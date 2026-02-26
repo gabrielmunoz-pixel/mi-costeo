@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import io
 
-st.set_page_config(page_title="BOM Processor Senior", layout="wide")
+st.set_page_config(page_title="BOM Processor Senior - CantEfic", layout="wide")
 
 def process_bom(df_v, df_d, df_p):
     # 1. LIMPIEZA INICIAL
@@ -10,7 +10,6 @@ def process_bom(df_v, df_d, df_p):
         df.columns = df.columns.str.strip()
 
     # 2. BLOQUE DE BLINDAJE (SANITY CHECK)
-    # Avisa pero NO detiene el cálculo
     ventas_skus = set(df_v['SKU'].unique())
     directos_skus = set(df_d['CODIGO VENTA'].unique())
     faltantes = ventas_skus - directos_skus
@@ -18,30 +17,28 @@ def process_bom(df_v, df_d, df_p):
         st.warning(f"⚠️ SKUs en Ventas sin receta en Directos: {list(faltantes)[:10]}")
 
     # 3. LOGICA DE NIVEL 1 (Ventas + Directos)
-    # Renombramos para tener control total de los nombres
     df_v_ready = df_v.rename(columns={'SKU': 'SKU_VENTA', 'Cantidad': 'CANT_VENTA'})
     
     m1 = pd.merge(df_v_ready, df_d, left_on='SKU_VENTA', right_on='CODIGO VENTA', how='inner')
     m1['REQ_N1'] = m1['CANT_VENTA'] * m1['CantReal']
 
-    # Separar Directos de Procesados (PRO-)
     es_proc = m1['SKU'].str.startswith('PRO-', na=False)
     df_dir_final = m1[~es_proc].copy()
     df_a_explotar = m1[es_proc].copy()
 
-    # 4. LOGICA DE NIVEL 2 (Procesados / Lotes)
+    # 4. LOGICA DE NIVEL 2 (Procesados usando CantEfic)
     if not df_a_explotar.empty:
-        # Renombramos hoja Procesados para evitar errores de sufijos
+        # Renombramos hoja Procesados incluyendo CantEfic
         df_p_ready = df_p.rename(columns={
             'Codigo Venta': 'COD_BOM_PROC',
-            'CantReceta': 'CANT_REC_PROC',
+            'CantEfic': 'CANT_EFIC_PROC', # CAMBIO CLAVE: Usamos CantEfic
             'Porcion': 'PORCION_PROC',
             'UM': 'UM_PROC',
             'Ingrediente': 'NOM_ING_PROC'
         })
 
-        # Calcular Rendimiento Total del Lote (Batch Yield)
-        yields = df_p_ready.groupby('COD_BOM_PROC')['CANT_REC_PROC'].sum().reset_index()
+        # Calcular Rendimiento Total del Lote sumando CantEfic
+        yields = df_p_ready.groupby('COD_BOM_PROC')['CANT_EFIC_PROC'].sum().reset_index()
         yields.columns = ['COD_BOM_PROC', 'TOTAL_YIELD_BATCH']
         
         # Evitar división por cero
@@ -53,13 +50,13 @@ def process_bom(df_v, df_d, df_p):
         # Cruzar con la necesidad del Nivel 1
         m2 = pd.merge(df_a_explotar, df_p_final, left_on='SKU', right_on='COD_BOM_PROC', how='left')
 
-        # Lógica de Lote (Si Porcion == 0, prorratea)
+        # Lógica de Lote usando CANT_EFIC_PROC
         def calc_batch(row):
-            if pd.isna(row['CANT_REC_PROC']): return 0
+            if pd.isna(row['CANT_EFIC_PROC']): return 0
             if row['PORCION_PROC'] == 0:
-                # (Uso en plato / Rendimiento Total) * Cantidad en receta
-                return (row['REQ_N1'] / row['TOTAL_YIELD_BATCH']) * row['CANT_REC_PROC']
-            return row['REQ_N1'] * row['CANT_REC_PROC']
+                # (Necesidad del plato / Rendimiento Total del Lote) * Cantidad Eficiente en receta
+                return (row['REQ_N1'] / row['TOTAL_YIELD_BATCH']) * row['CANT_EFIC_PROC']
+            return row['REQ_N1'] * row['CANT_EFIC_PROC']
 
         m2['TOTAL_FINAL'] = m2.apply(calc_batch, axis=1)
 
@@ -73,7 +70,6 @@ def process_bom(df_v, df_d, df_p):
         explosion = pd.DataFrame()
 
     # 5. CONSOLIDACIÓN
-    # Preparar directos
     dir_out = df_dir_final[['SKU', 'Ingrediente', 'REQ_N1', 'UM']].rename(columns={
         'SKU': 'SKU_OUT',
         'Ingrediente': 'ING_OUT',
@@ -81,17 +77,13 @@ def process_bom(df_v, df_d, df_p):
         'UM': 'UM_OUT'
     })
 
-    # Unir ambos niveles
     consolidado = pd.concat([dir_out, explosion], ignore_index=True)
-    
-    # Agrupar por SKU para sumar requerimientos repetidos
     resumen = consolidado.groupby(['SKU_OUT', 'ING_OUT', 'UM_OUT'], as_index=False)['CANT_OUT'].sum()
     
     return resumen.rename(columns={'SKU_OUT': 'SKU', 'ING_OUT': 'Ingrediente', 'CANT_OUT': 'Total Requerido', 'UM_OUT': 'UM'})
 
-# --- INTERFAZ STREAMLIT ---
-st.title("👨‍🍳 BOM Processor: Senior Edition")
-st.markdown("Cálculo de explosión de materiales con lógica de lotes y blindaje de errores.")
+# --- INTERFAZ ---
+st.title("👨‍🍳 BOM Processor: CantEfic Edition")
 
 file = st.file_uploader("Subir Prueba_costeo.xlsx", type="xlsx")
 
@@ -105,15 +97,14 @@ if file:
 
             resultado = process_bom(df_v, df_d, df_p)
 
-            st.subheader("📋 Requerimiento de Insumos")
+            st.subheader("📋 Requerimiento Final (Basado en CantEfic)")
             st.dataframe(resultado.style.format({"Total Requerido": "{:,.2f}"}), use_container_width=True)
 
-            # Exportar
             buf = io.BytesIO()
             with pd.ExcelWriter(buf, engine='openpyxl') as writer:
                 resultado.to_excel(writer, index=False)
-            st.download_button("📥 Descargar Excel", buf.getvalue(), "requerimiento_insumos.xlsx")
+            st.download_button("📥 Descargar Requerimiento", buf.getvalue(), "requerimiento_cant_efic.xlsx")
         else:
-            st.error("Faltan hojas. El archivo debe tener: Ventas, Directos y Procesados.")
+            st.error("Asegúrate de que las hojas se llamen: Ventas, Directos y Procesados.")
     except Exception as e:
         st.error(f"Error técnico: {e}")
