@@ -10,111 +10,66 @@ def process_bom(df_v, df_d, df_p):
     df_d.columns = df_d.columns.str.strip()
     df_p.columns = df_p.columns.str.strip()
 
-    # 2. Preparar Ventas (Renombrar para evitar colisiones)
-    df_v = df_v.rename(columns={'SKU': 'SKU_VENTA', 'Cantidad': 'CANT_VENTA'})
+    # 2. Sanity Check: SKUs sin receta
+    faltantes = set(df_v['SKU'].unique()) - set(df_d['CODIGO VENTA'].unique())
+    if faltantes:
+        st.warning(f"⚠️ SKUs en Ventas sin receta en Directos: {list(faltantes)[:5]}...")
 
-    # 3. Join Nivel 1: Ventas + Directos
-    m1 = pd.merge(
-        df_v, 
-        df_d, 
-        left_on='SKU_VENTA', 
-        right_on='CODIGO VENTA', 
-        how='inner'
-    )
-    
-    # Requerimiento N1 = Venta * CantReal de la receta del plato
-    m1['REQ_N1'] = m1['CANT_VENTA'] * m1['CantReal']
+    # 3. Nivel 1: Ventas + Directos
+    m1 = pd.merge(df_v.rename(columns={'SKU': 'SKU_V', 'Cantidad': 'CANT_V'}), 
+                  df_d, left_on='SKU_V', right_on='CODIGO VENTA', how='inner')
+    m1['REQ_N1'] = m1['CANT_V'] * m1['CantReal']
 
-    # 4. Separar Directos de Procesados (SKU en la hoja Directos empieza con PRO-)
-    # Nota: En m1, 'SKU' es el de la hoja Directos
+    # 4. Separar Directos de Procesados
     es_proc = m1['SKU'].str.startswith('PRO-', na=False)
-    final_dir = m1[~es_proc].copy()
-    a_explotar = m1[es_proc].copy()
+    df_dir = m1[~es_proc].copy()
+    df_a_exp = m1[es_proc].copy()
 
-    # 5. Explosión Nivel 2 (Procesados)
-    if not a_explotar.empty:
-        # Renombrar columnas de Procesados para control TOTAL
-        df_p_clean = df_p.rename(columns={
-            'Codigo Venta': 'COD_PROC_MAESTRO',
-            'Ingrediente': 'NOM_ING_PROC',
-            'SKU Ingrediente': 'SKU_ING_PROC',
-            'UM': 'UM_PROC',
-            'CantReceta': 'CANT_REC_PROC',
-            'Porcion': 'PORCION_PROC'
-        })
+    # 5. Nivel 2: Procesados con Lógica de Lotes
+    if not df_a_exp.empty:
+        # Sumar el rendimiento total del lote
+        yields = df_p.groupby('Codigo Venta')['CantReceta'].sum().reset_index().rename(columns={'CantReceta': 'YIELD'})
+        yields = yields[yields['YIELD'] > 0] # Evitar división por cero
+        
+        df_p_ready = pd.merge(df_p, yields, on='Codigo Venta')
+        
+        # Merge Nivel 2
+        m2 = pd.merge(df_a_exp, df_p_ready, left_on='SKU', right_on='Codigo Venta', how='left', suffixes=('_d', '_p'))
+        
+        # Fórmula de cálculo
+        def formula(r):
+            if pd.isna(r['CantReceta']): return 0
+            if r['Porcion_p'] == 0:
+                return (r['REQ_N1'] / r['YIELD']) * r['CantReceta']
+            return r['REQ_N1'] * r['CantReceta']
 
-        # Calcular Rendimiento Total de cada Batch
-        yields = df_p_clean.groupby('COD_PROC_MAESTRO')['CANT_REC_PROC'].sum().reset_index()
-        yields.columns = ['COD_PROC_MAESTRO', 'RENDIMIENTO_LOTE']
-
-        # Unir Procesados con sus rendimientos
-        df_p_ready = pd.merge(df_p_clean, yields, on='COD_PROC_MAESTRO')
-
-        # Join con la necesidad de nivel 1
-        # Unimos SKU de Directos con el Código de la receta procesada
-        m2 = pd.merge(
-            a_explotar,
-            df_p_ready,
-            left_on='SKU',
-            right_on='COD_PROC_MAESTRO',
-            how='left'
+        m2['TOTAL'] = m2.apply(formula, axis=1)
+        
+        exp_f = m2[['SKU Ingrediente', 'Ingrediente_p', 'TOTAL', 'UM_p']].rename(
+            columns={'SKU Ingrediente': 'SKU', 'Ingrediente_p': 'ING', 'UM_p': 'UM'}
         )
-
-        # Lógica de Lotes (PORCION_PROC == 0)
-        def calc_final(row):
-            if pd.isna(row['CANT_REC_PROC']): return 0
-            if row['PORCION_PROC'] == 0:
-                # (Gramos del sándwich / Total lote) * Cantidad ingrediente en receta
-                return (row['REQ_N1'] / row['RENDIMIENTO_LOTE']) * row['CANT_REC_PROC']
-            else:
-                return row['REQ_N1'] * row['CANT_REC_PROC']
-
-        m2['TOTAL_CALC'] = m2.apply(calc_final, axis=1)
-
-        exp_final = m2[['SKU_ING_PROC', 'NOM_ING_PROC', 'TOTAL_CALC', 'UM_PROC']].rename(columns={
-            'SKU_ING_PROC': 'SKU_FINAL',
-            'NOM_ING_PROC': 'INGREDIENTE',
-            'TOTAL_CALC': 'TOTAL',
-            'UM_PROC': 'UM'
-        })
     else:
-        exp_final = pd.DataFrame()
+        exp_f = pd.DataFrame()
 
-    # 6. Formatear Directos
-    # 'Ingrediente' y 'UM' vienen de la hoja Directos
-    final_dir = final_dir[['SKU', 'Ingrediente', 'REQ_N1', 'UM']].rename(columns={
-        'SKU': 'SKU_FINAL',
-        'Ingrediente': 'INGREDIENTE',
-        'REQ_N1': 'TOTAL'
-    })
+    # 6. Unir todo y agrupar
+    df_dir_f = df_dir[['SKU', 'Ingrediente', 'REQ_N1', 'UM']].rename(columns={'Ingrediente': 'ING', 'REQ_N1': 'TOTAL'})
+    res = pd.concat([df_dir_f, exp_f], ignore_index=True)
+    return res.groupby(['SKU', 'ING', 'UM'], as_index=False)['TOTAL'].sum()
 
-    # 7. Consolidación Final
-    resultado = pd.concat([final_dir, exp_final], ignore_index=True)
-    resumen = resultado.groupby(['SKU_FINAL', 'INGREDIENTE', 'UM'], as_index=False)['TOTAL'].sum()
-    
-    return resumen
-
-# --- Interfaz ---
-st.title("👨‍🍳 Procesador BOM - Versión Corregida")
-
-file = st.file_uploader("Cargar Prueba_costeo.xlsx", type="xlsx")
+# --- INTERFAZ ---
+st.title("📊 Procesador de Producción Blindado")
+file = st.file_uploader("Subir Prueba_costeo.xlsx", type="xlsx")
 
 if file:
     try:
         xls = pd.ExcelFile(file)
-        df_v = pd.read_excel(xls, 'Ventas')
-        df_d = pd.read_excel(xls, 'Directos')
-        df_p = pd.read_excel(xls, 'Procesados')
-
-        res = process_bom(df_v, df_d, df_p)
-
-        st.subheader("📊 Requerimiento Total Consolidado")
-        st.dataframe(res.style.format({"TOTAL": "{:,.2f}"}), use_container_width=True)
-
-        buf = io.BytesIO()
-        with pd.ExcelWriter(buf, engine='openpyxl') as writer:
-            res.to_excel(writer, index=False)
-        st.download_button("📥 Descargar Resultados", buf.getvalue(), "requerimiento_final.xlsx")
-
+        if all(h in xls.sheet_names for h in ['Ventas', 'Directos', 'Procesados']):
+            res = process_bom(pd.read_excel(xls, 'Ventas'), pd.read_excel(xls, 'Directos'), pd.read_excel(xls, 'Procesados'))
+            st.dataframe(res.style.format({"TOTAL": "{:,.2f}"}), use_container_width=True)
+            
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                res.to_excel(writer, index=False)
+            st.download_button("📥 Descargar", output.getvalue(), "requerimiento.xlsx")
     except Exception as e:
-        st.error(f"Error detectado: {e}")
+        st.error(f"Error: {e}")
