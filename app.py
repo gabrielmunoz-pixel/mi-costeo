@@ -2,20 +2,20 @@ import streamlit as st
 import pandas as pd
 import io
 
-st.set_page_config(page_title="MRP Original - Fix Valor 4", layout="wide")
+st.set_page_config(page_title="MRP Original - Fix Recetas Citadas", layout="wide")
 
 def process_bom(df_v, df_d, df_p):
     # 1. Limpieza inicial de columnas
     for df in [df_v, df_d, df_p]:
         df.columns = df.columns.str.strip()
 
-    # 2. Lista de SKUs vendidos (para opciones normales)
+    # 2. Lista de SKUs vendidos
     skus_vendidos = set(df_v['SKU'].astype(str).str.strip().str.upper())
 
     # 3. Preparación de Ventas
     df_v = df_v.rename(columns={'SKU': 'SKU_VENTA', 'Cantidad': 'CANT_VENTA'})
 
-    # 4. Filtrar Directos (Mantenemos valor 4 siempre para poder explotarlo)
+    # 4. Filtrar Directos (Mantenemos valor 4 siempre)
     def validar_opcion(row):
         if str(row['EsOpcion']) == "4":
             return True
@@ -34,43 +34,44 @@ def process_bom(df_v, df_d, df_p):
     # 5. Nivel 1: Cruzar Ventas con Directos
     m1 = pd.merge(df_v, df_d_ready, left_on='SKU_VENTA', right_on='SKU_RECETA_PADRE', how='inner')
     
-    # --- AJUSTE: RECURSIÓN PARA VALOR 4 (EXPLOSIÓN DE COMBOS) ---
-    # Separamos lo que es Link (4) de lo que es Ingrediente Directo
+    # --- LÓGICA DE EXPLOSIÓN PARA VALOR 4 ---
     es_link = m1['EsOpcion'].astype(str) == "4"
     
-    m1_normal = m1[~es_link].copy()
-    m1_normal['REQ_BASE'] = m1_normal['CANT_VENTA'] * m1_normal['CantReal']
+    # Separamos insumos normales
+    df_normal = m1[~es_link].copy()
+    df_normal['REQ_CALC'] = df_normal['CANT_VENTA'] * df_normal['CantReal']
     
-    m1_links = m1[es_link].copy()
-    if not m1_links.empty:
-        # Buscamos las recetas de los platos citados en la misma tabla de Directos
-        # Evitamos circularidad filtrando que el nuevo nivel no sea otra vez un link 4
-        df_recetas_platos = df_d_ready[df_d_ready['EsOpcion'].astype(str) != "4"]
+    # Separamos platos citados (valor 4)
+    df_links = m1[es_link].copy()
+    
+    if not df_links.empty:
+        # Volvemos a cruzar los links con la tabla de Directos para obtener los ingredientes del plato citado
+        # Evitamos los links del segundo nivel para no entrar en bucle
+        df_recetas_base = df_d_ready[df_d_ready['EsOpcion'].astype(str) != "4"]
         
-        m_citado = pd.merge(m1_links, df_recetas_platos, left_on='SKU_INSUMO', right_on='SKU_RECETA_PADRE', how='inner')
-        # Multiplicamos: Cantidad Venta Combo * CantReal del ingrediente dentro del plato citado
-        m_citado['REQ_BASE'] = m_citado['CANT_VENTA'] * m_citado['CantReal_y']
+        m_recursivo = pd.merge(df_links, df_recetas_base, left_on='SKU_INSUMO', right_on='SKU_RECETA_PADRE', how='inner')
+        m_recursivo['REQ_CALC'] = m_recursivo['CANT_VENTA'] * m_recursivo['CantReal_y']
         
-        # Estructuramos para unificar con m1_normal
-        m1_links_explotados = m_citado[['SKU_INSUMO_y', 'NOM_INSUMO_y', 'REQ_BASE', 'UM_y']].rename(
+        # Seleccionamos columnas para unificar
+        df_links_final = m_recursivo[['SKU_INSUMO_y', 'NOM_INSUMO_y', 'REQ_CALC', 'UM_y']].rename(
             columns={'SKU_INSUMO_y': 'SKU_INSUMO', 'NOM_INSUMO_y': 'NOM_INSUMO', 'UM_y': 'UM'}
         )
     else:
-        m1_links_explotados = pd.DataFrame()
+        df_links_final = pd.DataFrame()
 
-    # Consolidado de Insumos Base (Normales + los que venían dentro de un 4)
-    df_total_base = pd.concat([
-        m1_normal[['SKU_INSUMO', 'NOM_INSUMO', 'REQ_BASE', 'UM']], 
-        m1_links_explotados
+    # Unificamos todo en una sola lista base
+    df_unificado = pd.concat([
+        df_normal[['SKU_INSUMO', 'NOM_INSUMO', 'REQ_CALC', 'UM']], 
+        df_links_final
     ], ignore_index=True)
-    # -----------------------------------------------------------
+    # ----------------------------------------
 
     # 6. Separar Procesados (PRO-)
-    es_proc = df_total_base['SKU_INSUMO'].str.startswith('PRO-', na=False)
-    df_dir_f = df_total_base[~es_proc].copy()
-    df_a_exp = df_total_base[es_proc].copy()
+    es_proc = df_unificado['SKU_INSUMO'].str.startswith('PRO-', na=False)
+    df_dir_f = df_unificado[~es_proc].copy()
+    df_a_exp = df_unificado[es_proc].copy()
 
-    # 7. Nivel 2: Explosión de Procesados (Mechada, Pollo, etc.)
+    # 7. Nivel 2: Explosión de Procesados
     if not df_a_exp.empty:
         df_p_ready = df_p.rename(columns={
             'Codigo Venta': 'SKU_PROC_PADRE',
@@ -83,9 +84,9 @@ def process_bom(df_v, df_d, df_p):
 
         m2 = pd.merge(df_a_exp, df_p_ready, left_on='SKU_INSUMO', right_on='SKU_PROC_PADRE', how='left')
         
-        # Factor de Gasto Directo (Lo que pediste para corregir pesos)
+        # Factor de Gasto Directo (Tu ajuste de mermas)
         m2['FACTOR_GASTO'] = m2['VALOR_EFIC'] / m2['CANT_REC_PROC']
-        m2['TOTAL_FINAL'] = m2['REQ_BASE'] * m2['FACTOR_GASTO']
+        m2['TOTAL_FINAL'] = m2['REQ_CALC'] * m2['FACTOR_GASTO']
 
         exp_f = m2[['SKU_ING_PROC', 'NOM_ING_PROC', 'TOTAL_FINAL', 'UM_PROC']].rename(
             columns={
@@ -98,8 +99,8 @@ def process_bom(df_v, df_d, df_p):
         exp_f = pd.DataFrame()
 
     # 8. CONSOLIDACIÓN FINAL
-    dir_out = df_dir_f[['SKU_INSUMO', 'NOM_INSUMO', 'REQ_BASE', 'UM']].rename(
-        columns={'SKU_INSUMO': 'SKU_OUT', 'NOM_INSUMO': 'ING_OUT', 'REQ_BASE': 'CANT_OUT', 'UM': 'UM_OUT'})
+    dir_out = df_dir_f[['SKU_INSUMO', 'NOM_INSUMO', 'REQ_CALC', 'UM']].rename(
+        columns={'SKU_INSUMO': 'SKU_OUT', 'NOM_INSUMO': 'ING_OUT', 'REQ_CALC': 'CANT_OUT', 'UM': 'UM_OUT'})
     
     consolidado = pd.concat([dir_out, exp_f], ignore_index=True)
 
@@ -125,13 +126,20 @@ def process_bom(df_v, df_d, df_p):
     )
 
 # --- INTERFAZ STREAMLIT ---
-st.title("📊 MRP Gastronómico - Explosión de Combos")
-file = st.file_uploader("Subir Excel", type="xlsx")
+st.title("📊 MRP Gastronómico - Auditor de Combos")
+
+file = st.file_uploader("Subir Archivo de Costeo (Excel)", type="xlsx")
+
 if file:
     try:
         xls = pd.ExcelFile(file)
-        resultado = process_bom(pd.read_excel(xls,'Ventas'), pd.read_excel(xls,'Directos'), pd.read_excel(xls,'Procesados'))
-        st.subheader("📋 Consolidado de Insumos")
-        st.dataframe(resultado.style.format({"Total (Kg/L)": "{:,.3f}"}), use_container_width=True)
+        if all(h in xls.sheet_names for h in ['Ventas', 'Directos', 'Procesados']):
+            resultado = process_bom(
+                pd.read_excel(xls, 'Ventas'), 
+                pd.read_excel(xls, 'Directos'), 
+                pd.read_excel(xls, 'Procesados')
+            )
+            st.subheader("📋 Consolidado de Insumos")
+            st.dataframe(resultado.style.format({"Total (Kg/L)": "{:,.3f}"}), use_container_width=True)
     except Exception as e:
-        st.error(f"Error técnico: {e}")
+        st.error(f"Error: {e}")
