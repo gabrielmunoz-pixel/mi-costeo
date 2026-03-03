@@ -19,6 +19,9 @@ def process_bom(df_v, df_d, df_p):
     def validar_opcion(row):
         if pd.isna(row['EsOpcion']) or str(row['EsOpcion']).strip() == "":
             return True
+        # Valor 4 se mantiene para ser procesado luego como link
+        if str(row['EsOpcion']) == "4":
+            return True
         return str(row['SKU']).strip().upper() in skus_vendidos
 
     df_d_filtrado = df_d[df_d.apply(validar_opcion, axis=1)].copy()
@@ -31,14 +34,42 @@ def process_bom(df_v, df_d, df_p):
     
     # 5. Nivel 1: Cruzar Ventas con Directos
     m1 = pd.merge(df_v, df_d_ready, left_on='SKU_VENTA', right_on='SKU_RECETA_PADRE', how='inner')
-    m1['REQ_N1'] = m1['CANT_VENTA'] * m1['CantReal']
+    
+    # --- AJUSTE SOLICITADO: Lógica para Valor 4 (Citar Plato) ---
+    # Identificamos filas que citan a otro plato (EsOpcion 4)
+    es_link = m1['EsOpcion'].astype(str) == "4"
+    
+    # Insumos normales
+    m1_normal = m1[~es_link].copy()
+    m1_normal['REQ_N1'] = m1_normal['CANT_VENTA'] * m1_normal['CantReal']
+    
+    # Insumos que son links (Recursión de 1 nivel)
+    m1_links = m1[es_link].copy()
+    if not m1_links.empty:
+        # Buscamos en la tabla de directos la receta del SKU citado
+        m_citado = pd.merge(m1_links, df_d_ready, left_on='SKU_INSUMO', right_on='SKU_RECETA_PADRE', how='inner')
+        m_citado['REQ_N1'] = m_citado['CANT_VENTA'] * m_citado['CantReal_y']
+        
+        # Unificamos columnas para que coincidan con la estructura original
+        m1_links_final = m_citado[['SKU_INSUMO_y', 'NOM_INSUMO_y', 'REQ_N1', 'UM_y']].rename(
+            columns={'SKU_INSUMO_y': 'SKU_INSUMO', 'NOM_INSUMO_y': 'NOM_INSUMO', 'UM_y': 'UM'}
+        )
+    else:
+        m1_links_final = pd.DataFrame()
+
+    # Combinamos ambos resultados antes de pasar a procesados
+    df_base_calculo = pd.concat([
+        m1_normal[['SKU_INSUMO', 'NOM_INSUMO', 'REQ_N1', 'UM']], 
+        m1_links_final
+    ], ignore_index=True)
+    # ------------------------------------------------------------
 
     # 6. Separar Procesados (PRO-)
-    es_proc = m1['SKU_INSUMO'].str.startswith('PRO-', na=False)
-    df_dir_f = m1[~es_proc].copy()
-    df_a_exp = m1[es_proc].copy()
+    es_proc = df_base_calculo['SKU_INSUMO'].str.startswith('PRO-', na=False)
+    df_dir_f = df_base_calculo[~es_proc].copy()
+    df_a_exp = df_base_calculo[es_proc].copy()
 
-    # 7. Nivel 2: Explosión de Procesados (ÚNICO PUNTO MODIFICADO PARA LA MECHADA)
+    # 7. Nivel 2: Explosión de Procesados
     if not df_a_exp.empty:
         df_p_ready = df_p.rename(columns={
             'Codigo Venta': 'SKU_PROC_PADRE',
@@ -49,14 +80,10 @@ def process_bom(df_v, df_d, df_p):
             'CantReceta': 'CANT_REC_PROC'
         })
 
-        # UNIENDO CON LA HOJA DE PROCESADOS
         m2 = pd.merge(df_a_exp, df_p_ready, left_on='SKU_INSUMO', right_on='SKU_PROC_PADRE', how='left')
         
-        # --- AJUSTE DE LÓGICA: Factor de Gasto Directo ---
-        # Usamos (CantEfic / CantReceta) para que 20.000 de carne para 10.000 de receta den Factor 2.0
         m2['FACTOR_GASTO'] = m2['VALOR_EFIC'] / m2['CANT_REC_PROC']
         m2['TOTAL_FINAL'] = m2['REQ_N1'] * m2['FACTOR_GASTO']
-        # ------------------------------------------------
 
         exp_f = m2[['SKU_ING_PROC', 'NOM_ING_PROC', 'TOTAL_FINAL', 'UM_PROC']].rename(
             columns={
@@ -68,24 +95,21 @@ def process_bom(df_v, df_d, df_p):
     else:
         exp_f = pd.DataFrame()
 
-    # 8. CONSOLIDACIÓN Y NORMALIZACIÓN (Tu estructura original)
+    # 8. CONSOLIDACIÓN Y NORMALIZACIÓN
     dir_out = df_dir_f[['SKU_INSUMO', 'NOM_INSUMO', 'REQ_N1', 'UM']].rename(
         columns={'SKU_INSUMO': 'SKU_OUT', 'NOM_INSUMO': 'ING_OUT', 'REQ_N1': 'CANT_OUT', 'UM': 'UM_OUT'})
     
     consolidado = pd.concat([dir_out, exp_f], ignore_index=True)
 
-    # Normalización de Identidad
     consolidado['SKU_OUT'] = consolidado['SKU_OUT'].astype(str).str.strip().str.upper()
     consolidado['ING_OUT'] = consolidado['ING_OUT'].astype(str).str.strip()
     consolidado['UM_OUT'] = consolidado['UM_OUT'].astype(str).str.strip().str.upper()
 
-    # Agrupación final
     resumen = consolidado.groupby(['SKU_OUT', 'UM_OUT'], as_index=False).agg({
         'CANT_OUT': 'sum',
         'ING_OUT': 'first'
     })
 
-    # Conversión a Kilos/Litros
     resumen['TOTAL_KG_L'] = resumen['CANT_OUT'] / 1000
     
     return resumen[['SKU_OUT', 'ING_OUT', 'UM_OUT', 'TOTAL_KG_L']].rename(
