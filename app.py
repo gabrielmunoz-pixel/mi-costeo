@@ -71,7 +71,7 @@ def process_bom(df_v, df_d, df_p):
     df_dir_f = df_unificado[~es_proc].copy()
     df_a_exp = df_unificado[es_proc].copy()
 
-    # 7. Nivel 2: Explosión de Procesados
+    # 7. Nivel 2: Explosión de Procesados (MEJORA APLICADA AQUÍ)
     if not df_a_exp.empty:
         df_p_ready = df_p.rename(columns={
             'Codigo Venta': 'SKU_PROC_PADRE',
@@ -84,9 +84,12 @@ def process_bom(df_v, df_d, df_p):
 
         m2 = pd.merge(df_a_exp, df_p_ready, left_on='SKU_INSUMO', right_on='SKU_PROC_PADRE', how='left')
         
-        # Factor de Gasto Directo (Tu ajuste de mermas)
+        # --- AJUSTE DE CÁLCULO PARA EVITAR EL ERROR DE GRAMOS ---
+        # Factor = Cantidad Cruda necesaria / Cantidad de Receta base
+        # Ejemplo: 1250g crudo / 1000g receta = 1.25 factor de merma
         m2['FACTOR_GASTO'] = m2['VALOR_EFIC'] / m2['CANT_REC_PROC']
         m2['TOTAL_FINAL'] = m2['REQ_CALC'] * m2['FACTOR_GASTO']
+        # -------------------------------------------------------
 
         exp_f = m2[['SKU_ING_PROC', 'NOM_ING_PROC', 'TOTAL_FINAL', 'UM_PROC']].rename(
             columns={
