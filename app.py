@@ -2,49 +2,36 @@ import streamlit as st
 import pandas as pd
 import io
 
-st.set_page_config(page_title="BOM Processor Pro v3.2", layout="wide")
+st.set_page_config(page_title="BOM Processor v4.0 - Modular", layout="wide")
 
-def process_bom(df_v, df_d, df_p, df_dist):
+def process_bom(df_v, df_d, df_p):
     # 1. Limpieza de nombres de columnas
-    for df in [df_v, df_d, df_p, df_dist]:
+    for df in [df_v, df_d, df_p]:
         df.columns = df.columns.str.strip()
 
-    # 2. Procesar Distribución (Mix de Ventas)
-    if '%' in df_dist.columns:
-        if df_dist['%'].dtype == object:
-            df_dist['%'] = df_dist['%'].str.replace('%', '').astype(float) / 100
-
-    # 3. Cruzar Ventas con Distribución (Explicit Naming)
+    # 2. Preparación de Ventas
     df_v = df_v.rename(columns={'SKU': 'SKU_VENTA', 'Cantidad': 'CANT_VENTA'})
-    df_dist = df_dist.rename(columns={'Codigo': 'SKU_DIST', 'Opcion': 'OPCION_NOM', '%': 'PORCENTAJE'})
 
-    df_v_exp = pd.merge(df_v, df_dist, left_on='SKU_VENTA', right_on='SKU_DIST', how='left')
+    # 3. Nivel 1: Cruzar Ventas con Directos (Estructura Modular)
+    # Aquí unimos por Código de Venta. Se traerán todos los ingredientes (Base + Opciones)
+    df_d_ready = df_d.rename(columns={
+        'CODIGO VENTA': 'SKU_RECETA_PADRE', 
+        'SKU': 'SKU_INSUMO', 
+        'Ingrediente': 'NOM_INSUMO'
+    })
     
-    # Ponderación de venta
-    df_v_exp['VENTA_POND'] = df_v_exp.apply(
-        lambda x: x['CANT_VENTA'] * x['PORCENTAJE'] if pd.notnull(x['PORCENTAJE']) else x['CANT_VENTA'], axis=1
-    )
-
-    # 4. Nivel 1: Cruzar con Directos
-    df_d_ready = df_d.rename(columns={'CODIGO VENTA': 'SKU_RECETA_PADRE', 'SKU': 'SKU_INSUMO', 'Ingrediente': 'NOM_INSUMO'})
+    m1 = pd.merge(df_v, df_d_ready, left_on='SKU_VENTA', right_on='SKU_RECETA_PADRE', how='inner')
     
-    m1 = pd.merge(df_v_exp, df_d_ready, left_on='SKU_VENTA', right_on='SKU_RECETA_PADRE', how='inner')
-    
-    # Filtrado por EsOpcion
-    def filter_options(row):
-        if pd.isna(row['EsOpcion']) or row['EsOpcion'] == '':
-            return True
-        return str(row['OPCION_NOM']).lower() in str(row['Plato']).lower()
+    # Calculamos requerimiento inicial (Venta * CantReal)
+    # Nota: Si el usuario vendió 100 HAC-002, el script calculará 100 de cada opción listada.
+    m1['REQ_N1'] = m1['CANT_VENTA'] * m1['CantReal']
 
-    m1 = m1[m1.apply(filter_options, axis=1)]
-    m1['REQ_N1'] = m1['VENTA_POND'] * m1['CantReal']
-
-    # 5. Separar Procesados (PRO-)
+    # 4. Separar Procesados (PRO-)
     es_proc = m1['SKU_INSUMO'].str.startswith('PRO-', na=False)
     df_dir_f = m1[~es_proc].copy()
     df_a_exp = m1[es_proc].copy()
 
-    # 6. Nivel 2: Procesados (CantEfic)
+    # 5. Nivel 2: Explosión de Procesados (Lógica CantEfic)
     if not df_a_exp.empty:
         df_p_ready = df_p.rename(columns={
             'Codigo Venta': 'SKU_PROC_PADRE',
@@ -54,7 +41,7 @@ def process_bom(df_v, df_d, df_p, df_dist):
             'UM': 'UM_PROC'
         })
 
-        # Rendimiento del Lote por CantEfic
+        # Rendimiento del Lote por suma de CantEfic (Cimiento técnico del costeo)
         yields = df_p_ready.groupby('SKU_PROC_PADRE')['VALOR_EFIC'].sum().reset_index().rename(columns={'VALOR_EFIC': 'YIELD_LOTE'})
         df_p_final = pd.merge(df_p_ready, yields, on='SKU_PROC_PADRE')
         
@@ -62,6 +49,7 @@ def process_bom(df_v, df_d, df_p, df_dist):
         
         def calc_batch(r):
             if pd.isna(r['VALOR_EFIC']): return 0
+            # Lógica de Batch vs Porción Directa
             if r['Porcion'] == 0:
                 return (r['REQ_N1'] / r['YIELD_LOTE']) * r['VALOR_EFIC']
             return r['REQ_N1'] * r['VALOR_EFIC']
@@ -73,43 +61,52 @@ def process_bom(df_v, df_d, df_p, df_dist):
     else:
         exp_f = pd.DataFrame()
 
-    # 7. Consolidación y Conversión a Kilos/Litros
+    # 6. Consolidación Final y Conversión
     dir_out = df_dir_f[['SKU_INSUMO', 'NOM_INSUMO', 'REQ_N1', 'UM']].rename(
         columns={'SKU_INSUMO': 'SKU_OUT', 'NOM_INSUMO': 'ING_OUT', 'REQ_N1': 'CANT_OUT', 'UM': 'UM_OUT'})
     
     consolidado = pd.concat([dir_out, exp_f], ignore_index=True)
+    
+    # Agrupamos por Insumo para sumar usos en diferentes recetas
     resumen = consolidado.groupby(['SKU_OUT', 'ING_OUT', 'UM_OUT'], as_index=False)['CANT_OUT'].sum()
     
-    # DIVISIÓN POR 1000 PARA KILOS/LITROS
-    resumen['TOTAL_CONVERTIDO'] = resumen['CANT_OUT'] / 1000
+    # CONVERSIÓN A KILOS/LITROS (División por 1000)
+    resumen['TOTAL_KG_L'] = resumen['CANT_OUT'] / 1000
     
-    return resumen[['SKU_OUT', 'ING_OUT', 'UM_OUT', 'TOTAL_CONVERTIDO']].rename(
-        columns={'SKU_OUT': 'SKU', 'ING_OUT': 'Ingrediente', 'TOTAL_CONVERTIDO': 'Total (Kg/L)', 'UM_OUT': 'UM Original'}
+    return resumen[['SKU_OUT', 'ING_OUT', 'UM_OUT', 'TOTAL_KG_L']].rename(
+        columns={
+            'SKU_OUT': 'SKU', 
+            'ING_OUT': 'Ingrediente', 
+            'TOTAL_KG_L': 'Total (Kg/L)', 
+            'UM_OUT': 'UM Original'
+        }
     )
 
-# --- INTERFAZ ---
-st.title("📊 MRP Gastronómico: Reporte en Kilos/Litros")
+# --- INTERFAZ STREAMLIT ---
+st.title("📊 MRP Modular: Explosión de Recetas")
+st.markdown("Este sistema calcula el requerimiento total considerando cada ingrediente y opción como una unidad de receta.")
 
-file = st.file_uploader("Subir Archivo de Costeo", type="xlsx")
+file = st.file_uploader("Subir Archivo de Costeo (Excel)", type="xlsx")
 
 if file:
     try:
         xls = pd.ExcelFile(file)
-        required = ['Ventas', 'Directos', 'Procesados', 'DistAper']
+        required = ['Ventas', 'Directos', 'Procesados']
         if all(h in xls.sheet_names for h in required):
-            resultado = process_bom(pd.read_excel(xls, 'Ventas'), 
-                                     pd.read_excel(xls, 'Directos'), 
-                                     pd.read_excel(xls, 'Procesados'), 
-                                     pd.read_excel(xls, 'DistAper'))
+            resultado = process_bom(
+                pd.read_excel(xls, 'Ventas'), 
+                pd.read_excel(xls, 'Directos'), 
+                pd.read_excel(xls, 'Procesados')
+            )
             
-            st.subheader("📋 Consolidado de Requerimientos")
+            st.subheader("📋 Consolidado de Insumos (Kilos/Litros)")
             st.dataframe(resultado.style.format({"Total (Kg/L)": "{:,.3f}"}), use_container_width=True)
             
             buf = io.BytesIO()
             with pd.ExcelWriter(buf, engine='openpyxl') as writer:
                 resultado.to_excel(writer, index=False)
-            st.download_button("📥 Descargar Reporte Final", buf.getvalue(), "requerimiento_KilosLitros.xlsx")
+            st.download_button("📥 Descargar Reporte en Kg/L", buf.getvalue(), "requerimiento_modular_Kilos.xlsx")
         else:
-            st.error(f"Faltan hojas necesarias: {required}")
+            st.error(f"El archivo debe contener las hojas: {required}")
     except Exception as e:
-        st.error(f"Error detectado: {e}")
+        st.error(f"Error técnico detectado: {e}")
