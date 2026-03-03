@@ -2,19 +2,19 @@ import streamlit as st
 import pandas as pd
 import io
 
-st.set_page_config(page_title="MRP Gastronómico - Explosión", layout="wide")
+st.set_page_config(page_title="MRP Gastronómico", layout="wide")
 
 def process_bom(df_v, df_d, df_p):
-    # 1. Limpieza de nombres de columnas
+    # 1. Limpieza de columnas
     df_v.columns = df_v.columns.str.strip()
     df_d.columns = df_d.columns.str.strip()
     df_p.columns = df_p.columns.str.strip()
 
-    # 2. Identificación de SKUs vendidos para filtrar opciones
+    # 2. Preparar Ventas (Mantenemos tus nombres)
     df_v = df_v.rename(columns={'SKU': 'SKU_VENTA', 'Cantidad': 'CANT_VENTA'})
     skus_vendidos = set(df_v['SKU_VENTA'].astype(str).str.strip().str.upper())
 
-    # 3. Filtrado de Hoja Directos (Lógica EsOpcion)
+    # 3. Lógica EsOpcion
     def validar_opcion(row):
         es_op = str(row['EsOpcion']).strip()
         if pd.isna(row['EsOpcion']) or es_op in ["", "0", "4"]:
@@ -23,72 +23,63 @@ def process_bom(df_v, df_d, df_p):
 
     df_d_ready = df_d[df_d.apply(validar_opcion, axis=1)].copy()
     
-    # 4. Unir Ventas con Recetas Directas
+    # 4. Primer Merge (Ventas x Directos)
     m1 = pd.merge(df_v, df_d_ready, left_on='SKU_VENTA', right_on='CODIGO VENTA', how='inner')
 
-    # 5. Separar Insumos Base de Procesados (PRO-)
+    # 5. Separar Procesados de Insumos Directos
     es_proc = m1['SKU'].str.startswith('PRO-', na=False)
     df_insumos_directos = m1[~es_proc].copy()
     df_procesados_a_explotar = m1[es_proc].copy()
 
-    # 6. Explosión de Procesados con tu Lógica de Marcador (1=Porcion, 0=Lote)
+    # 6. EXPLOSIÓN DE PROCESADOS (Aquí está el arreglo del marcador)
     if not df_procesados_a_explotar.empty:
-        # Cruce con la hoja de Procesados
+        # Unimos con la hoja Procesados
         m2 = pd.merge(df_procesados_a_explotar, df_p, left_on='SKU', right_on='Codigo Venta', how='left')
         
-        # AJUSTE SOLICITADO: Lógica de Porcionado vs Lote
-        def calcular_explosion(row):
-            # Si el marcador Porcion es 1, la CantEfic ya es por unidad (no se divide)
-            if row['Porcion'] == 1:
+        def calcular_m2(row):
+            # Lógica: 1 es porción unitaria, 0 es lote
+            if row['Porcion_y'] == 1:
                 return row['CANT_VENTA'] * row['CantReal'] * row['CantEfic']
-            # Si el marcador es 0, es un lote y dividimos por CantReceta
             else:
-                factor = row['CantEfic'] / row['CantReceta'] if row['CantReceta'] > 0 else 0
-                return row['CANT_VENTA'] * row['CantReal'] * factor
+                divisor = row['CantReceta_y'] if row['CantReceta_y'] > 0 else 1
+                return row['CANT_VENTA'] * row['CantReal'] * (row['CantEfic'] / divisor)
 
-        m2['CANT_OUT'] = m2.apply(calcular_explosion, axis=1)
+        m2['CANT_OUT'] = m2.apply(calcular_m2, axis=1)
         
+        # Seleccionamos columnas usando los nombres de la hoja Procesados
         exp_f = m2[['SKU Ingrediente', 'Ingrediente_y', 'CANT_OUT', 'UM Salida']].rename(
-            columns={'SKU Ingrediente': 'SKU_OUT', 'Ingrediente_y': 'ING_OUT', 'UM Salida': 'UM_OUT'})
+            columns={'SKU Ingrediente': 'SKU_FINAL', 'Ingrediente_y': 'NOM_FINAL', 'UM Salida': 'UM_FINAL'})
     else:
         exp_f = pd.DataFrame()
 
-    # 7. Cálculo de Insumos Directos (Venta * CantReal)
+    # 7. INSUMOS DIRECTOS (Usamos los nombres de la hoja Directos)
     df_insumos_directos['CANT_OUT'] = df_insumos_directos['CANT_VENTA'] * df_insumos_directos['CantReal']
-    dir_out = df_insumos_directos[['SKU', 'Ingrediente_x', 'CANT_OUT', 'UM']].rename(
-        columns={'SKU': 'SKU_OUT', 'Ingrediente_x': 'ING_OUT', 'UM': 'UM_OUT'})
+    dir_out = df_insumos_directos[['SKU', 'Ingrediente', 'CANT_OUT', 'UM']].rename(
+        columns={'SKU': 'SKU_FINAL', 'Ingrediente': 'NOM_FINAL', 'UM': 'UM_FINAL'})
     
-    # 8. Consolidación Final
+    # 8. Consolidación
     consolidado = pd.concat([dir_out, exp_f], ignore_index=True)
-    consolidado['SKU_OUT'] = consolidado['SKU_OUT'].astype(str).str.strip().upper()
     
-    # 9. Agrupar y Convertir a Kg/L/Un
-    resumen = consolidado.groupby(['SKU_OUT', 'UM_OUT'], as_index=False).agg({'CANT_OUT': 'sum', 'ING_OUT': 'first'})
+    # 9. Agrupar y convertir a Kg/L
+    resumen = consolidado.groupby(['SKU_FINAL', 'UM_FINAL'], as_index=False).agg({
+        'CANT_OUT': 'sum', 
+        'NOM_FINAL': 'first'
+    })
     
-    def convertir_unidades(row):
-        um = str(row['UM_OUT']).upper()
+    def format_unidades(row):
+        um = str(row['UM_FINAL']).upper()
         if um in ['G', 'ML', 'CC']:
             return row['CANT_OUT'] / 1000
         return row['CANT_OUT']
 
-    resumen['TOTAL_FINAL'] = resumen.apply(convertir_unidades, axis=1)
+    resumen['TOTAL'] = resumen.apply(format_unidades, axis=1)
     
-    return resumen[['SKU_OUT', 'ING_OUT', 'UM_OUT', 'TOTAL_FINAL']].rename(
-        columns={'SKU_OUT': 'SKU', 'ING_OUT': 'Insumo', 'TOTAL_FINAL': 'Total', 'UM_OUT': 'UM'})
+    return resumen[['SKU_FINAL', 'NOM_FINAL', 'UM_FINAL', 'TOTAL']].rename(
+        columns={'SKU_FINAL': 'SKU', 'NOM_FINAL': 'Ingrediente', 'TOTAL': 'Total Kg/L/Un', 'UM_FINAL': 'UM'})
 
-# --- INTERFAZ ---
-st.title("👨‍🍳 MRP Sistema de Costeos Corregido")
-
-file = st.file_uploader("Sube tu archivo Excel", type="xlsx")
-
+# --- Ejecución Streamlit ---
+file = st.file_uploader("Sube tu Excel", type="xlsx")
 if file:
     xls = pd.ExcelFile(file)
-    resultado = process_bom(pd.read_excel(xls, 'Ventas'), pd.read_excel(xls, 'Directos'), pd.read_excel(xls, 'Procesados'))
-    
-    st.subheader("📋 Requerimiento Consolidado")
-    st.dataframe(resultado.style.format({"Total": "{:,.3f}"}), use_container_width=True)
-    
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        resultado.to_excel(writer, index=False)
-    st.download_button("📥 Descargar MRP", output.getvalue(), "MRP_Final.xlsx")
+    df_final = process_bom(pd.read_excel(xls, 'Ventas'), pd.read_excel(xls, 'Directos'), pd.read_excel(xls, 'Procesados'))
+    st.dataframe(df_final.style.format({"Total Kg/L/Un": "{:,.3f}"}), use_container_width=True)
