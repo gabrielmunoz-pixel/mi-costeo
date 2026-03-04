@@ -103,10 +103,18 @@ def save_ventas(df):
     engine = get_db_engine()
     df_v = df.copy()
     
-    # CORRECCIÓN DE FECHA 1970: Asegurar conversión correcta antes del renombramiento
-    if 'fecha_pura' in df_v.columns:
-        df_v['fecha_pura'] = pd.to_datetime(df_v['fecha_pura'], errors='coerce').dt.date
-    
+    # 1. Limpieza de nombres de columnas (por si acaso)
+    df_v.columns = df_v.columns.str.strip().str.lower()
+
+    # 2. CONVERSIÓN DE FECHA (Solución al error 22008)
+    # 'dayfirst=True' le dice a Python que el 13 es el día y no el mes.
+    # 'errors=coerce' convierte lo que no sea fecha en NaT (nulo) para no romper el proceso.
+    df_v['fecha_pura'] = pd.to_datetime(df_v['fecha_pura'], dayfirst=True, errors='coerce')
+
+    # 3. Eliminar filas que quedaron vacías o con fechas imposibles
+    df_v = df_v.dropna(subset=['fecha_pura'])
+
+    # 4. Mapeo a los nombres de tu tabla en Supabase
     df_v = df_v.rename(columns={
         'local': 'local',
         'fecha_pura': 'fecha_venta',
@@ -117,9 +125,13 @@ def save_ventas(df):
         'venta_real': 'monto_venta_real'
     })
     
+    # 5. Asegurar que solo enviamos la fecha (sin horas)
+    df_v['fecha_venta'] = df_v['fecha_venta'].dt.date
+
     try:
-        df_v.to_sql('ventas', engine, if_exists='append', index=False)
-        st.success(f"✅ Se han cargado {len(df_v)} registros de ventas.")
+        # Usamos 'method=multi' para que la carga sea más eficiente en PostgreSQL
+        df_v.to_sql('ventas', engine, if_exists='append', index=False, method='multi')
+        st.success(f"✅ Se han cargado {len(df_v)} registros correctamente.")
     except Exception as e:
         st.error(f"Error al cargar ventas: {e}")
 
