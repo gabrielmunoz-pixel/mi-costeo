@@ -42,66 +42,73 @@ def save_recetas_from_excel(df_directos, df_procesados):
     # 1. Adaptar Directos
     df_dir = df_directos.copy()
     df_dir = df_dir.rename(columns={
-        'CODIGO VENTA': 'codigo_venta',
-        'Plato': 'nombre_plato',
-        'SKU': 'sku_ingrediente',
-        'Ingrediente': 'nombre_ingrediente',
-        'CantReal': 'cant_real',
-        'Eficiencia': 'rendimiento',
-        'UM': 'um_salida',
-        'EsOpcion': 'es_opcion'
+        'CODIGO VENTA': 'codigo_venta', 'Plato': 'nombre_plato',
+        'SKU': 'sku_ingrediente', 'Ingrediente': 'nombre_ingrediente',
+        'CantReal': 'cant_real', 'Eficiencia': 'rendimiento',
+        'UM': 'um_salida', 'EsOpcion': 'es_opcion'
     })
     df_dir['es_procesado'] = False
 
     # 2. Adaptar Procesados
     df_proc = df_procesados.copy()
     df_proc = df_proc.rename(columns={
-        'Codigo Venta': 'codigo_venta',
-        'Ingrediente Proc': 'nombre_plato',
-        'SKU Ingrediente': 'sku_ingrediente',
-        'Ingrediente': 'nombre_ingrediente',
-        'CantReceta': 'cant_real',
-        'CantEfic': 'cant_efic',
-        'UM Salida': 'um_salida',
-        'Eficiencia': 'rendimiento'
+        'Codigo Venta': 'codigo_venta', 'Ingrediente Proc': 'nombre_plato',
+        'SKU Ingrediente': 'sku_ingrediente', 'Ingrediente': 'nombre_ingrediente',
+        'CantReceta': 'cant_real', 'CantEfic': 'cant_efic',
+        'UM Salida': 'um_salida', 'Eficiencia': 'rendimiento'
     })
     df_proc['es_procesado'] = True
     df_proc['es_opcion'] = 0
 
     df_final = pd.concat([df_dir, df_proc], ignore_index=True)
-    columnas_db = ['codigo_venta', 'nombre_plato', 'sku_ingrediente', 'nombre_ingrediente', 
-                   'cant_real', 'rendimiento', 'cant_efic', 'um_salida', 'es_procesado', 'es_opcion']
     
     try:
         with engine.connect() as conn:
             conn.execute(text("DROP VIEW IF EXISTS vista_costo_recetas CASCADE;"))
             conn.commit()
 
-        df_to_save = df_final[columnas_db].copy()
-        df_to_save['rendimiento'] = pd.to_numeric(df_to_save['rendimiento'], errors='coerce').fillna(1)
-        # Limpieza de SKUs al guardar
-        df_to_save['codigo_venta'] = df_to_save['codigo_venta'].astype(str).str.strip()
-        df_to_save['sku_ingrediente'] = df_to_save['sku_ingrediente'].astype(str).str.strip()
-        
-        df_to_save.to_sql('recetas', engine, if_exists='replace', index=False)
+        # Limpieza y guardado
+        df_final['codigo_venta'] = df_final['codigo_venta'].astype(str).str.strip()
+        df_final['sku_ingrediente'] = df_final['sku_ingrediente'].astype(str).str.strip()
+        df_final.to_sql('recetas', engine, if_exists='replace', index=False)
 
         with engine.connect() as conn:
             sql_vista = """
             CREATE VIEW vista_costo_recetas AS
-            WITH ultimo_muc AS (
-                SELECT DISTINCT ON (sku) sku, muc as precio_unitario_compra
+            WITH precio_insumos AS (
+                -- Precio desde Compras
+                SELECT DISTINCT ON (sku) sku, muc as precio_unitario
                 FROM compras ORDER BY sku, created_at DESC
+            ),
+            costo_procesados AS (
+                -- Precio calculado de los procesados (Suma de sus ingredientes)
+                SELECT 
+                    r.codigo_venta as sku_proc,
+                    SUM(r.cant_real * COALESCE(p.precio_unitario, 0)) as precio_unitario
+                FROM recetas r
+                LEFT JOIN precio_insumos p ON r.sku_ingrediente = p.sku
+                WHERE r.es_procesado = true
+                GROUP BY r.codigo_venta
+            ),
+            precios_finales AS (
+                -- Unimos precios de compras y precios de procesados
+                SELECT sku, precio_unitario FROM precio_insumos
+                UNION ALL
+                SELECT sku_proc, precio_unitario FROM costo_procesados
+                WHERE sku_proc NOT IN (SELECT sku FROM precio_insumos)
             )
-            SELECT r.*, u.precio_unitario_compra,
-            (r.cant_real * COALESCE(u.precio_unitario_compra, 0)) as costo_parcial_insumo
+            SELECT 
+                r.*, 
+                pf.precio_unitario as precio_unitario_compra,
+                (r.cant_real * COALESCE(pf.precio_unitario, 0)) as costo_parcial_insumo
             FROM recetas r
-            LEFT JOIN ultimo_muc u ON r.sku_ingrediente = u.sku;
+            LEFT JOIN precios_finales pf ON r.sku_ingrediente = pf.sku;
             """
             conn.execute(text(sql_vista))
             conn.commit()
-        st.success("✅ Recetario y Vista de Costos actualizados.")
+        st.success("✅ Recetario actualizado con soporte para Procesados.")
     except Exception as e:
-        st.error(f"Error en base de datos: {e}")
+        st.error(f"Error en la relación de costos: {e}")
 
 def save_ventas(df):
     engine = get_db_engine()
