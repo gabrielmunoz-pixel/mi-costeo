@@ -249,31 +249,60 @@ elif menu_principal == "Informes":
     target_sku = st.text_input("Ingrese el SKU a auditar (ej: AGR-028, AGREX-027, PRO-05)", "").strip()
 
     # --- HERRAMIENTA DE DIAGNÓSTICO MUC ---
-    with st.expander("⚖️ Auditor de MUC (Minimal Unit Conversion)", expanded=True):
-        st.subheader("Análisis de Conversión y Costo por Unidad Mínima")
-        if target_sku:
-            query_muc = text("""
-                SELECT 
-                    sku, 
-                    nombre_producto, 
-                    formato, 
-                    cantidad as cant_formato,
-                    conversion as muc_factor, 
-                    muc as costo_unidad_minima,
-                    created_at
-                FROM compras 
-                WHERE sku IN (SELECT DISTINCT sku_ingrediente FROM recetas WHERE codigo_venta = :sku_target)
-                ORDER BY created_at DESC
-            """)
-            df_muc = pd.read_sql(query_muc, engine, params={"sku_target": target_sku})
-            if not df_muc.empty:
-                st.write(f"Interpretación de Conversión para insumos de **{target_sku}**:")
-                st.dataframe(df_muc)
-                st.info("💡 **Regla de Oro:** Si el 'costo_unidad_minima' es igual al precio de la factura, el MUC probablemente sea 1.")
-            else:
-                st.error("No se detectaron factores de conversión para los insumos de este producto.")
+   # --- 1. AUDITOR DE MUC (CORREGIDO PARA PROCESADOS) ---
+with st.expander("⚖️ Auditor de MUC (Minimal Unit Conversion)", expanded=True):
+    st.subheader("Análisis de Conversión y Costo por Unidad Mínima")
+    if target_sku:
+        # Ahora consultamos la VISTA, no la tabla compras, para ver el costo heredado
+        query_muc = text("""
+            SELECT 
+                sku_ingrediente as sku, 
+                nombre_ingrediente, 
+                precio_unitario_final as costo_referencia,
+                costo_parcial_insumo as subtotal_en_receta
+            FROM vista_costo_recetas 
+            WHERE codigo_venta = :sku_target
+        """)
+        df_muc = pd.read_sql(query_muc, engine, params={"sku_target": target_sku})
+        if not df_muc.empty:
+            st.write(f"Desglose de costos para **{target_sku}** (Incluye Procesados):")
+            st.dataframe(df_muc)
+            st.info("💡 Si el costo viene de un 'PRO-', el valor es la suma de sus ingredientes.")
         else:
-            st.caption("Ingrese un SKU arriba para ver factores de conversión.")
+            st.error("No se encontraron ingredientes para este SKU en el recetario.")
+
+# --- 2. RASTREADOR DE SKU (DIAGNÓSTICO ESTRUCTURAL) ---
+st.markdown("---")
+with st.expander("🔍 Auditor de Costos (Rastreador de Cascada)", expanded=False):
+    if target_sku:
+        st.markdown(f"**Análisis de Jerarquía para: {target_sku}**")
+        
+        # Consultamos la vista que ya hizo el cálculo PRO-
+        q_analisis = text("SELECT * FROM vista_costo_recetas WHERE codigo_venta = :sku")
+        df_analisis = pd.read_sql(q_analisis, engine, params={"sku": target_sku})
+        
+        if df_analisis.empty:
+            st.error(f"❌ El SKU '{target_sku}' no existe en recetas.")
+        else:
+            for _, row in df_analisis.iterrows():
+                with st.container():
+                    col1, col2 = st.columns([1, 4])
+                    is_pro = str(row['sku_ingrediente']).startswith('PRO-')
+                    icon = "🧪" if is_pro else "📦"
+                    
+                    col1.metric("Cant.", f"{row['cant_real']} {row['um_salida']}")
+                    col2.markdown(f"**{icon} {row['nombre_ingrediente']}** ({row['sku_ingrediente']})")
+                    
+                    if is_pro:
+                        st.caption(f"↳ Este es un PROCESADO. Costo calculado por sub-receta: ${row['precio_unitario_final']:,.2f}")
+                    elif row['precio_unitario_final'] == 0:
+                        st.warning(f"⚠️ ¡ALERTA! El insumo {row['sku_ingrediente']} no tiene facturas en COMPRAS.")
+                    else:
+                        st.success(f"↳ Insumo directo. Último costo MUC: ${row['precio_unitario_final']:,.2f}")
+            
+            total_plato = df_analisis['costo_parcial_insumo'].sum()
+            st.divider()
+            st.metric("COSTO TOTAL DEL PLATO (Explosión Completa)", f"${total_plato:,.2f}")
 
     # --- MÓDULO DE DIAGNÓSTICO PROFUNDO ---
     st.markdown("---")
