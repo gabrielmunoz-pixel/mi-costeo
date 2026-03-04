@@ -5,9 +5,16 @@ from sqlalchemy import create_engine
 
 # --- CONFIGURACIÓN DE CONEXIÓN ---
 def get_db_engine():
-    db = st.secrets["connections"]["supabase"]
-    conn_str = f"postgresql://{db['user']}:{db['password']}@{db['host']}:{db['port']}/{db['database']}"
-    return create_engine(conn_str)
+    try:
+        db = st.secrets["connections"]["supabase"]
+        # Agregamos sslmode=require para asegurar la compatibilidad con Supabase
+        conn_str = f"postgresql://{db['user']}:{db['password']}@{db['host']}:{db['port']}/{db['database']}?sslmode=require"
+        
+        # Agregamos pool_pre_ping para reconectar si la sesión se cae
+        return create_engine(conn_str, pool_pre_ping=True)
+    except Exception as e:
+        st.error(f"Error al configurar el motor: {e}")
+        return None
 
 # Función para guardar compras
 def save_purchases(df):
