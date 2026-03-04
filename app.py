@@ -79,6 +79,10 @@ def save_recetas_from_excel(df_directos, df_procesados):
 
         df_to_save = df_final[columnas_db].copy()
         df_to_save['rendimiento'] = pd.to_numeric(df_to_save['rendimiento'], errors='coerce').fillna(1)
+        # Limpieza de SKUs al guardar
+        df_to_save['codigo_venta'] = df_to_save['codigo_venta'].astype(str).str.strip()
+        df_to_save['sku_ingrediente'] = df_to_save['sku_ingrediente'].astype(str).str.strip()
+        
         df_to_save.to_sql('recetas', engine, if_exists='replace', index=False)
 
         with engine.connect() as conn:
@@ -89,7 +93,7 @@ def save_recetas_from_excel(df_directos, df_procesados):
                 FROM compras ORDER BY sku, created_at DESC
             )
             SELECT r.*, u.precio_unitario_compra,
-            (r.cant_real * u.precio_unitario_compra) as costo_parcial_insumo
+            (r.cant_real * COALESCE(u.precio_unitario_compra, 0)) as costo_parcial_insumo
             FROM recetas r
             LEFT JOIN ultimo_muc u ON r.sku_ingrediente = u.sku;
             """
@@ -118,6 +122,8 @@ def save_ventas(df):
     })
     
     df_v['fecha_venta'] = df_v['fecha_venta'].dt.date
+    # Limpieza de SKU de venta
+    df_v['sku_producto'] = df_v['sku_producto'].astype(str).str.strip()
 
     try:
         df_v.to_sql('ventas', engine, if_exists='append', index=False, method='multi')
@@ -225,6 +231,35 @@ if menu_principal == "Gestión BD":
 
 elif menu_principal == "Informes":
     st.title("📊 Módulo de Informes")
+
+    # --- HERRAMIENTA DE DIAGNÓSTICO ---
+    with st.expander("🔍 Herramienta de Diagnóstico de Costos (Casos como AGREX-027)"):
+        sku_debug = st.text_input("Ingresa el SKU a revisar (ej: AGREX-027)", "AGREX-027")
+        if st.button("Ejecutar Diagnóstico Técnico"):
+            engine = get_db_engine()
+            # 1. Revisar si el producto existe en la vista de costos
+            query_v = text("SELECT * FROM vista_costo_recetas WHERE codigo_venta = :sku")
+            diag_costo = pd.read_sql(query_v, engine, params={"sku": sku_debug})
+            
+            if diag_costo.empty:
+                st.error(f"❌ El código {sku_debug} NO tiene una receta vinculada en la base de datos.")
+            else:
+                st.write("✅ **Paso 1: Receta encontrada.** Detalle de insumos y costos unitarios detectados:")
+                st.dataframe(diag_costo[['nombre_plato', 'nombre_ingrediente', 'sku_ingrediente', 'cant_real', 'precio_unitario_compra', 'costo_parcial_insumo']])
+                
+                # 2. Revisar la tabla de compras para esos insumos específicos
+                insumos_lista = diag_costo['sku_ingrediente'].unique().tolist()
+                if insumos_lista:
+                    query_c = text("SELECT sku, nombre_producto, muc, created_at FROM compras WHERE sku IN :skus ORDER BY created_at DESC")
+                    # Postgres requiere tuplas para el operador IN
+                    diag_compras = pd.read_sql(query_c, engine, params={"skus": tuple(insumos_lista)})
+                    
+                    st.write("✅ **Paso 2: Historial en Compras.** Precios registrados para estos insumos:")
+                    if not diag_compras.empty:
+                        st.dataframe(diag_compras)
+                    else:
+                        st.warning("⚠️ No se encontraron registros en la tabla COMPRAS para los insumos de esta receta. Por eso el costo es $0.")
+
     sub_informe = st.selectbox("Seleccione Informe", ["1: Rentabilidad por Categoría/Producto", "2: Rentabilidad por Ingrediente"])
     
     if sub_informe == "1: Rentabilidad por Categoría/Producto":
@@ -245,25 +280,34 @@ elif menu_principal == "Informes":
             
             df_v = pd.read_sql(text(q), engine, params={"i": f_inicio, "f": f_fin, "l": f_local})
             
-            df_rec = get_recetario_costeado().groupby('codigo_venta')['costo_parcial_insumo'].sum().reset_index()
+            # Limpieza proactiva de SKUs
+            df_v['sku_producto'] = df_v['sku_producto'].astype(str).str.strip()
             
+            # Traemos el costo unitario por receta agrupado por codigo_venta
+            df_rec_raw = get_recetario_costeado()
+            if not df_rec_raw.empty:
+                df_rec_raw['codigo_venta'] = df_rec_raw['codigo_venta'].astype(str).str.strip()
+                df_rec = df_rec_raw.groupby('codigo_venta')['costo_parcial_insumo'].sum().reset_index()
+            else:
+                df_rec = pd.DataFrame(columns=['codigo_venta', 'costo_parcial_insumo'])
+            
+            # Cruce de datos
             df_res = pd.merge(df_v, df_rec, left_on='sku_producto', right_on='codigo_venta', how='left')
             
-            # --- IMPLEMENTACIÓN DE MEJORA SOLICITADA ---
-            # 1. Asegurar que los nulos en venta sean 0 para evitar errores matemáticos
+            # Cálculos de rentabilidad
             df_res['venta'] = df_res['venta'].fillna(0)
-            df_res['costo_total'] = df_res['cant'] * df_res['costo_parcial_insumo'].fillna(0)
+            df_res['costo_parcial_insumo'] = df_res['costo_parcial_insumo'].fillna(0)
+            df_res['costo_total'] = df_res['cant'] * df_res['costo_parcial_insumo']
             df_res['rentabilidad'] = df_res['venta'] - df_res['costo_total']
             
-            # 2. Evitar división por cero en el margen
+            # Evitar división por cero en el margen
             df_res['%_margen'] = df_res.apply(
                 lambda x: (x['rentabilidad'] / x['venta'] * 100) if x['venta'] > 0 else -100, 
                 axis=1
             )
             
-            # 3. Forzar que aparezca aunque la venta sea 0 ordenando por cantidad
+            # Ordenar por cantidad vendida para ver los más populares arriba (como el AGREX-027)
             df_res = df_res.sort_values(by='cant', ascending=False)
-            # ------------------------------------------
             
             def color_semaforo(val):
                 color = 'green' if val > 65 else 'orange' if val > 50 else 'red'
