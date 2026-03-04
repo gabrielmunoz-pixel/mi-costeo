@@ -1,134 +1,153 @@
 import streamlit as st
 import pandas as pd
-import io
 from sqlalchemy import create_engine
 
-# --- CONFIGURACIÓN DE CONEXIÓN ---
+# --- CONFIGURACIÓN DE BASE DE DATOS ---
 def get_db_engine():
     try:
         db = st.secrets["connections"]["supabase"]
-        # Agregamos sslmode=require para asegurar la compatibilidad con Supabase
+        # Usamos sslmode=require y el puerto 6543 para el Transaction Pooler (IPv4 compatible)
         conn_str = f"postgresql://{db['user']}:{db['password']}@{db['host']}:{db['port']}/{db['database']}?sslmode=require"
-        
-        # Agregamos pool_pre_ping para reconectar si la sesión se cae
-        return create_engine(conn_str, pool_pre_ping=True)
+        return create_engine(conn_str, pool_pre_ping=True, pool_recycle=300)
     except Exception as e:
-        st.error(f"Error al configurar el motor: {e}")
+        st.error(f"Error de conexión: {e}")
         return None
 
-# Función para guardar compras
 def save_purchases(df):
     engine = get_db_engine()
-    # Limpiamos nombres de columnas para que coincidan con SQL (minúsculas y sin espacios)
-    df.columns = df.columns.str.lower().str.replace(' ', '_').str.replace('(', '').str.replace(')', '')
-    df.to_sql('compras', engine, if_exists='append', index=False)
-    st.success("✅ Base de datos de compras actualizada en Supabase.")
-
-# Función para extraer el MUC más reciente
-def get_muc_data():
-    engine = get_db_engine()
-    # Buscamos el último MUC registrado por cada SKU
-    query = """
-    SELECT DISTINCT ON (sku) 
-           sku, 
-           muc as muc_registrado,
-           costo_realfinal,
-           cant_conv,
-           formato,
-           nombre_proveedor
-    FROM compras 
-    ORDER BY sku, created_at DESC
-    """
-    try:
-        df = pd.read_sql(query, engine)
-        # Si el MUC viene nulo en la tabla, lo calculamos en tiempo real
-        df['muc_final'] = df.apply(
-            lambda r: r['muc_registrado'] if pd.notna(r['muc_registrado']) 
-            else (r['costo_realfinal'] / (r['cant_conv'] * r['formato']) if (r['cant_conv'] * r['formato']) > 0 else 0),
-            axis=1
-        )
-        return dict(zip(df['sku'], df['muc_final']))
-    except:
-        return {}
-
-# --- PROCESAMIENTO MRP (Tu lógica original blindada) ---
-def process_bom(df_v, df_d, df_p, muc_map):
-    for df in [df_v, df_d, df_p]:
-        df.columns = df.columns.str.strip()
-
-    # Actualización de precios desde Supabase
-    if muc_map:
-        df_d['Precio'] = df_d['SKU'].map(muc_map).fillna(df_d['Precio'])
-        df_p['Precio'] = df_p['SKU Ingrediente'].map(muc_map).fillna(df_p['Precio'])
-
-    # Lógica de Ventas
-    df_v = df_v.rename(columns={'SKU': 'SKU_VENTA', 'Cantidad': 'CANT_VENTA'})
-    skus_vendidos = set(df_v['SKU_VENTA'].astype(str).str.strip().str.upper())
-
-    def validar_opcion(row):
-        es_op = str(row['EsOpcion']).strip()
-        if pd.isna(row['EsOpcion']) or es_op in ["", "0", "4"]: return True
-        return str(row['SKU']).strip().upper() in skus_vendidos
-
-    m1 = pd.merge(df_v, df_d[df_d.apply(validar_opcion, axis=1)], left_on='SKU_VENTA', right_on='CODIGO VENTA')
-
-    # Explosión Procesados
-    es_proc = m1['SKU'].str.startswith('PRO-', na=False)
-    if not m1[es_proc].empty:
-        rendimientos = df_p.groupby('Codigo Venta')['CantReceta'].sum().reset_index().rename(columns={'CantReceta': 'TOTAL_RECETA_AUTO'})
-        df_p_clean = df_p.rename(columns={'Codigo Venta':'COD_P', 'Ingrediente':'NOM_P', 'CantEfic':'CE_P', 'Porcion':'MARK_P', 'UM Salida':'UM_P', 'SKU Ingrediente':'SKU_P'})
-        df_p_final = pd.merge(df_p_clean, rendimientos, left_on='COD_P', right_on='Codigo Venta')
-        
-        m2 = pd.merge(m1[es_proc], df_p_final, left_on='SKU', right_on='COD_P')
-        
-        def calc_m2(row):
-            divisor = row['TOTAL_RECETA_AUTO'] if row['TOTAL_RECETA_AUTO'] > 0 else 1
-            if row['MARK_P'] == 1: return row['CANT_VENTA'] * row['CantReal'] * row['CE_P']
-            return row['CANT_VENTA'] * row['CantReal'] * (row['CE_P'] / divisor)
-
-        m2['CANT_OUT'] = m2.apply(calc_m2, axis=1)
-        m2['COSTO_P'] = m2['CANT_OUT'] * m2['Precio']
-        exp_f = m2[['SKU_P', 'NOM_P', 'CANT_OUT', 'UM_P', 'COSTO_P']].rename(columns={'SKU_P':'SKU_F', 'NOM_P':'ING_F', 'UM_P':'UM_F'})
-    else: exp_f = pd.DataFrame()
-
-    # Insumos Directos
-    df_dir = m1[~es_proc].copy()
-    df_dir['CANT_OUT'] = df_dir['CANT_VENTA'] * df_dir['CantReal']
-    df_dir['COSTO_P'] = df_dir['CANT_OUT'] * df_dir['Precio']
-    dir_out = df_dir[['SKU', 'Ingrediente', 'CANT_OUT', 'UM', 'COSTO_P']].rename(columns={'SKU':'SKU_F', 'Ingrediente':'ING_F', 'UM':'UM_F'})
-
-    # Consolidado
-    total = pd.concat([dir_out, exp_f])
-    resumen = total.groupby(['SKU_F', 'UM_F'], as_index=False).agg({'CANT_OUT':'sum', 'COSTO_P':'sum', 'ING_F':'first'})
-    resumen['Total'] = resumen.apply(lambda r: r['CANT_OUT']/1000 if str(r['UM_F']).upper() in ['G','ML','CC'] else r['CANT_OUT'], axis=1)
+    # Limpieza de nombres para que coincidan con la tabla 'compras'
+    df.columns = df.columns.str.strip().str.lower()
+    df.columns = [col.replace('suma de ', '').replace(' ', '_').replace('(', '').replace(')', '') 
+                  for col in df.columns]
     
-    return resumen[['SKU_F', 'ING_F', 'UM_F', 'Total', 'COSTO_P']].rename(
-        columns={'SKU_F':'SKU', 'ING_F':'Insumo', 'UM_F':'UM', 'Total':'Cant Final', 'COSTO_P':'Costo Real $'})
+    columnas_db_compras = [
+        'local', 'fecha_dte', 'rut_proveedor', 'nombre_proveedor', 'tipo_dte', 
+        'folio', 'nombre_producto', 'sku', 'subcat', 'codigo_impuesto', 
+        'cantidad', 'conversion', 'formato', 'categoria_producto', 
+        'cant_conv', 'monto_real', 'recargo2', 'total_neto2', 
+        'imp_adic', 'iva_2', 'tootal2', 'costo_realfinal', 'muc'
+    ]
+    
+    try:
+        df_final = df[columnas_db_compras]
+        df_final.to_sql('compras', engine, if_exists='append', index=False)
+        st.success("✅ Compras guardadas correctamente en Supabase.")
+    except Exception as e:
+        st.error(f"Error al guardar compras: {e}")
 
-# --- UI ---
-st.title("👨‍🍳 MRP & Intelligence Compras (Supabase)")
+# --- NUEVA FUNCIÓN DE RECETAS CON RENDIMIENTO ---
+def save_recetas_from_excel(df_directos, df_procesados):
+    engine = get_db_engine()
+    
+    # 1. Adaptar Directos
+    df_dir = df_directos.copy()
+    df_dir = df_dir.rename(columns={
+        'CODIGO VENTA': 'codigo_venta',
+        'Nombre de la receta': 'nombre_plato',
+        'SKU': 'sku_ingrediente',
+        'Ingrediente': 'nombre_ingrediente',
+        'CantReal': 'cant_real',
+        'Rendimiento': 'rendimiento',
+        'CantEfic': 'cant_efic',
+        'UM': 'um_salida',
+        'EsOpcion': 'es_opcion'
+    })
+    df_dir['es_procesado'] = False
 
-t1, t2 = st.tabs(["Explosión MRP", "Historial de Compras"])
+    # 2. Adaptar Procesados
+    df_proc = df_procesados.copy()
+    df_proc = df_proc.rename(columns={
+        'Codigo Venta': 'codigo_venta',
+        'Nombre': 'nombre_plato',
+        'SKU Ingrediente': 'sku_ingrediente',
+        'Ingrediente': 'nombre_ingrediente',
+        'CantReal': 'cant_real',
+        'CantEfic': 'cant_efic',
+        'UM Salida': 'um_salida'
+    })
+    df_proc['es_procesado'] = True
+    
+    # Cálculo de rendimiento si no existe
+    if 'rendimiento' not in df_proc.columns:
+        df_proc['rendimiento'] = df_proc['cant_efic'] / df_proc['cant_real']
+
+    # Unificamos para la base de datos
+    df_final = pd.concat([df_dir, df_proc], ignore_index=True)
+    
+    # Columnas exactas de la tabla SQL
+    columnas_db = ['codigo_venta', 'nombre_plato', 'sku_ingrediente', 'nombre_ingrediente', 
+                   'cant_real', 'rendimiento', 'cant_efic', 'um_salida', 'es_procesado', 'es_opcion']
+    
+    try:
+        # Usamos replace para que el recetario maestro sea siempre la última versión cargada
+        df_final[columnas_db].to_sql('recetas', engine, if_exists='replace', index=False)
+        st.success("✅ Recetario cargado respetando factores de rendimiento.")
+    except Exception as e:
+        st.error(f"Error al cargar recetario: {e}")
+
+def get_recetario_costeado():
+    engine = get_db_engine()
+    query = "SELECT * FROM vista_costo_recetas"
+    try:
+        return pd.read_sql(query, engine)
+    except:
+        return pd.DataFrame()
+
+# --- INTERFAZ STREAMLIT ---
+st.set_page_config(page_title="Control de Costos - Gabriel Muñoz", layout="wide")
+st.title("📊 Sistema de Inteligencia de Costos e Inventario")
+
+t1, t2, t3 = st.tabs(["Explosión MRP", "Historial de Compras", "Gestión de Recetario"])
 
 with t2:
-    st.subheader("Módulo de Carga de Facturas")
-    file_c = st.file_uploader("Subir Excel de Compras", type="xlsx")
-    if file_c:
+    st.header("🛒 Carga de Facturas y MUC")
+    file_c = st.file_uploader("Subir Excel de Compras (datosventas 2)", type="xlsx")
+    if file_c and st.button("Guardar en Supabase"):
         df_c = pd.read_excel(file_c)
-        st.dataframe(df_c.head())
-        if st.button("Guardar en Supabase"):
-            save_purchases(df_c)
+        save_purchases(df_c)
+
+with t3:
+    st.header("📖 Master de Recetas y Rendimientos")
+    
+    col_a, col_b = st.columns(2)
+    with col_a:
+        file_dir = st.file_uploader("1. Subir Excel Directos", type="xlsx")
+    with col_b:
+        file_proc = st.file_uploader("2. Subir Excel Procesados", type="xlsx")
+        
+    if file_dir and file_proc and st.button("Sincronizar Recetario Maestro"):
+        df_directos = pd.read_excel(file_dir)
+        df_procesados = pd.read_excel(file_proc)
+        save_recetas_from_excel(df_directos, df_procesados)
+
+    st.divider()
+    df_view = get_recetario_costeado()
+    if not df_view.empty:
+        st.subheader("Editor y Visualizador de Costos Reales")
+        st.data_editor(
+            df_view,
+            column_config={
+                "precio_unitario_compra": st.column_config.NumberColumn("Último MUC ($)", format="$ %d"),
+                "costo_parcial_insumo": st.column_config.NumberColumn("Costo Bruto ($)", format="$ %d"),
+                "rendimiento": st.column_config.ProgressColumn("Rendimiento", min_value=0, max_value=1)
+            },
+            disabled=["precio_unitario_compra", "costo_parcial_insumo"]
+        )
 
 with t1:
-    file_m = st.file_uploader("Subir Estructura Recetas/Ventas", type="xlsx")
-    if file_m:
-        xls = pd.ExcelFile(file_m)
-        muc_map = get_muc_data() # Obtenemos MUC desde la DB
+    st.header("📦 Explosión de Insumos (MRP)")
+    file_v = st.file_uploader("Subir Ventas del Periodo", type="xlsx")
+    if file_v and not df_view.empty:
+        df_v = pd.read_excel(file_v)
+        # Lógica de explosión cruzando ventas con la vista de recetas
+        mrp = pd.merge(df_v, df_view, left_on='SKU', right_on='codigo_venta')
+        mrp['total_necesidad'] = mrp['Cantidad'] * mrp['cant_real']
+        mrp['total_costo'] = mrp['Cantidad'] * mrp['costo_parcial_insumo']
         
-        if muc_map:
-            st.success(f"📈 Se han sincronizado {len(muc_map)} precios reales desde la nube.")
+        resumen_mrp = mrp.groupby(['nombre_ingrediente', 'um_salida']).agg({
+            'total_necesidad': 'sum',
+            'total_costo': 'sum'
+        }).reset_index()
         
-        res = process_bom(pd.read_excel(xls, 'Ventas'), pd.read_excel(xls, 'Directos'), pd.read_excel(xls, 'Procesados'), muc_map)
-        
-        st.dataframe(res.style.format({"Cant Final": "{:,.3f}", "Costo Real $": "$ {:,.0f}"}))
-        st.metric("Inversión Total en Materia Prima", f"$ {res['Costo Real $'].sum():,.0f}")
+        st.dataframe(resumen_mrp)
+        st.metric("Inversión Total Materia Prima", f"$ {resumen_mrp['total_costo'].sum():,.0f}")
