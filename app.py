@@ -110,6 +110,31 @@ def save_recetas_from_excel(df_directos, df_procesados):
     except Exception as e:
         st.error(f"Error al insertar en la base de datos: {e}")
 
+def save_ventas(df):
+    engine = get_db_engine()
+    
+    # Mapeo de tus columnas a la base de datos
+    df_v = df.copy()
+    df_v = df_v.rename(columns={
+        'local': 'local',
+        'fecha_pura': 'fecha_venta',
+        'cat_menu': 'categoria_menu',
+        'nombre': 'nombre_producto',
+        'id_producto': 'sku_producto',
+        'cantidad': 'cantidad_vendida',
+        'venta_real': 'monto_venta_real'
+    })
+    
+    # Asegurar formato de fecha
+    df_v['fecha_venta'] = pd.to_datetime(df_v['fecha_venta']).dt.date
+    
+    try:
+        # Usamos append para ir acumulando los meses (Nov, Dic, Ene)
+        df_v.to_sql('ventas', engine, if_exists='append', index=False)
+        st.success(f"✅ Se han cargado {len(df_v)} registros de ventas correctamente.")
+    except Exception as e:
+        st.error(f"Error al cargar ventas: {e}")
+
 def get_informe_desviacion(df_ventas, df_recetario, df_compras_periodo):
     # 1. Calculamos el Consumo Teórico (Ventas x Receta)
     # Explotamos las ventas para saber cuánto debimos usar de cada SKU ingrediente
