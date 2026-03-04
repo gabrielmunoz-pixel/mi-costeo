@@ -1,12 +1,12 @@
 import streamlit as st
 import pandas as pd
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 
 # --- CONFIGURACIÓN DE BASE DE DATOS ---
 def get_db_engine():
     try:
         db = st.secrets["connections"]["supabase"]
-        # Usamos sslmode=require y el puerto 6543 para el Transaction Pooler (IPv4 compatible)
+        # Conexión vía Transaction Pooler (Puerto 6543) para compatibilidad IPv4
         conn_str = f"postgresql://{db['user']}:{db['password']}@{db['host']}:{db['port']}/{db['database']}?sslmode=require"
         return create_engine(conn_str, pool_pre_ping=True, pool_recycle=300)
     except Exception as e:
@@ -15,7 +15,7 @@ def get_db_engine():
 
 def save_purchases(df):
     engine = get_db_engine()
-    # Limpieza de nombres para que coincidan con la tabla 'compras'
+    # Normalización de nombres de columnas para la tabla 'compras'
     df.columns = df.columns.str.strip().str.lower()
     df.columns = [col.replace('suma de ', '').replace(' ', '_').replace('(', '').replace(')', '') 
                   for col in df.columns]
@@ -31,16 +31,14 @@ def save_purchases(df):
     try:
         df_final = df[columnas_db_compras]
         df_final.to_sql('compras', engine, if_exists='append', index=False)
-        st.success("✅ Compras guardadas correctamente en Supabase.")
+        st.success("✅ Compras guardadas correctamente en la base de datos.")
     except Exception as e:
         st.error(f"Error al guardar compras: {e}")
 
-# --- NUEVA FUNCIÓN DE RECETAS CON RENDIMIENTO ---
 def save_recetas_from_excel(df_directos, df_procesados):
     engine = get_db_engine()
     
-    # 1. Adaptar Directos
-    # Columnas: CODIGO VENTA, Plato, Ingrediente, SKU, EsOpcion, Cantidad, CantReal, UM, Proc, Precio, Eficiencia, Costo, Tipo
+    # 1. Adaptar Directos (Columnas: CODIGO VENTA, Plato, SKU, CantReal, Eficiencia, etc.)
     df_dir = df_directos.copy()
     df_dir = df_dir.rename(columns={
         'CODIGO VENTA': 'codigo_venta',
@@ -52,44 +50,63 @@ def save_recetas_from_excel(df_directos, df_procesados):
         'UM': 'um_salida',
         'EsOpcion': 'es_opcion'
     })
-    # Calculamos CantEfic si no viene explícita en directos
-    if 'cant_efic' not in df_dir.columns:
-        df_dir['cant_efic'] = df_dir['cant_real'] * df_dir['rendimiento'].fillna(1)
     df_dir['es_procesado'] = False
+    if 'cant_efic' not in df_dir.columns:
+        df_dir['cant_efic'] = df_dir['cant_real'] * pd.to_numeric(df_dir['rendimiento'], errors='coerce').fillna(1)
 
-    # 2. Adaptar Procesados
-    # Columnas: Ingrediente Proc, Codigo Venta, Ingrediente, SKU Ingrediente, Precio, UM, Eficiencia, CantEfic, UM Salida, Porcion, CantReceta, Costo Total
+    # 2. Adaptar Procesados (Columnas: Ingrediente Proc, Codigo Venta, SKU Ingrediente, CantReceta, etc.)
     df_proc = df_procesados.copy()
     df_proc = df_proc.rename(columns={
         'Codigo Venta': 'codigo_venta',
         'Ingrediente Proc': 'nombre_plato',
         'SKU Ingrediente': 'sku_ingrediente',
         'Ingrediente': 'nombre_ingrediente',
-        'CantReceta': 'cant_real',      # En tus procesados, CantReceta es la base
+        'CantReceta': 'cant_real',
         'CantEfic': 'cant_efic',
         'UM Salida': 'um_salida',
         'Eficiencia': 'rendimiento'
     })
     df_proc['es_procesado'] = True
-    df_proc['es_opcion'] = 0 # Valor por defecto para procesados
+    df_proc['es_opcion'] = 0
 
     # Unificamos para la base de datos
     df_final = pd.concat([df_dir, df_proc], ignore_index=True)
     
-    # Columnas exactas que espera tu tabla SQL 'recetas'
     columnas_db = [
         'codigo_venta', 'nombre_plato', 'sku_ingrediente', 'nombre_ingrediente', 
         'cant_real', 'rendimiento', 'cant_efic', 'um_salida', 'es_procesado', 'es_opcion'
     ]
     
     try:
-        # Filtramos solo las columnas necesarias y manejamos valores nulos
+        # 1. Conexión manual para limpiar dependencias
+        with engine.connect() as conn:
+            # Borramos la vista para que nos deje reemplazar la tabla
+            conn.execute(text("DROP VIEW IF EXISTS vista_costo_recetas CASCADE;"))
+            conn.commit()
+
+        # 2. Guardamos los nuevos datos (esto recrea la tabla 'recetas')
         df_to_save = df_final[columnas_db].copy()
         df_to_save['rendimiento'] = pd.to_numeric(df_to_save['rendimiento'], errors='coerce').fillna(1)
-        
-        # Guardamos en Supabase (if_exists='replace' para mantener el maestro actualizado)
         df_to_save.to_sql('recetas', engine, if_exists='replace', index=False)
-        st.success("✅ Recetario unificado y cargado correctamente.")
+
+        # 3. Recreamos la Vista de Costos (ahora con la tabla nueva)
+        with engine.connect() as conn:
+            sql_vista = """
+            CREATE VIEW vista_costo_recetas AS
+            WITH ultimo_muc AS (
+                SELECT DISTINCT ON (sku) sku, muc as precio_unitario_compra
+                FROM compras 
+                ORDER BY sku, created_at DESC
+            )
+            SELECT r.*, u.precio_unitario_compra,
+            (r.cant_real * u.precio_unitario_compra) as costo_parcial_insumo
+            FROM recetas r
+            LEFT JOIN ultimo_muc u ON r.sku_ingrediente = u.sku;
+            """
+            conn.execute(text(sql_vista))
+            conn.commit()
+
+        st.success("✅ Recetario y Vista de Costos actualizados correctamente.")
     except Exception as e:
         st.error(f"Error al insertar en la base de datos: {e}")
 
@@ -110,7 +127,7 @@ t1, t2, t3 = st.tabs(["Explosión MRP", "Historial de Compras", "Gestión de Rec
 with t2:
     st.header("🛒 Carga de Facturas y MUC")
     file_c = st.file_uploader("Subir Excel de Compras (datosventas 2)", type="xlsx")
-    if file_c and st.button("Guardar en Supabase"):
+    if file_c and st.button("Guardar en Supabase", key="btn_compras"):
         df_c = pd.read_excel(file_c)
         save_purchases(df_c)
 
@@ -131,15 +148,16 @@ with t3:
     st.divider()
     df_view = get_recetario_costeado()
     if not df_view.empty:
-        st.subheader("Editor y Visualizador de Costos Reales")
+        st.subheader("Visualización de Costos Reales (Base de Datos)")
         st.data_editor(
             df_view,
             column_config={
                 "precio_unitario_compra": st.column_config.NumberColumn("Último MUC ($)", format="$ %d"),
                 "costo_parcial_insumo": st.column_config.NumberColumn("Costo Bruto ($)", format="$ %d"),
-                "rendimiento": st.column_config.ProgressColumn("Rendimiento", min_value=0, max_value=1)
+                "rendimiento": st.column_config.NumberColumn("Rendimiento", format="%.2f")
             },
-            disabled=["precio_unitario_compra", "costo_parcial_insumo"]
+            disabled=True,
+            hide_index=True
         )
 
 with t1:
@@ -147,7 +165,7 @@ with t1:
     file_v = st.file_uploader("Subir Ventas del Periodo", type="xlsx")
     if file_v and not df_view.empty:
         df_v = pd.read_excel(file_v)
-        # Lógica de explosión cruzando ventas con la vista de recetas
+        # Cruce de ventas con recetas costeadas
         mrp = pd.merge(df_v, df_view, left_on='SKU', right_on='codigo_venta')
         mrp['total_necesidad'] = mrp['Cantidad'] * mrp['cant_real']
         mrp['total_costo'] = mrp['Cantidad'] * mrp['costo_parcial_insumo']
