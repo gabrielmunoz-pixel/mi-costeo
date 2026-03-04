@@ -76,7 +76,6 @@ def save_recetas_from_excel(df_directos, df_procesados):
             sql_vista = """
             CREATE VIEW vista_costo_recetas AS
             WITH 
-            -- A. Precios de mercado (Facturas cargadas)
             precios_mercado AS (
                 SELECT DISTINCT ON (sku) 
                     sku, 
@@ -84,8 +83,6 @@ def save_recetas_from_excel(df_directos, df_procesados):
                 FROM compras 
                 ORDER BY sku, created_at DESC
             ),
-            -- B. Costo calculado de los Procesados (PRO-)
-            --    Suma de ingredientes base para obtener el valor del "PRO-05"
             costo_calculado_procesados AS (
                 SELECT 
                     r.codigo_venta as sku_pro,
@@ -95,14 +92,12 @@ def save_recetas_from_excel(df_directos, df_procesados):
                 WHERE r.es_procesado = true
                 GROUP BY r.codigo_venta
             ),
-            -- C. Maestra de Precios Unificada
             maestra_precios AS (
                 SELECT sku, costo_unitario_compra as precio_ref FROM precios_mercado
                 UNION ALL
                 SELECT sku_pro, costo_final_producido FROM costo_calculado_procesados
                 WHERE sku_pro NOT IN (SELECT sku FROM precios_mercado)
             )
-            -- D. Resultado Final para el Informe
             SELECT 
                 r.*, 
                 mp.precio_ref as precio_unitario_final,
@@ -115,6 +110,7 @@ def save_recetas_from_excel(df_directos, df_procesados):
         st.success("✅ Estructura sólida de costos reconstruida.")
     except Exception as e:
         st.error(f"Error en SQL: {e}")
+
 def save_ventas(df):
     engine = get_db_engine()
     df_v = df.copy()
@@ -245,66 +241,66 @@ elif menu_principal == "Informes":
     st.title("📊 Módulo de Informes")
     engine = get_db_engine()
 
-    # --- DEFINICIÓN DE SKU PARA AUDITORÍA (CORRECCIÓN TÉCNICA) ---
+    # --- DEFINICIÓN DE SKU PARA AUDITORÍA ---
     target_sku = st.text_input("Ingrese el SKU a auditar (ej: AGR-028, AGREX-027, PRO-05)", "").strip()
 
-    # --- HERRAMIENTA DE DIAGNÓSTICO MUC ---
-   # --- 1. AUDITOR DE MUC (CORREGIDO PARA PROCESADOS) ---
-with st.expander("⚖️ Auditor de MUC (Minimal Unit Conversion)", expanded=True):
-    st.subheader("Análisis de Conversión y Costo por Unidad Mínima")
-    if target_sku:
-        # Ahora consultamos la VISTA, no la tabla compras, para ver el costo heredado
-        query_muc = text("""
-            SELECT 
-                sku_ingrediente as sku, 
-                nombre_ingrediente, 
-                precio_unitario_final as costo_referencia,
-                costo_parcial_insumo as subtotal_en_receta
-            FROM vista_costo_recetas 
-            WHERE codigo_venta = :sku_target
-        """)
-        df_muc = pd.read_sql(query_muc, engine, params={"sku_target": target_sku})
-        if not df_muc.empty:
-            st.write(f"Desglose de costos para **{target_sku}** (Incluye Procesados):")
-            st.dataframe(df_muc)
-            st.info("💡 Si el costo viene de un 'PRO-', el valor es la suma de sus ingredientes.")
-        else:
-            st.error("No se encontraron ingredientes para este SKU en el recetario.")
+    # --- 1. AUDITOR DE MUC (INTEGRADO PARA PROCESADOS) ---
+    with st.expander("⚖️ Auditor de MUC (Minimal Unit Conversion)", expanded=True):
+        st.subheader("Análisis de Conversión y Costo por Unidad Mínima")
+        if target_sku:
+            try:
+                query_muc = text("""
+                    SELECT 
+                        sku_ingrediente as sku, 
+                        nombre_ingrediente, 
+                        precio_unitario_final as costo_referencia,
+                        costo_parcial_insumo as subtotal_en_receta
+                    FROM vista_costo_recetas 
+                    WHERE codigo_venta = :sku_target
+                """)
+                with engine.connect() as conn:
+                    df_muc = pd.read_sql(query_muc, conn, params={"sku_target": target_sku})
+                if not df_muc.empty:
+                    st.write(f"Desglose de costos para **{target_sku}** (Incluye Procesados):")
+                    st.dataframe(df_muc)
+                    st.info("💡 Si el costo viene de un 'PRO-', el valor es la suma de sus ingredientes.")
+                else:
+                    st.error("No se encontraron ingredientes para este SKU en el recetario.")
+            except Exception as e:
+                st.error(f"Error de consulta en MUC: {e}")
 
-# --- 2. RASTREADOR DE SKU (DIAGNÓSTICO ESTRUCTURAL) ---
-st.markdown("---")
-with st.expander("🔍 Auditor de Costos (Rastreador de Cascada)", expanded=False):
-    if target_sku:
-        st.markdown(f"**Análisis de Jerarquía para: {target_sku}**")
-        
-        # Consultamos la vista que ya hizo el cálculo PRO-
-        q_analisis = text("SELECT * FROM vista_costo_recetas WHERE codigo_venta = :sku")
-        df_analisis = pd.read_sql(q_analisis, engine, params={"sku": target_sku})
-        
-        if df_analisis.empty:
-            st.error(f"❌ El SKU '{target_sku}' no existe en recetas.")
-        else:
-            for _, row in df_analisis.iterrows():
-                with st.container():
-                    col1, col2 = st.columns([1, 4])
-                    is_pro = str(row['sku_ingrediente']).startswith('PRO-')
-                    icon = "🧪" if is_pro else "📦"
-                    
-                    col1.metric("Cant.", f"{row['cant_real']} {row['um_salida']}")
-                    col2.markdown(f"**{icon} {row['nombre_ingrediente']}** ({row['sku_ingrediente']})")
-                    
-                    if is_pro:
-                        st.caption(f"↳ Este es un PROCESADO. Costo calculado por sub-receta: ${row['precio_unitario_final']:,.2f}")
-                    elif row['precio_unitario_final'] == 0:
-                        st.warning(f"⚠️ ¡ALERTA! El insumo {row['sku_ingrediente']} no tiene facturas en COMPRAS.")
-                    else:
-                        st.success(f"↳ Insumo directo. Último costo MUC: ${row['precio_unitario_final']:,.2f}")
+    # --- 2. RASTREADOR DE SKU (DIAGNÓSTICO ESTRUCTURAL) ---
+    st.markdown("---")
+    with st.expander("🔍 Auditor de Costos (Rastreador de Cascada)", expanded=False):
+        if target_sku:
+            st.markdown(f"**Análisis de Jerarquía para: {target_sku}**")
+            q_analisis = text("SELECT * FROM vista_costo_recetas WHERE codigo_venta = :sku")
+            df_analisis = pd.read_sql(q_analisis, engine, params={"sku": target_sku})
             
-            total_plato = df_analisis['costo_parcial_insumo'].sum()
-            st.divider()
-            st.metric("COSTO TOTAL DEL PLATO (Explosión Completa)", f"${total_plato:,.2f}")
+            if df_analisis.empty:
+                st.error(f"❌ El SKU '{target_sku}' no existe en recetas.")
+            else:
+                for _, row in df_analisis.iterrows():
+                    with st.container():
+                        col1, col2 = st.columns([1, 4])
+                        is_pro = str(row['sku_ingrediente']).startswith('PRO-')
+                        icon = "🧪" if is_pro else "📦"
+                        
+                        col1.metric("Cant.", f"{row['cant_real']} {row['um_salida']}")
+                        col2.markdown(f"**{icon} {row['nombre_ingrediente']}** ({row['sku_ingrediente']})")
+                        
+                        if is_pro:
+                            st.caption(f"↳ Este es un PROCESADO. Costo calculado por sub-receta: ${row['precio_unitario_final']:,.2f}")
+                        elif row['precio_unitario_final'] == 0:
+                            st.warning(f"⚠️ ¡ALERTA! El insumo {row['sku_ingrediente']} no tiene facturas en COMPRAS.")
+                        else:
+                            st.success(f"↳ Insumo directo. Último costo MUC: ${row['precio_unitario_final']:,.2f}")
+                
+                total_plato = df_analisis['costo_parcial_insumo'].sum()
+                st.divider()
+                st.metric("COSTO TOTAL DEL PLATO (Explosión Completa)", f"${total_plato:,.2f}")
 
-    # --- MÓDULO DE DIAGNÓSTICO PROFUNDO ---
+    # --- 3. MÓDULO DE DIAGNÓSTICO PROFUNDO (RESTAURADO) ---
     st.markdown("---")
     with st.expander("🔍 Auditor de Costos (Diagnóstico vista_costo_recetas)", expanded=False):
         st.subheader("Rastreador de SKU: Producto -> Receta -> Insumo -> Compra")
@@ -343,8 +339,9 @@ with st.expander("🔍 Auditor de Costos (Rastreador de Cascada)", expanded=Fals
                     if not df_vista_check.empty:
                         total_receta = df_vista_check['costo_parcial_insumo'].sum()
                         st.metric("Costo Total Calculado para " + target_sku, f"${total_receta:,.2f}")
-                        st.dataframe(df_vista_check[['nombre_ingrediente', 'cant_real', 'precio_unitario_compra', 'costo_parcial_insumo']])
+                        st.dataframe(df_vista_check[['nombre_ingrediente', 'cant_real', 'precio_unitario_final', 'costo_parcial_insumo']])
 
+    # --- 4. HERRAMIENTA DE DIAGNÓSTICO ESPECÍFICO (RESTAURADA) ---
     st.markdown("---")
     with st.expander("🔍 Herramienta de Diagnóstico de Costos (Casos como AGREX-027)"):
         sku_debug = st.text_input("Ingresa el SKU a revisar (ej: AGREX-027)", "AGREX-027")
@@ -355,7 +352,7 @@ with st.expander("🔍 Auditor de Costos (Rastreador de Cascada)", expanded=Fals
                 st.error(f"❌ El código {sku_debug} NO tiene una receta vinculada.")
             else:
                 st.write("✅ **Paso 1: Receta encontrada.**")
-                st.dataframe(diag_costo[['nombre_plato', 'nombre_ingrediente', 'sku_ingrediente', 'cant_real', 'precio_unitario_compra', 'costo_parcial_insumo']])
+                st.dataframe(diag_costo[['nombre_plato', 'nombre_ingrediente', 'sku_ingrediente', 'cant_real', 'precio_unitario_final', 'costo_parcial_insumo']])
                 insumos_lista = diag_costo['sku_ingrediente'].unique().tolist()
                 if insumos_lista:
                     query_c = text("SELECT sku, nombre_producto, muc, created_at FROM compras WHERE sku IN :skus ORDER BY created_at DESC")
@@ -366,6 +363,7 @@ with st.expander("🔍 Auditor de Costos (Rastreador de Cascada)", expanded=Fals
                     else:
                         st.warning("⚠️ No se encontraron registros en COMPRAS.")
 
+    # --- 5. INFORMES DE RENTABILIDAD ---
     sub_informe = st.selectbox("Seleccione Informe", ["1: Rentabilidad por Categoría/Producto", "2: Rentabilidad por Ingrediente"])
     
     if sub_informe == "1: Rentabilidad por Categoría/Producto":
@@ -390,6 +388,7 @@ with st.expander("🔍 Auditor de Costos (Rastreador de Cascada)", expanded=Fals
                 df_rec = df_rec_raw.groupby('codigo_venta')['costo_parcial_insumo'].sum().reset_index()
             else:
                 df_rec = pd.DataFrame(columns=['codigo_venta', 'costo_parcial_insumo'])
+            
             df_res = pd.merge(df_v, df_rec, left_on='sku_producto', right_on='codigo_venta', how='left')
             df_res['venta'] = df_res['venta'].fillna(0)
             df_res['costo_parcial_insumo'] = df_res['costo_parcial_insumo'].fillna(0)
