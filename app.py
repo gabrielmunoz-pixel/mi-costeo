@@ -18,6 +18,7 @@ def get_db_engine():
 
 def save_purchases(df):
     engine = get_db_engine()
+    # Limpieza de nombres de columna para coincidir con DB
     df.columns = df.columns.str.strip().str.lower()
     df.columns = [col.replace('suma de ', '').replace(' ', '_').replace('(', '').replace(')', '') 
                   for col in df.columns]
@@ -40,7 +41,7 @@ def save_purchases(df):
 def save_recetas_from_excel(df_directos, df_procesados):
     engine = get_db_engine()
     
-    # 1. Preparar Directos (Columnas exactas del Excel)
+    # 1. Preparar Directos (Columnas: CODIGO VENTA, Plato, Ingrediente, SKU, CantReal, Eficiencia, UM)
     df_dir = df_directos.copy()
     df_dir = df_dir.rename(columns={
         'CODIGO VENTA': 'codigo_venta', 'Plato': 'nombre_plato',
@@ -52,7 +53,7 @@ def save_recetas_from_excel(df_directos, df_procesados):
     df_dir['porcion_marcador'] = 0 
     df_dir['volumen_receta_lote'] = 0 
 
-    # 2. Preparar Procesados (Columnas exactas del Excel)
+    # 2. Preparar Procesados (Columnas: Ingrediente Proc, Codigo Venta, SKU Ingrediente, CantEfic, Porcion, CantReceta)
     df_proc = df_procesados.copy()
     df_proc = df_proc.rename(columns={
         'Codigo Venta': 'codigo_venta', 'Ingrediente Proc': 'nombre_plato',
@@ -76,7 +77,7 @@ def save_recetas_from_excel(df_directos, df_procesados):
         df_final.to_sql('recetas', engine, if_exists='replace', index=False)
 
         with engine.connect() as conn:
-            # LÓGICA DE EXPLOSIÓN: Lote (0) vs Porción (1) con nombres estandarizados
+            # LÓGICA DE EXPLOSIÓN MRP: Lote (0) vs Porción (1)
             sql_vista = """
             CREATE VIEW vista_costo_recetas AS
             WITH 
@@ -184,6 +185,7 @@ with st.sidebar:
     st.title("📂 Navegación")
     menu_principal = st.radio("Módulo", ["Gestión BD", "Informes"])
     st.divider()
+    st.subheader("🗓️ Filtros Globales")
     f_inicio = st.date_input("Inicio", value=datetime(2025, 11, 1))
     f_fin = st.date_input("Fin")
     locales_list = ["Todos"]
@@ -211,6 +213,7 @@ if menu_principal == "Gestión BD":
             st.metric("Costo Total Teórico", f"$ {res['total_costo'].sum():,.0f}")
 
     elif sub == "Gestión de Recetario":
+        st.subheader("📖 Master de Recetas")
         col1, col2 = st.columns(2)
         with col1: f_dir = st.file_uploader("Directos", type="xlsx")
         with col2: f_proc = st.file_uploader("Procesados", type="xlsx")
@@ -220,59 +223,92 @@ if menu_principal == "Gestión BD":
         if not df_v.empty: st.dataframe(df_v, hide_index=True)
 
     elif sub == "Historial de Compras":
+        st.subheader("🛒 Carga de Facturas")
         file_c = st.file_uploader("Subir Excel de Compras", type="xlsx")
         if file_c and st.button("Guardar Compras"):
             save_purchases(pd.read_excel(file_c))
 
     elif sub == "Carga Ventas":
+        st.subheader("📈 Inyección de Ventas")
         file_h = st.file_uploader("Excel Ventas", type="xlsx")
         if file_h and st.button("Inyectar"):
             save_ventas(pd.read_excel(file_h))
 
 elif menu_principal == "Informes":
     st.title("📊 Módulo de Informes")
-    target_sku = st.text_input("Ingrese SKU a auditar", "").strip()
+    target_sku = st.text_input("Ingrese SKU a auditar (ej: AGR-028, AGREX-027, PRO-05)", "").strip()
     engine = get_db_engine()
 
     if target_sku:
+        # --- 1. AUDITOR DE MUC ---
         with st.expander("⚖️ Auditor de MUC (Integrado)", expanded=True):
-            query = text("SELECT sku_ingrediente as sku, nombre_ingrediente, precio_unitario_final, costo_parcial_insumo FROM vista_costo_recetas WHERE codigo_venta = :t")
-            df = pd.read_sql(query, engine, params={"t": target_sku})
-            if not df.empty: st.dataframe(df)
-            else: st.warning("SKU no encontrado.")
+            query = text("""
+                SELECT 
+                    sku_ingrediente as sku, 
+                    nombre_ingrediente, 
+                    precio_unitario_final, 
+                    costo_parcial_insumo 
+                FROM vista_costo_recetas 
+                WHERE codigo_venta = :t
+            """)
+            try:
+                df_muc = pd.read_sql(query, engine, params={"t": target_sku})
+                if not df_muc.empty:
+                    st.dataframe(df_muc)
+                else:
+                    st.warning("SKU no encontrado en la vista de costos.")
+            except Exception as e:
+                st.error(f"Error en Auditor de MUC: {e}")
 
+        # --- 2. RASTREADOR DE CASCADA ---
         with st.expander("🔍 Auditor de Costos (Rastreador de Cascada)", expanded=True):
             df_c = pd.read_sql(text("SELECT * FROM vista_costo_recetas WHERE codigo_venta = :t"), engine, params={"t": target_sku})
             if not df_c.empty:
                 for _, r in df_c.iterrows():
-                    col1, col2 = st.columns([1, 4])
-                    col1.metric("Cant.", f"{r['cant_calculo']} {r['um_salida']}")
-                    col2.markdown(f"**{r['nombre_ingrediente']}** ({r['sku_ingrediente']})")
-                    st.caption(f"↳ Costo: ${r['precio_unitario_final']:,.2f}")
+                    with st.container():
+                        col1, col2 = st.columns([1, 4])
+                        is_pro = str(r['sku_ingrediente']).startswith('PRO-')
+                        col1.metric("Cant.", f"{r['cant_calculo']} {r['um_salida']}")
+                        col2.markdown(f"**{'🧪' if is_pro else '📦'} {r['nombre_ingrediente']}** ({r['sku_ingrediente']})")
+                        st.caption(f"↳ Costo Unitario Ref: ${r['precio_unitario_final']:,.2f}")
                 st.divider()
                 st.metric("COSTO TOTAL EXPLOTADO", f"${df_c['costo_parcial_insumo'].sum():,.2f}")
 
+        # --- 3. DIAGNÓSTICO TÉCNICO ---
         with st.expander("🔍 Diagnóstico Técnico vista_costo_recetas", expanded=False):
             st.write("Datos Crudos de la Vista:")
             st.dataframe(pd.read_sql(text("SELECT * FROM vista_costo_recetas WHERE codigo_venta = :t"), engine, params={"t": target_sku}))
 
-    sub_inf = st.selectbox("Informe", ["1: Rentabilidad por Producto", "2: Rentabilidad por Ingrediente"])
+    # --- INFORMES GENERALES ---
+    sub_inf = st.selectbox("Seleccione Informe", ["1: Rentabilidad por Producto", "2: Rentabilidad por Ingrediente"])
+    
     if st.button("Generar Informe"):
         if sub_inf == "1: Rentabilidad por Producto":
             q = "SELECT categoria_menu, sku_producto, nombre_producto, SUM(monto_venta_real) as venta, SUM(cantidad_vendida) as cant FROM ventas WHERE fecha_venta BETWEEN :i AND :f GROUP BY 1, 2, 3"
             df_v = pd.read_sql(text(q), engine, params={"i": f_inicio, "f": f_fin})
-            df_rec = get_recetario_costeado().groupby('codigo_venta')['costo_parcial_insumo'].sum().reset_index()
-            res = pd.merge(df_v, df_rec, left_on='sku_producto', right_on='codigo_venta', how='left').fillna(0)
-            res['rentabilidad'] = res['venta'] - (res['cant'] * res['costo_parcial_insumo'])
+            df_rec_costos = get_recetario_costeado().groupby('codigo_venta')['costo_parcial_insumo'].sum().reset_index()
+            
+            res = pd.merge(df_v, df_rec_costos, left_on='sku_producto', right_on='codigo_venta', how='left').fillna(0)
+            res['costo_total'] = res['cant'] * res['costo_parcial_insumo']
+            res['rentabilidad'] = res['venta'] - res['costo_total']
             res['%_margen'] = res.apply(lambda x: (x['rentabilidad'] / x['venta'] * 100) if x['venta'] > 0 else 0, axis=1)
             
             def semaforo(v):
                 c = 'green' if v > 65 else 'orange' if v > 50 else 'red'
                 return f'background-color: {c}'
             
-            st.dataframe(res.style.applymap(semaforo, subset=['%_margen']).format({'venta': '${:,.0f}', 'rentabilidad': '${:,.0f}', '%_margen': '{:.1f}%'}))
+            st.dataframe(res.style.applymap(semaforo, subset=['%_margen']).format({
+                'venta': '${:,.0f}', 
+                'costo_total': '${:,.0f}', 
+                'rentabilidad': '${:,.0f}', 
+                '%_margen': '{:.1f}%'
+            }))
 
         elif sub_inf == "2: Rentabilidad por Ingrediente":
             inf = get_informe_desviacion(f_inicio, f_fin, f_local)
             if not inf.empty:
-                st.dataframe(inf[['nombre_ingrediente', 'consumo_teorico', 'cant_conv', 'desviacion_dinero']])
+                st.dataframe(inf[['nombre_ingrediente', 'consumo_teorico', 'cant_conv', 'desviacion_dinero']].style.format({
+                    'consumo_teorico': '{:.2f}',
+                    'cant_conv': '{:.2f}',
+                    'desviacion_dinero': '${:,.0f}'
+                }))
