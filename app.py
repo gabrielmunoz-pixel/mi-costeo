@@ -110,6 +110,38 @@ def save_recetas_from_excel(df_directos, df_procesados):
     except Exception as e:
         st.error(f"Error al insertar en la base de datos: {e}")
 
+def get_informe_desviacion(df_ventas, df_recetario, df_compras_periodo):
+    # 1. Calculamos el Consumo Teórico (Ventas x Receta)
+    # Explotamos las ventas para saber cuánto debimos usar de cada SKU ingrediente
+    teorico = pd.merge(df_ventas, df_recetario, left_on='SKU', right_on='codigo_venta')
+    teorico['consumo_teorico'] = teorico['Cantidad'] * teorico['cant_real']
+    
+    consumo_total_teorico = teorico.groupby(['sku_ingrediente', 'nombre_ingrediente']).agg({
+        'consumo_teorico': 'sum'
+    }).reset_index()
+
+    # 2. Calculamos las Compras Reales del periodo
+    # Sumamos todo lo que entró según las facturas en ese rango de fechas
+    compras_totales = df_compras_periodo.groupby('sku').agg({
+        'cant_conv': 'sum', # Usamos la cantidad convertida (ej: kg)
+        'muc': 'mean'       # Precio promedio para valorizar la pérdida
+    }).reset_index()
+
+    # 3. Cruzamos ambos mundos
+    informe = pd.merge(
+        consumo_total_teorico, 
+        compras_totales, 
+        left_on='sku_ingrediente', 
+        right_on='sku', 
+        how='outer'
+    ).fillna(0)
+
+    # 4. Calculamos Desviaciones
+    informe['desviacion_cantidad'] = informe['consumo_teorico'] - informe['cant_conv']
+    informe['desviacion_dinero'] = informe['desviacion_cantidad'] * informe['muc']
+    
+    return informe
+
 def get_recetario_costeado():
     engine = get_db_engine()
     query = "SELECT * FROM vista_costo_recetas"
