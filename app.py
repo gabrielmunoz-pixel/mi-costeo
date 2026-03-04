@@ -278,8 +278,7 @@ elif menu_principal == "Informes":
                 with st.expander(f"📂 {cat_p}", expanded=True):
                     for s in subcats:
                         st.subheader(f"📍 {s.capitalize()}")
-                        # Filtrado asumiendo que en 'compras' existe columna 'subcat'
-                        df_s = inf[inf['subcat'].str.lower() == s.lower()] if 'subcat' in inf.columns else pd.DataFrame()
+                       df_s = inf[inf['subcat'].astype(str).str.lower() == s.lower()] if 'subcat' in inf.columns else pd.DataFrame()
                         if not df_s.empty:
                             st.dataframe(df_s[['nombre_ingrediente', 'consumo_teorico', 'cant_conv', 'desviacion_dinero']])
                         else:
