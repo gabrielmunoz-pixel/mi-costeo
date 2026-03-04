@@ -230,14 +230,29 @@ elif menu_principal == "Informes":
     if sub_informe == "1: Rentabilidad por Categoría/Producto":
         if st.button("Generar Informe 1"):
             engine = get_db_engine()
-            q = "SELECT categoria_menu, nombre_producto, sku_producto, SUM(monto_venta_real) as venta, SUM(cantidad_vendida) as cant FROM ventas WHERE fecha_venta BETWEEN :i AND :f"
+            # Incluimos sku_producto en la selección y el agrupado
+            q = """
+                SELECT 
+                    categoria_menu, 
+                    sku_producto, 
+                    nombre_producto, 
+                    SUM(monto_venta_real) as venta, 
+                    SUM(cantidad_vendida) as cant 
+                FROM ventas 
+                WHERE fecha_venta BETWEEN :i AND :f
+            """
             if f_local != "Todos": q += " AND local = :l"
             q += " GROUP BY 1, 2, 3"
             
             df_v = pd.read_sql(text(q), engine, params={"i": f_inicio, "f": f_fin, "l": f_local})
+            
+            # Traemos el costo unitario por receta
             df_rec = get_recetario_costeado().groupby('codigo_venta')['costo_parcial_insumo'].sum().reset_index()
             
+            # Cruce de datos
             df_res = pd.merge(df_v, df_rec, left_on='sku_producto', right_on='codigo_venta', how='left')
+            
+            # Cálculos de rentabilidad
             df_res['costo_total'] = df_res['cant'] * df_res['costo_parcial_insumo']
             df_res['rentabilidad'] = df_res['venta'] - df_res['costo_total']
             df_res['%_margen'] = (df_res['rentabilidad'] / df_res['venta']) * 100
@@ -246,9 +261,20 @@ elif menu_principal == "Informes":
                 color = 'green' if val > 65 else 'orange' if val > 50 else 'red'
                 return f'background-color: {color}'
 
-            st.dataframe(df_res[['categoria_menu', 'nombre_producto', 'venta', 'costo_total', 'rentabilidad', '%_margen']]
-                         .style.applymap(color_semaforo, subset=['%_margen'])
-                         .format({'venta': '${:,.0f}', 'costo_total': '${:,.0f}', 'rentabilidad': '${:,.0f}', '%_margen': '{:.1f}%'}))
+            # Mostramos el DataFrame con el SKU (Código de Venta) incluido
+            columnas_mostrar = ['sku_producto', 'categoria_menu', 'nombre_producto', 'venta', 'costo_total', 'rentabilidad', '%_margen']
+            
+            st.dataframe(
+                df_res[columnas_mostrar]
+                .style.applymap(color_semaforo, subset=['%_margen'])
+                .format({
+                    'venta': '${:,.0f}', 
+                    'costo_total': '${:,.0f}', 
+                    'rentabilidad': '${:,.0f}', 
+                    '%_margen': '{:.1f}%'
+                }),
+                use_container_width=True
+            )
 
     elif sub_informe == "2: Rentabilidad por Ingrediente":
         if st.button("Generar Informe 2"):
