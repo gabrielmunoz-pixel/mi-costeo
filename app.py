@@ -241,76 +241,32 @@ elif menu_principal == "Informes":
 
     # --- HERRAMIENTA DE DIAGNÓSTICO ---
 
-    st.markdown("---")
-    with st.expander("💎 Monitor Maestro de MUC (Finales, Directos y Procesados)", expanded=False):
-        st.subheader("Análisis de Costo Unitario por Nivel")
+    with st.expander("⚖️ Auditor de MUC (Minimal Unit Conversion)", expanded=True):
+        st.subheader("Análisis de Conversión y Costo por Unidad Mínima")
         
-        engine = get_db_engine()
-        
-        # 1. Obtener la "Super Lista" que procesa la lógica de la Vista
-        # Esta consulta replica la lógica de la vista para mostrarte el origen
-        query_master = text("""
-            WITH precio_insumos AS (
-                SELECT DISTINCT ON (sku) 
-                    sku, 
-                    nombre_producto as nombre, 
-                    muc as precio_unitario, 
-                    'COMPRA DIRECTA' as origen,
-                    created_at as fecha
-                FROM compras 
-                ORDER BY sku, created_at DESC
-            ),
-            costo_procesados AS (
-                SELECT 
-                    r.codigo_venta as sku,
-                    MAX(r.nombre_plato) as nombre,
-                    SUM(r.cant_real * COALESCE(p.precio_unitario, 0)) as precio_unitario,
-                    'RECETA PROCESADO' as origen,
-                    NOW() as fecha
-                FROM recetas r
-                LEFT JOIN precio_insumos p ON r.sku_ingrediente = p.sku
-                WHERE r.es_procesado = true
-                GROUP BY r.codigo_venta
-            ),
-            super_lista AS (
-                SELECT * FROM precio_insumos
-                UNION ALL
-                SELECT * FROM costo_procesados
-                WHERE sku NOT IN (SELECT sku FROM precio_insumos)
-            )
-            SELECT * FROM super_lista ORDER BY origen DESC, sku ASC
+        # Consultamos la tabla de compras para ver tus factores de conversión
+        query_muc = text("""
+            SELECT 
+                sku, 
+                nombre_producto, 
+                formato, 
+                cantidad as cant_formato,
+                conversion as muc_factor, -- Tu Minimal Unit Conversion
+                muc as costo_unidad_minima,
+                created_at
+            FROM compras 
+            WHERE sku IN (SELECT DISTINCT sku_ingrediente FROM recetas WHERE codigo_venta = :sku_target)
+            ORDER BY created_at DESC
         """)
         
-        df_master = pd.read_sql(query_master, engine)
-
-        if df_master.empty:
-            st.warning("No hay datos suficientes para calcular el Maestro de MUC. Verifica compras y recetas.")
+        df_muc = pd.read_sql(query_muc, engine, params={"sku_target": target_sku})
+        
+        if not df_muc.empty:
+            st.write(f"Interpretación de Conversión para insumos de **{target_sku}**:")
+            st.dataframe(df_muc)
+            st.info("💡 **Regla de Oro:** Si el 'costo_unidad_minima' es igual al precio de la factura, el MUC (Conversion) probablemente sea 1 (sin convertir).")
         else:
-            # Buscador rápido dentro del maestro
-            busqueda = st.text_input("Filtrar por SKU o Nombre (ej: PRO-05, Aceite, AGREX)", "").lower()
-            if busqueda:
-                df_master = df_master[
-                    df_master['sku'].str.lower().str.contains(busqueda) | 
-                    df_master['nombre'].str.lower().str.contains(busqueda)
-                ]
-
-            # Métricas resumen
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Items en Maestro", len(df_master))
-            c2.metric("Insumos Directos", len(df_master[df_master['origen'] == 'COMPRA DIRECTA']))
-            c3.metric("Procesados Calculados", len(df_master[df_master['origen'] == 'RECETA PROCESADO']))
-
-            # Visualización con formato
-            st.dataframe(
-                df_master.style.format({'precio_unitario': '${:,.2f}'})
-                .apply(lambda x: ['background-color: #1e3d59; color: white' if v == 'RECETA PROCESADO' else '' for v in x], axis=1, subset=['origen']),
-                use_container_width=True,
-                hide_index=True
-            )
-
-            # Botón para descargar el Maestro de Precios actual
-            csv = df_master.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Descargar Maestro de MUC (.csv)", csv, "maestro_muc.csv", "text/csv")
+            st.error("No se detectaron factores de conversión para los insumos de este producto.")
     # --- MÓDULO DE DIAGNÓSTICO PROFUNDO ---
     st.markdown("---")
     with st.expander("🔍 Auditor de Costos (Diagnóstico vista_costo_recetas)", expanded=False):
