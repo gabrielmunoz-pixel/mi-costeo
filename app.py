@@ -238,59 +238,56 @@ if menu_principal == "Gestión BD":
 
 elif menu_principal == "Informes":
     st.title("📊 Módulo de Informes")
+    engine = get_db_engine()
 
-    # --- HERRAMIENTA DE DIAGNÓSTICO ---
+    # --- DEFINICIÓN DE SKU PARA AUDITORÍA (CORRECCIÓN TÉCNICA) ---
+    target_sku = st.text_input("Ingrese el SKU a auditar (ej: AGR-028, AGREX-027, PRO-05)", "").strip()
 
+    # --- HERRAMIENTA DE DIAGNÓSTICO MUC ---
     with st.expander("⚖️ Auditor de MUC (Minimal Unit Conversion)", expanded=True):
         st.subheader("Análisis de Conversión y Costo por Unidad Mínima")
-        
-        # Consultamos la tabla de compras para ver tus factores de conversión
-        query_muc = text("""
-            SELECT 
-                sku, 
-                nombre_producto, 
-                formato, 
-                cantidad as cant_formato,
-                conversion as muc_factor, -- Tu Minimal Unit Conversion
-                muc as costo_unidad_minima,
-                created_at
-            FROM compras 
-            WHERE sku IN (SELECT DISTINCT sku_ingrediente FROM recetas WHERE codigo_venta = :sku_target)
-            ORDER BY created_at DESC
-        """)
-        
-        df_muc = pd.read_sql(query_muc, engine, params={"sku_target": target_sku})
-        
-        if not df_muc.empty:
-            st.write(f"Interpretación de Conversión para insumos de **{target_sku}**:")
-            st.dataframe(df_muc)
-            st.info("💡 **Regla de Oro:** Si el 'costo_unidad_minima' es igual al precio de la factura, el MUC (Conversion) probablemente sea 1 (sin convertir).")
+        if target_sku:
+            query_muc = text("""
+                SELECT 
+                    sku, 
+                    nombre_producto, 
+                    formato, 
+                    cantidad as cant_formato,
+                    conversion as muc_factor, 
+                    muc as costo_unidad_minima,
+                    created_at
+                FROM compras 
+                WHERE sku IN (SELECT DISTINCT sku_ingrediente FROM recetas WHERE codigo_venta = :sku_target)
+                ORDER BY created_at DESC
+            """)
+            df_muc = pd.read_sql(query_muc, engine, params={"sku_target": target_sku})
+            if not df_muc.empty:
+                st.write(f"Interpretación de Conversión para insumos de **{target_sku}**:")
+                st.dataframe(df_muc)
+                st.info("💡 **Regla de Oro:** Si el 'costo_unidad_minima' es igual al precio de la factura, el MUC probablemente sea 1.")
+            else:
+                st.error("No se detectaron factores de conversión para los insumos de este producto.")
         else:
-            st.error("No se detectaron factores de conversión para los insumos de este producto.")
+            st.caption("Ingrese un SKU arriba para ver factores de conversión.")
+
     # --- MÓDULO DE DIAGNÓSTICO PROFUNDO ---
     st.markdown("---")
     with st.expander("🔍 Auditor de Costos (Diagnóstico vista_costo_recetas)", expanded=False):
         st.subheader("Rastreador de SKU: Producto -> Receta -> Insumo -> Compra")
-        target_sku = st.text_input("Ingrese el SKU a auditar (ej: AGR-028, AGREX-027, PRO-05)", "").strip()
-        
         if target_sku:
-            engine = get_db_engine()
-            
-            # 1. BUSCAR EN RECETAS (¿Existe el producto y qué insumos tiene?)
+            # 1. BUSCAR EN RECETAS
             st.markdown(f"**1. Definición en Recetario:**")
             q_rec = text("SELECT * FROM recetas WHERE codigo_venta = :sku")
             df_rec_check = pd.read_sql(q_rec, engine, params={"sku": target_sku})
-            
             if df_rec_check.empty:
-                st.error(f"❌ El SKU '{target_sku}' no existe en la tabla de recetas. Revisa tus archivos de Directos/Procesados.")
+                st.error(f"❌ El SKU '{target_sku}' no existe en la tabla de recetas.")
             else:
-                st.success(f"✅ Se encontraron {len(df_rec_check)} insumos vinculados a {target_sku}.")
+                st.success(f"✅ Se encontraron {len(df_rec_check)} insumos vinculados.")
                 st.dataframe(df_rec_check[['nombre_plato', 'nombre_ingrediente', 'sku_ingrediente', 'cant_real', 'um_salida']])
 
-                # 2. BUSCAR EN COMPRAS (¿Tienen precio esos insumos?)
+                # 2. BUSCAR EN COMPRAS
                 st.markdown(f"**2. Estado de Insumos en Compras:**")
                 insumos_ids = df_rec_check['sku_ingrediente'].unique().tolist()
-                
                 q_comp = text("""
                     SELECT DISTINCT ON (sku) 
                         sku, nombre_producto, muc as costo_unitario, cant_conv, created_at as fecha_compra
@@ -299,59 +296,46 @@ elif menu_principal == "Informes":
                     ORDER BY sku, created_at DESC
                 """)
                 df_comp_check = pd.read_sql(q_comp, engine, params={"skus": tuple(insumos_ids)})
-                
                 if df_comp_check.empty:
-                    st.warning("⚠️ Ninguno de los insumos de esta receta tiene facturas cargadas en 'compras'.")
+                    st.warning("⚠️ Ninguno de los insumos tiene facturas cargadas.")
                 else:
-                    st.write("Últimos precios detectados para los insumos:")
+                    st.write("Últimos precios detectados:")
                     st.dataframe(df_comp_check)
                     
-                    # 3. CRUCE FINAL (Lo que ve la vista_costo_recetas)
+                    # 3. CRUCE FINAL
                     st.markdown(f"**3. Resultado en Vista Calculada (vista_costo_recetas):**")
                     q_vista = text("SELECT * FROM vista_costo_recetas WHERE codigo_venta = :sku")
                     df_vista_check = pd.read_sql(q_vista, engine, params={"sku": target_sku})
-                    
                     if not df_vista_check.empty:
                         total_receta = df_vista_check['costo_parcial_insumo'].sum()
                         st.metric("Costo Total Calculado para " + target_sku, f"${total_receta:,.2f}")
                         st.dataframe(df_vista_check[['nombre_ingrediente', 'cant_real', 'precio_unitario_compra', 'costo_parcial_insumo']])
-                    else:
-                        st.error("❌ La vista no devolvió datos. Esto puede ser un error de sincronización de la base de datos.")
 
     st.markdown("---")
-    
     with st.expander("🔍 Herramienta de Diagnóstico de Costos (Casos como AGREX-027)"):
         sku_debug = st.text_input("Ingresa el SKU a revisar (ej: AGREX-027)", "AGREX-027")
         if st.button("Ejecutar Diagnóstico Técnico"):
-            engine = get_db_engine()
-            # 1. Revisar si el producto existe en la vista de costos
             query_v = text("SELECT * FROM vista_costo_recetas WHERE codigo_venta = :sku")
             diag_costo = pd.read_sql(query_v, engine, params={"sku": sku_debug})
-            
             if diag_costo.empty:
-                st.error(f"❌ El código {sku_debug} NO tiene una receta vinculada en la base de datos.")
+                st.error(f"❌ El código {sku_debug} NO tiene una receta vinculada.")
             else:
-                st.write("✅ **Paso 1: Receta encontrada.** Detalle de insumos y costos unitarios detectados:")
+                st.write("✅ **Paso 1: Receta encontrada.**")
                 st.dataframe(diag_costo[['nombre_plato', 'nombre_ingrediente', 'sku_ingrediente', 'cant_real', 'precio_unitario_compra', 'costo_parcial_insumo']])
-                
-                # 2. Revisar la tabla de compras para esos insumos específicos
                 insumos_lista = diag_costo['sku_ingrediente'].unique().tolist()
                 if insumos_lista:
                     query_c = text("SELECT sku, nombre_producto, muc, created_at FROM compras WHERE sku IN :skus ORDER BY created_at DESC")
-                    # Postgres requiere tuplas para el operador IN
                     diag_compras = pd.read_sql(query_c, engine, params={"skus": tuple(insumos_lista)})
-                    
-                    st.write("✅ **Paso 2: Historial en Compras.** Precios registrados para estos insumos:")
+                    st.write("✅ **Paso 2: Historial en Compras.**")
                     if not diag_compras.empty:
                         st.dataframe(diag_compras)
                     else:
-                        st.warning("⚠️ No se encontraron registros en la tabla COMPRAS para los insumos de esta receta. Por eso el costo es $0.")
+                        st.warning("⚠️ No se encontraron registros en COMPRAS.")
 
     sub_informe = st.selectbox("Seleccione Informe", ["1: Rentabilidad por Categoría/Producto", "2: Rentabilidad por Ingrediente"])
     
     if sub_informe == "1: Rentabilidad por Categoría/Producto":
         if st.button("Generar Informe 1"):
-            engine = get_db_engine()
             q = """
                 SELECT 
                     categoria_menu, 
@@ -364,75 +348,41 @@ elif menu_principal == "Informes":
             """
             if f_local != "Todos": q += " AND local = :l"
             q += " GROUP BY 1, 2, 3"
-            
             df_v = pd.read_sql(text(q), engine, params={"i": f_inicio, "f": f_fin, "l": f_local})
-            
-            # Limpieza proactiva de SKUs
             df_v['sku_producto'] = df_v['sku_producto'].astype(str).str.strip()
-            
-            # Traemos el costo unitario por receta agrupado por codigo_venta
             df_rec_raw = get_recetario_costeado()
             if not df_rec_raw.empty:
                 df_rec_raw['codigo_venta'] = df_rec_raw['codigo_venta'].astype(str).str.strip()
                 df_rec = df_rec_raw.groupby('codigo_venta')['costo_parcial_insumo'].sum().reset_index()
             else:
                 df_rec = pd.DataFrame(columns=['codigo_venta', 'costo_parcial_insumo'])
-            
-            # Cruce de datos
             df_res = pd.merge(df_v, df_rec, left_on='sku_producto', right_on='codigo_venta', how='left')
-            
-            # Cálculos de rentabilidad
             df_res['venta'] = df_res['venta'].fillna(0)
             df_res['costo_parcial_insumo'] = df_res['costo_parcial_insumo'].fillna(0)
             df_res['costo_total'] = df_res['cant'] * df_res['costo_parcial_insumo']
             df_res['rentabilidad'] = df_res['venta'] - df_res['costo_total']
-            
-            # Evitar división por cero en el margen
-            df_res['%_margen'] = df_res.apply(
-                lambda x: (x['rentabilidad'] / x['venta'] * 100) if x['venta'] > 0 else -100, 
-                axis=1
-            )
-            
-            # Ordenar por cantidad vendida para ver los más populares arriba (como el AGREX-027)
+            df_res['%_margen'] = df_res.apply(lambda x: (x['rentabilidad'] / x['venta'] * 100) if x['venta'] > 0 else -100, axis=1)
             df_res = df_res.sort_values(by='cant', ascending=False)
             
             def color_semaforo(val):
                 color = 'green' if val > 65 else 'orange' if val > 50 else 'red'
                 return f'background-color: {color}'
-
-            columnas_mostrar = ['sku_producto', 'categoria_menu', 'nombre_producto', 'venta', 'costo_total', 'rentabilidad', '%_margen']
             
-            st.dataframe(
-                df_res[columnas_mostrar]
-                .style.applymap(color_semaforo, subset=['%_margen'])
-                .format({
-                    'venta': '${:,.0f}', 
-                    'costo_total': '${:,.0f}', 
-                    'rentabilidad': '${:,.0f}', 
-                    '%_margen': '{:.1f}%'
-                }),
-                use_container_width=True
-            )
+            columnas_mostrar = ['sku_producto', 'categoria_menu', 'nombre_producto', 'venta', 'costo_total', 'rentabilidad', '%_margen']
+            st.dataframe(df_res[columnas_mostrar].style.applymap(color_semaforo, subset=['%_margen']).format({
+                'venta': '${:,.0f}', 'costo_total': '${:,.0f}', 'rentabilidad': '${:,.0f}', '%_margen': '{:.1f}%'
+            }), use_container_width=True)
 
     elif sub_informe == "2: Rentabilidad por Ingrediente":
         if st.button("Generar Informe 2"):
             inf = get_informe_desviacion(f_inicio, f_fin, f_local)
-            
-            jerarquia = {
-                "COCINA": ["carnes", "verduras", "alimentos", "panes"],
-                "BAR": ["Cocteles", "Cervezas", "Vinos", "Espumantes", "Bebidas", "Moctails", "Jugos y Aguas"]
-            }
-            
+            jerarquia = {"COCINA": ["carnes", "verduras", "alimentos", "panes"], "BAR": ["Cocteles", "Cervezas", "Vinos", "Espumantes", "Bebidas", "Moctails", "Jugos y Aguas"]}
             if not inf.empty:
                 for cat_p, subcats in jerarquia.items():
                     with st.expander(f"📂 {cat_p}", expanded=True):
                         for s in subcats:
                             st.subheader(f"📍 {s.capitalize()}")
-                            if 'subcat' in inf.columns:
-                                df_s = inf[inf['subcat'].astype(str).str.lower() == s.lower()]
-                            else:
-                                df_s = pd.DataFrame()
-
+                            df_s = inf[inf['subcat'].astype(str).str.lower() == s.lower()] if 'subcat' in inf.columns else pd.DataFrame()
                             if not df_s.empty:
                                 st.dataframe(df_s[['nombre_ingrediente', 'consumo_teorico', 'cant_conv', 'desviacion_dinero']])
                             else:
