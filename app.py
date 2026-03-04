@@ -39,7 +39,7 @@ def save_purchases(df):
 def save_recetas_from_excel(df_directos, df_procesados):
     engine = get_db_engine()
     
-    # 1. Preparación de datos (Directos y Procesados)
+    # 1. Preparar Directos
     df_dir = df_directos.copy()
     df_dir = df_dir.rename(columns={
         'CODIGO VENTA': 'codigo_venta', 'Plato': 'nombre_plato',
@@ -49,6 +49,7 @@ def save_recetas_from_excel(df_directos, df_procesados):
     })
     df_dir['es_procesado'] = False
 
+    # 2. Preparar Procesados
     df_proc = df_procesados.copy()
     df_proc = df_proc.rename(columns={
         'Codigo Venta': 'codigo_venta', 'Ingrediente Proc': 'nombre_plato',
@@ -66,52 +67,54 @@ def save_recetas_from_excel(df_directos, df_procesados):
             conn.execute(text("DROP VIEW IF EXISTS vista_costo_recetas CASCADE;"))
             conn.commit()
 
+        # Limpieza de datos antes de subir
         df_final['codigo_venta'] = df_final['codigo_venta'].astype(str).str.strip()
         df_final['sku_ingrediente'] = df_final['sku_ingrediente'].astype(str).str.strip()
         df_final.to_sql('recetas', engine, if_exists='replace', index=False)
 
         with engine.connect() as conn:
-            # ESTA ES LA ESTRUCTURA SÓLIDA DEL INFORME:
             sql_vista = """
             CREATE VIEW vista_costo_recetas AS
-            WITH precio_insumos_base AS (
-                -- Obtenemos el último precio MUC de la tabla compras
-                SELECT DISTINCT ON (sku) sku, muc as precio_unitario
+            WITH 
+            -- A. Precios de mercado (Facturas cargadas)
+            precios_mercado AS (
+                SELECT DISTINCT ON (sku) 
+                    sku, 
+                    muc as costo_unitario_compra
                 FROM compras 
                 ORDER BY sku, created_at DESC
             ),
-            costo_procesados AS (
-                -- Calculamos el costo unitario de los PRO- (Procesados)
-                -- Sumando el costo de sus ingredientes base
+            -- B. Costo calculado de los Procesados (PRO-)
+            --    Suma de ingredientes base para obtener el valor del "PRO-05"
+            costo_calculado_procesados AS (
                 SELECT 
-                    r.codigo_venta as sku_procesado,
-                    SUM(r.cant_real * COALESCE(p.precio_unitario, 0)) as costo_total_producido
+                    r.codigo_venta as sku_pro,
+                    SUM(r.cant_real * COALESCE(pm.costo_unitario_compra, 0)) as costo_final_producido
                 FROM recetas r
-                LEFT JOIN precio_insumos_base p ON r.sku_ingrediente = p.sku
+                INNER JOIN precios_mercado pm ON r.sku_ingrediente = pm.sku
                 WHERE r.es_procesado = true
                 GROUP BY r.codigo_venta
             ),
-            lista_precios_maestra AS (
-                -- Unificamos: Si es insumo directo usamos precio_insumos_base, 
-                -- si es procesado usamos costo_procesados
-                SELECT sku, precio_unitario FROM precio_insumos_base
+            -- C. Maestra de Precios Unificada
+            maestra_precios AS (
+                SELECT sku, costo_unitario_compra as precio_ref FROM precios_mercado
                 UNION ALL
-                SELECT sku_procesado, costo_total_producido FROM costo_procesados
-                WHERE sku_procesado NOT IN (SELECT sku FROM precio_insumos_base)
+                SELECT sku_pro, costo_final_producido FROM costo_calculado_procesados
+                WHERE sku_pro NOT IN (SELECT sku FROM precios_mercado)
             )
+            -- D. Resultado Final para el Informe
             SELECT 
                 r.*, 
-                lp.precio_unitario as precio_unitario_final,
-                (r.cant_real * COALESCE(lp.precio_unitario, 0)) as costo_parcial_insumo
+                mp.precio_ref as precio_unitario_final,
+                (r.cant_real * COALESCE(mp.precio_ref, 0)) as costo_parcial_insumo
             FROM recetas r
-            LEFT JOIN lista_precios_maestra lp ON r.sku_ingrediente = lp.sku;
+            LEFT JOIN maestra_precios mp ON r.sku_ingrediente = mp.sku;
             """
             conn.execute(text(sql_vista))
             conn.commit()
-        st.success("✅ Estructura de costos sincronizada. El informe ahora calcula procesados dinámicamente.")
+        st.success("✅ Estructura sólida de costos reconstruida.")
     except Exception as e:
-        st.error(f"Error al reconstruir la estructura de costos: {e}")
-
+        st.error(f"Error en SQL: {e}")
 def save_ventas(df):
     engine = get_db_engine()
     df_v = df.copy()
