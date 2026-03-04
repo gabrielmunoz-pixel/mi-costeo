@@ -233,6 +233,59 @@ elif menu_principal == "Informes":
     st.title("📊 Módulo de Informes")
 
     # --- HERRAMIENTA DE DIAGNÓSTICO ---
+    # --- MÓDULO DE DIAGNÓSTICO PROFUNDO ---
+    st.markdown("---")
+    with st.expander("🔍 Auditor de Costos (Diagnóstico vista_costo_recetas)", expanded=False):
+        st.subheader("Rastreador de SKU: Producto -> Receta -> Insumo -> Compra")
+        target_sku = st.text_input("Ingrese el SKU a auditar (ej: AGR-028, AGREX-027, PRO-05)", "").strip()
+        
+        if target_sku:
+            engine = get_db_engine()
+            
+            # 1. BUSCAR EN RECETAS (¿Existe el producto y qué insumos tiene?)
+            st.markdown(f"**1. Definición en Recetario:**")
+            q_rec = text("SELECT * FROM recetas WHERE codigo_venta = :sku")
+            df_rec_check = pd.read_sql(q_rec, engine, params={"sku": target_sku})
+            
+            if df_rec_check.empty:
+                st.error(f"❌ El SKU '{target_sku}' no existe en la tabla de recetas. Revisa tus archivos de Directos/Procesados.")
+            else:
+                st.success(f"✅ Se encontraron {len(df_rec_check)} insumos vinculados a {target_sku}.")
+                st.dataframe(df_rec_check[['nombre_plato', 'nombre_ingrediente', 'sku_ingrediente', 'cant_real', 'um_salida']])
+
+                # 2. BUSCAR EN COMPRAS (¿Tienen precio esos insumos?)
+                st.markdown(f"**2. Estado de Insumos en Compras:**")
+                insumos_ids = df_rec_check['sku_ingrediente'].unique().tolist()
+                
+                q_comp = text("""
+                    SELECT DISTINCT ON (sku) 
+                        sku, nombre_producto, muc as costo_unitario, cant_conv, created_at as fecha_compra
+                    FROM compras 
+                    WHERE sku IN :skus 
+                    ORDER BY sku, created_at DESC
+                """)
+                df_comp_check = pd.read_sql(q_comp, engine, params={"skus": tuple(insumos_ids)})
+                
+                if df_comp_check.empty:
+                    st.warning("⚠️ Ninguno de los insumos de esta receta tiene facturas cargadas en 'compras'.")
+                else:
+                    st.write("Últimos precios detectados para los insumos:")
+                    st.dataframe(df_comp_check)
+                    
+                    # 3. CRUCE FINAL (Lo que ve la vista_costo_recetas)
+                    st.markdown(f"**3. Resultado en Vista Calculada (vista_costo_recetas):**")
+                    q_vista = text("SELECT * FROM vista_costo_recetas WHERE codigo_venta = :sku")
+                    df_vista_check = pd.read_sql(q_vista, engine, params={"sku": target_sku})
+                    
+                    if not df_vista_check.empty:
+                        total_receta = df_vista_check['costo_parcial_insumo'].sum()
+                        st.metric("Costo Total Calculado para " + target_sku, f"${total_receta:,.2f}")
+                        st.dataframe(df_vista_check[['nombre_ingrediente', 'cant_real', 'precio_unitario_compra', 'costo_parcial_insumo']])
+                    else:
+                        st.error("❌ La vista no devolvió datos. Esto puede ser un error de sincronización de la base de datos.")
+
+    st.markdown("---")
+    
     with st.expander("🔍 Herramienta de Diagnóstico de Costos (Casos como AGREX-027)"):
         sku_debug = st.text_input("Ingresa el SKU a revisar (ej: AGREX-027)", "AGREX-027")
         if st.button("Ejecutar Diagnóstico Técnico"):
