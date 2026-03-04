@@ -40,50 +40,58 @@ def save_recetas_from_excel(df_directos, df_procesados):
     engine = get_db_engine()
     
     # 1. Adaptar Directos
+    # Columnas: CODIGO VENTA, Plato, Ingrediente, SKU, EsOpcion, Cantidad, CantReal, UM, Proc, Precio, Eficiencia, Costo, Tipo
     df_dir = df_directos.copy()
     df_dir = df_dir.rename(columns={
         'CODIGO VENTA': 'codigo_venta',
-        'Nombre de la receta': 'nombre_plato',
+        'Plato': 'nombre_plato',
         'SKU': 'sku_ingrediente',
         'Ingrediente': 'nombre_ingrediente',
         'CantReal': 'cant_real',
-        'Rendimiento': 'rendimiento',
-        'CantEfic': 'cant_efic',
+        'Eficiencia': 'rendimiento',
         'UM': 'um_salida',
         'EsOpcion': 'es_opcion'
     })
+    # Calculamos CantEfic si no viene explícita en directos
+    if 'cant_efic' not in df_dir.columns:
+        df_dir['cant_efic'] = df_dir['cant_real'] * df_dir['rendimiento'].fillna(1)
     df_dir['es_procesado'] = False
 
     # 2. Adaptar Procesados
+    # Columnas: Ingrediente Proc, Codigo Venta, Ingrediente, SKU Ingrediente, Precio, UM, Eficiencia, CantEfic, UM Salida, Porcion, CantReceta, Costo Total
     df_proc = df_procesados.copy()
     df_proc = df_proc.rename(columns={
         'Codigo Venta': 'codigo_venta',
-        'Nombre': 'nombre_plato',
+        'Ingrediente Proc': 'nombre_plato',
         'SKU Ingrediente': 'sku_ingrediente',
         'Ingrediente': 'nombre_ingrediente',
-        'CantReal': 'cant_real',
+        'CantReceta': 'cant_real',      # En tus procesados, CantReceta es la base
         'CantEfic': 'cant_efic',
-        'UM Salida': 'um_salida'
+        'UM Salida': 'um_salida',
+        'Eficiencia': 'rendimiento'
     })
     df_proc['es_procesado'] = True
-    
-    # Cálculo de rendimiento si no existe
-    if 'rendimiento' not in df_proc.columns:
-        df_proc['rendimiento'] = df_proc['cant_efic'] / df_proc['cant_real']
+    df_proc['es_opcion'] = 0 # Valor por defecto para procesados
 
     # Unificamos para la base de datos
     df_final = pd.concat([df_dir, df_proc], ignore_index=True)
     
-    # Columnas exactas de la tabla SQL
-    columnas_db = ['codigo_venta', 'nombre_plato', 'sku_ingrediente', 'nombre_ingrediente', 
-                   'cant_real', 'rendimiento', 'cant_efic', 'um_salida', 'es_procesado', 'es_opcion']
+    # Columnas exactas que espera tu tabla SQL 'recetas'
+    columnas_db = [
+        'codigo_venta', 'nombre_plato', 'sku_ingrediente', 'nombre_ingrediente', 
+        'cant_real', 'rendimiento', 'cant_efic', 'um_salida', 'es_procesado', 'es_opcion'
+    ]
     
     try:
-        # Usamos replace para que el recetario maestro sea siempre la última versión cargada
-        df_final[columnas_db].to_sql('recetas', engine, if_exists='replace', index=False)
-        st.success("✅ Recetario cargado respetando factores de rendimiento.")
+        # Filtramos solo las columnas necesarias y manejamos valores nulos
+        df_to_save = df_final[columnas_db].copy()
+        df_to_save['rendimiento'] = pd.to_numeric(df_to_save['rendimiento'], errors='coerce').fillna(1)
+        
+        # Guardamos en Supabase (if_exists='replace' para mantener el maestro actualizado)
+        df_to_save.to_sql('recetas', engine, if_exists='replace', index=False)
+        st.success("✅ Recetario unificado y cargado correctamente.")
     except Exception as e:
-        st.error(f"Error al cargar recetario: {e}")
+        st.error(f"Error al insertar en la base de datos: {e}")
 
 def get_recetario_costeado():
     engine = get_db_engine()
