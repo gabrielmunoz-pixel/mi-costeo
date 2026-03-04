@@ -103,18 +103,10 @@ def save_ventas(df):
     engine = get_db_engine()
     df_v = df.copy()
     
-    # 1. Limpieza de nombres de columnas (por si acaso)
     df_v.columns = df_v.columns.str.strip().str.lower()
-
-    # 2. CONVERSIÓN DE FECHA (Solución al error 22008)
-    # 'dayfirst=True' le dice a Python que el 13 es el día y no el mes.
-    # 'errors=coerce' convierte lo que no sea fecha en NaT (nulo) para no romper el proceso.
     df_v['fecha_pura'] = pd.to_datetime(df_v['fecha_pura'], dayfirst=True, errors='coerce')
-
-    # 3. Eliminar filas que quedaron vacías o con fechas imposibles
     df_v = df_v.dropna(subset=['fecha_pura'])
 
-    # 4. Mapeo a los nombres de tu tabla en Supabase
     df_v = df_v.rename(columns={
         'local': 'local',
         'fecha_pura': 'fecha_venta',
@@ -125,11 +117,9 @@ def save_ventas(df):
         'venta_real': 'monto_venta_real'
     })
     
-    # 5. Asegurar que solo enviamos la fecha (sin horas)
     df_v['fecha_venta'] = df_v['fecha_venta'].dt.date
 
     try:
-        # Usamos 'method=multi' para que la carga sea más eficiente en PostgreSQL
         df_v.to_sql('ventas', engine, if_exists='append', index=False, method='multi')
         st.success(f"✅ Se han cargado {len(df_v)} registros correctamente.")
     except Exception as e:
@@ -147,14 +137,12 @@ def get_recetario_costeado():
 def get_informe_desviacion(fecha_i, fecha_f, local="Todos"):
     engine = get_db_engine()
     
-    # Query de Ventas con filtro de Local
     q_v = "SELECT sku_producto, cantidad_vendida FROM ventas WHERE fecha_venta BETWEEN :i AND :f"
     if local != "Todos": q_v += " AND local = :l"
     df_v = pd.read_sql(text(q_v), engine, params={"i": fecha_i, "f": fecha_f, "l": local})
     
     df_rec = get_recetario_costeado()
     
-    # Query de Compras con filtro de Local
     q_c = "SELECT sku, cant_conv, muc, subcat FROM compras WHERE created_at::date BETWEEN :i AND :f"
     if local != "Todos": q_c += " AND local = :l"
     df_c = pd.read_sql(text(q_c), engine, params={"i": fecha_i, "f": fecha_f, "l": local})
@@ -177,7 +165,6 @@ def get_informe_desviacion(fecha_i, fecha_f, local="Todos"):
 # --- INTERFAZ STREAMLIT ---
 st.set_page_config(page_title="Control de Costos - Gabriel Muñoz", layout="wide")
 
-# MENÚ LATERAL (SIDEBAR)
 with st.sidebar:
     st.title("📂 Navegación")
     menu_principal = st.radio("Seleccione Módulo", ["Gestión BD", "Informes"])
@@ -187,7 +174,6 @@ with st.sidebar:
     f_inicio = st.date_input("Fecha Inicio", value=datetime(2025, 11, 1))
     f_fin = st.date_input("Fecha Fin")
     
-    # Obtención dinámica de locales
     locales_list = ["Todos"]
     try:
         engine_temp = get_db_engine()
@@ -196,7 +182,6 @@ with st.sidebar:
     except: pass
     f_local = st.selectbox("Local", locales_list)
 
-# --- CONTENIDO PRINCIPAL ---
 if menu_principal == "Gestión BD":
     st.title("⚙️ Gestión de Base de Datos")
     sub_gestion = st.selectbox("Operación", ["Explosión MRP", "Historial de Compras", "Gestión de Recetario", "Carga Histórica de Ventas"])
@@ -274,12 +259,18 @@ elif menu_principal == "Informes":
                 "BAR": ["Cocteles", "Cervezas", "Vinos", "Espumantes", "Bebidas", "Moctails", "Jugos y Aguas"]
             }
             
-            for cat_p, subcats in jerarquia.items():
-                with st.expander(f"📂 {cat_p}", expanded=True):
-                    for s in subcats:
-                        st.subheader(f"📍 {s.capitalize()}")
-                       df_s = inf[inf['subcat'].astype(str).str.lower() == s.lower()] if 'subcat' in inf.columns else pd.DataFrame()
-                        if not df_s.empty:
-                            st.dataframe(df_s[['nombre_ingrediente', 'consumo_teorico', 'cant_conv', 'desviacion_dinero']])
-                        else:
-                            st.caption(f"No se encontraron datos para {s}")
+            if not inf.empty:
+                for cat_p, subcats in jerarquia.items():
+                    with st.expander(f"📂 {cat_p}", expanded=True):
+                        for s in subcats:
+                            st.subheader(f"📍 {s.capitalize()}")
+                            # MEJORA IMPLEMENTADA: .astype(str) para evitar fallo por nulos
+                            if 'subcat' in inf.columns:
+                                df_s = inf[inf['subcat'].astype(str).str.lower() == s.lower()]
+                            else:
+                                df_s = pd.DataFrame()
+
+                            if not df_s.empty:
+                                st.dataframe(df_s[['nombre_ingrediente', 'consumo_teorico', 'cant_conv', 'desviacion_dinero']])
+                            else:
+                                st.caption(f"No se encontraron datos para {s}")
