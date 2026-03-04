@@ -1,123 +1,127 @@
 import streamlit as st
 import pandas as pd
 import io
+from sqlalchemy import create_engine
 
-st.set_page_config(page_title="MRP Gastronómico - Explosión Total", layout="wide")
+# --- CONFIGURACIÓN DE CONEXIÓN ---
+def get_db_engine():
+    db = st.secrets["connections"]["supabase"]
+    conn_str = f"postgresql://{db['user']}:{db['password']}@{db['host']}:{db['port']}/{db['database']}"
+    return create_engine(conn_str)
 
-def process_bom(df_v, df_d, df_p):
-    # 1. Limpieza de nombres de columnas y datos (Crucial para evitar KeyErrors)
-    df_v.columns = df_v.columns.str.strip()
-    df_d.columns = df_d.columns.str.strip()
-    df_p.columns = df_p.columns.str.strip()
+# Función para guardar compras
+def save_purchases(df):
+    engine = get_db_engine()
+    # Limpiamos nombres de columnas para que coincidan con SQL (minúsculas y sin espacios)
+    df.columns = df.columns.str.lower().str.replace(' ', '_').str.replace('(', '').str.replace(')', '')
+    df.to_sql('compras', engine, if_exists='append', index=False)
+    st.success("✅ Base de datos de compras actualizada en Supabase.")
 
-    # 2. Preparar Ventas
+# Función para extraer el MUC más reciente
+def get_muc_data():
+    engine = get_db_engine()
+    # Buscamos el último MUC registrado por cada SKU
+    query = """
+    SELECT DISTINCT ON (sku) 
+           sku, 
+           muc as muc_registrado,
+           costo_realfinal,
+           cant_conv,
+           formato,
+           nombre_proveedor
+    FROM compras 
+    ORDER BY sku, created_at DESC
+    """
+    try:
+        df = pd.read_sql(query, engine)
+        # Si el MUC viene nulo en la tabla, lo calculamos en tiempo real
+        df['muc_final'] = df.apply(
+            lambda r: r['muc_registrado'] if pd.notna(r['muc_registrado']) 
+            else (r['costo_realfinal'] / (r['cant_conv'] * r['formato']) if (r['cant_conv'] * r['formato']) > 0 else 0),
+            axis=1
+        )
+        return dict(zip(df['sku'], df['muc_final']))
+    except:
+        return {}
+
+# --- PROCESAMIENTO MRP (Tu lógica original blindada) ---
+def process_bom(df_v, df_d, df_p, muc_map):
+    for df in [df_v, df_d, df_p]:
+        df.columns = df.columns.str.strip()
+
+    # Actualización de precios desde Supabase
+    if muc_map:
+        df_d['Precio'] = df_d['SKU'].map(muc_map).fillna(df_d['Precio'])
+        df_p['Precio'] = df_p['SKU Ingrediente'].map(muc_map).fillna(df_p['Precio'])
+
+    # Lógica de Ventas
     df_v = df_v.rename(columns={'SKU': 'SKU_VENTA', 'Cantidad': 'CANT_VENTA'})
     skus_vendidos = set(df_v['SKU_VENTA'].astype(str).str.strip().str.upper())
 
-    # 3. Lógica EsOpcion (Tu lógica original)
     def validar_opcion(row):
         es_op = str(row['EsOpcion']).strip()
-        if pd.isna(row['EsOpcion']) or es_op in ["", "0", "4"]:
-            return True
+        if pd.isna(row['EsOpcion']) or es_op in ["", "0", "4"]: return True
         return str(row['SKU']).strip().upper() in skus_vendidos
 
-    df_d_ready = df_d[df_d.apply(validar_opcion, axis=1)].copy()
-    
-    # 4. Cruzar Ventas con Directos
-    m1 = pd.merge(df_v, df_d_ready, left_on='SKU_VENTA', right_on='CODIGO VENTA', how='inner')
+    m1 = pd.merge(df_v, df_d[df_d.apply(validar_opcion, axis=1)], left_on='SKU_VENTA', right_on='CODIGO VENTA')
 
-    # 5. Separar Insumos Directos de Procesados
+    # Explosión Procesados
     es_proc = m1['SKU'].str.startswith('PRO-', na=False)
-    df_insumos_directos = m1[~es_proc].copy()
-    df_procesados_a_explotar = m1[es_proc].copy()
-
-    # 6. EXPLOSIÓN DE PROCESADOS
-    if not df_procesados_a_explotar.empty:
-        # --- AJUSTE SOLICITADO: SUMAMOS CANTRECETA PARA OBTENER EL VOLUMEN NETO FIJO (1640) ---
-        # Usamos CantReceta para que el divisor sea el rendimiento real de la jarra sin mermas
-        rendimientos = df_p.groupby('Codigo Venta')['CantReceta'].sum().reset_index()
-        rendimientos = rendimientos.rename(columns={'CantReceta': 'TOTAL_RECETA_AUTO'})
-
-        # Preparamos la hoja de Procesados con nombres únicos para que no choquen en el merge
-        df_p_clean = df_p.rename(columns={
-            'Codigo Venta': 'COD_P',
-            'Ingrediente': 'NOM_P',
-            'CantEfic': 'CE_P',
-            'CantReceta': 'CR_P',
-            'Porcion': 'MARK_P', # Este es tu marcador 1 o 0
-            'UM Salida': 'UM_P',
-            'SKU Ingrediente': 'SKU_P'
-        })
-
-        # Unimos Procesados con sus rendimientos calculados
-        df_p_final = pd.merge(df_p_clean, rendimientos, left_on='COD_P', right_on='Codigo Venta', how='left')
-
-        # Unimos usando los nuevos nombres limpios
-        m2 = pd.merge(df_procesados_a_explotar, df_p_final, left_on='SKU', right_on='COD_P', how='left')
+    if not m1[es_proc].empty:
+        rendimientos = df_p.groupby('Codigo Venta')['CantReceta'].sum().reset_index().rename(columns={'CantReceta': 'TOTAL_RECETA_AUTO'})
+        df_p_clean = df_p.rename(columns={'Codigo Venta':'COD_P', 'Ingrediente':'NOM_P', 'CantEfic':'CE_P', 'Porcion':'MARK_P', 'UM Salida':'UM_P', 'SKU Ingrediente':'SKU_P'})
+        df_p_final = pd.merge(df_p_clean, rendimientos, left_on='COD_P', right_on='Codigo Venta')
         
-        # Lógica del Marcador: 1=Porción, 0=Lote
-        def calcular_m2(row):
-            if row['MARK_P'] == 1:
-                # Caso Pollo Panko: CantEfic es unitaria
-                return row['CANT_VENTA'] * row['CantReal'] * row['CE_P']
-            else:
-                # Caso Lote: Usamos TOTAL_RECETA_AUTO (basado en CantReceta) como divisor
-                divisor = row['TOTAL_RECETA_AUTO'] if row['TOTAL_RECETA_AUTO'] > 0 else 1
-                return row['CANT_VENTA'] * row['CantReal'] * (row['CE_P'] / divisor)
-
-        m2['CANT_OUT'] = m2.apply(calcular_m2, axis=1)
+        m2 = pd.merge(m1[es_proc], df_p_final, left_on='SKU', right_on='COD_P')
         
-        # Normalizamos para el final
-        exp_f = m2[['SKU_P', 'NOM_P', 'CANT_OUT', 'UM_P']].rename(
-            columns={'SKU_P': 'SKU_FIN', 'NOM_P': 'ING_FIN', 'UM_P': 'UM_FIN'})
-    else:
-        exp_f = pd.DataFrame()
+        def calc_m2(row):
+            divisor = row['TOTAL_RECETA_AUTO'] if row['TOTAL_RECETA_AUTO'] > 0 else 1
+            if row['MARK_P'] == 1: return row['CANT_VENTA'] * row['CantReal'] * row['CE_P']
+            return row['CANT_VENTA'] * row['CantReal'] * (row['CE_P'] / divisor)
 
-    # 7. INSUMOS DIRECTOS
-    df_insumos_directos['CANT_OUT'] = df_insumos_directos['CANT_VENTA'] * df_insumos_directos['CantReal']
-    dir_out = df_insumos_directos[['SKU', 'Ingrediente', 'CANT_OUT', 'UM']].rename(
-        columns={'SKU': 'SKU_FIN', 'Ingrediente': 'ING_FIN', 'UM': 'UM_FIN'})
-    
-    # 8. Consolidación
-    consolidado = pd.concat([dir_out, exp_f], ignore_index=True)
-    
-    # 9. Agrupación y Conversión
-    resumen = consolidado.groupby(['SKU_FIN', 'UM_FIN'], as_index=False).agg({'CANT_OUT': 'sum', 'ING_FIN': 'first'})
-    
-    def formatear(row):
-        um = str(row['UM_FIN']).upper()
-        if um in ['G', 'ML', 'CC']:
-            return row['CANT_OUT'] / 1000
-        return row['CANT_OUT']
+        m2['CANT_OUT'] = m2.apply(calc_m2, axis=1)
+        m2['COSTO_P'] = m2['CANT_OUT'] * m2['Precio']
+        exp_f = m2[['SKU_P', 'NOM_P', 'CANT_OUT', 'UM_P', 'COSTO_P']].rename(columns={'SKU_P':'SKU_F', 'NOM_P':'ING_F', 'UM_P':'UM_F'})
+    else: exp_f = pd.DataFrame()
 
-    resumen['TOTAL'] = resumen.apply(formatear, axis=1)
+    # Insumos Directos
+    df_dir = m1[~es_proc].copy()
+    df_dir['CANT_OUT'] = df_dir['CANT_VENTA'] * df_dir['CantReal']
+    df_dir['COSTO_P'] = df_dir['CANT_OUT'] * df_dir['Precio']
+    dir_out = df_dir[['SKU', 'Ingrediente', 'CANT_OUT', 'UM', 'COSTO_P']].rename(columns={'SKU':'SKU_F', 'Ingrediente':'ING_F', 'UM':'UM_F'})
+
+    # Consolidado
+    total = pd.concat([dir_out, exp_f])
+    resumen = total.groupby(['SKU_F', 'UM_F'], as_index=False).agg({'CANT_OUT':'sum', 'COSTO_P':'sum', 'ING_F':'first'})
+    resumen['Total'] = resumen.apply(lambda r: r['CANT_OUT']/1000 if str(r['UM_F']).upper() in ['G','ML','CC'] else r['CANT_OUT'], axis=1)
     
-    return resumen[['SKU_FIN', 'ING_FIN', 'UM_FIN', 'TOTAL']].rename(
-        columns={'SKU_FIN': 'SKU', 'ING_FIN': 'Insumo', 'UM_FIN': 'UM', 'TOTAL': 'Total Kg/L/Un'})
+    return resumen[['SKU_F', 'ING_F', 'UM_F', 'Total', 'COSTO_P']].rename(
+        columns={'SKU_F':'SKU', 'ING_F':'Insumo', 'UM_F':'UM', 'Total':'Cant Final', 'COSTO_P':'Costo Real $'})
 
 # --- UI ---
-st.title("👨‍🍳 MRP Sistema de Costeos - Versión Final Blindada")
+st.title("👨‍🍳 MRP & Intelligence Compras (Supabase)")
 
-file = st.file_uploader("Sube tu archivo Excel", type="xlsx")
+t1, t2 = st.tabs(["Explosión MRP", "Historial de Compras"])
 
-if file:
-    try:
-        xls = pd.ExcelFile(file)
-        # Cargamos las hojas asegurando que existan
-        res = process_bom(
-            pd.read_excel(xls, 'Ventas'), 
-            pd.read_excel(xls, 'Directos'), 
-            pd.read_excel(xls, 'Procesados')
-        )
+with t2:
+    st.subheader("Módulo de Carga de Facturas")
+    file_c = st.file_uploader("Subir Excel de Compras", type="xlsx")
+    if file_c:
+        df_c = pd.read_excel(file_c)
+        st.dataframe(df_c.head())
+        if st.button("Guardar en Supabase"):
+            save_purchases(df_c)
+
+with t1:
+    file_m = st.file_uploader("Subir Estructura Recetas/Ventas", type="xlsx")
+    if file_m:
+        xls = pd.ExcelFile(file_m)
+        muc_map = get_muc_data() # Obtenemos MUC desde la DB
         
-        st.subheader("📋 Resultados")
-        st.dataframe(res.style.format({"Total Kg/L/Un": "{:,.3f}"}), use_container_width=True)
+        if muc_map:
+            st.success(f"📈 Se han sincronizado {len(muc_map)} precios reales desde la nube.")
         
-        buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-            res.to_excel(writer, index=False)
-        st.download_button("📥 Descargar MRP", buffer.getvalue(), "MRP_Final.xlsx")
+        res = process_bom(pd.read_excel(xls, 'Ventas'), pd.read_excel(xls, 'Directos'), pd.read_excel(xls, 'Procesados'), muc_map)
         
-    except Exception as e:
-        st.error(f"Error detectado: {e}")
-        st.info("Asegúrate de que la hoja 'Procesados' tenga una columna llamada 'Porcion' con valores 1 o 0.")
+        st.dataframe(res.style.format({"Cant Final": "{:,.3f}", "Costo Real $": "$ {:,.0f}"}))
+        st.metric("Inversión Total en Materia Prima", f"$ {res['Costo Real $'].sum():,.0f}")
