@@ -13,7 +13,7 @@ def get_db_engine():
         st.error(f"Error de conexión: {e}")
         return None
 
-# --- FUNCIONES DE PERSISTENCIA (GUARDADO) - TAL CUAL LAS DEFINISTE ---
+# --- FUNCIONES DE PERSISTENCIA (GUARDADO) ---
 
 def save_purchases(df):
     engine = get_db_engine()
@@ -102,6 +102,7 @@ def save_recetas_from_excel(df_directos, df_procesados):
 def save_ventas(df):
     engine = get_db_engine()
     df_v = df.copy()
+    # Mapeo exacto según tus nuevas columnas
     df_v = df_v.rename(columns={
         'local': 'local',
         'fecha_pura': 'fecha_venta',
@@ -127,144 +128,103 @@ def get_recetario_costeado():
     except:
         return pd.DataFrame()
 
-def get_informe_desviacion(fecha_i, fecha_f, local="Todos"):
+def get_informe_desviacion(fecha_i, fecha_f):
     engine = get_db_engine()
-    query_v_str = "SELECT sku_producto, cantidad_vendida FROM ventas WHERE fecha_venta BETWEEN :i AND :f"
-    if local != "Todos":
-        query_v_str += " AND local = :l"
+    # 1. Obtener Ventas del periodo filtrado
+    query_v = text("SELECT sku_producto, cantidad_vendida FROM ventas WHERE fecha_venta BETWEEN :i AND :f")
+    df_v = pd.read_sql(query_v, engine, params={"i": fecha_i, "f": fecha_f})
     
-    df_v = pd.read_sql(text(query_v_str), engine, params={"i": fecha_i, "f": fecha_f, "l": local})
+    # 2. Obtener Recetario Maestro
     df_rec = get_recetario_costeado()
     
-    query_c_str = "SELECT sku, cant_conv, muc, subcat, categoria_producto FROM compras WHERE created_at::date BETWEEN :i AND :f"
-    if local != "Todos":
-        query_c_str += " AND local = :l"
-        
-    df_c = pd.read_sql(text(query_c_str), engine, params={"i": fecha_i, "f": fecha_f, "l": local})
+    # 3. Obtener Compras del periodo filtrado
+    query_c = text("SELECT sku, cant_conv, muc FROM compras WHERE created_at::date BETWEEN :i AND :f")
+    df_c = pd.read_sql(query_c, engine, params={"i": fecha_i, "f": fecha_f})
 
     if df_v.empty or df_rec.empty:
         return pd.DataFrame()
 
+    # Explosión Teórica: Ventas x Receta
     teorico = pd.merge(df_v, df_rec, left_on='sku_producto', right_on='codigo_venta')
     teorico['consumo_teorico'] = teorico['cantidad_vendida'] * teorico['cant_real']
     cons_teorico = teorico.groupby(['sku_ingrediente', 'nombre_ingrediente']).agg({'consumo_teorico': 'sum'}).reset_index()
 
-    comp_real = df_c.groupby(['sku', 'subcat', 'categoria_producto']).agg({'cant_conv': 'sum', 'muc': 'mean'}).reset_index()
+    # Consolidado de Compras Reales
+    comp_real = df_c.groupby('sku').agg({'cant_conv': 'sum', 'muc': 'mean'}).reset_index()
 
+    # Cruce y Cálculo de Desviación
     informe = pd.merge(cons_teorico, comp_real, left_on='sku_ingrediente', right_on='sku', how='outer').fillna(0)
     informe['desviacion_cantidad'] = informe['consumo_teorico'] - informe['cant_conv']
     informe['desviacion_dinero'] = informe['desviacion_cantidad'] * informe['muc']
     
     return informe
 
-# --- INTERFAZ STREAMLIT CON NUEVA NAVEGACIÓN ---
-st.set_page_config(page_title="Gestión de Operaciones - Gabriel Muñoz", layout="wide")
+# --- INTERFAZ STREAMLIT ---
+st.set_page_config(page_title="Control de Costos - Gabriel Muñoz", layout="wide")
+st.title("📊 Sistema de Inteligencia de Costos e Inventario")
 
-# MENÚ LATERAL
-with st.sidebar:
-    st.title("📂 Menú Principal")
-    menu_opcion = st.radio("Categoría", ["Gestión BD", "Informes"])
+t1, t2, t3, t4 = st.tabs(["Explosión MRP", "Historial de Compras", "Gestión de Recetario", "Informes Gerenciales"])
+
+with t2:
+    st.header("🛒 Carga de Facturas")
+    file_c = st.file_uploader("Subir Excel de Compras", type="xlsx")
+    if file_c and st.button("Guardar Compras"):
+        save_purchases(pd.read_excel(file_c))
+
+with t3:
+    st.header("📖 Master de Recetas")
+    col_a, col_b = st.columns(2)
+    with col_a: file_dir = st.file_uploader("Subir Directos", type="xlsx")
+    with col_b: file_proc = st.file_uploader("Subir Procesados", type="xlsx")
+    if file_dir and file_proc and st.button("Sincronizar Recetario"):
+        save_recetas_from_excel(pd.read_excel(file_dir), pd.read_excel(file_proc))
     
-    st.divider()
-    st.subheader("🗓️ Filtros Globales")
-    f_inicio = st.date_input("Fecha Inicio", value=datetime(2025, 11, 1))
-    f_fin = st.date_input("Fecha Fin")
+    df_view = get_recetario_costeado()
+    if not df_view.empty:
+        st.subheader("Visualización de Costos")
+        st.dataframe(df_view, hide_index=True)
+
+with t1:
+    st.header("📦 Explosión Rápida (MRP)")
+    file_v_fast = st.file_uploader("Subir Ventas del día", type="xlsx")
+    if file_v_fast and not df_view.empty:
+        df_v_f = pd.read_excel(file_v_fast)
+        mrp = pd.merge(df_v_f, df_view, left_on='SKU', right_on='codigo_venta')
+        mrp['total_necesidad'] = mrp['Cantidad'] * mrp['cant_real']
+        mrp['total_costo'] = mrp['Cantidad'] * mrp['costo_parcial_insumo']
+        res = mrp.groupby(['nombre_ingrediente', 'um_salida']).agg({'total_necesidad': 'sum', 'total_costo': 'sum'}).reset_index()
+        st.dataframe(res)
+        st.metric("Costo Total Teórico", f"$ {res['total_costo'].sum():,.0f}")
+
+with t4:
+    st.header("📉 Dashboard de Decisiones")
+    sub = st.selectbox("Acción", ["Carga Histórica de Ventas", "Análisis de Desviación"])
     
-    engine_loc = get_db_engine()
-    locales_list = ["Todos"]
-    try:
-        locales_db = pd.read_sql("SELECT DISTINCT local FROM ventas", engine_loc)['local'].tolist()
-        locales_list.extend(locales_db)
-    except: pass
-    f_local = st.selectbox("Local", locales_list)
-
-# LÓGICA DE SUBMENÚS
-if menu_opcion == "Gestión BD":
-    st.header("⚙️ Gestión de Base de Datos")
-    sub_gestion = st.selectbox("Submenú", ["Explosión MRP", "Historial de Compras", "Gestión de Recetario", "Carga Histórica de Ventas"])
-    
-    if sub_gestion == "Explosión MRP":
-        st.subheader("📦 Explosión Rápida (MRP)")
-        file_v_fast = st.file_uploader("Subir Ventas del día", type="xlsx")
-        df_view = get_recetario_costeado()
-        if file_v_fast and not df_view.empty:
-            df_v_f = pd.read_excel(file_v_fast)
-            mrp = pd.merge(df_v_f, df_view, left_on='SKU', right_on='codigo_venta')
-            mrp['total_necesidad'] = mrp['Cantidad'] * mrp['cant_real']
-            mrp['total_costo'] = mrp['Cantidad'] * mrp['costo_parcial_insumo']
-            res = mrp.groupby(['nombre_ingrediente', 'um_salida']).agg({'total_necesidad': 'sum', 'total_costo': 'sum'}).reset_index()
-            st.dataframe(res)
-            st.metric("Costo Total Teórico", f"$ {res['total_costo'].sum():,.0f}")
-
-    elif sub_gestion == "Historial de Compras":
-        st.subheader("🛒 Historial de Compras")
-        file_c = st.file_uploader("Subir Excel de Compras", type="xlsx")
-        if file_c and st.button("Guardar Compras"):
-            save_purchases(pd.read_excel(file_c))
-
-    elif sub_gestion == "Gestión de Recetario":
-        st.subheader("📖 Master de Recetas")
-        col_a, col_b = st.columns(2)
-        with col_a: file_dir = st.file_uploader("Subir Directos", type="xlsx")
-        with col_b: file_proc = st.file_uploader("Subir Procesados", type="xlsx")
-        if file_dir and file_proc and st.button("Sincronizar Recetario"):
-            save_recetas_from_excel(pd.read_excel(file_dir), pd.read_excel(file_proc))
-        
-        df_view = get_recetario_costeado()
-        if not df_view.empty:
-            st.dataframe(df_view, hide_index=True)
-
-    elif sub_gestion == "Carga Histórica de Ventas":
-        st.subheader("📈 Carga Histórica de Ventas")
+    if sub == "Carga Histórica de Ventas":
         file_h = st.file_uploader("Excel Ventas (Nov-Dic-Ene)", type="xlsx")
         if file_h and st.button("Inyectar a Base de Datos"):
             save_ventas(pd.read_excel(file_h))
-
-elif menu_opcion == "Informes":
-    st.header("📊 Módulo de Informes")
-    sub_informe = st.selectbox("Tipo de Informe", ["1: Rentabilidad por Categoría/Producto", "2: Rentabilidad por Ingrediente"])
-    
-    if sub_informe == "1: Rentabilidad por Categoría/Producto":
-        if st.button("Generar Informe de Rentabilidad"):
-            # Lógica Informe 1
-            engine = get_db_engine()
-            query = text("""
-                SELECT categoria_menu, nombre_producto, sku_producto, 
-                SUM(monto_venta_real) as venta, SUM(cantidad_vendida) as cant 
-                FROM ventas WHERE fecha_venta BETWEEN :i AND :f GROUP BY 1, 2, 3
-            """)
-            df_v = pd.read_sql(query, engine, params={"i": f_inicio, "f": f_fin})
-            df_rec = get_recetario_costeado().groupby('codigo_venta')['costo_parcial_insumo'].sum().reset_index()
             
-            df_res = pd.merge(df_v, df_rec, left_on='sku_producto', right_on='codigo_venta', how='left')
-            df_res['costo_total'] = df_res['cant'] * df_res['costo_parcial_insumo']
-            df_res['rentabilidad'] = df_res['venta'] - df_res['costo_total']
-            df_res['%_margen'] = (df_res['rentabilidad'] / df_res['venta']) * 100
-            
-            def semaforo(val):
-                color = 'green' if val > 65 else 'orange' if val > 50 else 'red'
-                return f'background-color: {color}'
-
-            st.dataframe(df_res[['categoria_menu', 'nombre_producto', 'venta', 'costo_total', 'rentabilidad', '%_margen']]
-                         .style.applymap(semaforo, subset=['%_margen'])
-                         .format({'venta': '${:,.0f}', 'costo_total': '${:,.0f}', 'rentabilidad': '${:,.0f}', '%_margen': '{:.1f}%'}))
-
-    elif sub_informe == "2: Rentabilidad por Ingrediente":
-        if st.button("Generar Informe de Ingredientes"):
-            inf = get_informe_desviacion(f_inicio, f_fin, f_local)
-            
-            jerarquia = {
-                "COCINA": ["carnes", "verduras", "alimentos", "panes"],
-                "BAR": ["Cocteles", "Cervezas", "Vinos", "Espumantes", "Bebidas", "Moctails", "Jugos y Aguas"]
-            }
-            
-            for cat_principal, subcats in jerarquia.items():
-                with st.expander(f"📂 {cat_principal}", expanded=True):
-                    for s in subcats:
-                        st.subheader(f"📍 {s.capitalize()}")
-                        # Filtrado por subcategoría asumiendo columna 'subcat'
-                        df_sub = inf[inf['subcat'].str.lower() == s.lower()]
-                        if not df_sub.empty:
-                            st.dataframe(df_sub[['nombre_ingrediente', 'consumo_teorico', 'cant_conv', 'desviacion_dinero']])
-                        else:
-                            st.caption(f"Sin movimientos para {s}")
+    elif sub == "Análisis de Desviación":
+        c1, c2 = st.columns(2)
+        f_i = c1.date_input("Inicio", value=datetime(2025, 11, 1))
+        f_f = c2.date_input("Fin")
+        
+        if st.button("Generar Informe"):
+            inf = get_informe_desviacion(f_i, f_f)
+            if not inf.empty:
+                # KPIs Maestros
+                perdida_total = inf[inf['desviacion_dinero'] < 0]['desviacion_dinero'].sum()
+                st.metric("Pérdida por Desviación (Fuga)", f"$ {abs(perdida_total):,.0f}", delta_color="inverse")
+                
+                # Gráfico Pareto de Pérdidas
+                st.subheader("Top 10 Insumos con Mayor Desviación ($)")
+                top_perdidas = inf[inf['desviacion_dinero'] < 0].sort_values('desviacion_dinero').head(10)
+                top_perdidas['desviacion_dinero'] = top_perdidas['desviacion_dinero'].abs()
+                st.bar_chart(top_perdidas.set_index('nombre_ingrediente')['desviacion_dinero'])
+                
+                # Tabla Detallada
+                st.subheader("Detalle de Conciliación")
+                st.dataframe(inf.style.highlight_min(subset=['desviacion_dinero'], color='lightcoral'))
+            else:
+                st.warning("No hay datos en el rango seleccionado.")
