@@ -447,10 +447,11 @@ def informe_desviacion(fecha_i, fecha_f, local):
     nombres_compras = run_query(q_nom)
     dict_nombres = dict(zip(nombres_compras['sku'], nombres_compras['nombre_compra'])) if not nombres_compras.empty else {}
 
-informe = pd.merge(
+    informe = pd.merge(
         cons_teo, df_c,
         left_on='sku_ingrediente', right_on='sku', how='outer'
-    )informe = informe.fillna(0)
+    )
+    informe = informe.fillna(0)
 
     # SKU final: unificar sku_ingrediente y sku en una sola columna
     informe['sku_final'] = informe.apply(
