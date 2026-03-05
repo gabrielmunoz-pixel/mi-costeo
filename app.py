@@ -473,7 +473,7 @@ def informe_desviacion(fecha_i, fecha_f, local):
     informe['sku_ingrediente']   = informe['sku_final']
     informe['nombre_ingrediente']= informe['nombre_final']
 
-return informe.sort_values('desviacion_dinero', ascending=False)
+    return informe.sort_values('desviacion_dinero', ascending=False)
 
 
 # ============================================================
