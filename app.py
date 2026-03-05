@@ -459,6 +459,9 @@ def save_recetario(df_directos, df_procesados):
         st.warning(f"⚠️ Se consolidaron {duplicados} filas duplicadas (mismo SKU en mismo plato).")
 
     try:
+        with engine.connect() as conn:
+            conn.execute(text("DROP VIEW IF EXISTS vista_costo_recetas CASCADE"))
+            conn.commit()
         df_agg[cols].to_sql('recetas', engine, if_exists='replace', index=False)
         st.success(f"✅ Recetario sincronizado — {len(df_agg)} filas únicas cargadas.")
     except Exception as e:
