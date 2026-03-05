@@ -394,8 +394,8 @@ def informe_desviacion(fecha_i, fecha_f, local):
         # DEBUG palta
         debug_palta = exp[exp['sku_ingrediente_base'] == 'AL-FV-051']
         if not debug_palta.empty:
-            st.info(f"DEBUG PALTA cols: {[c for c in exp.columns if 'cant_real' in c]}")
-            st.info(f"DEBUG PALTA: {len(debug_palta)} filas, cant_real_base sample={debug_palta['cant_real_base'].head(3).tolist()}, consumo={debug_palta['consumo_parcial'].sum():.0f}")
+            st.info(f"DEBUG PALTA: {len(debug_palta)} filas, consumo={debug_palta['consumo_parcial'].sum():.0f}")
+            st.dataframe(debug_palta[['sku_producto','codigo_venta_x','sku_ingrediente_plato','cant_real_plato','rendimiento_total','cant_real_base','cant_vendida','consumo_parcial']].head(10))
 
         exp_out = exp[['sku_ingrediente_base', 'nombre_ingrediente_base', 'consumo_parcial']].rename(
             columns={'sku_ingrediente_base': 'sku_ingrediente',
