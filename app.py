@@ -520,10 +520,7 @@ def save_recetario(df_directos, df_procesados):
 
     # Consolidar duplicados: mismo ingrediente en el mismo plato → sumar cantidades
     df_final = df_final[cols].copy()
-    df_agg = df_final.groupby(
-        ['codigo_venta', 'sku_ingrediente', 'es_procesado'],
-        as_index=False
-    ).agg({
+    agg_dict = {
         'nombre_plato':      'first',
         'nombre_ingrediente':'first',
         'cant_real':         'sum',
@@ -531,7 +528,17 @@ def save_recetario(df_directos, df_procesados):
         'rendimiento':       'first',
         'um_salida':         'first',
         'es_opcion':         'first'
-    })
+    }
+    if 'porcion' in df_final.columns:
+        agg_dict['porcion'] = 'first'
+
+    df_agg = df_final.groupby(
+        ['codigo_venta', 'sku_ingrediente', 'es_procesado'],
+        as_index=False
+    ).agg(agg_dict)
+
+    # cols final solo con columnas que existen en df_agg
+    cols = [c for c in cols_base if c in df_agg.columns]
 
     duplicados = len(df_final) - len(df_agg)
     if duplicados > 0:
