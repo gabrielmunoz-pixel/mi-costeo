@@ -457,6 +457,11 @@ def informe_desviacion(fecha_i, fecha_f, local):
         cons_teo, df_c,
         left_on='sku_ingrediente', right_on='sku', how='outer'
     )
+    # Debug post-join
+    debug_post = informe[informe['sku_ingrediente'] == 'BA-CA-032']
+    st.info(f"DEBUG BA-CA-032 post-join: {len(debug_post)} filas")
+    if not debug_post.empty:
+        st.write(debug_post.iloc[0].to_dict())
     informe = informe.fillna(0)
 
     # SKU final: unificar sku_ingrediente y sku en una sola columna
