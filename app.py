@@ -347,9 +347,15 @@ def informe_desviacion(fecha_i, fecha_f, local):
         consumo_teorico=('consumo_teorico', 'sum')).reset_index()
 
     # Compras reales del período — fecha_dte es timestamp YYYY-MM-DD HH:MM:SS
+    # cant_real_comprada = SUM(cant_conv / formato), protegido contra NULL y 0
     q_c = """
-        SELECT sku, subcat, SUM(cant_conv) as cant_real_comprada, AVG(muc) as muc_promedio
-        FROM compras WHERE fecha_dte::date BETWEEN :i AND :f
+        SELECT
+            sku,
+            subcat,
+            SUM(cant_conv / NULLIF(COALESCE(formato, 1), 0)) AS cant_real_comprada,
+            AVG(muc) AS muc_promedio
+        FROM compras
+        WHERE fecha_dte::date BETWEEN :i AND :f
     """
     params_c = {"i": fecha_i, "f": fecha_f}
     if local != "Todos":
@@ -361,8 +367,13 @@ def informe_desviacion(fecha_i, fecha_f, local):
     # Fallback: si el período no tiene compras, mostrar histórico completo
     if df_c.empty:
         q_c2 = """
-            SELECT sku, subcat, SUM(cant_conv) as cant_real_comprada, AVG(muc) as muc_promedio
-            FROM compras GROUP BY 1, 2
+            SELECT
+                sku,
+                subcat,
+                SUM(cant_conv / NULLIF(COALESCE(formato, 1), 0)) AS cant_real_comprada,
+                AVG(muc) AS muc_promedio
+            FROM compras
+            GROUP BY 1, 2
         """
         df_c = run_query(q_c2)
         if not df_c.empty:
