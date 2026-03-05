@@ -527,6 +527,8 @@ def informe_desviacion(fecha_i, fecha_f, local):
     informe['sku_ingrediente']   = informe['sku_final']
     informe['nombre_ingrediente']= informe['nombre_final']
 
+    debug_final = informe[informe['sku_ingrediente'] == 'BA-CA-023']
+    st.info(f"DEBUG BA-CA-023 FINAL: {len(debug_final)} filas, consumo={debug_final['consumo_teorico'].values}")
     return informe.sort_values('desviacion_dinero', ascending=False)
 
 
