@@ -336,9 +336,13 @@ def informe_desviacion(fecha_i, fecha_f, local):
     df_v = run_query(q_v, params)
 
     # Recetario (directos: cant_real, procesados: cant_efic)
+    # Excluir ingredientes opcionales (EsOpcion != 0 y != NaN) — se costean por su propio SKU
     df_rec = run_query("SELECT * FROM recetas")
     if df_rec.empty or df_v.empty:
         return pd.DataFrame()
+
+    df_rec['es_opcion'] = pd.to_numeric(df_rec['es_opcion'], errors='coerce').fillna(0)
+    df_rec = df_rec[df_rec['es_opcion'].isin([0, 4])].copy()
 
     df_rec['cantidad_uso'] = df_rec.apply(
         lambda r: pd.to_numeric(r['cant_efic'], errors='coerce')
