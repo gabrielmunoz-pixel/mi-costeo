@@ -230,58 +230,25 @@ elif menu_principal == "Informes":
     if sub_informe == "1: Rentabilidad por Categoría/Producto":
         if st.button("Generar Informe 1"):
             engine = get_db_engine()
-            q = """
-                SELECT 
-                    categoria_menu, 
-                    sku_producto, 
-                    nombre_producto, 
-                    SUM(monto_venta_real) as venta, 
-                    SUM(cantidad_vendida) as cant 
-                FROM ventas 
-                WHERE fecha_venta BETWEEN :i AND :f
-            """
+            q = "SELECT categoria_menu, nombre_producto, sku_producto, SUM(monto_venta_real) as venta, SUM(cantidad_vendida) as cant FROM ventas WHERE fecha_venta BETWEEN :i AND :f"
             if f_local != "Todos": q += " AND local = :l"
             q += " GROUP BY 1, 2, 3"
             
             df_v = pd.read_sql(text(q), engine, params={"i": f_inicio, "f": f_fin, "l": f_local})
-            
             df_rec = get_recetario_costeado().groupby('codigo_venta')['costo_parcial_insumo'].sum().reset_index()
             
             df_res = pd.merge(df_v, df_rec, left_on='sku_producto', right_on='codigo_venta', how='left')
-            
-            # --- IMPLEMENTACIÓN DE MEJORA SOLICITADA ---
-            # 1. Asegurar que los nulos en venta sean 0 para evitar errores matemáticos
-            df_res['venta'] = df_res['venta'].fillna(0)
-            df_res['costo_total'] = df_res['cant'] * df_res['costo_parcial_insumo'].fillna(0)
+            df_res['costo_total'] = df_res['cant'] * df_res['costo_parcial_insumo']
             df_res['rentabilidad'] = df_res['venta'] - df_res['costo_total']
-            
-            # 2. Evitar división por cero en el margen
-            df_res['%_margen'] = df_res.apply(
-                lambda x: (x['rentabilidad'] / x['venta'] * 100) if x['venta'] > 0 else -100, 
-                axis=1
-            )
-            
-            # 3. Forzar que aparezca aunque la venta sea 0 ordenando por cantidad
-            df_res = df_res.sort_values(by='cant', ascending=False)
-            # ------------------------------------------
+            df_res['%_margen'] = (df_res['rentabilidad'] / df_res['venta']) * 100
             
             def color_semaforo(val):
                 color = 'green' if val > 65 else 'orange' if val > 50 else 'red'
                 return f'background-color: {color}'
 
-            columnas_mostrar = ['sku_producto', 'categoria_menu', 'nombre_producto', 'venta', 'costo_total', 'rentabilidad', '%_margen']
-            
-            st.dataframe(
-                df_res[columnas_mostrar]
-                .style.applymap(color_semaforo, subset=['%_margen'])
-                .format({
-                    'venta': '${:,.0f}', 
-                    'costo_total': '${:,.0f}', 
-                    'rentabilidad': '${:,.0f}', 
-                    '%_margen': '{:.1f}%'
-                }),
-                use_container_width=True
-            )
+            st.dataframe(df_res[['categoria_menu', 'nombre_producto', 'venta', 'costo_total', 'rentabilidad', '%_margen']]
+                         .style.applymap(color_semaforo, subset=['%_margen'])
+                         .format({'venta': '${:,.0f}', 'costo_total': '${:,.0f}', 'rentabilidad': '${:,.0f}', '%_margen': '{:.1f}%'}))
 
     elif sub_informe == "2: Rentabilidad por Ingrediente":
         if st.button("Generar Informe 2"):
@@ -297,6 +264,7 @@ elif menu_principal == "Informes":
                     with st.expander(f"📂 {cat_p}", expanded=True):
                         for s in subcats:
                             st.subheader(f"📍 {s.capitalize()}")
+                            # MEJORA IMPLEMENTADA: .astype(str) para evitar fallo por nulos
                             if 'subcat' in inf.columns:
                                 df_s = inf[inf['subcat'].astype(str).str.lower() == s.lower()]
                             else:
