@@ -377,12 +377,6 @@ def informe_desviacion(fecha_i, fecha_f, local):
             cant_real=('cant_real', 'first')
         ).reset_index()
 
-        # DEBUG
-        st.info(f"merge_pro_agg filas: {len(merge_pro_agg)}, columnas: {merge_pro_agg.columns.tolist()}")
-        debug_pro18 = merge_pro_agg[merge_pro_agg['sku_ingrediente'] == 'PRO-18']
-        if not debug_pro18.empty:
-            st.dataframe(debug_pro18)
-
         rows = []
         for _, plato_row in merge_pro_agg.iterrows():
             pro_sku    = plato_row['sku_ingrediente']  # PRO-XX
@@ -413,6 +407,10 @@ def informe_desviacion(fecha_i, fecha_f, local):
 
         if rows:
             exp_out = pd.DataFrame(rows)
+            debug_bca = exp_out[exp_out['sku_ingrediente'] == 'BA-CA-023']
+            if not debug_bca.empty:
+                st.info(f"DEBUG BA-CA-023 en exp_out: {len(debug_bca)} filas, total={debug_bca['consumo_parcial'].sum():.0f}")
+                st.dataframe(debug_bca.head(10))
 
     # ---- CONSOLIDAR ----
     todo = pd.concat([df for df in [dir_out, exp_out] if not df.empty], ignore_index=True)
