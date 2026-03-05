@@ -409,6 +409,10 @@ def informe_desviacion(fecha_i, fecha_f, local):
 
         if rows:
             exp_out = pd.DataFrame(rows)
+            debug_bca = exp_out[exp_out['sku_ingrediente'] == 'BA-CA-023']
+            if not debug_bca.empty:
+                st.info(f"DEBUG BA-CA-023 en exp_out: {len(debug_bca)} filas, total={debug_bca['consumo_parcial'].sum():.0f}")
+                st.dataframe(debug_bca)
 
     # ---- CONSOLIDAR ----
     todo = pd.concat([df for df in [dir_out, exp_out] if not df.empty], ignore_index=True)
