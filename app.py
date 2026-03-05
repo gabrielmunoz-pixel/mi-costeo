@@ -391,7 +391,7 @@ def informe_desviacion(fecha_i, fecha_f, local):
         if not df_c.empty:
             st.warning("⚠️ Sin compras en el período seleccionado — mostrando totales históricos.")
 
-    # Nombre canónico desde compras (evita mostrar SKU cuando no hay match en recetario)
+    # Nombre canónico desde compras — un solo nombre por SKU usando diccionario (sin merge)
     q_nom = """
         SELECT sku, MIN(nombre_producto) as nombre_compra
         FROM compras
@@ -399,30 +399,32 @@ def informe_desviacion(fecha_i, fecha_f, local):
         GROUP BY sku
     """
     nombres_compras = run_query(q_nom)
+    dict_nombres = dict(zip(nombres_compras['sku'], nombres_compras['nombre_compra'])) if not nombres_compras.empty else {}
 
     informe = pd.merge(
         cons_teo, df_c,
         left_on='sku_ingrediente', right_on='sku', how='outer'
     )
-
-    # Unir nombre desde compras como fuente canónica
-    if not nombres_compras.empty:
-        informe = pd.merge(informe, nombres_compras, on='sku', how='left')
-        informe['nombre_ingrediente'] = informe.apply(
-            lambda r: r['nombre_compra']
-            if (pd.isna(r['nombre_ingrediente']) or r['nombre_ingrediente'] == 0)
-            else r['nombre_ingrediente'], axis=1
-        )
-
     informe = informe.fillna(0)
+
+    # SKU final: unificar sku_ingrediente y sku en una sola columna
+    informe['sku_final'] = informe.apply(
+        lambda r: r['sku_ingrediente'] if r['sku_ingrediente'] not in [0, '', None]
+        else r['sku'], axis=1
+    )
+
+    # Nombre final: recetario primero, compras como fallback
+    informe['nombre_final'] = informe.apply(
+        lambda r: r['nombre_ingrediente'] if r['nombre_ingrediente'] not in [0, '', None]
+        else dict_nombres.get(r['sku_final'], r['sku_final']), axis=1
+    )
+
     informe['desviacion_cant']   = informe['cant_real_comprada'] - informe['consumo_teorico']
     informe['desviacion_dinero'] = informe['desviacion_cant'] * informe['muc_promedio']
 
-    # SKU final: usar sku de compras si sku_ingrediente está vacío
-    informe['sku_ingrediente'] = informe.apply(
-        lambda r: r['sku'] if (r['sku_ingrediente'] == 0 or pd.isna(r['sku_ingrediente']))
-        else r['sku_ingrediente'], axis=1
-    )
+    # Renombrar para consistencia con el resto del informe
+    informe['sku_ingrediente']   = informe['sku_final']
+    informe['nombre_ingrediente']= informe['nombre_final']
 
     return informe.sort_values('desviacion_dinero', ascending=False)
 
