@@ -344,7 +344,7 @@ def informe_desviacion(fecha_i, fecha_f, local):
     df_rec['es_opcion'] = pd.to_numeric(df_rec['es_opcion'], errors='coerce').fillna(0)
     df_rec['cant_real'] = pd.to_numeric(df_rec['cant_real'], errors='coerce').fillna(0)
     df_rec['cant_efic'] = pd.to_numeric(df_rec['cant_efic'], errors='coerce').fillna(0)
-    df_rec = df_rec[df_rec['es_opcion'].isin([0, 4])].copy()  # NULL ya convertido a 0 por fillna
+    df_rec = df_rec[df_rec['es_opcion'] == 0].copy()  # solo fijos (null→0 por fillna, opciones 1/2/3/5/6 excluidas)
 
     # Separar directos y procesados
     df_dir  = df_rec[df_rec['es_procesado'] == False].copy()
@@ -436,6 +436,17 @@ def informe_desviacion(fecha_i, fecha_f, local):
         df_c = run_query(q_c2, params_c)
         if not df_c.empty:
             st.warning("⚠️ Sin compras en el período seleccionado — mostrando totales históricos.")
+
+    # Aplicar equivalencias de SKU antes del join
+    df_equiv = run_query("SELECT sku_compra, sku_receta FROM sku_equivalencias")
+    if not df_equiv.empty:
+        dict_equiv = dict(zip(df_equiv['sku_compra'], df_equiv['sku_receta']))
+        df_c['sku'] = df_c['sku'].map(lambda x: dict_equiv.get(x, x))
+        # Re-agrupar por si hay múltiples SKUs que ahora apuntan al mismo
+        df_c = df_c.groupby(['sku', 'subcat'], as_index=False).agg({
+            'cant_real_comprada': 'sum',
+            'muc_promedio': 'mean'
+        })
 
     # Nombre canónico desde compras — un solo nombre por SKU usando diccionario (sin merge)
     q_nom = """
@@ -652,7 +663,7 @@ with st.sidebar:
 if modulo == "📦 Gestión de Datos":
     st.markdown("<div class='section-title'>Gestión de Datos</div>", unsafe_allow_html=True)
 
-    tab1, tab2, tab3 = st.tabs(["📖 Recetario", "🛒 Compras", "📈 Ventas"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📖 Recetario", "🛒 Compras", "📈 Ventas", "🔀 Equivalencias SKU"])
 
     with tab1:
         st.markdown("<div class='info-box'>Carga las hojas <b>Directos</b> y <b>Procesados</b> de tu recetario. Esto reemplaza el recetario actual.</div>", unsafe_allow_html=True)
@@ -682,6 +693,54 @@ if modulo == "📦 Gestión de Datos":
         f_ven = st.file_uploader("Excel de Ventas (.xlsx)", type="xlsx", key="ven")
         if f_ven and st.button("💾 Cargar Ventas"):
             save_ventas(pd.read_excel(f_ven))
+
+    with tab4:
+        st.markdown("<div class='info-box'>Mapea SKUs de compras sin código de venta hacia SKUs equivalentes que sí tienen receta.<br>Ejemplo: Erdinger Trigo (BA-CA-078) → Erdinger Weissbier (BA-CA-066)</div>", unsafe_allow_html=True)
+
+        df_eq = run_query("SELECT sku_compra, sku_receta, descripcion FROM sku_equivalencias ORDER BY sku_compra")
+        if not df_eq.empty:
+            st.caption(f"{len(df_eq)} equivalencias registradas")
+            st.dataframe(df_eq, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No hay equivalencias registradas aún.")
+
+        st.markdown("#### Agregar equivalencia")
+        c1, c2, c3 = st.columns(3)
+        with c1: sku_compra_in = st.text_input("SKU Compras (origen)", placeholder="BA-CA-078")
+        with c2: sku_receta_in = st.text_input("SKU Receta (destino)", placeholder="BA-CA-066")
+        with c3: desc_in = st.text_input("Descripción", placeholder="Erdinger Trigo -> Weissbier")
+
+        if st.button("Agregar Equivalencia"):
+            if sku_compra_in and sku_receta_in:
+                engine = get_engine()
+                try:
+                    with engine.connect() as conn:
+                        conn.execute(text(
+                            "INSERT INTO sku_equivalencias (sku_compra, sku_receta, descripcion) "
+                            "VALUES (:c, :r, :d) "
+                            "ON CONFLICT (sku_compra) DO UPDATE SET sku_receta = :r, descripcion = :d"
+                        ), {"c": sku_compra_in.strip(), "r": sku_receta_in.strip(), "d": desc_in.strip()})
+                        conn.commit()
+                    st.success(f"Equivalencia guardada: {sku_compra_in} -> {sku_receta_in}")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {e}")
+            else:
+                st.warning("Completa SKU origen y destino.")
+
+        if not df_eq.empty:
+            st.markdown("#### Eliminar equivalencia")
+            sku_del = st.selectbox("Seleccionar SKU a eliminar", df_eq['sku_compra'].tolist())
+            if st.button("Eliminar"):
+                engine = get_engine()
+                try:
+                    with engine.connect() as conn:
+                        conn.execute(text("DELETE FROM sku_equivalencias WHERE sku_compra = :c"), {"c": sku_del})
+                        conn.commit()
+                    st.success(f"Eliminada equivalencia para {sku_del}")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {e}")
 
 
 # ============================================================
