@@ -1,3 +1,6 @@
+
+Copiar
+
 import streamlit as st
 import pandas as pd
 import io
@@ -436,10 +439,31 @@ def save_recetario(df_directos, df_procesados):
 
     df_final = pd.concat([df_dir, df_proc], ignore_index=True)
     df_final['rendimiento'] = pd.to_numeric(df_final['rendimiento'], errors='coerce').fillna(1)
+    df_final['cant_real'] = pd.to_numeric(df_final['cant_real'], errors='coerce').fillna(0)
+    df_final['cant_efic'] = pd.to_numeric(df_final['cant_efic'], errors='coerce').fillna(0)
+
+    # Consolidar duplicados: mismo ingrediente en el mismo plato → sumar cantidades
+    df_final = df_final[cols].copy()
+    df_agg = df_final.groupby(
+        ['codigo_venta', 'sku_ingrediente', 'es_procesado'],
+        as_index=False
+    ).agg({
+        'nombre_plato':      'first',
+        'nombre_ingrediente':'first',
+        'cant_real':         'sum',
+        'cant_efic':         'sum',
+        'rendimiento':       'first',
+        'um_salida':         'first',
+        'es_opcion':         'first'
+    })
+
+    duplicados = len(df_final) - len(df_agg)
+    if duplicados > 0:
+        st.warning(f"⚠️ Se consolidaron {duplicados} filas duplicadas (mismo SKU en mismo plato).")
 
     try:
-        df_final[cols].to_sql('recetas', engine, if_exists='replace', index=False)
-        st.success("✅ Recetario sincronizado correctamente.")
+        df_agg[cols].to_sql('recetas', engine, if_exists='replace', index=False)
+        st.success(f"✅ Recetario sincronizado — {len(df_agg)} filas únicas cargadas.")
     except Exception as e:
         st.error(f"Error al guardar recetario: {e}")
 
