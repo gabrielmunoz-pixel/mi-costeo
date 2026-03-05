@@ -376,7 +376,9 @@ def informe_desviacion(fecha_i, fecha_f, local):
         exp = pd.merge(exp, rend, left_on='sku_ingrediente_plato', right_on='cod_pro', how='left')
         exp['rendimiento_total'] = exp['rendimiento_total'].replace(0, 1).fillna(1)
         exp['porcion'] = pd.to_numeric(exp.get('porcion_base', exp.get('porcion', 0)), errors='coerce').fillna(0)
-        exp['cant_real_base'] = pd.to_numeric(exp.get('cant_real_base', 0), errors='coerce').fillna(0)
+        # Verificar columnas disponibles post-merge
+        cant_real_col = 'cant_real_base' if 'cant_real_base' in exp.columns else 'cant_real_y' if 'cant_real_y' in exp.columns else 'cant_real'
+        exp['cant_real_base'] = pd.to_numeric(exp[cant_real_col], errors='coerce').fillna(0)
 
         def calc_consumo(row):
             # Consumo teórico usa cant_real (no cant_efic) — cant_efic incluye mermas para costeo
@@ -388,6 +390,13 @@ def informe_desviacion(fecha_i, fecha_f, local):
                 return row['cant_vendida'] * (row['cant_real_plato'] / row['rendimiento_total']) * row['cant_real_base']
 
         exp['consumo_parcial'] = exp.apply(calc_consumo, axis=1)
+
+        # DEBUG palta
+        debug_palta = exp[exp['sku_ingrediente_base'] == 'AL-FV-051']
+        if not debug_palta.empty:
+            st.info(f"DEBUG PALTA cols: {[c for c in exp.columns if 'cant_real' in c]}")
+            st.info(f"DEBUG PALTA: {len(debug_palta)} filas, cant_real_base sample={debug_palta['cant_real_base'].head(3).tolist()}, consumo={debug_palta['consumo_parcial'].sum():.0f}")
+
         exp_out = exp[['sku_ingrediente_base', 'nombre_ingrediente_base', 'consumo_parcial']].rename(
             columns={'sku_ingrediente_base': 'sku_ingrediente',
                      'nombre_ingrediente_base': 'nombre_ingrediente'})
