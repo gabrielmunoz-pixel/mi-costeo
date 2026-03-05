@@ -349,6 +349,8 @@ def informe_desviacion(fecha_i, fecha_f, local):
     teorico = pd.merge(df_v, df_rec, left_on='sku_producto', right_on='codigo_venta', how='inner')
     teorico['consumo_teorico'] = teorico['cant_vendida'] * teorico['cantidad_uso']
     # Agrupar solo por SKU — un ingrediente puede tener nombres distintos en distintos platos
+    # Primero eliminamos duplicados que puedan venir del merge ventas x recetario
+    teorico = teorico.drop_duplicates(subset=['sku_producto', 'sku_ingrediente'])
     cons_teo = teorico.groupby('sku_ingrediente').agg(
         consumo_teorico=('consumo_teorico', 'sum'),
         nombre_ingrediente=('nombre_ingrediente', 'first')
