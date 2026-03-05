@@ -377,6 +377,12 @@ def informe_desviacion(fecha_i, fecha_f, local):
             cant_real=('cant_real', 'first')
         ).reset_index()
 
+        # DEBUG
+        st.info(f"merge_pro_agg filas: {len(merge_pro_agg)}, columnas: {merge_pro_agg.columns.tolist()}")
+        debug_pro18 = merge_pro_agg[merge_pro_agg['sku_ingrediente'] == 'PRO-18']
+        if not debug_pro18.empty:
+            st.dataframe(debug_pro18)
+
         rows = []
         for _, plato_row in merge_pro_agg.iterrows():
             pro_sku    = plato_row['sku_ingrediente']  # PRO-XX
