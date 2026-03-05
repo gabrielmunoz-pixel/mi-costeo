@@ -346,36 +346,38 @@ def informe_desviacion(fecha_i, fecha_f, local):
     cons_teo = teorico.groupby(['sku_ingrediente', 'nombre_ingrediente']).agg(
         consumo_teorico=('consumo_teorico', 'sum')).reset_index()
 
-    # Compras reales del período — fecha_dte es timestamp YYYY-MM-DD HH:MM:SS
-    # cant_real_comprada = SUM(cant_conv / formato), protegido contra NULL y 0
-    q_c = """
+    # Compras reales del período — fecha_dte es timestamp, cant_conv ya está en unidades
+    filtro_local_c = "AND local = :l" if local != "Todos" else ""
+    params_c = {"i": fecha_i, "f": fecha_f}
+    if local != "Todos":
+        params_c["l"] = local
+
+    q_c = f"""
         SELECT
             sku,
             subcat,
-            SUM(cant_conv / NULLIF(COALESCE(formato, 1), 0)) AS cant_real_comprada,
+            SUM(cant_conv) AS cant_real_comprada,
             AVG(muc) AS muc_promedio
         FROM compras
         WHERE fecha_dte::date BETWEEN :i AND :f
+        {filtro_local_c}
+        GROUP BY 1, 2
     """
-    params_c = {"i": fecha_i, "f": fecha_f}
-    if local != "Todos":
-        q_c += " AND local = :l"
-        params_c["l"] = local
-    q_c += " GROUP BY 1, 2"
     df_c = run_query(q_c, params_c)
 
     # Fallback: si el período no tiene compras, mostrar histórico completo
     if df_c.empty:
-        q_c2 = """
+        q_c2 = f"""
             SELECT
                 sku,
                 subcat,
-                SUM(cant_conv / NULLIF(COALESCE(formato, 1), 0)) AS cant_real_comprada,
+                SUM(cant_conv) AS cant_real_comprada,
                 AVG(muc) AS muc_promedio
             FROM compras
+            WHERE 1=1 {filtro_local_c}
             GROUP BY 1, 2
         """
-        df_c = run_query(q_c2)
+        df_c = run_query(q_c2, params_c)
         if not df_c.empty:
             st.warning("⚠️ Sin compras en el período seleccionado — mostrando totales históricos.")
 
