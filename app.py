@@ -358,6 +358,9 @@ def informe_desviacion(fecha_i, fecha_f, local):
     debug_bca_dir = dir_out[dir_out['sku_ingrediente'] == 'BA-CA-023']
     st.info(f"DEBUG BA-CA-023 en dir_out: {len(debug_bca_dir)} filas, total={debug_bca_dir['consumo_parcial'].sum():.0f}")
 
+    # También debug en cons_teo y en informe final — agregar DESPUÉS del groupby
+    
+
 
 
     # ---- EXPLOSIÓN PROCESADOS ----
@@ -420,6 +423,8 @@ def informe_desviacion(fecha_i, fecha_f, local):
         consumo_teorico=('consumo_parcial', 'sum'),
         nombre_ingrediente=('nombre_ingrediente', 'first')
     ).reset_index()
+    debug_cons = cons_teo[cons_teo['sku_ingrediente'] == 'BA-CA-023']
+    st.info(f"DEBUG BA-CA-023 en cons_teo: consumo_teorico={debug_cons['consumo_teorico'].values}")
 
 
 
