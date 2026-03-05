@@ -230,11 +230,11 @@ def calcular_costo_platos(engine, fecha_i, fecha_f, local):
     Devuelve DataFrame con costo teórico por código de venta (plato).
     Usa último MUC de compras dentro del período (o el último histórico si no hay en período).
     """
-    # Último MUC por SKU (último registro histórico)
+    # Último MUC por SKU (último registro histórico, ordenado por fecha_dte)
     muc_sql = """
         SELECT DISTINCT ON (sku) sku, muc
         FROM compras
-        ORDER BY sku, created_at DESC
+        ORDER BY sku, fecha_dte DESC
     """
     df_muc = run_query(muc_sql)
     if df_muc.empty:
@@ -276,18 +276,20 @@ def informe_rentabilidad(fecha_i, fecha_f, local):
     if engine is None:
         return pd.DataFrame()
 
-    q_v = """
+    filtro_local_r = "AND local = :l" if local != "Todos" else ""
+    params = {"i": str(fecha_i), "f": str(fecha_f)}
+    if local != "Todos":
+        params["l"] = local
+
+    q_v = f"""
         SELECT sku_producto, nombre_producto, categoria_menu,
                SUM(cantidad_vendida) as cant,
                SUM(monto_venta_real) as venta
         FROM ventas
         WHERE fecha_venta BETWEEN :i AND :f
+        {filtro_local_r}
+        GROUP BY 1, 2, 3
     """
-    params = {"i": fecha_i, "f": fecha_f}
-    if local != "Todos":
-        q_v += " AND local = :l"
-        params["l"] = local
-    q_v += " GROUP BY 1, 2, 3"
 
     df_v = run_query(q_v, params)
     if df_v.empty:
@@ -318,16 +320,19 @@ def informe_desviacion(fecha_i, fecha_f, local):
     if engine is None:
         return pd.DataFrame()
 
-    # Ventas del período
-    q_v = """
-        SELECT sku_producto, SUM(cantidad_vendida) as cant_vendida
-        FROM ventas WHERE fecha_venta BETWEEN :i AND :f
-    """
-    params = {"i": fecha_i, "f": fecha_f}
+    # Ventas del período — casteamos fechas a string para evitar problemas de tipo con SQLAlchemy
+    filtro_local_v = "AND local = :l" if local != "Todos" else ""
+    params = {"i": str(fecha_i), "f": str(fecha_f)}
     if local != "Todos":
-        q_v += " AND local = :l"
         params["l"] = local
-    q_v += " GROUP BY 1"
+
+    q_v = f"""
+        SELECT sku_producto, SUM(cantidad_vendida) as cant_vendida
+        FROM ventas
+        WHERE fecha_venta BETWEEN :i AND :f
+        {filtro_local_v}
+        GROUP BY 1
+    """
     df_v = run_query(q_v, params)
 
     # Recetario (directos: cant_real, procesados: cant_efic)
