@@ -496,10 +496,15 @@ def informe_desviacion(fecha_i, fecha_f, local):
             if sku_dest not in dict_nombres and sku_orig in dict_nombres:
                 dict_nombres[sku_dest] = dict_nombres[sku_orig]
 
+    debug_dc = df_c[df_c['sku'] == 'BA-CA-023']
+    st.info(f"DEBUG BA-CA-023 en df_c post-equiv: {len(debug_dc)} filas, comprado={debug_dc['cant_real_comprada'].sum():.0f}")
+
     informe = pd.merge(
         cons_teo, df_c,
         left_on='sku_ingrediente', right_on='sku', how='outer'
     )
+    debug_inf = informe[informe['sku_ingrediente'] == 'BA-CA-023']
+    st.info(f"DEBUG BA-CA-023 post-join: {len(debug_inf)} filas, consumo={debug_inf['consumo_teorico'].sum():.0f}")
     informe = informe.fillna(0)
 
     # SKU final: unificar sku_ingrediente y sku en una sola columna
