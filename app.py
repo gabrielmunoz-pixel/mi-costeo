@@ -340,11 +340,11 @@ def informe_desviacion(fecha_i, fecha_f, local):
     if df_rec.empty or df_v.empty:
         return pd.DataFrame()
 
-    # Filtrar opcionales y convertir tipos
+    # Filtrar opcionales — NULL se trata como 0 (siempre va en el plato)
     df_rec['es_opcion'] = pd.to_numeric(df_rec['es_opcion'], errors='coerce').fillna(0)
     df_rec['cant_real'] = pd.to_numeric(df_rec['cant_real'], errors='coerce').fillna(0)
     df_rec['cant_efic'] = pd.to_numeric(df_rec['cant_efic'], errors='coerce').fillna(0)
-    df_rec = df_rec[df_rec['es_opcion'].isin([0, 4])].copy()
+    df_rec = df_rec[df_rec['es_opcion'].isin([0, 4])].copy()  # NULL ya convertido a 0 por fillna
 
     # Separar directos y procesados
     df_dir  = df_rec[df_rec['es_procesado'] == False].copy()
@@ -394,6 +394,12 @@ def informe_desviacion(fecha_i, fecha_f, local):
         consumo_teorico=('consumo_parcial', 'sum'),
         nombre_ingrediente=('nombre_ingrediente', 'first')
     ).reset_index()
+
+    # DEBUG temporal — mostrar desglose para AL-PA-008
+    debug_pan = todo[todo['sku_ingrediente'] == 'AL-PA-008']
+    if not debug_pan.empty:
+        st.info(f"DEBUG AL-PA-008: {len(debug_pan)} filas, total={debug_pan['consumo_parcial'].sum():.0f}")
+        st.dataframe(debug_pan.head(20))
 
 
     # Compras reales del período — fecha_dte es timestamp, cant_conv ya está en unidades
