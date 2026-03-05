@@ -346,10 +346,10 @@ def informe_desviacion(fecha_i, fecha_f, local):
     cons_teo = teorico.groupby(['sku_ingrediente', 'nombre_ingrediente']).agg(
         consumo_teorico=('consumo_teorico', 'sum')).reset_index()
 
-    # Compras reales del período
+    # Compras reales del período — fecha_dte es timestamp YYYY-MM-DD HH:MM:SS
     q_c = """
         SELECT sku, subcat, SUM(cant_conv) as cant_real_comprada, AVG(muc) as muc_promedio
-        FROM compras WHERE created_at::date BETWEEN :i AND :f
+        FROM compras WHERE fecha_dte::date BETWEEN :i AND :f
     """
     params_c = {"i": fecha_i, "f": fecha_f}
     if local != "Todos":
@@ -357,6 +357,16 @@ def informe_desviacion(fecha_i, fecha_f, local):
         params_c["l"] = local
     q_c += " GROUP BY 1, 2"
     df_c = run_query(q_c, params_c)
+
+    # Fallback: si el período no tiene compras, mostrar histórico completo
+    if df_c.empty:
+        q_c2 = """
+            SELECT sku, subcat, SUM(cant_conv) as cant_real_comprada, AVG(muc) as muc_promedio
+            FROM compras GROUP BY 1, 2
+        """
+        df_c = run_query(q_c2)
+        if not df_c.empty:
+            st.warning("⚠️ Sin compras en el período seleccionado — mostrando totales históricos.")
 
     informe = pd.merge(
         cons_teo, df_c,
