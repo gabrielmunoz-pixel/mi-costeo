@@ -335,30 +335,66 @@ def informe_desviacion(fecha_i, fecha_f, local):
     """
     df_v = run_query(q_v, params)
 
-    # Recetario (directos: cant_real, procesados: cant_efic)
-    # Excluir ingredientes opcionales (EsOpcion != 0 y != NaN) — se costean por su propio SKU
+    # Recetario completo
     df_rec = run_query("SELECT * FROM recetas")
     if df_rec.empty or df_v.empty:
         return pd.DataFrame()
 
+    # Filtrar opcionales y convertir tipos
     df_rec['es_opcion'] = pd.to_numeric(df_rec['es_opcion'], errors='coerce').fillna(0)
+    df_rec['cant_real'] = pd.to_numeric(df_rec['cant_real'], errors='coerce').fillna(0)
+    df_rec['cant_efic'] = pd.to_numeric(df_rec['cant_efic'], errors='coerce').fillna(0)
     df_rec = df_rec[df_rec['es_opcion'].isin([0, 4])].copy()
 
-    df_rec['cantidad_uso'] = df_rec.apply(
-        lambda r: pd.to_numeric(r['cant_efic'], errors='coerce')
-        if r['es_procesado'] else r['cant_real'], axis=1
-    ).fillna(0)
+    # Separar directos y procesados
+    df_dir  = df_rec[df_rec['es_procesado'] == False].copy()
+    df_proc = df_rec[df_rec['es_procesado'] == True].copy()
 
-    # Consumo teórico
-    teorico = pd.merge(df_v, df_rec, left_on='sku_producto', right_on='codigo_venta', how='inner')
-    teorico['consumo_teorico'] = teorico['cant_vendida'] * teorico['cantidad_uso']
-    # Agrupar solo por SKU — un ingrediente puede tener nombres distintos en distintos platos
-    # Primero eliminamos duplicados que puedan venir del merge ventas x recetario
-    teorico = teorico.drop_duplicates(subset=['sku_producto', 'sku_ingrediente'])
-    cons_teo = teorico.groupby('sku_ingrediente').agg(
-        consumo_teorico=('consumo_teorico', 'sum'),
+    # ---- DIRECTOS que no son PRO- ----
+    dir_no_pro = df_dir[~df_dir['sku_ingrediente'].str.startswith('PRO-', na=False)].copy()
+    merge_dir = pd.merge(df_v, dir_no_pro, left_on='sku_producto', right_on='codigo_venta', how='inner')
+    merge_dir['consumo_parcial'] = merge_dir['cant_vendida'] * merge_dir['cant_real']
+    dir_out = merge_dir[['sku_ingrediente', 'nombre_ingrediente', 'consumo_parcial']]
+
+    # ---- EXPLOSIÓN PROCESADOS ----
+    # Paso 1: platos que usan un PRO- como ingrediente
+    dir_pro = df_dir[df_dir['sku_ingrediente'].str.startswith('PRO-', na=False)].copy()
+    merge_pro = pd.merge(df_v, dir_pro, left_on='sku_producto', right_on='codigo_venta', how='inner')
+
+    exp_out = pd.DataFrame()
+    if not merge_pro.empty and not df_proc.empty:
+        # Paso 2: rendimiento total de cada procesado = SUM(cant_real) de sus ingredientes
+        rend = df_proc.groupby('codigo_venta')['cant_real'].sum().reset_index()
+        rend.columns = ['cod_pro', 'rendimiento_total']
+
+        # Paso 3: explotar ingredientes base
+        exp = pd.merge(merge_pro, df_proc,
+                       left_on='sku_ingrediente', right_on='codigo_venta',
+                       how='left', suffixes=('_plato', '_base'))
+        exp = pd.merge(exp, rend, left_on='sku_ingrediente_plato', right_on='cod_pro', how='left')
+        exp['rendimiento_total'] = exp['rendimiento_total'].replace(0, 1).fillna(1)
+        exp['porcion'] = pd.to_numeric(exp.get('porcion_base', exp.get('porcion', 0)), errors='coerce').fillna(0)
+
+        def calc_consumo(row):
+            if row['porcion'] == 1:
+                # Unitario (ej: Pollo Panko): cant_real_plato × cant_efic_base por unidad
+                return row['cant_vendida'] * row['cant_real_plato'] * row['cant_efic_base']
+            else:
+                # Lote (ej: Mayonesa): proporcional al rendimiento del lote
+                return row['cant_vendida'] * (row['cant_real_plato'] / row['rendimiento_total']) * row['cant_efic_base']
+
+        exp['consumo_parcial'] = exp.apply(calc_consumo, axis=1)
+        exp_out = exp[['sku_ingrediente_base', 'nombre_ingrediente_base', 'consumo_parcial']].rename(
+            columns={'sku_ingrediente_base': 'sku_ingrediente',
+                     'nombre_ingrediente_base': 'nombre_ingrediente'})
+
+    # ---- CONSOLIDAR ----
+    todo = pd.concat([df for df in [dir_out, exp_out] if not df.empty], ignore_index=True)
+    cons_teo = todo.groupby('sku_ingrediente').agg(
+        consumo_teorico=('consumo_parcial', 'sum'),
         nombre_ingrediente=('nombre_ingrediente', 'first')
     ).reset_index()
+
 
     # Compras reales del período — fecha_dte es timestamp, cant_conv ya está en unidades
     filtro_local_c = "AND local = :l" if local != "Todos" else ""
@@ -453,6 +489,7 @@ def save_recetario(df_directos, df_procesados):
     })
     df_dir['es_procesado'] = False
     df_dir['cant_efic'] = None
+    df_dir['porcion'] = 0
 
     df_proc = df_procesados.copy()
     df_proc.columns = df_proc.columns.str.strip()
@@ -460,13 +497,16 @@ def save_recetario(df_directos, df_procesados):
         'Codigo Venta': 'codigo_venta', 'Ingrediente Proc': 'nombre_plato',
         'SKU Ingrediente': 'sku_ingrediente', 'Ingrediente': 'nombre_ingrediente',
         'CantReceta': 'cant_real', 'CantEfic': 'cant_efic',
-        'UM Salida': 'um_salida', 'Eficiencia': 'rendimiento'
+        'UM Salida': 'um_salida', 'Eficiencia': 'rendimiento',
+        'Porcion': 'porcion'
     })
     df_proc['es_procesado'] = True
     df_proc['es_opcion'] = 0
+    if 'porcion' not in df_proc.columns:
+        df_proc['porcion'] = 0
 
     cols = ['codigo_venta', 'nombre_plato', 'sku_ingrediente', 'nombre_ingrediente',
-            'cant_real', 'cant_efic', 'rendimiento', 'um_salida', 'es_procesado', 'es_opcion']
+            'cant_real', 'cant_efic', 'rendimiento', 'um_salida', 'es_procesado', 'es_opcion', 'porcion']
 
     df_final = pd.concat([df_dir, df_proc], ignore_index=True)
     df_final['rendimiento'] = pd.to_numeric(df_final['rendimiento'], errors='coerce').fillna(1)
