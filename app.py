@@ -376,14 +376,16 @@ def informe_desviacion(fecha_i, fecha_f, local):
         exp = pd.merge(exp, rend, left_on='sku_ingrediente_plato', right_on='cod_pro', how='left')
         exp['rendimiento_total'] = exp['rendimiento_total'].replace(0, 1).fillna(1)
         exp['porcion'] = pd.to_numeric(exp.get('porcion_base', exp.get('porcion', 0)), errors='coerce').fillna(0)
+        exp['cant_real_base'] = pd.to_numeric(exp.get('cant_real_base', 0), errors='coerce').fillna(0)
 
         def calc_consumo(row):
+            # Consumo teórico usa cant_real (no cant_efic) — cant_efic incluye mermas para costeo
             if row['porcion'] == 1:
-                # Unitario (ej: Pollo Panko): cant_real_plato × cant_efic_base por unidad
-                return row['cant_vendida'] * row['cant_real_plato'] * row['cant_efic_base']
+                # Unitario (ej: Pollo Panko): ventas × cant_real_plato × cant_real_base
+                return row['cant_vendida'] * row['cant_real_plato'] * row['cant_real_base']
             else:
-                # Lote (ej: Mayonesa): proporcional al rendimiento del lote
-                return row['cant_vendida'] * (row['cant_real_plato'] / row['rendimiento_total']) * row['cant_efic_base']
+                # Lote (ej: Mayonesa): ventas × (cant_real_plato / rendimiento_total) × cant_real_base
+                return row['cant_vendida'] * (row['cant_real_plato'] / row['rendimiento_total']) * row['cant_real_base']
 
         exp['consumo_parcial'] = exp.apply(calc_consumo, axis=1)
         exp_out = exp[['sku_ingrediente_base', 'nombre_ingrediente_base', 'consumo_parcial']].rename(
@@ -448,7 +450,7 @@ def informe_desviacion(fecha_i, fecha_f, local):
             'muc_promedio': 'mean'
         })
 
-    # Nombre canónico desde compras — un solo nombre por SKU usando diccionario (sin merge)
+    # Nombre canónico desde compras — incluir equivalencias para SKUs que solo existen como destino
     q_nom = """
         SELECT sku, MIN(nombre_producto) as nombre_compra
         FROM compras
@@ -457,6 +459,15 @@ def informe_desviacion(fecha_i, fecha_f, local):
     """
     nombres_compras = run_query(q_nom)
     dict_nombres = dict(zip(nombres_compras['sku'], nombres_compras['nombre_compra'])) if not nombres_compras.empty else {}
+
+    # Para SKUs de receta que no están en compras directamente (solo via equivalencias),
+    # usar el nombre de uno de sus equivalentes como fallback
+    if not df_equiv.empty:
+        for _, row in df_equiv.iterrows():
+            sku_dest = row['sku_receta']
+            sku_orig = row['sku_compra']
+            if sku_dest not in dict_nombres and sku_orig in dict_nombres:
+                dict_nombres[sku_dest] = dict_nombres[sku_orig]
 
     informe = pd.merge(
         cons_teo, df_c,
