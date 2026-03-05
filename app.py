@@ -493,22 +493,27 @@ def save_recetario(df_directos, df_procesados):
 
     df_proc = df_procesados.copy()
     df_proc.columns = df_proc.columns.str.strip()
-    df_proc = df_proc.rename(columns={
+    # Detectar columna porcion con cualquier variación de nombre o espacios
+    col_porcion = next((c for c in df_proc.columns if c.strip().lower() == 'porcion'), None)
+    rename_map = {
         'Codigo Venta': 'codigo_venta', 'Ingrediente Proc': 'nombre_plato',
         'SKU Ingrediente': 'sku_ingrediente', 'Ingrediente': 'nombre_ingrediente',
         'CantReceta': 'cant_real', 'CantEfic': 'cant_efic',
-        'UM Salida': 'um_salida', 'Eficiencia': 'rendimiento',
-        'Porcion': 'porcion'
-    })
+        'UM Salida': 'um_salida', 'Eficiencia': 'rendimiento'
+    }
+    if col_porcion:
+        rename_map[col_porcion] = 'porcion'
+    df_proc = df_proc.rename(columns=rename_map)
     df_proc['es_procesado'] = True
     df_proc['es_opcion'] = 0
     if 'porcion' not in df_proc.columns:
         df_proc['porcion'] = 0
 
-    cols = ['codigo_venta', 'nombre_plato', 'sku_ingrediente', 'nombre_ingrediente',
-            'cant_real', 'cant_efic', 'rendimiento', 'um_salida', 'es_procesado', 'es_opcion', 'porcion']
+    cols_base = ['codigo_venta', 'nombre_plato', 'sku_ingrediente', 'nombre_ingrediente',
+                 'cant_real', 'cant_efic', 'rendimiento', 'um_salida', 'es_procesado', 'es_opcion', 'porcion']
 
     df_final = pd.concat([df_dir, df_proc], ignore_index=True)
+    cols = [c for c in cols_base if c in df_final.columns]
     df_final['rendimiento'] = pd.to_numeric(df_final['rendimiento'], errors='coerce').fillna(1)
     df_final['cant_real'] = pd.to_numeric(df_final['cant_real'], errors='coerce').fillna(0)
     df_final['cant_efic'] = pd.to_numeric(df_final['cant_efic'], errors='coerce').fillna(0)
