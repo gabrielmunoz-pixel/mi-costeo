@@ -365,42 +365,43 @@ def informe_desviacion(fecha_i, fecha_f, local):
 
     exp_out = pd.DataFrame()
     if not merge_pro.empty and not df_proc.empty:
-        # Paso 2: rendimiento total de cada procesado = SUM(cant_real) de sus ingredientes
-        rend = df_proc.groupby('codigo_venta')['cant_real'].sum().reset_index()
-        rend.columns = ['cod_pro', 'rendimiento_total']
+        # Paso 2: rendimiento total y porcion de cada procesado
+        rend = df_proc.groupby('codigo_venta').agg(
+            rendimiento_total=('cant_real', 'sum'),
+            porcion=('porcion', 'first')
+        ).reset_index()
 
-        # Paso 3: explotar ingredientes base
-        exp = pd.merge(merge_pro, df_proc,
-                       left_on='sku_ingrediente', right_on='codigo_venta',
-                       how='left', suffixes=('_plato', '_base'))
-        exp = pd.merge(exp, rend, left_on='sku_ingrediente_plato', right_on='cod_pro', how='left')
-        exp['rendimiento_total'] = exp['rendimiento_total'].replace(0, 1).fillna(1)
-        exp['porcion'] = pd.to_numeric(exp.get('porcion_base', exp.get('porcion', 0)), errors='coerce').fillna(0)
-        # Verificar columnas disponibles post-merge
-        cant_real_col = 'cant_real_base' if 'cant_real_base' in exp.columns else 'cant_real_y' if 'cant_real_y' in exp.columns else 'cant_real'
-        exp['cant_real_base'] = pd.to_numeric(exp[cant_real_col], errors='coerce').fillna(0)
+        rows = []
+        for _, plato_row in merge_pro.iterrows():
+            pro_sku   = plato_row['sku_ingrediente']   # PRO-XX
+            cant_plato = pd.to_numeric(plato_row['cant_real'], errors='coerce') or 0
+            ventas     = pd.to_numeric(plato_row['cant_vendida'], errors='coerce') or 0
 
-        def calc_consumo(row):
-            # Consumo teórico usa cant_real (no cant_efic) — cant_efic incluye mermas para costeo
-            if row['porcion'] == 1:
-                # Unitario (ej: Pollo Panko): ventas × cant_real_plato × cant_real_base
-                return row['cant_vendida'] * row['cant_real_plato'] * row['cant_real_base']
-            else:
-                # Lote (ej: Mayonesa): ventas × (cant_real_plato / rendimiento_total) × cant_real_base
-                return row['cant_vendida'] * (row['cant_real_plato'] / row['rendimiento_total']) * row['cant_real_base']
+            # Ingredientes base del procesado
+            base_rows = df_proc[df_proc['codigo_venta'] == pro_sku]
+            if base_rows.empty:
+                continue
 
-        exp['consumo_parcial'] = exp.apply(calc_consumo, axis=1)
+            rend_row = rend[rend['codigo_venta'] == pro_sku]
+            rend_total = float(rend_row['rendimiento_total'].values[0]) if not rend_row.empty else 1
+            porcion    = int(rend_row['porcion'].values[0]) if not rend_row.empty else 0
+            if rend_total == 0:
+                rend_total = 1
 
-        # DEBUG palta
-        debug_palta = exp[exp['sku_ingrediente_base'] == 'AL-FV-051']
-        if not debug_palta.empty:
-            st.info(f"DEBUG PALTA: {len(debug_palta)} filas, consumo={debug_palta['consumo_parcial'].sum():.0f}")
-            st.info(f"Columnas exp: {exp.columns.tolist()}")
-            st.dataframe(debug_palta[['sku_ingrediente_plato','cant_real_plato','rendimiento_total','cant_real_base','consumo_parcial']].head(10))
+            for _, base in base_rows.iterrows():
+                cant_base = pd.to_numeric(base['cant_real'], errors='coerce') or 0
+                if porcion == 1:
+                    consumo = ventas * cant_plato * cant_base
+                else:
+                    consumo = ventas * (cant_plato / rend_total) * cant_base
+                rows.append({
+                    'sku_ingrediente':   base['sku_ingrediente'],
+                    'nombre_ingrediente': base['nombre_ingrediente'],
+                    'consumo_parcial':   consumo
+                })
 
-        exp_out = exp[['sku_ingrediente_base', 'nombre_ingrediente_base', 'consumo_parcial']].rename(
-            columns={'sku_ingrediente_base': 'sku_ingrediente',
-                     'nombre_ingrediente_base': 'nombre_ingrediente'})
+        if rows:
+            exp_out = pd.DataFrame(rows)
 
     # ---- CONSOLIDAR ----
     todo = pd.concat([df for df in [dir_out, exp_out] if not df.empty], ignore_index=True)
