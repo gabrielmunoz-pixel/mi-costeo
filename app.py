@@ -371,18 +371,23 @@ def informe_desviacion(fecha_i, fecha_f, local):
             porcion=('porcion', 'first')
         ).reset_index()
 
+        # Agregar ventas por codigo_venta + sku_ingrediente (PRO-XX) para evitar iterar fila por fila
+        merge_pro_agg = merge_pro.groupby(['codigo_venta', 'sku_ingrediente']).agg(
+            cant_vendida=('cant_vendida', 'sum'),
+            cant_real=('cant_real', 'first')
+        ).reset_index()
+
         rows = []
-        for _, plato_row in merge_pro.iterrows():
-            pro_sku   = plato_row['sku_ingrediente']   # PRO-XX
+        for _, plato_row in merge_pro_agg.iterrows():
+            pro_sku    = plato_row['sku_ingrediente']  # PRO-XX
             cant_plato = pd.to_numeric(plato_row['cant_real'], errors='coerce') or 0
             ventas     = pd.to_numeric(plato_row['cant_vendida'], errors='coerce') or 0
 
-            # Ingredientes base del procesado
             base_rows = df_proc[df_proc['codigo_venta'] == pro_sku]
             if base_rows.empty:
                 continue
 
-            rend_row = rend[rend['codigo_venta'] == pro_sku]
+            rend_row   = rend[rend['codigo_venta'] == pro_sku]
             rend_total = float(rend_row['rendimiento_total'].values[0]) if not rend_row.empty else 1
             porcion    = int(rend_row['porcion'].values[0]) if not rend_row.empty else 0
             if rend_total == 0:
@@ -395,9 +400,9 @@ def informe_desviacion(fecha_i, fecha_f, local):
                 else:
                     consumo = ventas * (cant_plato / rend_total) * cant_base
                 rows.append({
-                    'sku_ingrediente':   base['sku_ingrediente'],
+                    'sku_ingrediente':    base['sku_ingrediente'],
                     'nombre_ingrediente': base['nombre_ingrediente'],
-                    'consumo_parcial':   consumo
+                    'consumo_parcial':    consumo
                 })
 
         if rows:
