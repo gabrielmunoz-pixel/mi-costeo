@@ -356,13 +356,7 @@ def informe_desviacion(fecha_i, fecha_f, local):
     merge_dir['consumo_parcial'] = merge_dir['cant_vendida'] * merge_dir['cant_real']
     dir_out = merge_dir[['sku_ingrediente', 'nombre_ingrediente', 'consumo_parcial']]
 
-    # DEBUG ESP-004
-    debug_esp = merge_dir[merge_dir['codigo_venta'] == 'ESP-004']
-    st.info(f"DEBUG ESP-004 en merge_dir: {len(debug_esp)} filas")
-    debug_rec = df_dir[df_dir['codigo_venta'] == 'ESP-004']
-    st.info(f"DEBUG ESP-004 en df_dir: {len(debug_rec)} filas, es_opcion={debug_rec['es_opcion'].tolist() if not debug_rec.empty else 'vacío'}")
-    debug_v = df_v[df_v['sku_producto'] == 'ESP-004']
-    st.info(f"DEBUG ESP-004 en df_v: {len(debug_v)} filas, cant_vendida={debug_v['cant_vendida'].tolist() if not debug_v.empty else 'vacío'}")
+
 
     # ---- EXPLOSIÓN PROCESADOS ----
     # Paso 1: platos que usan un PRO- como ingrediente
@@ -403,16 +397,7 @@ def informe_desviacion(fecha_i, fecha_f, local):
         nombre_ingrediente=('nombre_ingrediente', 'first')
     ).reset_index()
 
-    # DEBUG temporal — mostrar desglose para AL-PA-008
-    debug_pan = todo[todo['sku_ingrediente'] == 'AL-PA-008']
-    if not debug_pan.empty:
-        st.info(f"DEBUG AL-PA-008: {len(debug_pan)} filas, total={debug_pan['consumo_parcial'].sum():.0f}")
-        st.write("Fila 1:", debug_pan.iloc[0].to_dict())
-        if len(debug_pan) > 1:
-            st.write("Fila 2:", debug_pan.iloc[1].to_dict())
-    st.info(f"dir_out filas AL-PA-008: {len(dir_out[dir_out['sku_ingrediente']=='AL-PA-008'])}, total={dir_out[dir_out['sku_ingrediente']=='AL-PA-008']['consumo_parcial'].sum():.0f}")
-    if not exp_out.empty:
-        st.info(f"exp_out filas AL-PA-008: {len(exp_out[exp_out['sku_ingrediente']=='AL-PA-008'])}, total={exp_out[exp_out['sku_ingrediente']=='AL-PA-008']['consumo_parcial'].sum():.0f}")
+
 
 
     # Compras reales del período — fecha_dte es timestamp, cant_conv ya está en unidades
@@ -461,6 +446,12 @@ def informe_desviacion(fecha_i, fecha_f, local):
     """
     nombres_compras = run_query(q_nom)
     dict_nombres = dict(zip(nombres_compras['sku'], nombres_compras['nombre_compra'])) if not nombres_compras.empty else {}
+
+    # Debug Chandon antes del outer join
+    debug_chandon_teo = cons_teo[cons_teo['sku_ingrediente'] == 'BA-CA-032']
+    debug_chandon_c   = df_c[df_c['sku'] == 'BA-CA-032']
+    st.info(f"DEBUG BA-CA-032 — cons_teo: {len(debug_chandon_teo)} filas, consumo={debug_chandon_teo['consumo_teorico'].sum():.0f}")
+    st.info(f"DEBUG BA-CA-032 — df_c (compras): {len(debug_chandon_c)} filas, comprado={debug_chandon_c['cant_real_comprada'].sum():.0f}")
 
     informe = pd.merge(
         cons_teo, df_c,
