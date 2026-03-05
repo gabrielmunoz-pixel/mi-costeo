@@ -447,22 +447,10 @@ def informe_desviacion(fecha_i, fecha_f, local):
     nombres_compras = run_query(q_nom)
     dict_nombres = dict(zip(nombres_compras['sku'], nombres_compras['nombre_compra'])) if not nombres_compras.empty else {}
 
-    # Debug Chandon antes del outer join
-    debug_chandon_teo = cons_teo[cons_teo['sku_ingrediente'] == 'BA-CA-032']
-    debug_chandon_c   = df_c[df_c['sku'] == 'BA-CA-032']
-    st.info(f"DEBUG BA-CA-032 — cons_teo: {len(debug_chandon_teo)} filas, consumo={debug_chandon_teo['consumo_teorico'].sum():.0f}")
-    st.info(f"DEBUG BA-CA-032 — df_c (compras): {len(debug_chandon_c)} filas, comprado={debug_chandon_c['cant_real_comprada'].sum():.0f}")
-
-    informe = pd.merge(
+informe = pd.merge(
         cons_teo, df_c,
         left_on='sku_ingrediente', right_on='sku', how='outer'
-    )
-    # Debug post-join
-    debug_post = informe[informe['sku_ingrediente'] == 'BA-CA-032']
-    st.info(f"DEBUG BA-CA-032 post-join: {len(debug_post)} filas")
-    if not debug_post.empty:
-        st.write(debug_post.iloc[0].to_dict())
-    informe = informe.fillna(0)
+    )informe = informe.fillna(0)
 
     # SKU final: unificar sku_ingrediente y sku en una sola columna
     informe['sku_final'] = informe.apply(
@@ -470,10 +458,11 @@ def informe_desviacion(fecha_i, fecha_f, local):
         else r['sku'], axis=1
     )
 
-    # Nombre final: recetario primero, compras como fallback
+    # Nombre final: recetario primero, compras como fallback para ingredientes sin receta
     informe['nombre_final'] = informe.apply(
-        lambda r: r['nombre_ingrediente'] if r['nombre_ingrediente'] not in [0, '', None]
-        else dict_nombres.get(r['sku_final'], r['sku_final']), axis=1
+        lambda r: r['nombre_ingrediente']
+        if (r['nombre_ingrediente'] not in [0, '', None] and str(r['nombre_ingrediente']).strip() != '')
+        else dict_nombres.get(str(r['sku_final']), str(r['sku_final'])), axis=1
     )
 
     informe['desviacion_cant']   = informe['cant_real_comprada'] - informe['consumo_teorico']
@@ -483,9 +472,7 @@ def informe_desviacion(fecha_i, fecha_f, local):
     informe['sku_ingrediente']   = informe['sku_final']
     informe['nombre_ingrediente']= informe['nombre_final']
 
-    debug_final = informe[informe['sku_ingrediente'] == 'BA-CA-032']
-    st.info(f"DEBUG BA-CA-032 FINAL: consumo_teorico={debug_final['consumo_teorico'].values}, cant_comprada={debug_final['cant_real_comprada'].values}")
-    return informe.sort_values('desviacion_dinero', ascending=False)
+return informe.sort_values('desviacion_dinero', ascending=False)
 
 
 # ============================================================
@@ -847,7 +834,7 @@ elif modulo == "📊 Informes":
                         return 'background-color: #1a3a2a; color: #4caf7d'
                     return ''
 
-                cols_show2 = ['nombre_ingrediente', 'subcat', 'consumo_teorico',
+                cols_show2 = ['sku_ingrediente', 'nombre_ingrediente', 'subcat', 'consumo_teorico',
                               'cant_real_comprada', 'desviacion_cant', 'desviacion_dinero']
 
                 existing_cols = [c for c in cols_show2 if c in df_inf2.columns]
