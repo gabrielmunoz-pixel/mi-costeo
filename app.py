@@ -365,7 +365,7 @@ def informe_desviacion(fecha_i, fecha_f, local):
             AVG(muc) AS muc_promedio
         FROM compras
         WHERE fecha_dte::date BETWEEN :i AND :f
-          AND subcat IN ('Directos', 'Indirectos')
+          AND subcat IN ('Directo', 'Indirecto')
         {filtro_local_c}
         GROUP BY 1, 2
     """
@@ -380,7 +380,7 @@ def informe_desviacion(fecha_i, fecha_f, local):
                 SUM(cant_conv) AS cant_real_comprada,
                 AVG(muc) AS muc_promedio
             FROM compras
-            WHERE subcat IN ('Directos', 'Indirectos')
+            WHERE subcat IN ('Directo', 'Indirecto')
             {filtro_local_c}
             GROUP BY 1, 2
         """
