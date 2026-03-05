@@ -348,8 +348,11 @@ def informe_desviacion(fecha_i, fecha_f, local):
     # Consumo teórico
     teorico = pd.merge(df_v, df_rec, left_on='sku_producto', right_on='codigo_venta', how='inner')
     teorico['consumo_teorico'] = teorico['cant_vendida'] * teorico['cantidad_uso']
-    cons_teo = teorico.groupby(['sku_ingrediente', 'nombre_ingrediente']).agg(
-        consumo_teorico=('consumo_teorico', 'sum')).reset_index()
+    # Agrupar solo por SKU — un ingrediente puede tener nombres distintos en distintos platos
+    cons_teo = teorico.groupby('sku_ingrediente').agg(
+        consumo_teorico=('consumo_teorico', 'sum'),
+        nombre_ingrediente=('nombre_ingrediente', 'first')
+    ).reset_index()
 
     # Compras reales del período — fecha_dte es timestamp, cant_conv ya está en unidades
     filtro_local_c = "AND local = :l" if local != "Todos" else ""
