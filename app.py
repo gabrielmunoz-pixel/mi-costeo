@@ -391,15 +391,38 @@ def informe_desviacion(fecha_i, fecha_f, local):
         if not df_c.empty:
             st.warning("⚠️ Sin compras en el período seleccionado — mostrando totales históricos.")
 
+    # Nombre canónico desde compras (evita mostrar SKU cuando no hay match en recetario)
+    q_nom = """
+        SELECT sku, MIN(nombre_producto) as nombre_compra
+        FROM compras
+        WHERE subcat IN ('Directo', 'Indirecto')
+        GROUP BY sku
+    """
+    nombres_compras = run_query(q_nom)
+
     informe = pd.merge(
         cons_teo, df_c,
         left_on='sku_ingrediente', right_on='sku', how='outer'
-    ).fillna(0)
+    )
 
-    informe['desviacion_cant'] = informe['cant_real_comprada'] - informe['consumo_teorico']
+    # Unir nombre desde compras como fuente canónica
+    if not nombres_compras.empty:
+        informe = pd.merge(informe, nombres_compras, on='sku', how='left')
+        informe['nombre_ingrediente'] = informe.apply(
+            lambda r: r['nombre_compra']
+            if (pd.isna(r['nombre_ingrediente']) or r['nombre_ingrediente'] == 0)
+            else r['nombre_ingrediente'], axis=1
+        )
+
+    informe = informe.fillna(0)
+    informe['desviacion_cant']   = informe['cant_real_comprada'] - informe['consumo_teorico']
     informe['desviacion_dinero'] = informe['desviacion_cant'] * informe['muc_promedio']
-    informe['nombre_ingrediente'] = informe.apply(
-        lambda r: r['nombre_ingrediente'] if r['nombre_ingrediente'] != 0 else r['sku'], axis=1)
+
+    # SKU final: usar sku de compras si sku_ingrediente está vacío
+    informe['sku_ingrediente'] = informe.apply(
+        lambda r: r['sku'] if (r['sku_ingrediente'] == 0 or pd.isna(r['sku_ingrediente']))
+        else r['sku_ingrediente'], axis=1
+    )
 
     return informe.sort_values('desviacion_dinero', ascending=False)
 
