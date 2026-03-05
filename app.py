@@ -355,11 +355,6 @@ def informe_desviacion(fecha_i, fecha_f, local):
     merge_dir = pd.merge(df_v, dir_no_pro, left_on='sku_producto', right_on='codigo_venta', how='inner')
     merge_dir['consumo_parcial'] = merge_dir['cant_vendida'] * merge_dir['cant_real']
     dir_out = merge_dir[['sku_ingrediente', 'nombre_ingrediente', 'consumo_parcial']]
-    debug_bca_dir = dir_out[dir_out['sku_ingrediente'] == 'BA-CA-023']
-    st.info(f"DEBUG BA-CA-023 en dir_out: {len(debug_bca_dir)} filas, total={debug_bca_dir['consumo_parcial'].sum():.0f}")
-
-    # También debug en cons_teo y en informe final — agregar DESPUÉS del groupby
-    
 
 
 
@@ -412,10 +407,6 @@ def informe_desviacion(fecha_i, fecha_f, local):
 
         if rows:
             exp_out = pd.DataFrame(rows)
-            debug_bca = exp_out[exp_out['sku_ingrediente'] == 'BA-CA-023']
-            if not debug_bca.empty:
-                st.info(f"DEBUG BA-CA-023 en exp_out: {len(debug_bca)} filas, total={debug_bca['consumo_parcial'].sum():.0f}")
-                st.dataframe(debug_bca)
 
     # ---- CONSOLIDAR ----
     todo = pd.concat([df for df in [dir_out, exp_out] if not df.empty], ignore_index=True)
@@ -423,8 +414,6 @@ def informe_desviacion(fecha_i, fecha_f, local):
         consumo_teorico=('consumo_parcial', 'sum'),
         nombre_ingrediente=('nombre_ingrediente', 'first')
     ).reset_index()
-    debug_cons = cons_teo[cons_teo['sku_ingrediente'] == 'BA-CA-023']
-    st.info(f"DEBUG BA-CA-023 en cons_teo: consumo_teorico={debug_cons['consumo_teorico'].values}")
 
 
 
@@ -496,15 +485,10 @@ def informe_desviacion(fecha_i, fecha_f, local):
             if sku_dest not in dict_nombres and sku_orig in dict_nombres:
                 dict_nombres[sku_dest] = dict_nombres[sku_orig]
 
-    debug_dc = df_c[df_c['sku'] == 'BA-CA-023']
-    st.info(f"DEBUG BA-CA-023 en df_c post-equiv: {len(debug_dc)} filas, comprado={debug_dc['cant_real_comprada'].sum():.0f}")
-
     informe = pd.merge(
         cons_teo, df_c,
         left_on='sku_ingrediente', right_on='sku', how='outer'
     )
-    debug_inf = informe[informe['sku_ingrediente'] == 'BA-CA-023']
-    st.info(f"DEBUG BA-CA-023 post-join: {len(debug_inf)} filas, consumo={debug_inf['consumo_teorico'].sum():.0f}")
     informe = informe.fillna(0)
 
     # SKU final: unificar sku_ingrediente y sku en una sola columna
@@ -527,8 +511,6 @@ def informe_desviacion(fecha_i, fecha_f, local):
     informe['sku_ingrediente']   = informe['sku_final']
     informe['nombre_ingrediente']= informe['nombre_final']
 
-    debug_final = informe[informe['sku_ingrediente'] == 'BA-CA-023']
-    st.info(f"DEBUG BA-CA-023 FINAL: {len(debug_final)} filas, consumo={debug_final['consumo_teorico'].values}")
     return informe.sort_values('desviacion_dinero', ascending=False)
 
 
