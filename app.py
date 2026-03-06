@@ -503,8 +503,8 @@ def informe_desviacion(fecha_i, fecha_f, local):
     nombres_compras = run_query(q_nom)
     dict_nombres = dict(zip(nombres_compras['sku'], nombres_compras['nombre_compra'])) if not nombres_compras.empty else {}
 
-    # Para SKUs de receta que no están en compras directamente (solo via equivalencias),
-    # usar el nombre de uno de sus equivalentes como fallback
+    # Fallback de nombres via equivalencias
+    df_equiv = run_query("SELECT sku_compra, sku_receta FROM sku_equivalencias")
     if not df_equiv.empty:
         for _, row in df_equiv.iterrows():
             sku_dest = row['sku_receta']
