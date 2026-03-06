@@ -350,10 +350,18 @@ def informe_desviacion(fecha_i, fecha_f, local):
     df_dir  = df_rec[df_rec['es_procesado'] == False].copy()
     df_proc = df_rec[df_rec['es_procesado'] == True].copy()
 
+    # Factor de conversión según um_salida: G/CC/ML → /1000, UN/KG/LT → 1
+    def factor_um(um):
+        if pd.isna(um): return 1
+        um = str(um).strip().upper()
+        if um in ['G', 'CC', 'ML']: return 1/1000
+        return 1
+
     # ---- DIRECTOS que no son PRO- ----
     dir_no_pro = df_dir[~df_dir['sku_ingrediente'].str.startswith('PRO-', na=False)].copy()
+    dir_no_pro['factor_um'] = dir_no_pro['um_salida'].apply(factor_um)
     merge_dir = pd.merge(df_v, dir_no_pro, left_on='sku_producto', right_on='codigo_venta', how='inner')
-    merge_dir['consumo_parcial'] = merge_dir['cant_vendida'] * merge_dir['cant_real']
+    merge_dir['consumo_parcial'] = merge_dir['cant_vendida'] * merge_dir['cant_real'] * merge_dir['factor_um']
     dir_out = merge_dir[['sku_ingrediente', 'nombre_ingrediente', 'consumo_parcial']]
 
 
@@ -374,7 +382,8 @@ def informe_desviacion(fecha_i, fecha_f, local):
         # Agregar ventas por codigo_venta + sku_ingrediente (PRO-XX) para evitar iterar fila por fila
         merge_pro_agg = merge_pro.groupby(['codigo_venta', 'sku_ingrediente']).agg(
             cant_vendida=('cant_vendida', 'sum'),
-            cant_real=('cant_real', 'first')
+            cant_real=('cant_real', 'first'),
+            um_salida=('um_salida', 'first')
         ).reset_index()
 
         rows = []
@@ -395,10 +404,12 @@ def informe_desviacion(fecha_i, fecha_f, local):
 
             for _, base in base_rows.iterrows():
                 cant_base = pd.to_numeric(base['cant_real'], errors='coerce') or 0
+                um_base   = factor_um(base.get('um_salida', ''))
+                cant_plato_conv = cant_plato * factor_um(plato_row.get('um_salida', ''))
                 if porcion == 1:
-                    consumo = ventas * cant_plato * cant_base
+                    consumo = ventas * cant_plato_conv * cant_base * um_base
                 else:
-                    consumo = ventas * (cant_plato / rend_total) * cant_base
+                    consumo = ventas * (cant_plato_conv / rend_total) * cant_base * um_base
                 rows.append({
                     'sku_ingrediente':    base['sku_ingrediente'],
                     'nombre_ingrediente': base['nombre_ingrediente'],
