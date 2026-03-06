@@ -1199,13 +1199,10 @@ elif modulo == "📊 Informes":
                     pivot.columns = [meses_labels.get(c, c) if not isinstance(c, str) else c for c in pivot.columns]
                     mes_cols_str = [meses_labels[m] for m in meses_cols]
 
-                    # Calcular Δ% entre columnas de mes disponibles
-                    for i in range(1, len(mes_cols_str)):
-                        prev_col = mes_cols_str[i-1]
-                        curr_col = mes_cols_str[i]
-                        delta_col = f'Δ% {curr_col}'
-                        if prev_col in pivot.columns and curr_col in pivot.columns:
-                            pivot[delta_col] = ((pivot[curr_col] - pivot[prev_col]) / pivot[prev_col].replace(0, None) * 100).round(1)
+                    # Forzar tipos numéricos en columnas de mes
+                    for mc in mes_cols_str:
+                        if mc in pivot.columns:
+                            pivot[mc] = pd.to_numeric(pivot[mc], errors='coerce')
 
                     # ---------- VISTA RESUMEN POR CATEGORÍA ----------
                     st.markdown("#### Resumen por Categoría")
