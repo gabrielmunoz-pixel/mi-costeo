@@ -717,60 +717,10 @@ with st.sidebar:
     if 'modulo' not in st.session_state:
         st.session_state['modulo'] = "📦 Gestión de Datos"
 
+    # CSS menú
     st.markdown("""
     <style>
-    div[data-testid="stSidebar"] .menu-item {
-        display: block; width: 100%; text-align: left;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
-    for item, subitems in menu_items.items():
-        es_activo = st.session_state['modulo'].startswith(item[:3])
-        bg_item   = '#1f1f1f' if es_activo else 'transparent'
-        borde     = 'border-left: 2px solid #d4a853;' if es_activo else 'border-left: 2px solid transparent;'
-
-        col_btn, col_arrow = st.sidebar.columns([9, 1])
-        with col_btn:
-            if st.button(
-                item,
-                key=f"menu_{item}",
-                use_container_width=True,
-            ):
-                if st.session_state['menu_abierto'] == item:
-                    st.session_state['menu_abierto'] = None
-                else:
-                    st.session_state['menu_abierto'] = item
-                    st.session_state['modulo'] = item
-
-        # Subitems en cascada
-        if subitems and st.session_state['menu_abierto'] == item:
-            for sub in subitems:
-                sub_key = f"{item} — {sub}"
-                es_sub_activo = st.session_state['modulo'] == sub_key
-                color_sub = '#d4a853' if es_sub_activo else '#888'
-                st.sidebar.markdown(
-                    f"""<div style="
-                        padding: 6px 12px 6px 28px;
-                        font-size: 0.82rem;
-                        color: {color_sub};
-                        letter-spacing: 0.03em;
-                        cursor: pointer;
-                        border-left: 1px solid #2a2a2a;
-                        margin-left: 8px;
-                    ">{'▸ ' if es_sub_activo else '· '}{sub}</div>""",
-                    unsafe_allow_html=True
-                )
-                if st.sidebar.button(sub, key=f"sub_{sub_key}", use_container_width=True,
-                                     label_visibility="collapsed"):
-                    st.session_state['modulo'] = sub_key
-
-    modulo = st.session_state['modulo']
-
-    # CSS para estilizar botones del menú
-    st.markdown("""
-    <style>
-    section[data-testid="stSidebar"] button[kind="secondary"] {
+    section[data-testid="stSidebar"] button {
         background: transparent !important;
         border: none !important;
         border-radius: 6px !important;
@@ -779,15 +729,44 @@ with st.sidebar:
         font-weight: 500 !important;
         text-align: left !important;
         padding: 8px 12px !important;
-        transition: all 0.15s !important;
+        transition: background 0.15s, color 0.15s !important;
         letter-spacing: 0.02em !important;
     }
-    section[data-testid="stSidebar"] button[kind="secondary"]:hover {
+    section[data-testid="stSidebar"] button:hover {
         background: #1f1f1f !important;
         color: #d4a853 !important;
     }
+    section[data-testid="stSidebar"] button p {
+        text-align: left !important;
+    }
     </style>
     """, unsafe_allow_html=True)
+
+    for item, subitems in menu_items.items():
+        es_activo = st.session_state['modulo'].startswith(item[:3])
+        label = f"**{item}**" if es_activo else item
+
+        if st.sidebar.button(label, key=f"menu_{item}", use_container_width=True):
+            if st.session_state['menu_abierto'] == item and not subitems:
+                pass
+            elif st.session_state['menu_abierto'] == item:
+                st.session_state['menu_abierto'] = None
+            else:
+                st.session_state['menu_abierto'] = item
+            st.session_state['modulo'] = item
+
+        # Subitems
+        if subitems and st.session_state['menu_abierto'] == item:
+            for sub in subitems:
+                sub_key = f"{item} — {sub}"
+                es_sub  = st.session_state['modulo'] == sub_key
+                prefix  = "▸ " if es_sub else "  · "
+                sub_label = f"**{prefix}{sub}**" if es_sub else f"{prefix}{sub}"
+                if st.sidebar.button(sub_label, key=f"sub_{sub_key}", use_container_width=True):
+                    st.session_state['modulo'] = sub_key
+                    st.session_state['menu_abierto'] = item
+
+    modulo = st.session_state['modulo']
 
     st.divider()
     st.markdown("<div style='font-size:0.75rem; color:#666; text-transform:uppercase; letter-spacing:0.08em;'>Filtros globales</div>", unsafe_allow_html=True)
