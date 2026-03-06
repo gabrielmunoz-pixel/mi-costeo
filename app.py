@@ -968,31 +968,58 @@ elif modulo == "📊 Informes":
                               'desviacion_cant', 'variacion_pct', 'desviacion_dinero']
                 existing_cols = [c for c in cols_show2 if c in df_inf2.columns]
 
-                col_rename = {
-                    'sku_ingrediente':   'SKU',
-                    'nombre_ingrediente':'Ingrediente',
-                    'subcat':            'Categoría',
-                    'consumo_teorico':   'Teórico',
-                    'cant_real_comprada':'Comprado',
-                    'desviacion_cant':   'Δ Cantidad',
-                    'variacion_pct':     'Δ %',
-                    'desviacion_dinero': 'Δ $'
-                }
+                def badge_pct(val):
+                    if val is None or (isinstance(val, float) and pd.isna(val)):
+                        return '<span style="color:#555">—</span>'
+                    if val > 20:
+                        return f'<span style="background:#3a1a1a;color:#e84545;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:+.1f}%</span>'
+                    elif val > 5:
+                        return f'<span style="background:#3a2a1a;color:#e89c45;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:+.1f}%</span>'
+                    elif val < -5:
+                        return f'<span style="background:#1a3a2a;color:#4caf7d;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:+.1f}%</span>'
+                    return f'<span style="color:#aaa;font-size:0.78rem">{val:+.1f}%</span>'
 
-                df_show = df_inf2[existing_cols].rename(columns=col_rename)
+                def fmt_dinero_html(val):
+                    if val > 0:
+                        return f'<span style="color:#e84545;font-weight:600">${val:,.0f}</span>'
+                    elif val < 0:
+                        return f'<span style="color:#4caf7d;font-weight:600">${val:,.0f}</span>'
+                    return f'<span style="color:#aaa">${val:,.0f}</span>'
 
-                fmt = {
-                    'Teórico':   '{:,.2f}',
-                    'Comprado':  '{:,.2f}',
-                    'Δ Cantidad':'{:,.2f}',
-                    'Δ %':       '{:+.1f}%',
-                    'Δ $':       '${:,.0f}'
-                }
-                fmt = {k: v for k, v in fmt.items() if k in df_show.columns}
+                rows_html = ''
+                for _, r in df_inf2.iterrows():
+                    pct    = r.get('variacion_pct', None)
+                    dinero = r.get('desviacion_dinero', 0)
+                    bg     = '#1e1212' if dinero > 0 else '#121e14' if dinero < 0 else ''
+                    rows_html += (
+                        f'<tr style="border-bottom:1px solid #1e1e1e;background:{bg};transition:background 0.15s">'
+                        f'<td style="padding:10px 14px;color:#666;font-size:0.76rem;font-family:monospace;white-space:nowrap">{r.get("sku_ingrediente","")}</td>'
+                        f'<td style="padding:10px 14px;font-weight:500;color:#e8e4de">{r.get("nombre_ingrediente","")}</td>'
+                        f'<td style="padding:10px 14px;color:#555;font-size:0.8rem">{r.get("subcat","")}</td>'
+                        f'<td style="padding:10px 14px;text-align:right;color:#777;font-variant-numeric:tabular-nums">{r.get("consumo_teorico",0):,.2f}</td>'
+                        f'<td style="padding:10px 14px;text-align:right;color:#ccc;font-variant-numeric:tabular-nums;font-weight:500">{r.get("cant_real_comprada",0):,.2f}</td>'
+                        f'<td style="padding:10px 14px;text-align:right;color:#777;font-variant-numeric:tabular-nums">{r.get("desviacion_cant",0):,.2f}</td>'
+                        f'<td style="padding:10px 14px;text-align:center">{badge_pct(pct)}</td>'
+                        f'<td style="padding:10px 14px;text-align:right;font-variant-numeric:tabular-nums">{fmt_dinero_html(dinero)}</td>'
+                        f'</tr>'
+                    )
 
-                styled = df_show.style                    .applymap(semaforo_desv, subset=['Δ $'])                    .applymap(semaforo_pct,  subset=['Δ %'] if 'Δ %' in df_show.columns else [])                    .format(fmt, na_rep='—')                    .set_properties(**{'font-size': '0.85rem'})
-
-                st.dataframe(styled, use_container_width=True, hide_index=True)
+                hs = 'padding:11px 14px;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
+                tabla_html = (
+                    '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
+                    '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.84rem">'
+                    '<thead><tr style="background:#111">'
+                    f'<th style="{hs};text-align:left">SKU</th>'
+                    f'<th style="{hs};text-align:left">Ingrediente</th>'
+                    f'<th style="{hs};text-align:left">Cat.</th>'
+                    f'<th style="{hs};text-align:right">Teórico</th>'
+                    f'<th style="{hs};text-align:right">Comprado</th>'
+                    f'<th style="{hs};text-align:right">Δ Cant.</th>'
+                    f'<th style="{hs};text-align:center">Δ %</th>'
+                    f'<th style="{hs};text-align:right">Δ $</th>'
+                    f'</tr></thead><tbody>{rows_html}</tbody></table></div>'
+                )
+                st.markdown(tabla_html, unsafe_allow_html=True)
 
                 # Resumen por subcategoría
                 if 'subcat' in df_inf2.columns:
