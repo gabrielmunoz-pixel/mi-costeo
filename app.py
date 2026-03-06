@@ -856,7 +856,7 @@ elif modulo == "📊 Informes":
 
     informe_sel = st.radio(
         "Seleccionar informe",
-        ["Informe 1 — Rentabilidad por Producto", "Informe 2 — Desviación Real vs Teórico", "Informe 3 — Evolución de Precios"],
+        ["Informe 1 — Rentabilidad por Producto", "Informe 2 — Desviación Real vs Teórico", "Informe 3 — Evolución de Precios", "Informe 4 — Impacto de Precios sobre Product Mix"],
         horizontal=True,
         label_visibility="collapsed"
     )
@@ -1367,3 +1367,226 @@ elif modulo == "📊 Informes":
                 with pd.ExcelWriter(buf4, engine='openpyxl') as w:
                     pivot.to_excel(w, sheet_name='Precios', index=False)
                 st.download_button("📥 Descargar Excel", buf4.getvalue(), "Informe3_Precios.xlsx")
+
+    # ----------------------------------------------------------
+    # INFORME 4 — IMPACTO DE PRECIOS SOBRE PRODUCT MIX
+    # ----------------------------------------------------------
+    elif "Informe 4" in informe_sel:
+        st.markdown("### 🔀 Impacto de Precios sobre Product Mix")
+        st.markdown("<div class='info-box'>Compara el costo del mix de ventas con precios del mes base vs precios del mes de comparación. Fórmula: <b>cant_vendida_mes1 × costo_mes1</b> vs <b>cant_vendida_mes1 × costo_mes2</b>. Variación % muestra el impacto puro del cambio de precios.</div>", unsafe_allow_html=True)
+
+        # Selectores de mes
+        meses_disp4 = run_query("""
+            SELECT DISTINCT DATE_TRUNC('month', fecha_dte::timestamp)::date as mes
+            FROM compras WHERE subcat IN ('Directo','Indirecto') ORDER BY 1
+        """)
+
+        if meses_disp4.empty:
+            st.warning("No hay datos de compras disponibles.")
+        else:
+            meses_list4 = pd.to_datetime(meses_disp4['mes']).tolist()
+            meses_fmt4  = [m.strftime('%B %Y').capitalize() for m in meses_list4]
+
+            mc1, mc2, mc3 = st.columns([2, 2, 2])
+            with mc1:
+                mes_base_idx = st.selectbox("Mes base (ventas + precios)", range(len(meses_fmt4)),
+                                            format_func=lambda i: meses_fmt4[i],
+                                            index=0, key='inf4_base')
+            with mc2:
+                mes_comp_idx = st.selectbox("Mes comparación (precios)", range(len(meses_fmt4)),
+                                            format_func=lambda i: meses_fmt4[i],
+                                            index=len(meses_list4)-1, key='inf4_comp')
+            with mc3:
+                cat_menu_q = run_query("SELECT DISTINCT categoria_menu FROM ventas WHERE categoria_menu IS NOT NULL ORDER BY 1")
+                cats_menu = ['Todos'] + cat_menu_q['categoria_menu'].tolist() if not cat_menu_q.empty else ['Todos']
+                cat_menu_sel = st.selectbox("Categoría menú", cats_menu, key='inf4_cat')
+
+            mes_base = meses_list4[mes_base_idx]
+            mes_comp = meses_list4[mes_comp_idx]
+            mes_base_str = mes_base.strftime('%B %Y').capitalize()
+            mes_comp_str = mes_comp.strftime('%B %Y').capitalize()
+
+            # Ordenamiento fuera del botón
+            ord4_col, ord4_dir_col = st.columns([3, 1])
+            with ord4_col:
+                ord4_col_sel = st.selectbox("Ordenar por", [
+                    'Más vendido', f'Costo {mes_base_str}', f'Costo {mes_comp_str}', 'Δ% Costo', 'Δ$ Costo'
+                ], key='ord4_col')
+            with ord4_dir_col:
+                ord4_dir = st.selectbox("Dir.", ['↓', '↑'], key='ord4_dir')
+
+            if st.button("▶ Generar Informe 4"):
+
+                mes_base_i = mes_base.strftime('%Y-%m-01')
+                mes_base_f = (mes_base + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
+                mes_comp_i = mes_comp.strftime('%Y-%m-01')
+                mes_comp_f = (mes_comp + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
+
+                filtro_cat4 = f"AND v.categoria_menu = '{cat_menu_sel}'" if cat_menu_sel != 'Todos' else ""
+
+                # 1. Ventas del mes base por plato
+                q_ventas = f"""
+                    SELECT sku_producto, MIN(nombre_producto) as nombre,
+                           MIN(categoria_menu) as categoria_menu,
+                           SUM(cantidad_vendida) as cant_vendida
+                    FROM ventas
+                    WHERE fecha_venta BETWEEN '{mes_base_i}' AND '{mes_base_f}'
+                    {filtro_cat4.replace('v.','', 1)}
+                    GROUP BY sku_producto
+                    ORDER BY cant_vendida DESC
+                """
+                df_ventas = run_query(q_ventas)
+
+                # 2. Precio promedio por ingrediente en mes base y mes comp
+                q_precios_mes = f"""
+                    SELECT sku,
+                           SUM(CASE WHEN fecha_dte::date BETWEEN '{mes_base_i}' AND '{mes_base_f}'
+                               THEN monto_real ELSE 0 END) /
+                           NULLIF(SUM(CASE WHEN fecha_dte::date BETWEEN '{mes_base_i}' AND '{mes_base_f}'
+                               THEN cant_conv ELSE 0 END), 0) as precio_base,
+                           SUM(CASE WHEN fecha_dte::date BETWEEN '{mes_comp_i}' AND '{mes_comp_f}'
+                               THEN monto_real ELSE 0 END) /
+                           NULLIF(SUM(CASE WHEN fecha_dte::date BETWEEN '{mes_comp_i}' AND '{mes_comp_f}'
+                               THEN cant_conv ELSE 0 END), 0) as precio_comp
+                    FROM compras
+                    WHERE subcat IN ('Directo','Indirecto')
+                    GROUP BY sku
+                """
+                df_precios = run_query(q_precios_mes)
+
+                # 3. Recetario directos + factor_um
+                df_rec4 = run_query("SELECT codigo_venta, sku_ingrediente, cant_real, cant_efic, um_salida, es_procesado, es_opcion FROM recetas")
+                df_rec4['es_opcion'] = pd.to_numeric(df_rec4['es_opcion'], errors='coerce').fillna(0)
+                df_rec4 = df_rec4[df_rec4['es_opcion'] == 0]
+
+                def factor_um4(um):
+                    if pd.isna(um): return 1
+                    return 1/1000 if str(um).strip().upper() in ['G','CC','ML'] else 1
+
+                df_rec4['factor'] = df_rec4['um_salida'].apply(factor_um4)
+                df_rec4['cant_real'] = pd.to_numeric(df_rec4['cant_real'], errors='coerce').fillna(0)
+                df_rec4_dir = df_rec4[df_rec4['es_procesado'] == False].copy()
+
+                # 4. Join receta × precios
+                df_rec4_dir = df_rec4_dir.merge(df_precios, left_on='sku_ingrediente', right_on='sku', how='left')
+                df_rec4_dir['precio_base'] = pd.to_numeric(df_rec4_dir['precio_base'], errors='coerce').fillna(0)
+                df_rec4_dir['precio_comp'] = pd.to_numeric(df_rec4_dir['precio_comp'], errors='coerce').fillna(0)
+
+                # Usar precio_base como fallback para precio_comp si no hay datos
+                df_rec4_dir['precio_comp'] = df_rec4_dir.apply(
+                    lambda r: r['precio_base'] if r['precio_comp'] == 0 else r['precio_comp'], axis=1
+                )
+
+                df_rec4_dir['costo_ing_base'] = df_rec4_dir['cant_real'] * df_rec4_dir['factor'] * df_rec4_dir['precio_base']
+                df_rec4_dir['costo_ing_comp'] = df_rec4_dir['cant_real'] * df_rec4_dir['factor'] * df_rec4_dir['precio_comp']
+
+                # 5. Costo por plato
+                costo_plato = df_rec4_dir.groupby('codigo_venta').agg(
+                    costo_base=('costo_ing_base','sum'),
+                    costo_comp=('costo_ing_comp','sum')
+                ).reset_index()
+
+                # 6. Join con ventas
+                df_mix = df_ventas.merge(costo_plato, left_on='sku_producto', right_on='codigo_venta', how='left')
+                df_mix['costo_base'] = pd.to_numeric(df_mix['costo_base'], errors='coerce').fillna(0)
+                df_mix['costo_comp'] = pd.to_numeric(df_mix['costo_comp'], errors='coerce').fillna(0)
+
+                df_mix['impacto_base'] = df_mix['cant_vendida'] * df_mix['costo_base']
+                df_mix['impacto_comp'] = df_mix['cant_vendida'] * df_mix['costo_comp']
+                df_mix['delta_dinero']  = df_mix['impacto_comp'] - df_mix['impacto_base']
+                df_mix['delta_pct']     = df_mix.apply(
+                    lambda r: (r['delta_dinero'] / r['impacto_base'] * 100) if r['impacto_base'] > 0 else None, axis=1
+                )
+
+                st.session_state['inf4_df'] = df_mix
+                st.session_state['inf4_labels'] = (mes_base_str, mes_comp_str)
+
+            # Renderizar
+            if 'inf4_df' in st.session_state:
+                df_mix = st.session_state['inf4_df']
+                mes_base_str, mes_comp_str = st.session_state['inf4_labels']
+
+                # Ordenar
+                asc4 = ord4_dir == '↑'
+                sort_map = {
+                    'Más vendido':          ('cant_vendida', asc4),
+                    f'Costo {mes_base_str}':('impacto_base', asc4),
+                    f'Costo {mes_comp_str}':('impacto_comp', asc4),
+                    'Δ% Costo':             ('delta_pct',    asc4),
+                    'Δ$ Costo':             ('delta_dinero', asc4),
+                }
+                if ord4_col_sel in sort_map:
+                    col_s, asc_s = sort_map[ord4_col_sel]
+                    df_mix = df_mix.sort_values(col_s, ascending=asc_s, na_position='last')
+
+                # Métricas
+                total_base  = df_mix['impacto_base'].sum()
+                total_comp  = df_mix['impacto_comp'].sum()
+                total_delta = total_comp - total_base
+                total_pct   = (total_delta / total_base * 100) if total_base > 0 else 0
+
+                mm1, mm2, mm3, mm4 = st.columns(4)
+                mm1.metric(f"Costo total {mes_base_str}", f"${total_base:,.0f}")
+                mm2.metric(f"Costo total {mes_comp_str}", f"${total_comp:,.0f}")
+                mm3.metric("Δ$ por cambio de precios", f"${total_delta:,.0f}")
+                mm4.metric("Δ% impacto total", f"{total_pct:+.1f}%")
+
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                # Helpers
+                def badge_pct4(val):
+                    if val is None or (isinstance(val, float) and pd.isna(val)):
+                        return '<span style="color:#444">—</span>'
+                    if val > 10:
+                        return f'<span style="background:#3a1a1a;color:#e84545;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:+.1f}%</span>'
+                    elif val > 3:
+                        return f'<span style="background:#3a2a1a;color:#e89c45;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:+.1f}%</span>'
+                    elif val < -3:
+                        return f'<span style="background:#1a3a2a;color:#4caf7d;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:+.1f}%</span>'
+                    return f'<span style="color:#aaa;font-size:0.78rem">{val:+.1f}%</span>'
+
+                def fmt_delta4(val):
+                    if val > 0: return f'<span style="color:#e84545;font-weight:600">${val:,.0f}</span>'
+                    if val < 0: return f'<span style="color:#4caf7d;font-weight:600">${val:,.0f}</span>'
+                    return f'<span style="color:#aaa">${val:,.0f}</span>'
+
+                rows4 = ''
+                for _, r in df_mix.iterrows():
+                    bg = '#1e1212' if (r['delta_dinero'] or 0) > 0 else '#121e14' if (r['delta_dinero'] or 0) < 0 else ''
+                    rows4 += (
+                        f'<tr style="border-bottom:1px solid #1e1e1e;background:{bg}">'
+                        f'<td style="padding:10px 14px;color:#666;font-family:monospace;font-size:0.76rem">{r.get("sku_producto","")}</td>'
+                        f'<td style="padding:10px 14px;font-weight:500;color:#e8e4de">{r.get("nombre","")}</td>'
+                        f'<td style="padding:10px 14px;color:#555;font-size:0.8rem">{r.get("categoria_menu","")}</td>'
+                        f'<td style="padding:10px 14px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">{r.get("cant_vendida",0):,.0f}</td>'
+                        f'<td style="padding:10px 14px;text-align:right;color:#ccc;font-variant-numeric:tabular-nums">${r.get("costo_base",0):,.0f}</td>'
+                        f'<td style="padding:10px 14px;text-align:right;color:#ccc;font-variant-numeric:tabular-nums">${r.get("costo_comp",0):,.0f}</td>'
+                        f'<td style="padding:10px 14px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">${r.get("impacto_base",0):,.0f}</td>'
+                        f'<td style="padding:10px 14px;text-align:right;color:#e8e4de;font-variant-numeric:tabular-nums">${r.get("impacto_comp",0):,.0f}</td>'
+                        f'<td style="padding:10px 14px;text-align:right">{fmt_delta4(r.get("delta_dinero",0))}</td>'
+                        f'<td style="padding:10px 14px;text-align:center">{badge_pct4(r.get("delta_pct",None))}</td>'
+                        f'</tr>'
+                    )
+
+                hs4 = 'padding:11px 14px;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
+                hdrs4 = ['SKU','Plato','Categoría','Cant. Vendida',
+                         f'Costo unit. {mes_base_str}', f'Costo unit. {mes_comp_str}',
+                         f'Impacto {mes_base_str}', f'Impacto {mes_comp_str}',
+                         'Δ$','Δ%']
+                tabla4 = (
+                    '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
+                    '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.84rem">'
+                    '<thead><tr style="background:#111">'
+                    + ''.join([f'<th style="{hs4};text-align:{"left" if i<3 else "right"}">{h}</th>' for i, h in enumerate(hdrs4)])
+                    + f'</tr></thead><tbody>{rows4}</tbody></table></div>'
+                )
+                st.markdown(tabla4, unsafe_allow_html=True)
+
+                # Descarga
+                st.markdown("<br>", unsafe_allow_html=True)
+                buf5 = io.BytesIO()
+                with pd.ExcelWriter(buf5, engine='openpyxl') as w:
+                    df_mix[['sku_producto','nombre','categoria_menu','cant_vendida',
+                             'costo_base','costo_comp','impacto_base','impacto_comp',
+                             'delta_dinero','delta_pct']].to_excel(w, sheet_name='ProductMix', index=False)
+                st.download_button("📥 Descargar Excel", buf5.getvalue(), "Informe4_ProductMix.xlsx")
