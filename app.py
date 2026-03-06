@@ -1165,7 +1165,23 @@ elif modulo == "📊 Informes":
             with col_cat:
                 cat_sel = st.selectbox("Categoría", cats_disp)
 
+            # Selectbox ordenamiento FUERA del botón para no perder el informe
+            st.markdown("<br>", unsafe_allow_html=True)
+            so1, so2, so3, so4 = st.columns([2, 1, 2, 1])
+            with so1:
+                ord_col_cat = st.selectbox("Ordenar resumen por", ['Categoría'] + [m.strftime('%b %Y').capitalize() for m in ventana], key='ord_cat')
+            with so2:
+                ord_dir_cat = st.selectbox("Dir.", ['↓', '↑'], key='dir_cat')
+            with so3:
+                ord_col_det = st.selectbox("Ordenar detalle por", ['SKU', 'Ingrediente'] + [m.strftime('%b %Y').capitalize() for m in ventana], key='ord_det')
+            with so4:
+                ord_dir_det = st.selectbox("Dir.", ['↓', '↑'], key='dir_det')
+
             if st.button("▶ Generar Informe 3"):
+                st.session_state['inf3_cat_sel'] = cat_sel
+                st.session_state['inf3_ventana'] = ventana
+                st.session_state['inf3_mes_cols'] = [m.strftime('%b %Y').capitalize() for m in ventana]
+
                 # Query precios por mes
                 filtro_cat = f"AND categoria_producto = '{cat_sel}'" if cat_sel != 'Todos' else ""
                 fechas_in  = ", ".join([f"'{m.strftime('%Y-%m-%d')}'" for m in ventana])
@@ -1191,168 +1207,163 @@ elif modulo == "📊 Informes":
                 if df_p.empty:
                     st.warning("Sin datos para los meses seleccionados.")
                 else:
-                    df_p['mes'] = pd.to_datetime(df_p['mes'])
-                    meses_cols = sorted(df_p['mes'].unique())
-                    meses_labels = {m: pd.Timestamp(m).strftime('%b %Y').capitalize() for m in meses_cols}
+                    st.session_state['inf3_df'] = df_p
 
-                    # Pivot: sku × mes → precio
-                    pivot = df_p.pivot_table(index=['sku','nombre','categoria','subcat'], columns='mes', values='precio_prom').reset_index()
-                    pivot.columns = [meses_labels.get(c, c) if not isinstance(c, str) else c for c in pivot.columns]
-                    mes_cols_str = [meses_labels[m] for m in meses_cols]
+            # Renderizar informe si hay datos en session_state
+            if 'inf3_df' in st.session_state:
+                df_p = st.session_state['inf3_df']
+                mes_cols_str = [m.strftime('%b %Y').capitalize() for m in ventana]
 
-                    # Forzar tipos numéricos en columnas de mes
+                df_p['mes'] = pd.to_datetime(df_p['mes'])
+                meses_cols  = sorted(df_p['mes'].unique())
+                meses_labels = {m: pd.Timestamp(m).strftime('%b %Y').capitalize() for m in meses_cols}
+
+                # Pivot: sku × mes → precio
+                pivot = df_p.pivot_table(index=['sku','nombre','categoria','subcat'], columns='mes', values='precio_prom').reset_index()
+                pivot.columns = [meses_labels.get(c, c) if not isinstance(c, str) else c for c in pivot.columns]
+                mes_cols_str = [meses_labels[m] for m in meses_cols]
+
+                # Forzar tipos numéricos en columnas de mes
+                for mc in mes_cols_str:
+                    if mc in pivot.columns:
+                        pivot[mc] = pd.to_numeric(pivot[mc], errors='coerce')
+
+                # ---------- VISTA RESUMEN POR CATEGORÍA ----------
+                st.markdown("#### Resumen por Categoría")
+                cat_res = df_p.groupby(['categoria','mes']).agg(
+                    precio_prom=('precio_prom','mean'),
+                ).reset_index()
+                cat_res['mes'] = pd.to_datetime(cat_res['mes'])
+
+                # Contar SKUs únicos por categoría (total, no por mes)
+                skus_por_cat = df_p.groupby('categoria')['sku'].nunique().reset_index()
+                skus_por_cat.columns = ['categoria', 'skus']
+
+                cat_pivot = cat_res.pivot_table(index='categoria', columns='mes', values='precio_prom').reset_index()
+                cat_pivot.columns = [meses_labels.get(c, c) if not isinstance(c, str) else c for c in cat_pivot.columns]
+                cat_pivot = cat_pivot.merge(skus_por_cat, on='categoria', how='left')
+
+                # Forzar tipos numéricos
+                for mc in mes_cols_str:
+                    if mc in cat_pivot.columns:
+                        cat_pivot[mc] = pd.to_numeric(cat_pivot[mc], errors='coerce')
+
+                # Calcular Δ% en cat_pivot
+                for i in range(1, len(mes_cols_str)):
+                    prev_c = mes_cols_str[i-1]
+                    curr_c = mes_cols_str[i]
+                    if prev_c in cat_pivot.columns and curr_c in cat_pivot.columns:
+                        cat_pivot[f'_delta_{curr_c}'] = ((cat_pivot[curr_c] - cat_pivot[prev_c]) / cat_pivot[prev_c].replace(0, None) * 100).round(1)
+
+                # Aplicar ordenamiento categorías (usa selectbox definidos arriba)
+                asc = ord_dir_cat == '↑'
+                if ord_col_cat == 'Categoría':
+                    cat_pivot = cat_pivot.sort_values('categoria', ascending=asc)
+                elif ord_col_cat in cat_pivot.columns:
+                    cat_pivot = cat_pivot.sort_values(ord_col_cat, ascending=asc, na_position='last')
+
+                hs = 'padding:11px 14px;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
+
+                def badge_delta(val):
+                    if val is None or (isinstance(val, float) and pd.isna(val)):
+                        return '<span style="color:#444">—</span>'
+                    if val > 10:
+                        return f'<span style="background:#3a1a1a;color:#e84545;padding:2px 7px;border-radius:10px;font-size:0.75rem;font-weight:600">{val:+.1f}%</span>'
+                    elif val > 3:
+                        return f'<span style="background:#3a2a1a;color:#e89c45;padding:2px 7px;border-radius:10px;font-size:0.75rem;font-weight:600">{val:+.1f}%</span>'
+                    elif val < -3:
+                        return f'<span style="background:#1a3a2a;color:#4caf7d;padding:2px 7px;border-radius:10px;font-size:0.75rem;font-weight:600">{val:+.1f}%</span>'
+                    return f'<span style="color:#aaa;font-size:0.75rem">{val:+.1f}%</span>'
+
+                def fmt_precio(val):
+                    if val is None or (isinstance(val, float) and pd.isna(val)):
+                        return '<span style="color:#333">—</span>'
+                    return f'<span style="color:#ccc">${val:,.2f}</span>'
+
+                # Tabla resumen categorías
+                cat_hdrs = ['Categoría', 'SKUs'] + mes_cols_str
+                cat_rows_html = ''
+                for _, r in cat_pivot.iterrows():
+                    cat_rows_html += '<tr style="border-bottom:1px solid #1e1e1e">'
+                    cat_rows_html += f'<td style="padding:10px 14px;font-weight:500;color:#e8e4de">{r.get("categoria","")}</td>'
+                    cat_rows_html += f'<td style="padding:10px 14px;text-align:right;color:#666">{int(r.get("skus",0)) if not pd.isna(r.get("skus",0)) else 0}</td>'
+                    prev_val = None
                     for mc in mes_cols_str:
-                        if mc in pivot.columns:
-                            pivot[mc] = pd.to_numeric(pivot[mc], errors='coerce')
+                        v = r.get(mc, None)
+                        delta_html = ''
+                        if prev_val is not None and v is not None and not pd.isna(v) and prev_val != 0:
+                            delta = (v - prev_val) / prev_val * 100
+                            delta_html = f' {badge_delta(delta)}'
+                        cat_rows_html += f'<td style="padding:10px 14px;text-align:right">{fmt_precio(v)}{delta_html}</td>'
+                        prev_val = v if (v is not None and not pd.isna(v)) else prev_val
+                    cat_rows_html += '</tr>'
 
-                    # ---------- VISTA RESUMEN POR CATEGORÍA ----------
-                    st.markdown("#### Resumen por Categoría")
-                    cat_res = df_p.groupby(['categoria','mes']).agg(
-                        precio_prom=('precio_prom','mean'),
-                    ).reset_index()
-                    cat_res['mes'] = pd.to_datetime(cat_res['mes'])
+                cat_table = (
+                    '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
+                    '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.84rem">'
+                    '<thead><tr style="background:#111">'
+                    + ''.join([f'<th style="{hs};text-align:{"left" if i<2 else "right"}">{h}</th>' for i, h in enumerate(cat_hdrs)])
+                    + f'</tr></thead><tbody>{cat_rows_html}</tbody></table></div>'
+                )
+                st.markdown(cat_table, unsafe_allow_html=True)
 
-                    # Contar SKUs únicos por categoría (total, no por mes)
-                    skus_por_cat = df_p.groupby('categoria')['sku'].nunique().reset_index()
-                    skus_por_cat.columns = ['categoria', 'skus']
+                # ---------- FILTROS + TABLA DETALLE ----------
+                st.markdown("---")
+                st.markdown("#### Detalle por Ingrediente")
 
-                    cat_pivot = cat_res.pivot_table(index='categoria', columns='mes', values='precio_prom').reset_index()
-                    cat_pivot.columns = [meses_labels.get(c, c) if not isinstance(c, str) else c for c in cat_pivot.columns]
-                    cat_pivot = cat_pivot.merge(skus_por_cat, on='categoria', how='left')
+                fc1, fc2 = st.columns(2)
+                with fc1:
+                    filtro_sku  = st.text_input("🔍 Filtrar por SKU", "").strip().upper()
+                with fc2:
+                    filtro_nom  = st.text_input("🔍 Filtrar por nombre", "").strip().lower()
 
-                    # Forzar tipos numéricos
+                df_det = pivot.copy()
+                if filtro_sku:
+                    df_det = df_det[df_det['sku'].str.upper().str.contains(filtro_sku, na=False)]
+                if filtro_nom:
+                    df_det = df_det[df_det['nombre'].str.lower().str.contains(filtro_nom, na=False)]
+
+                # Ordenamiento detalle
+                ord_cols_det = ['SKU', 'Ingrediente'] + mes_cols_str
+                # Aplicar ordenamiento detalle (usa selectbox definidos arriba)
+                asc_det = ord_dir_det == '↑'
+                if ord_col_det == 'SKU':
+                    df_det = df_det.sort_values('sku', ascending=asc_det)
+                elif ord_col_det == 'Ingrediente':
+                    df_det = df_det.sort_values('nombre', ascending=asc_det)
+                elif ord_col_det in df_det.columns:
+                    df_det = df_det.sort_values(ord_col_det, ascending=asc_det, na_position='last')
+
+                det_hdrs = ['SKU', 'Ingrediente', 'Categoría'] + mes_cols_str
+                det_rows_html = ''
+                for _, r in df_det.iterrows():
+                    det_rows_html += '<tr style="border-bottom:1px solid #1e1e1e">'
+                    det_rows_html += f'<td style="padding:10px 14px;color:#666;font-family:monospace;font-size:0.76rem">{r.get("sku","")}</td>'
+                    det_rows_html += f'<td style="padding:10px 14px;font-weight:500;color:#e8e4de">{r.get("nombre","")}</td>'
+                    det_rows_html += f'<td style="padding:10px 14px;color:#555;font-size:0.8rem">{r.get("categoria","")}</td>'
+                    prev_val = None
                     for mc in mes_cols_str:
-                        if mc in cat_pivot.columns:
-                            cat_pivot[mc] = pd.to_numeric(cat_pivot[mc], errors='coerce')
+                        v = r.get(mc, None)
+                        delta_html = ''
+                        if prev_val is not None and v is not None and not pd.isna(v) and prev_val != 0:
+                            delta = (v - prev_val) / prev_val * 100
+                            delta_html = f'<br>{badge_delta(delta)}'
+                        det_rows_html += f'<td style="padding:10px 14px;text-align:right;vertical-align:middle">{fmt_precio(v)}{delta_html}</td>'
+                        prev_val = v if (v is not None and not pd.isna(v)) else prev_val
+                    det_rows_html += '</tr>'
 
-                    # Calcular Δ% en cat_pivot
-                    for i in range(1, len(mes_cols_str)):
-                        prev_c = mes_cols_str[i-1]
-                        curr_c = mes_cols_str[i]
-                        if prev_c in cat_pivot.columns and curr_c in cat_pivot.columns:
-                            cat_pivot[f'_delta_{curr_c}'] = ((cat_pivot[curr_c] - cat_pivot[prev_c]) / cat_pivot[prev_c].replace(0, None) * 100).round(1)
+                det_table = (
+                    '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
+                    '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.84rem">'
+                    '<thead><tr style="background:#111">'
+                    + ''.join([f'<th style="{hs};text-align:{"left" if i<3 else "right"}">{h}</th>' for i, h in enumerate(det_hdrs)])
+                    + f'</tr></thead><tbody>{det_rows_html}</tbody></table></div>'
+                )
+                st.markdown(det_table, unsafe_allow_html=True)
 
-                    # Selector ordenamiento
-                    ord_cols = ['Categoría'] + mes_cols_str
-                    oc1, oc2 = st.columns([3, 1])
-                    with oc1:
-                        ord_col = st.selectbox("Ordenar por", ord_cols, index=len(ord_cols)-1, key='ord_cat')
-                    with oc2:
-                        ord_dir = st.selectbox("Dirección", ['↓ Mayor a menor', '↑ Menor a mayor'], key='dir_cat')
-
-                    asc = ord_dir.startswith('↑')
-                    if ord_col == 'Categoría':
-                        cat_pivot = cat_pivot.sort_values('categoria', ascending=asc)
-                    elif ord_col in cat_pivot.columns:
-                        cat_pivot = cat_pivot.sort_values(ord_col, ascending=asc, na_position='last')
-
-                    hs = 'padding:11px 14px;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
-
-                    def badge_delta(val):
-                        if val is None or (isinstance(val, float) and pd.isna(val)):
-                            return '<span style="color:#444">—</span>'
-                        if val > 10:
-                            return f'<span style="background:#3a1a1a;color:#e84545;padding:2px 7px;border-radius:10px;font-size:0.75rem;font-weight:600">{val:+.1f}%</span>'
-                        elif val > 3:
-                            return f'<span style="background:#3a2a1a;color:#e89c45;padding:2px 7px;border-radius:10px;font-size:0.75rem;font-weight:600">{val:+.1f}%</span>'
-                        elif val < -3:
-                            return f'<span style="background:#1a3a2a;color:#4caf7d;padding:2px 7px;border-radius:10px;font-size:0.75rem;font-weight:600">{val:+.1f}%</span>'
-                        return f'<span style="color:#aaa;font-size:0.75rem">{val:+.1f}%</span>'
-
-                    def fmt_precio(val):
-                        if val is None or (isinstance(val, float) and pd.isna(val)):
-                            return '<span style="color:#333">—</span>'
-                        return f'<span style="color:#ccc">${val:,.2f}</span>'
-
-                    # Tabla resumen categorías
-                    cat_hdrs = ['Categoría', 'SKUs'] + mes_cols_str
-                    cat_rows_html = ''
-                    for _, r in cat_pivot.iterrows():
-                        cat_rows_html += '<tr style="border-bottom:1px solid #1e1e1e">'
-                        cat_rows_html += f'<td style="padding:10px 14px;font-weight:500;color:#e8e4de">{r.get("categoria","")}</td>'
-                        cat_rows_html += f'<td style="padding:10px 14px;text-align:right;color:#666">{int(r.get("skus",0)) if not pd.isna(r.get("skus",0)) else 0}</td>'
-                        prev_val = None
-                        for mc in mes_cols_str:
-                            v = r.get(mc, None)
-                            delta_html = ''
-                            if prev_val is not None and v is not None and not pd.isna(v) and prev_val != 0:
-                                delta = (v - prev_val) / prev_val * 100
-                                delta_html = f' {badge_delta(delta)}'
-                            cat_rows_html += f'<td style="padding:10px 14px;text-align:right">{fmt_precio(v)}{delta_html}</td>'
-                            prev_val = v if (v is not None and not pd.isna(v)) else prev_val
-                        cat_rows_html += '</tr>'
-
-                    cat_table = (
-                        '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
-                        '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.84rem">'
-                        '<thead><tr style="background:#111">'
-                        + ''.join([f'<th style="{hs};text-align:{"left" if i<2 else "right"}">{h}</th>' for i, h in enumerate(cat_hdrs)])
-                        + f'</tr></thead><tbody>{cat_rows_html}</tbody></table></div>'
-                    )
-                    st.markdown(cat_table, unsafe_allow_html=True)
-
-                    # ---------- FILTROS + TABLA DETALLE ----------
-                    st.markdown("---")
-                    st.markdown("#### Detalle por Ingrediente")
-
-                    fc1, fc2 = st.columns(2)
-                    with fc1:
-                        filtro_sku  = st.text_input("🔍 Filtrar por SKU", "").strip().upper()
-                    with fc2:
-                        filtro_nom  = st.text_input("🔍 Filtrar por nombre", "").strip().lower()
-
-                    df_det = pivot.copy()
-                    if filtro_sku:
-                        df_det = df_det[df_det['sku'].str.upper().str.contains(filtro_sku, na=False)]
-                    if filtro_nom:
-                        df_det = df_det[df_det['nombre'].str.lower().str.contains(filtro_nom, na=False)]
-
-                    # Ordenamiento detalle
-                    ord_cols_det = ['SKU', 'Ingrediente'] + mes_cols_str
-                    od1, od2 = st.columns([3, 1])
-                    with od1:
-                        ord_col_det = st.selectbox("Ordenar por", ord_cols_det, index=len(ord_cols_det)-1, key='ord_det')
-                    with od2:
-                        ord_dir_det = st.selectbox("Dirección", ['↓ Mayor a menor', '↑ Menor a mayor'], key='dir_det')
-
-                    asc_det = ord_dir_det.startswith('↑')
-                    if ord_col_det == 'SKU':
-                        df_det = df_det.sort_values('sku', ascending=asc_det)
-                    elif ord_col_det == 'Ingrediente':
-                        df_det = df_det.sort_values('nombre', ascending=asc_det)
-                    elif ord_col_det in df_det.columns:
-                        df_det = df_det.sort_values(ord_col_det, ascending=asc_det, na_position='last')
-
-                    det_hdrs = ['SKU', 'Ingrediente', 'Categoría'] + mes_cols_str
-                    det_rows_html = ''
-                    for _, r in df_det.iterrows():
-                        det_rows_html += '<tr style="border-bottom:1px solid #1e1e1e">'
-                        det_rows_html += f'<td style="padding:10px 14px;color:#666;font-family:monospace;font-size:0.76rem">{r.get("sku","")}</td>'
-                        det_rows_html += f'<td style="padding:10px 14px;font-weight:500;color:#e8e4de">{r.get("nombre","")}</td>'
-                        det_rows_html += f'<td style="padding:10px 14px;color:#555;font-size:0.8rem">{r.get("categoria","")}</td>'
-                        prev_val = None
-                        for mc in mes_cols_str:
-                            v = r.get(mc, None)
-                            delta_html = ''
-                            if prev_val is not None and v is not None and not pd.isna(v) and prev_val != 0:
-                                delta = (v - prev_val) / prev_val * 100
-                                delta_html = f'<br>{badge_delta(delta)}'
-                            det_rows_html += f'<td style="padding:10px 14px;text-align:right;vertical-align:middle">{fmt_precio(v)}{delta_html}</td>'
-                            prev_val = v if (v is not None and not pd.isna(v)) else prev_val
-                        det_rows_html += '</tr>'
-
-                    det_table = (
-                        '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
-                        '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.84rem">'
-                        '<thead><tr style="background:#111">'
-                        + ''.join([f'<th style="{hs};text-align:{"left" if i<3 else "right"}">{h}</th>' for i, h in enumerate(det_hdrs)])
-                        + f'</tr></thead><tbody>{det_rows_html}</tbody></table></div>'
-                    )
-                    st.markdown(det_table, unsafe_allow_html=True)
-
-                    # Descarga
-                    st.markdown("<br>", unsafe_allow_html=True)
-                    buf4 = io.BytesIO()
-                    with pd.ExcelWriter(buf4, engine='openpyxl') as w:
-                        pivot.to_excel(w, sheet_name='Precios', index=False)
-                    st.download_button("📥 Descargar Excel", buf4.getvalue(), "Informe3_Precios.xlsx")
+                # Descarga
+                st.markdown("<br>", unsafe_allow_html=True)
+                buf4 = io.BytesIO()
+                with pd.ExcelWriter(buf4, engine='openpyxl') as w:
+                    pivot.to_excel(w, sheet_name='Precios', index=False)
+                st.download_button("📥 Descargar Excel", buf4.getvalue(), "Informe3_Precios.xlsx")
