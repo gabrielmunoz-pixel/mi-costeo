@@ -527,6 +527,14 @@ def informe_desviacion(fecha_i, fecha_f, local):
         left_on='sku_ingrediente', right_on='sku', how='outer'
     )
     informe = informe.fillna(0)
+
+    # Eliminar filas que son SKUs originales ya consolidados via equivalencias
+    # (aparecen solo en compras con consumo_teorico=0 porque ya fueron mapeados a su sku_receta)
+    skus_compra_equiv = set(df_equiv['sku_compra'].tolist()) if not df_equiv.empty else set()
+    informe = informe[~(
+        (informe['consumo_teorico'] == 0) &
+        (informe['sku'].isin(skus_compra_equiv))
+    )]
     informe['subcat'] = informe.apply(
         lambda r: dict_subcat.get(str(r['sku_ingrediente']), dict_subcat.get(str(r['sku']), '')), axis=1
     )
