@@ -1209,11 +1209,42 @@ elif modulo == "📊 Informes":
                     st.markdown("#### Resumen por Categoría")
                     cat_res = df_p.groupby(['categoria','mes']).agg(
                         precio_prom=('precio_prom','mean'),
-                        skus=('sku','nunique')
                     ).reset_index()
                     cat_res['mes'] = pd.to_datetime(cat_res['mes'])
-                    cat_pivot = cat_res.pivot_table(index=['categoria','skus'], columns='mes', values='precio_prom').reset_index()
+
+                    # Contar SKUs únicos por categoría (total, no por mes)
+                    skus_por_cat = df_p.groupby('categoria')['sku'].nunique().reset_index()
+                    skus_por_cat.columns = ['categoria', 'skus']
+
+                    cat_pivot = cat_res.pivot_table(index='categoria', columns='mes', values='precio_prom').reset_index()
                     cat_pivot.columns = [meses_labels.get(c, c) if not isinstance(c, str) else c for c in cat_pivot.columns]
+                    cat_pivot = cat_pivot.merge(skus_por_cat, on='categoria', how='left')
+
+                    # Forzar tipos numéricos
+                    for mc in mes_cols_str:
+                        if mc in cat_pivot.columns:
+                            cat_pivot[mc] = pd.to_numeric(cat_pivot[mc], errors='coerce')
+
+                    # Calcular Δ% en cat_pivot
+                    for i in range(1, len(mes_cols_str)):
+                        prev_c = mes_cols_str[i-1]
+                        curr_c = mes_cols_str[i]
+                        if prev_c in cat_pivot.columns and curr_c in cat_pivot.columns:
+                            cat_pivot[f'_delta_{curr_c}'] = ((cat_pivot[curr_c] - cat_pivot[prev_c]) / cat_pivot[prev_c].replace(0, None) * 100).round(1)
+
+                    # Selector ordenamiento
+                    ord_cols = ['Categoría'] + mes_cols_str
+                    oc1, oc2 = st.columns([3, 1])
+                    with oc1:
+                        ord_col = st.selectbox("Ordenar por", ord_cols, index=len(ord_cols)-1, key='ord_cat')
+                    with oc2:
+                        ord_dir = st.selectbox("Dirección", ['↓ Mayor a menor', '↑ Menor a mayor'], key='dir_cat')
+
+                    asc = ord_dir.startswith('↑')
+                    if ord_col == 'Categoría':
+                        cat_pivot = cat_pivot.sort_values('categoria', ascending=asc)
+                    elif ord_col in cat_pivot.columns:
+                        cat_pivot = cat_pivot.sort_values(ord_col, ascending=asc, na_position='last')
 
                     hs = 'padding:11px 14px;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
 
@@ -1275,6 +1306,22 @@ elif modulo == "📊 Informes":
                         df_det = df_det[df_det['sku'].str.upper().str.contains(filtro_sku, na=False)]
                     if filtro_nom:
                         df_det = df_det[df_det['nombre'].str.lower().str.contains(filtro_nom, na=False)]
+
+                    # Ordenamiento detalle
+                    ord_cols_det = ['SKU', 'Ingrediente'] + mes_cols_str
+                    od1, od2 = st.columns([3, 1])
+                    with od1:
+                        ord_col_det = st.selectbox("Ordenar por", ord_cols_det, index=len(ord_cols_det)-1, key='ord_det')
+                    with od2:
+                        ord_dir_det = st.selectbox("Dirección", ['↓ Mayor a menor', '↑ Menor a mayor'], key='dir_det')
+
+                    asc_det = ord_dir_det.startswith('↑')
+                    if ord_col_det == 'SKU':
+                        df_det = df_det.sort_values('sku', ascending=asc_det)
+                    elif ord_col_det == 'Ingrediente':
+                        df_det = df_det.sort_values('nombre', ascending=asc_det)
+                    elif ord_col_det in df_det.columns:
+                        df_det = df_det.sort_values(ord_col_det, ascending=asc_det, na_position='last')
 
                     det_hdrs = ['SKU', 'Ingrediente', 'Categoría'] + mes_cols_str
                     det_rows_html = ''
