@@ -722,7 +722,23 @@ def procesar_compras(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     # ── Verificar columnas mínimas ──────────────────────────────────────────
     faltantes = [c for c in COLS_REQUERIDAS if c not in df.columns]
     if faltantes:
-        warnings.append(f"⚠️ Columnas no encontradas en el archivo: {', '.join(faltantes)}")
+        warnings.append(
+            f"⚠️ Columnas no encontradas tras normalizar nombres: **{', '.join(faltantes)}**\n"
+            f"Columnas recibidas: {', '.join(df.columns.tolist())}"
+        )
+    # Columnas críticas para el cálculo — si faltan el resultado será incorrecto
+    criticas = {
+        'total_item':       'monto_real será 0',
+        'recargo_global':   'recargo2 será 0 (no se distribuye recargo)',
+        'descuento_global': 'descuento no se aplicará',
+        'iva':              'IVA_2 será 0 en todos los folios',
+        'total':            'no se podrá ajustar redondeo ni distribuir despacho',
+        'conversion':       'cant_conv = cantidad (sin conversión)',
+        'formato':          'MUC calculado como por unidad en todos los casos',
+    }
+    for col, impacto in criticas.items():
+        if col not in df.columns:
+            warnings.append(f"🔴 Columna crítica **'{col}'** no encontrada → {impacto}")
 
     # ── Tipos básicos ────────────────────────────────────────────────────────
     df['tipo_dte']        = pd.to_numeric(df.get('tipo_dte', 33), errors='coerce').fillna(33).astype(int)
@@ -1075,14 +1091,22 @@ if modulo.startswith("📦"):
             # ── Validador: comparar costo_realfinal vs Total factura ──────────
             with st.expander("🔍 Validación por folio — Diferencias vs Total declarado", expanded=False):
                 if 'total' in df_proc.columns and 'folio' in df_proc.columns:
-                    # Separar por subcat para validación relevante
-                    subcat_col = next((c for c in df_proc.columns if 'subcat' in c.lower()), None)
-                    if subcat_col:
-                        df_mrp = df_proc[df_proc[subcat_col].isin(['Directo','Indirecto'])]
-                    else:
-                        df_mrp = df_proc
+                    subcat_col = next((c for c in df_proc.columns if c == 'subcat'), None)
 
-                    val = df_mrp.groupby('folio').agg(
+                    if subcat_col:
+                        # Solo folios donde TODAS las líneas son Directo o Indirecto
+                        # (excluir folios mixtos donde el Total de factura incluye otras subcats)
+                        subcat_por_folio = df_proc.groupby('folio')[subcat_col].apply(
+                            lambda s: s.isin(['Directo','Indirecto']).all()
+                        )
+                        folios_puros = subcat_por_folio[subcat_por_folio].index
+                        df_val = df_proc[df_proc['folio'].isin(folios_puros)]
+                        n_mixtos = df_proc['folio'].nunique() - len(folios_puros)
+                    else:
+                        df_val = df_proc
+                        n_mixtos = 0
+
+                    val = df_val.groupby('folio').agg(
                         total_declarado=('total', 'max'),
                         costo_calculado=('costo_realfinal', 'sum')
                     ).reset_index()
@@ -1090,19 +1114,21 @@ if modulo.startswith("📦"):
                     val['dif_abs'] = val['diferencia'].abs()
                     val_issues = val[val['dif_abs'] > 1].sort_values('dif_abs', ascending=False)
 
-                    c1v, c2v = st.columns(2)
-                    c1v.metric("Folios Directo/Indirecto", f"{val['folio'].nunique():,}")
-                    c2v.metric("Folios con diferencia > $1", f"{len(val_issues):,}")
+                    c1v, c2v, c3v = st.columns(3)
+                    c1v.metric("Folios validados", f"{len(val):,}")
+                    c2v.metric("Folios mixtos (excluidos)", f"{n_mixtos:,}",
+                               help="Folios con Directo/Indirecto + otras subcats — el Total de factura no es comparable con solo las líneas MRP")
+                    c3v.metric("Folios con diferencia > $1", f"{len(val_issues):,}")
 
                     if val_issues.empty:
-                        st.success("✅ Todos los folios Directo/Indirecto cuadran con el total declarado.")
+                        st.success("✅ Todos los folios cuadran con el total declarado.")
                     else:
-                        st.warning(f"⚠️ {len(val_issues)} folio(s) con diferencia > $1")
+                        st.warning(f"⚠️ {len(val_issues)} folio(s) con diferencia > $1 — revisar")
                         st.dataframe(
                             val_issues[['folio','total_declarado','costo_calculado','diferencia']],
                             use_container_width=True, hide_index=True
                         )
-                    st.caption("ℹ️ Los folios de Administración (arriendos, seguros, etc.) pueden mostrar diferencias por ítems exentos mixtos — no afectan el MRP.")
+                    st.caption("ℹ️ Se validan solo folios donde el 100% de líneas son Directo o Indirecto. Los folios mixtos tienen un Total de factura que incluye otras categorías.")
                 else:
                     st.info("No se encontró columna 'total' para validar.")
 
