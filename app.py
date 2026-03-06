@@ -409,10 +409,12 @@ def informe_desviacion(fecha_i, fecha_f, local):
             if rend_total == 0:
                 rend_total = 1
 
+            um_plato = factor_um(plato_row['um_salida'] if 'um_salida' in plato_row.index else '')
+            cant_plato_conv = cant_plato * um_plato
+
             for _, base in base_rows.iterrows():
                 cant_base = pd.to_numeric(base['cant_real'], errors='coerce') or 0
-                um_base   = factor_um(base.get('um_salida', ''))
-                cant_plato_conv = cant_plato * factor_um(plato_row.get('um_salida', ''))
+                um_base   = factor_um(base['um_salida'] if pd.notna(base.get('um_salida')) else '')
                 if porcion == 1:
                     consumo = ventas * cant_plato_conv * cant_base * um_base
                 else:
@@ -425,6 +427,11 @@ def informe_desviacion(fecha_i, fecha_f, local):
 
         if rows:
             exp_out = pd.DataFrame(rows)
+
+    # ---- AUDIT HUEVO ----
+    huevo_dir = dir_out[dir_out['sku_ingrediente'] == 'AL-AF-048']['consumo_parcial'].sum() if not dir_out.empty else 0
+    huevo_exp = exp_out[exp_out['sku_ingrediente'] == 'AL-AF-048']['consumo_parcial'].sum() if not exp_out.empty else 0
+    st.info(f"AUDIT HUEVO — dir_out: {huevo_dir:.2f} | exp_out: {huevo_exp:.2f} | total: {huevo_dir+huevo_exp:.2f}")
 
     # ---- CONSOLIDAR ----
     todo = pd.concat([df for df in [dir_out, exp_out] if not df.empty], ignore_index=True)
