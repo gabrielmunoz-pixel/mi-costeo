@@ -920,63 +920,103 @@ elif modulo == "📊 Informes":
     # INFORME 2
     # ----------------------------------------------------------
     else:
-        st.markdown("### 📉 Desviación Real vs Teórico")
-        st.markdown(f"<div class='info-box'>Período: <b>{f_inicio}</b> → <b>{f_fin}</b> · Local: <b>{f_local}</b><br>Consumo teórico = ventas × CantReal (directos) o CantEfic (procesados). Comprado real = cant_conv de facturas en el período.</div>", unsafe_allow_html=True)
+        st.markdown("### 📉 Informe de Desviación")
+        st.markdown(f"<div class='info-box'>Período: <b>{f_inicio}</b> → <b>{f_fin}</b> · Local: <b>{f_local}</b><br>Consumo teórico = ventas × CantReal. Comprado real = cant_conv de facturas. Variación % = (Comprado - Teórico) / Teórico × 100.</div>", unsafe_allow_html=True)
 
         if st.button("▶ Generar Informe 2"):
             with st.spinner("Calculando desviaciones..."):
                 df_inf2 = informe_desviacion(f_inicio, f_fin, f_local)
 
             if not df_inf2.empty:
-                perdida_total = df_inf2[df_inf2['desviacion_dinero'] > 0]['desviacion_dinero'].sum()
-                ahorro_total  = df_inf2[df_inf2['desviacion_dinero'] < 0]['desviacion_dinero'].sum()
-
-                m1, m2 = st.columns(2)
-                m1.metric("⚠️ Exceso comprado (posible merma/robo)", f"${perdida_total:,.0f}")
-                m2.metric("✅ Comprado por debajo del teórico", f"${abs(ahorro_total):,.0f}")
-
-                # Semáforo desviación
-                def semaforo_desv(val):
-                    if val > 0:
-                        return 'background-color: #3a1a1a; color: #e84545'
-                    elif val < 0:
-                        return 'background-color: #1a3a2a; color: #4caf7d'
-                    return ''
-
-                cols_show2 = ['sku_ingrediente', 'nombre_ingrediente', 'subcat', 'consumo_teorico',
-                              'cant_real_comprada', 'desviacion_cant', 'desviacion_dinero']
-
-                existing_cols = [c for c in cols_show2 if c in df_inf2.columns]
-
-                st.dataframe(
-                    df_inf2[existing_cols].style
-                        .applymap(semaforo_desv, subset=['desviacion_dinero'])
-                        .format({
-                            'consumo_teorico':     '{:,.3f}',
-                            'cant_real_comprada':  '{:,.3f}',
-                            'desviacion_cant':     '{:,.3f}',
-                            'desviacion_dinero':   '${:,.0f}'
-                        }),
-                    use_container_width=True,
-                    hide_index=True
+                # Calcular variación %
+                df_inf2['variacion_pct'] = df_inf2.apply(
+                    lambda r: ((r['cant_real_comprada'] - r['consumo_teorico']) / r['consumo_teorico'] * 100)
+                    if r['consumo_teorico'] > 0 else None, axis=1
                 )
 
-                # Agrupado por subcategoría
+                perdida_total  = df_inf2[df_inf2['desviacion_dinero'] > 0]['desviacion_dinero'].sum()
+                ahorro_total   = df_inf2[df_inf2['desviacion_dinero'] < 0]['desviacion_dinero'].sum()
+                items_exceso   = (df_inf2['desviacion_dinero'] > 0).sum()
+                items_ok       = (df_inf2['desviacion_dinero'] <= 0).sum()
+
+                # Métricas superiores
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("🔴 Exceso comprado", f"${perdida_total:,.0f}", f"{items_exceso} ítems")
+                m2.metric("🟢 Bajo lo teórico",  f"${abs(ahorro_total):,.0f}", f"{items_ok} ítems")
+                m3.metric("📦 Total ítems", f"{len(df_inf2)}")
+                desv_neta = perdida_total + ahorro_total
+                m4.metric("⚖️ Desviación neta", f"${desv_neta:,.0f}")
+
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                # Semáforos
+                def semaforo_desv(val):
+                    if pd.isna(val): return ''
+                    if val > 0:   return 'background-color: #3a1a1a; color: #e84545'
+                    elif val < 0: return 'background-color: #1a3a2a; color: #4caf7d'
+                    return ''
+
+                def semaforo_pct(val):
+                    if pd.isna(val): return 'color: #555'
+                    if val > 20:    return 'background-color: #3a1a1a; color: #e84545; font-weight:600'
+                    elif val > 5:   return 'background-color: #3a2a1a; color: #e89c45; font-weight:600'
+                    elif val < -5:  return 'background-color: #1a3a2a; color: #4caf7d; font-weight:600'
+                    return 'color: #aaa'
+
+                cols_show2 = ['sku_ingrediente', 'nombre_ingrediente', 'subcat',
+                              'consumo_teorico', 'cant_real_comprada',
+                              'desviacion_cant', 'variacion_pct', 'desviacion_dinero']
+                existing_cols = [c for c in cols_show2 if c in df_inf2.columns]
+
+                col_rename = {
+                    'sku_ingrediente':   'SKU',
+                    'nombre_ingrediente':'Ingrediente',
+                    'subcat':            'Categoría',
+                    'consumo_teorico':   'Teórico',
+                    'cant_real_comprada':'Comprado',
+                    'desviacion_cant':   'Δ Cantidad',
+                    'variacion_pct':     'Δ %',
+                    'desviacion_dinero': 'Δ $'
+                }
+
+                df_show = df_inf2[existing_cols].rename(columns=col_rename)
+
+                fmt = {
+                    'Teórico':   '{:,.2f}',
+                    'Comprado':  '{:,.2f}',
+                    'Δ Cantidad':'{:,.2f}',
+                    'Δ %':       '{:+.1f}%',
+                    'Δ $':       '${:,.0f}'
+                }
+                fmt = {k: v for k, v in fmt.items() if k in df_show.columns}
+
+                styled = df_show.style                    .applymap(semaforo_desv, subset=['Δ $'])                    .applymap(semaforo_pct,  subset=['Δ %'] if 'Δ %' in df_show.columns else [])                    .format(fmt, na_rep='—')                    .set_properties(**{'font-size': '0.85rem'})
+
+                st.dataframe(styled, use_container_width=True, hide_index=True)
+
+                # Resumen por subcategoría
                 if 'subcat' in df_inf2.columns:
-                    st.markdown("#### Por Subcategoría")
+                    st.markdown("---")
+                    st.markdown("#### Resumen por Categoría")
                     sub = df_inf2.groupby('subcat').agg(
-                        consumo_teorico=('consumo_teorico','sum'),
-                        comprado_real=('cant_real_comprada','sum'),
-                        desviacion_dinero=('desviacion_dinero','sum')
-                    ).reset_index().sort_values('desviacion_dinero', ascending=False)
+                        Teórico=('consumo_teorico','sum'),
+                        Comprado=('cant_real_comprada','sum'),
+                        Δ_dinero=('desviacion_dinero','sum'),
+                        Items=('sku_ingrediente','count')
+                    ).reset_index().sort_values('Δ_dinero', ascending=False)
+                    sub['Δ %'] = ((sub['Comprado'] - sub['Teórico']) / sub['Teórico'].replace(0,1) * 100).round(1)
+                    sub = sub.rename(columns={'subcat':'Categoría','Δ_dinero':'Δ $'})
                     st.dataframe(
                         sub.style
-                            .applymap(semaforo_desv, subset=['desviacion_dinero'])
-                            .format({'consumo_teorico':'{:,.2f}','comprado_real':'{:,.2f}','desviacion_dinero':'${:,.0f}'}),
+                            .applymap(semaforo_desv, subset=['Δ $'])
+                            .applymap(semaforo_pct,  subset=['Δ %'])
+                            .format({'Teórico':'{:,.2f}','Comprado':'{:,.2f}','Δ $':'${:,.0f}','Δ %':'{:+.1f}%'}),
                         use_container_width=True, hide_index=True
                     )
 
+                st.markdown("<br>", unsafe_allow_html=True)
                 buf3 = io.BytesIO()
+                export_cols = existing_cols
                 with pd.ExcelWriter(buf3, engine='openpyxl') as w:
-                    df_inf2[existing_cols].to_excel(w, sheet_name='Desviacion', index=False)
-                st.download_button("📥 Descargar Informe 2", buf3.getvalue(), "Informe2_Desviacion.xlsx")
+                    df_inf2[export_cols].to_excel(w, sheet_name='Desviacion', index=False)
+                st.download_button("📥 Descargar Excel", buf3.getvalue(), "Informe2_Desviacion.xlsx")
