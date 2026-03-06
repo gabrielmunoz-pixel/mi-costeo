@@ -455,7 +455,8 @@ def informe_desviacion(fecha_i, fecha_f, local):
 
 
     # Compras reales del período — fecha_dte es timestamp, cant_conv ya está en unidades
-    filtro_local_c = "AND UPPER(local) = UPPER(:l)" if local != "Todos" else ""
+    filtro_local_c  = "AND UPPER(local) = UPPER(:l)" if local != "Todos" else ""
+    filtro_local_c2 = "AND UPPER(c.local) = UPPER(:l)" if local != "Todos" else ""
     params_c = {"i": fecha_i, "f": fecha_f}
     if local != "Todos":
         params_c["l"] = local
@@ -469,7 +470,7 @@ def informe_desviacion(fecha_i, fecha_f, local):
         LEFT JOIN sku_equivalencias e ON c.sku = e.sku_compra
         WHERE c.fecha_dte::date BETWEEN :i AND :f
           AND c.subcat = 'Directo'
-        {filtro_local_c.replace('local', 'c.local')}
+        {filtro_local_c2}
         GROUP BY 1
     """
     df_c = run_query(q_c, params_c)
@@ -484,7 +485,7 @@ def informe_desviacion(fecha_i, fecha_f, local):
             FROM compras c
             LEFT JOIN sku_equivalencias e ON c.sku = e.sku_compra
             WHERE c.subcat = 'Directo'
-            {filtro_local_c.replace('local', 'c.local')}
+            {filtro_local_c2}
             GROUP BY 1
         """
         df_c = run_query(q_c2, params_c)
