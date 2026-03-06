@@ -276,7 +276,7 @@ def informe_rentabilidad(fecha_i, fecha_f, local):
     if engine is None:
         return pd.DataFrame()
 
-    filtro_local_r = "AND local = :l" if local != "Todos" else ""
+    filtro_local_r = "AND UPPER(local) = UPPER(:l)" if local != "Todos" else ""
     params = {"i": str(fecha_i), "f": str(fecha_f)}
     if local != "Todos":
         params["l"] = local
@@ -321,7 +321,7 @@ def informe_desviacion(fecha_i, fecha_f, local):
         return pd.DataFrame()
 
     # Ventas del período — casteamos fechas a string para evitar problemas de tipo con SQLAlchemy
-    filtro_local_v = "AND local = :l" if local != "Todos" else ""
+    filtro_local_v = "AND UPPER(local) = UPPER(:l)" if local != "Todos" else ""
     params = {"i": str(fecha_i), "f": str(fecha_f)}
     if local != "Todos":
         params["l"] = local
@@ -441,7 +441,7 @@ def informe_desviacion(fecha_i, fecha_f, local):
 
 
     # Compras reales del período — fecha_dte es timestamp, cant_conv ya está en unidades
-    filtro_local_c = "AND local = :l" if local != "Todos" else ""
+    filtro_local_c = "AND UPPER(local) = UPPER(:l)" if local != "Todos" else ""
     params_c = {"i": fecha_i, "f": fecha_f}
     if local != "Todos":
         params_c["l"] = local
