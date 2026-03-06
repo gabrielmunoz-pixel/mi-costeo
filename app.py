@@ -374,10 +374,17 @@ def informe_desviacion(fecha_i, fecha_f, local):
     exp_out = pd.DataFrame()
     if not merge_pro.empty and not df_proc.empty:
         # Paso 2: rendimiento total y porcion de cada procesado
-        rend = df_proc.groupby('codigo_venta').agg(
-            rendimiento_total=('cant_real', 'sum'),
+        # Usa MAX(rendimiento) si está definido (>1), sino SUM(cant_real)
+        rend_exp = df_proc.groupby('codigo_venta').agg(
+            rendimiento_explicito=('rendimiento', 'max'),
+            rendimiento_suma=('cant_real', 'sum'),
             porcion=('porcion', 'first')
         ).reset_index()
+        rend_exp['rendimiento_total'] = rend_exp.apply(
+            lambda r: r['rendimiento_explicito'] if pd.notna(r['rendimiento_explicito']) and r['rendimiento_explicito'] > 1
+            else r['rendimiento_suma'], axis=1
+        )
+        rend = rend_exp[['codigo_venta', 'rendimiento_total', 'porcion']]
 
         # Agregar ventas por codigo_venta + sku_ingrediente (PRO-XX) para evitar iterar fila por fila
         merge_pro_agg = merge_pro.groupby(['codigo_venta', 'sku_ingrediente']).agg(
