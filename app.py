@@ -462,13 +462,14 @@ def informe_desviacion(fecha_i, fecha_f, local):
 
     q_c = f"""
         SELECT
-            sku,
-            SUM(cant_conv) AS cant_real_comprada,
-            AVG(muc) AS muc_promedio
-        FROM compras
-        WHERE fecha_dte::date BETWEEN :i AND :f
-          AND subcat = 'Directo'
-        {filtro_local_c}
+            COALESCE(e.sku_receta, c.sku) as sku,
+            SUM(c.cant_conv) AS cant_real_comprada,
+            AVG(c.muc) AS muc_promedio
+        FROM compras c
+        LEFT JOIN sku_equivalencias e ON c.sku = e.sku_compra
+        WHERE c.fecha_dte::date BETWEEN :i AND :f
+          AND c.subcat = 'Directo'
+        {filtro_local_c.replace('local', 'c.local')}
         GROUP BY 1
     """
     df_c = run_query(q_c, params_c)
@@ -477,28 +478,20 @@ def informe_desviacion(fecha_i, fecha_f, local):
     if df_c.empty:
         q_c2 = f"""
             SELECT
-                sku,
-                SUM(cant_conv) AS cant_real_comprada,
-                AVG(muc) AS muc_promedio
-            FROM compras
-            WHERE subcat = 'Directo'
-            {filtro_local_c}
+                COALESCE(e.sku_receta, c.sku) as sku,
+                SUM(c.cant_conv) AS cant_real_comprada,
+                AVG(c.muc) AS muc_promedio
+            FROM compras c
+            LEFT JOIN sku_equivalencias e ON c.sku = e.sku_compra
+            WHERE c.subcat = 'Directo'
+            {filtro_local_c.replace('local', 'c.local')}
             GROUP BY 1
         """
         df_c = run_query(q_c2, params_c)
         if not df_c.empty:
             st.warning("⚠️ Sin compras en el período seleccionado — mostrando totales históricos.")
 
-    # Aplicar equivalencias de SKU antes del join
-    df_equiv = run_query("SELECT sku_compra, sku_receta FROM sku_equivalencias")
-    if not df_equiv.empty:
-        dict_equiv = dict(zip(df_equiv['sku_compra'], df_equiv['sku_receta']))
-        df_c['sku'] = df_c['sku'].map(lambda x: dict_equiv.get(x, x))
-        # Re-agrupar consolidando equivalencias (sin subcat para no fragmentar)
-        df_c = df_c.groupby('sku', as_index=False).agg({
-            'cant_real_comprada': 'sum',
-            'muc_promedio': 'mean'
-        })
+    # Equivalencias ya aplicadas en SQL — no necesita remapeo en Python
 
     # Nombre canónico desde compras — incluir equivalencias para SKUs que solo existen como destino
     q_nom = """
