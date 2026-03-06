@@ -1438,7 +1438,19 @@ elif modulo == "📊 Informes":
                 df_ventas = run_query(q_ventas)
 
                 # 2. Precio promedio por ingrediente en mes base y mes comp
+                # Incluye equivalencias históricas de SKU
                 q_precios_mes = f"""
+                    WITH equiv AS (
+                        SELECT sku_compra, sku_receta FROM sku_equivalencias
+                    ),
+                    compras_equiv AS (
+                        SELECT 
+                            COALESCE(e.sku_receta, c.sku) as sku,
+                            c.monto_real, c.cant_conv, c.fecha_dte
+                        FROM compras c
+                        LEFT JOIN equiv e ON c.sku = e.sku_compra
+                        WHERE c.subcat IN ('Directo','Indirecto') AND c.cant_conv > 0
+                    )
                     SELECT sku,
                            SUM(CASE WHEN fecha_dte::date BETWEEN '{mes_base_i}' AND '{mes_base_f}'
                                THEN monto_real ELSE 0 END) /
@@ -1448,8 +1460,7 @@ elif modulo == "📊 Informes":
                                THEN monto_real ELSE 0 END) /
                            NULLIF(SUM(CASE WHEN fecha_dte::date BETWEEN '{mes_comp_i}' AND '{mes_comp_f}'
                                THEN cant_conv ELSE 0 END), 0) as precio_comp
-                    FROM compras
-                    WHERE subcat IN ('Directo','Indirecto')
+                    FROM compras_equiv
                     GROUP BY sku
                 """
                 df_precios = run_query(q_precios_mes)
