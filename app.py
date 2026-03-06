@@ -1129,7 +1129,7 @@ elif modulo == "📊 Informes":
 
         # Selector de mes de referencia
         meses_disp = run_query("""
-            SELECT DISTINCT DATE_TRUNC('month', fecha_dte)::date as mes
+            SELECT DISTINCT DATE_TRUNC('month', fecha_dte::timestamp)::date as mes
             FROM compras
             WHERE subcat IN ('Directo','Indirecto')
             ORDER BY 1
@@ -1175,14 +1175,14 @@ elif modulo == "📊 Informes":
                         sku,
                         MIN(nombre_producto) as nombre,
                         subcat,
-                        DATE_TRUNC('month', fecha_dte)::date as mes,
+                        DATE_TRUNC('month', fecha_dte::timestamp)::date as mes,
                         SUM(monto_real) / NULLIF(SUM(cant_conv), 0) as precio_prom
                     FROM compras
-                    WHERE DATE_TRUNC('month', fecha_dte)::date IN ({fechas_in})
+                    WHERE DATE_TRUNC('month', fecha_dte::timestamp)::date IN ({fechas_in})
                       AND subcat IN ('Directo','Indirecto')
                       AND cant_conv > 0
                       {filtro_cat}
-                    GROUP BY sku, subcat, DATE_TRUNC('month', fecha_dte)::date
+                    GROUP BY sku, subcat, DATE_TRUNC('month', fecha_dte::timestamp)::date
                     ORDER BY sku, mes
                 """
                 df_p = run_query(q_precios)
