@@ -1472,9 +1472,23 @@ elif modulo == "📊 Informes":
                 df_rec4_dir['precio_base'] = pd.to_numeric(df_rec4_dir['precio_base'], errors='coerce').fillna(0)
                 df_rec4_dir['precio_comp'] = pd.to_numeric(df_rec4_dir['precio_comp'], errors='coerce').fillna(0)
 
-                # Usar precio_base como fallback para precio_comp si no hay datos
-                df_rec4_dir['precio_comp'] = df_rec4_dir.apply(
-                    lambda r: r['precio_base'] if r['precio_comp'] == 0 else r['precio_comp'], axis=1
+                # Precio más cercano disponible para cada ingrediente en mes_comp
+                # Si no hay precio en mes_comp, busca el más cercano (antes o después)
+                q_precio_cercano = f"""
+                    SELECT DISTINCT ON (sku) sku,
+                        SUM(monto_real) OVER (PARTITION BY sku, DATE_TRUNC('month', fecha_dte::timestamp)) /
+                        NULLIF(SUM(cant_conv) OVER (PARTITION BY sku, DATE_TRUNC('month', fecha_dte::timestamp)), 0) as precio_comp
+                    FROM compras
+                    WHERE subcat IN ('Directo','Indirecto') AND cant_conv > 0
+                    ORDER BY sku, ABS(EXTRACT(EPOCH FROM (DATE_TRUNC('month', fecha_dte::timestamp) - '{mes_comp_i}'::timestamp)))
+                """
+                df_precio_cercano = run_query(q_precio_cercano)
+
+                # Reemplazar precio_comp con el más cercano donde no hay datos
+                df_precios = df_precios.merge(df_precio_cercano.rename(columns={'precio_comp':'precio_comp_cercano'}), on='sku', how='left')
+                df_precios['precio_comp'] = df_precios.apply(
+                    lambda r: r['precio_comp'] if (pd.notna(r['precio_comp']) and r['precio_comp'] > 0)
+                    else r['precio_comp_cercano'], axis=1
                 )
 
                 df_rec4_dir['costo_ing_base'] = df_rec4_dir['cant_real'] * df_rec4_dir['factor'] * df_rec4_dir['precio_base']
