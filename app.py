@@ -721,7 +721,7 @@ with st.sidebar:
     menu_items = {
         "📦 Gestión de Datos": ["Recetario", "Compras", "Ventas", "Equivalencias SKU"],
         "🧮 Explosión MRP":    [],
-        "📊 Informes":         ["Rentabilidad", "Desviación", "Product Mix"],
+        "📊 Informes":         ["Rentabilidad", "Desviación", "Variación Precio Compras"],
     }
 
     if 'menu_abierto' not in st.session_state:
@@ -943,7 +943,7 @@ elif modulo.startswith("📊"):
         informe_sel = "Informe 1"
     elif "Desviación" in modulo:
         informe_sel = "Informe 2"
-    elif "Product Mix" in modulo:
+    elif "Variación Precio Compras" in modulo:
         informe_sel = "Informe 3"
     else:
         informe_sel = "Informe 1"  # default
@@ -952,7 +952,7 @@ elif modulo.startswith("📊"):
     titulos = {
         "Informe 1": ("💰", "Rentabilidad por Producto"),
         "Informe 2": ("📉", "Desviación Real vs Teórico"),
-        "Informe 3": ("🔀", "Impacto de Precios sobre Product Mix"),
+        "Informe 3": ("🔀", "Variación Precio Compras"),
     }
     icono, titulo_txt = titulos.get(informe_sel, ("📊", "Informes"))
     st.markdown(f"""
