@@ -781,7 +781,15 @@ with st.sidebar:
 # MÓDULO: GESTIÓN DE DATOS
 # ============================================================
 if modulo.startswith("📦"):
-    st.markdown("<div class='section-title'>Gestión de Datos</div>", unsafe_allow_html=True)
+    st.markdown(f"""
+    <div style="margin-bottom:1.5rem">
+        <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#555;margin-bottom:4px">Módulo</div>
+        <div style="font-family:'DM Serif Display',serif;font-size:2rem;color:#f0ede8;letter-spacing:-0.02em;line-height:1.1">
+            📦 Gestión de Datos
+        </div>
+        <div style="width:40px;height:2px;background:#d4a853;margin-top:8px;border-radius:2px"></div>
+    </div>
+    """, unsafe_allow_html=True)
 
     tab1, tab2, tab3, tab4 = st.tabs(["📖 Recetario", "🛒 Compras", "📈 Ventas", "🔀 Equivalencias SKU"])
 
@@ -867,7 +875,15 @@ if modulo.startswith("📦"):
 # MÓDULO: EXPLOSIÓN MRP
 # ============================================================
 elif modulo.startswith("🧮"):
-    st.markdown("<div class='section-title'>Explosión MRP</div>", unsafe_allow_html=True)
+    st.markdown(f"""
+    <div style="margin-bottom:1.5rem">
+        <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#555;margin-bottom:4px">Módulo</div>
+        <div style="font-family:'DM Serif Display',serif;font-size:2rem;color:#f0ede8;letter-spacing:-0.02em;line-height:1.1">
+            🧮 Explosión MRP
+        </div>
+        <div style="width:40px;height:2px;background:#d4a853;margin-top:8px;border-radius:2px"></div>
+    </div>
+    """, unsafe_allow_html=True)
     st.markdown("<div class='info-box'>Sube el Excel con las hojas <b>Ventas</b>, <b>Directos</b> y <b>Procesados</b>. La lógica de cálculo es la versión validada.</div>", unsafe_allow_html=True)
 
     file_mrp = st.file_uploader("Archivo Excel MRP (.xlsx)", type="xlsx")
@@ -909,16 +925,33 @@ elif modulo.startswith("🧮"):
 # MÓDULO: INFORMES
 # ============================================================
 elif modulo.startswith("📊"):
-    st.markdown("<div class='section-title'>Informes</div>", unsafe_allow_html=True)
 
-    informe_sel = st.radio(
-        "Seleccionar informe",
-        ["Informe 1 — Rentabilidad por Producto", "Informe 2 — Desviación Real vs Teórico", "Informe 3 — Impacto de Precios sobre Product Mix"],
-        horizontal=True,
-        label_visibility="collapsed"
-    )
+    # Derivar informe activo desde subitem del menú
+    if "Rentabilidad" in modulo:
+        informe_sel = "Informe 1"
+    elif "Desviación" in modulo:
+        informe_sel = "Informe 2"
+    elif "Product Mix" in modulo:
+        informe_sel = "Informe 3"
+    else:
+        informe_sel = "Informe 1"  # default
 
-    st.markdown("---")
+    # Título elegante según informe
+    titulos = {
+        "Informe 1": ("💰", "Rentabilidad por Producto"),
+        "Informe 2": ("📉", "Desviación Real vs Teórico"),
+        "Informe 3": ("🔀", "Impacto de Precios sobre Product Mix"),
+    }
+    icono, titulo_txt = titulos.get(informe_sel, ("📊", "Informes"))
+    st.markdown(f"""
+    <div style="margin-bottom:1.5rem">
+        <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#555;margin-bottom:4px">Informes</div>
+        <div style="font-family:'DM Serif Display',serif;font-size:2rem;color:#f0ede8;letter-spacing:-0.02em;line-height:1.1">
+            {icono} {titulo_txt}
+        </div>
+        <div style="width:40px;height:2px;background:#d4a853;margin-top:8px;border-radius:2px"></div>
+    </div>
+    """, unsafe_allow_html=True)
 
     # ----------------------------------------------------------
     # INFORME 1
