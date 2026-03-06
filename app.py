@@ -875,53 +875,111 @@ elif modulo == "📊 Informes":
                 df_inf1 = informe_rentabilidad(f_inicio, f_fin, f_local)
 
             if not df_inf1.empty:
-                # Métricas resumen
                 venta_total = df_inf1['venta'].sum()
                 costo_total = df_inf1['costo_total'].sum()
                 rent_total  = df_inf1['rentabilidad'].sum()
                 margen_gral = (rent_total / venta_total * 100) if venta_total > 0 else 0
 
                 m1, m2, m3, m4 = st.columns(4)
-                m1.metric("Venta Total", f"${venta_total:,.0f}")
-                m2.metric("Costo Teórico Total", f"${costo_total:,.0f}")
-                m3.metric("Rentabilidad Bruta", f"${rent_total:,.0f}")
-                m4.metric("Margen General", f"{margen_gral:.1f}%")
+                m1.metric("💰 Venta Total",        f"${venta_total:,.0f}")
+                m2.metric("📦 Costo Teórico",       f"${costo_total:,.0f}")
+                m3.metric("📈 Rentabilidad Bruta",  f"${rent_total:,.0f}")
+                m4.metric("🎯 Margen General",      f"{margen_gral:.1f}%")
 
-                st.markdown("#### Detalle por Producto")
+                st.markdown("<br>", unsafe_allow_html=True)
 
+                # --- Helpers badge ---
+                def badge_margen(val):
+                    if pd.isna(val): return '<span style="color:#555">—</span>'
+                    if val >= 60:
+                        return f'<span style="background:#1a3a2a;color:#4caf7d;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:.1f}%</span>'
+                    elif val >= 40:
+                        return f'<span style="background:#3a2a1a;color:#e89c45;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:.1f}%</span>'
+                    return f'<span style="background:#3a1a1a;color:#e84545;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:.1f}%</span>'
+
+                def fmt_rent(val):
+                    if val >= 0:
+                        return f'<span style="color:#4caf7d;font-weight:600">${val:,.0f}</span>'
+                    return f'<span style="color:#e84545;font-weight:600">${val:,.0f}</span>'
+
+                # --- Tabla detalle por producto ---
+                rows_html = ''
                 cols_show = ['sku_producto', 'categoria_menu', 'nombre_producto',
                              'cant', 'venta', 'costo_total', 'rentabilidad', 'margen_pct']
+                for _, r in df_inf1[cols_show].iterrows():
+                    margen = r.get('margen_pct', 0)
+                    bg = '#121e14' if margen >= 60 else '#1e1a12' if margen >= 40 else '#1e1212'
+                    rows_html += (
+                        f'<tr style="border-bottom:1px solid #1e1e1e;background:{bg}">'
+                        f'<td style="padding:10px 14px;color:#666;font-size:0.76rem;font-family:monospace">{r.get("sku_producto","")}</td>'
+                        f'<td style="padding:10px 14px;color:#555;font-size:0.8rem">{r.get("categoria_menu","")}</td>'
+                        f'<td style="padding:10px 14px;font-weight:500;color:#e8e4de">{r.get("nombre_producto","")}</td>'
+                        f'<td style="padding:10px 14px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">{r.get("cant",0):,.0f}</td>'
+                        f'<td style="padding:10px 14px;text-align:right;color:#ccc;font-variant-numeric:tabular-nums">${r.get("venta",0):,.0f}</td>'
+                        f'<td style="padding:10px 14px;text-align:right;color:#777;font-variant-numeric:tabular-nums">${r.get("costo_total",0):,.0f}</td>'
+                        f'<td style="padding:10px 14px;text-align:right;font-variant-numeric:tabular-nums">{fmt_rent(r.get("rentabilidad",0))}</td>'
+                        f'<td style="padding:10px 14px;text-align:center">{badge_margen(margen)}</td>'
+                        f'</tr>'
+                    )
 
-                st.dataframe(
-                    df_inf1[cols_show].style
-                        .applymap(semaforo_margen, subset=['margen_pct'])
-                        .format({
-                            'venta':       '${:,.0f}',
-                            'costo_total': '${:,.0f}',
-                            'rentabilidad':'${:,.0f}',
-                            'margen_pct':  '{:.1f}%',
-                            'cant':        '{:,.0f}'
-                        }),
-                    use_container_width=True,
-                    hide_index=True
+                hs = 'padding:11px 14px;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
+                tabla_html = (
+                    '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
+                    '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.84rem">'
+                    '<thead><tr style="background:#111">'
+                    f'<th style="{hs};text-align:left">SKU</th>'
+                    f'<th style="{hs};text-align:left">Categoría</th>'
+                    f'<th style="{hs};text-align:left">Producto</th>'
+                    f'<th style="{hs};text-align:right">Cant.</th>'
+                    f'<th style="{hs};text-align:right">Venta</th>'
+                    f'<th style="{hs};text-align:right">Costo</th>'
+                    f'<th style="{hs};text-align:right">Rentabilidad</th>'
+                    f'<th style="{hs};text-align:center">Margen</th>'
+                    f'</tr></thead><tbody>{rows_html}</tbody></table></div>'
                 )
+                st.markdown("#### Detalle por Producto")
+                st.markdown(tabla_html, unsafe_allow_html=True)
 
-                # Agrupado por categoría
+                # --- Resumen por Categoría ---
+                st.markdown("---")
                 st.markdown("#### Resumen por Categoría")
                 cat = df_inf1.groupby('categoria_menu').agg(
                     venta=('venta','sum'),
                     costo=('costo_total','sum'),
-                    rentabilidad=('rentabilidad','sum')
+                    rentabilidad=('rentabilidad','sum'),
+                    productos=('sku_producto','count')
                 ).reset_index()
                 cat['margen_pct'] = cat.apply(
-                    lambda r: r['rentabilidad']/r['venta']*100 if r['venta']>0 else 0, axis=1)
-                st.dataframe(
-                    cat.style
-                        .applymap(semaforo_margen, subset=['margen_pct'])
-                        .format({'venta':'${:,.0f}','costo':'${:,.0f}',
-                                 'rentabilidad':'${:,.0f}','margen_pct':'{:.1f}%'}),
-                    use_container_width=True, hide_index=True
+                    lambda r: r['rentabilidad']/r['venta']*100 if r['venta']>0 else 0, axis=1
+                ).round(1)
+                cat = cat.sort_values('rentabilidad', ascending=False)
+
+                cat_rows = ''
+                for _, r in cat.iterrows():
+                    cat_rows += (
+                        f'<tr style="border-bottom:1px solid #1e1e1e">'
+                        f'<td style="padding:10px 14px;font-weight:500;color:#e8e4de">{r["categoria_menu"]}</td>'
+                        f'<td style="padding:10px 14px;text-align:right;color:#aaa">{r["productos"]:,.0f}</td>'
+                        f'<td style="padding:10px 14px;text-align:right;color:#ccc;font-variant-numeric:tabular-nums">${r["venta"]:,.0f}</td>'
+                        f'<td style="padding:10px 14px;text-align:right;color:#777;font-variant-numeric:tabular-nums">${r["costo"]:,.0f}</td>'
+                        f'<td style="padding:10px 14px;text-align:right;font-variant-numeric:tabular-nums">{fmt_rent(r["rentabilidad"])}</td>'
+                        f'<td style="padding:10px 14px;text-align:center">{badge_margen(r["margen_pct"])}</td>'
+                        f'</tr>'
+                    )
+
+                cat_html = (
+                    '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
+                    '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.84rem">'
+                    '<thead><tr style="background:#111">'
+                    f'<th style="{hs};text-align:left">Categoría</th>'
+                    f'<th style="{hs};text-align:right">Productos</th>'
+                    f'<th style="{hs};text-align:right">Venta</th>'
+                    f'<th style="{hs};text-align:right">Costo</th>'
+                    f'<th style="{hs};text-align:right">Rentabilidad</th>'
+                    f'<th style="{hs};text-align:center">Margen</th>'
+                    f'</tr></thead><tbody>{cat_rows}</tbody></table></div>'
                 )
+                st.markdown(cat_html, unsafe_allow_html=True)
 
                 # Descarga
                 buf2 = io.BytesIO()
