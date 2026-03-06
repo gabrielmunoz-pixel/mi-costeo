@@ -1387,16 +1387,19 @@ elif modulo.startswith("📊"):
                 rows3 = ''
                 for _, r in df3.iterrows():
                     bg = '#1e1212' if (r['delta_dinero'] or 0) > 0 else '#121e14' if (r['delta_dinero'] or 0) < 0 else ''
-                    sin_p = ' <span style="color:#555;font-size:0.7rem">~</span>' if r.get('sin_precio_comp', False) else ''
+                    sin_p = r.get('sin_precio_comp', False)
+                    row_bg = bg if bg else ('rgba(13,30,60,0.6)' if sin_p else '')
+                    icono_cell = '<span style="color:#4a9eda;font-size:0.75rem">ℹ️ </span>' if sin_p else ''
+                    precio_comp_color = '#4a9eda' if sin_p else '#ccc'
                     rows3 += (
-                        f'<tr style="border-bottom:1px solid #1e1e1e;background:{bg}">'
+                        f'<tr style="border-bottom:1px solid #1e1e1e;background:{row_bg}">'
                         f'<td style="padding:10px 14px;color:#666;font-family:monospace;font-size:0.76rem">{r.get("sku","")}</td>'
-                        f'<td style="padding:10px 14px;font-weight:500;color:#e8e4de">{r.get("nombre","")}</td>'
+                        f'<td style="padding:10px 14px;font-weight:500;color:{"#4a9eda" if sin_p else "#e8e4de"}">{icono_cell}{r.get("nombre","")}</td>'
                         f'<td style="padding:10px 14px;color:#555;font-size:0.8rem">{r.get("categoria","")}</td>'
                         f'<td style="padding:10px 14px;color:#444;font-size:0.78rem">{r.get("subcat","")}</td>'
                         f'<td style="padding:10px 14px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">{r.get("cant_base",0):,.2f}</td>'
                         f'<td style="padding:10px 14px;text-align:right;color:#888;font-variant-numeric:tabular-nums">${r.get("precio_base",0):,.2f}</td>'
-                        f'<td style="padding:10px 14px;text-align:right;color:#ccc;font-variant-numeric:tabular-nums">${r.get("precio_comp",0):,.2f}{sin_p}</td>'
+                        f'<td style="padding:10px 14px;text-align:right;color:{precio_comp_color};font-variant-numeric:tabular-nums">${r.get("precio_comp",0):,.2f}</td>'
                         f'<td style="padding:10px 14px;text-align:right;color:#777;font-variant-numeric:tabular-nums">${r.get("impacto_base",0):,.0f}</td>'
                         f'<td style="padding:10px 14px;text-align:right;color:#e8e4de;font-variant-numeric:tabular-nums">${r.get("impacto_comp",0):,.0f}</td>'
                         f'<td style="padding:10px 14px;text-align:right">{fmt_d3(r.get("delta_dinero",0))}</td>'
