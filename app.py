@@ -432,6 +432,10 @@ def informe_desviacion(fecha_i, fecha_f, local):
     huevo_dir = dir_out[dir_out['sku_ingrediente'] == 'AL-AF-048']['consumo_parcial'].sum() if not dir_out.empty else 0
     huevo_exp = exp_out[exp_out['sku_ingrediente'] == 'AL-AF-048']['consumo_parcial'].sum() if not exp_out.empty else 0
     st.info(f"AUDIT HUEVO — dir_out: {huevo_dir:.2f} | exp_out: {huevo_exp:.2f} | total: {huevo_dir+huevo_exp:.2f}")
+    # Debug PRO-17 en merge_pro_agg
+    if not merge_pro.empty:
+        pro17 = merge_pro_agg[merge_pro_agg['sku_ingrediente'] == 'PRO-17']
+        st.info(f"AUDIT PRO-17 en merge_pro_agg: {len(pro17)} filas, ventas={pro17['cant_vendida'].sum():.0f}, cant_real={pro17['cant_real'].tolist()}, um_salida={pro17['um_salida'].tolist()}")
 
     # ---- CONSOLIDAR ----
     todo = pd.concat([df for df in [dir_out, exp_out] if not df.empty], ignore_index=True)
