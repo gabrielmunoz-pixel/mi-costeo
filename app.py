@@ -258,12 +258,12 @@ def calcular_costo_platos(engine, fecha_i, fecha_f, local):
     df_dir  = df_rec[df_rec['es_procesado'] == False].copy()
     df_proc = df_rec[df_rec['es_procesado'] == True].copy()
 
-    # ---- DIRECTOS: cant_efic × factor_um × precio_unitario ----
+    # ---- DIRECTOS: cant_real × factor_um × precio_unitario ----
     dir_m = pd.merge(df_dir, df_precio, left_on='sku_ingrediente', right_on='sku', how='left')
-    dir_m['cant_efic']      = pd.to_numeric(dir_m['cant_efic'], errors='coerce').fillna(0)
+    dir_m['cant_real']      = pd.to_numeric(dir_m['cant_real'], errors='coerce').fillna(0)
     dir_m['precio_unitario']= pd.to_numeric(dir_m['precio_unitario'], errors='coerce').fillna(0)
     dir_m['factor']         = dir_m['um_salida'].apply(factor_um)
-    dir_m['costo_parcial']  = dir_m['cant_efic'] * dir_m['factor'] * dir_m['precio_unitario']
+    dir_m['costo_parcial']  = dir_m['cant_real'] * dir_m['factor'] * dir_m['precio_unitario']
     costo_dir = dir_m.groupby('codigo_venta')['costo_parcial'].sum().reset_index()
 
     # ---- PROCESADOS: cant_efic × factor_um × precio_unitario ----
