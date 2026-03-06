@@ -1158,22 +1158,23 @@ elif modulo == "📊 Informes":
             else:
                 ventana = [m for m in [mes_ant2, mes_ant, mes_ref] if m is not None]
 
-            # Categorías disponibles
-            cats_q = run_query("SELECT DISTINCT subcat FROM compras WHERE subcat IN ('Directo','Indirecto') ORDER BY 1")
-            cats_disp = ['Todos'] + cats_q['subcat'].tolist() if not cats_q.empty else ['Todos']
+            # Categorías disponibles desde categoria_producto
+            cats_q = run_query("SELECT DISTINCT categoria_producto FROM compras WHERE subcat IN ('Directo','Indirecto') AND categoria_producto IS NOT NULL ORDER BY 1")
+            cats_disp = ['Todos'] + cats_q['categoria_producto'].tolist() if not cats_q.empty else ['Todos']
 
             with col_cat:
                 cat_sel = st.selectbox("Categoría", cats_disp)
 
             if st.button("▶ Generar Informe 3"):
                 # Query precios por mes
-                filtro_cat = f"AND subcat = '{cat_sel}'" if cat_sel != 'Todos' else ""
+                filtro_cat = f"AND categoria_producto = '{cat_sel}'" if cat_sel != 'Todos' else ""
                 fechas_in  = ", ".join([f"'{m.strftime('%Y-%m-%d')}'" for m in ventana])
 
                 q_precios = f"""
                     SELECT
                         sku,
                         MIN(nombre_producto) as nombre,
+                        MIN(categoria_producto) as categoria,
                         subcat,
                         DATE_TRUNC('month', fecha_dte::timestamp)::date as mes,
                         SUM(monto_real) / NULLIF(SUM(cant_conv), 0) as precio_prom
@@ -1195,7 +1196,7 @@ elif modulo == "📊 Informes":
                     meses_labels = {m: pd.Timestamp(m).strftime('%b %Y').capitalize() for m in meses_cols}
 
                     # Pivot: sku × mes → precio
-                    pivot = df_p.pivot_table(index=['sku','nombre','subcat'], columns='mes', values='precio_prom').reset_index()
+                    pivot = df_p.pivot_table(index=['sku','nombre','categoria','subcat'], columns='mes', values='precio_prom').reset_index()
                     pivot.columns = [meses_labels.get(c, c) if not isinstance(c, str) else c for c in pivot.columns]
                     mes_cols_str = [meses_labels[m] for m in meses_cols]
 
@@ -1206,12 +1207,12 @@ elif modulo == "📊 Informes":
 
                     # ---------- VISTA RESUMEN POR CATEGORÍA ----------
                     st.markdown("#### Resumen por Categoría")
-                    cat_res = df_p.groupby(['subcat','mes']).agg(
+                    cat_res = df_p.groupby(['categoria','mes']).agg(
                         precio_prom=('precio_prom','mean'),
                         skus=('sku','nunique')
                     ).reset_index()
                     cat_res['mes'] = pd.to_datetime(cat_res['mes'])
-                    cat_pivot = cat_res.pivot_table(index=['subcat','skus'], columns='mes', values='precio_prom').reset_index()
+                    cat_pivot = cat_res.pivot_table(index=['categoria','skus'], columns='mes', values='precio_prom').reset_index()
                     cat_pivot.columns = [meses_labels.get(c, c) if not isinstance(c, str) else c for c in cat_pivot.columns]
 
                     hs = 'padding:11px 14px;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
@@ -1237,7 +1238,7 @@ elif modulo == "📊 Informes":
                     cat_rows_html = ''
                     for _, r in cat_pivot.iterrows():
                         cat_rows_html += '<tr style="border-bottom:1px solid #1e1e1e">'
-                        cat_rows_html += f'<td style="padding:10px 14px;font-weight:500;color:#e8e4de">{r.get("subcat","")}</td>'
+                        cat_rows_html += f'<td style="padding:10px 14px;font-weight:500;color:#e8e4de">{r.get("categoria","")}</td>'
                         cat_rows_html += f'<td style="padding:10px 14px;text-align:right;color:#666">{int(r.get("skus",0)) if not pd.isna(r.get("skus",0)) else 0}</td>'
                         prev_val = None
                         for mc in mes_cols_str:
@@ -1275,13 +1276,13 @@ elif modulo == "📊 Informes":
                     if filtro_nom:
                         df_det = df_det[df_det['nombre'].str.lower().str.contains(filtro_nom, na=False)]
 
-                    det_hdrs = ['SKU', 'Ingrediente', 'Cat.'] + mes_cols_str
+                    det_hdrs = ['SKU', 'Ingrediente', 'Categoría'] + mes_cols_str
                     det_rows_html = ''
                     for _, r in df_det.iterrows():
                         det_rows_html += '<tr style="border-bottom:1px solid #1e1e1e">'
                         det_rows_html += f'<td style="padding:10px 14px;color:#666;font-family:monospace;font-size:0.76rem">{r.get("sku","")}</td>'
                         det_rows_html += f'<td style="padding:10px 14px;font-weight:500;color:#e8e4de">{r.get("nombre","")}</td>'
-                        det_rows_html += f'<td style="padding:10px 14px;color:#555;font-size:0.8rem">{r.get("subcat","")}</td>'
+                        det_rows_html += f'<td style="padding:10px 14px;color:#555;font-size:0.8rem">{r.get("categoria","")}</td>'
                         prev_val = None
                         for mc in mes_cols_str:
                             v = r.get(mc, None)
