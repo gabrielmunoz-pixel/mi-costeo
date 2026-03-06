@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import io
 from sqlalchemy import create_engine, text
 from datetime import datetime, date
@@ -645,21 +646,214 @@ def save_recetario(df_directos, df_procesados):
         st.error(f"Error al guardar recetario: {e}")
 
 
-def save_compras(df):
+# ============================================================
+# PROCESADO DE COMPRAS
+# ============================================================
+
+TASAS_IMP_ADIC = {
+    '271': 0.18,
+    '27':  0.10,
+    '26':  0.21,
+    '25':  0.21,
+    '24':  0.3155,
+    '19':  0.12,
+    '18':  0.05,
+}
+
+# Columnas mínimas que debe traer el archivo fuente
+COLS_REQUERIDAS = [
+    'local', 'fecha_dte', 'rut_proveedor', 'nombre_proveedor',
+    'tipo_dte', 'folio', 'nombre_producto',
+    'cantidad', 'total_item', 'codigo_impuesto', 'iva',
+    'descuento_global', 'recargo_global', 'total',
+    'sku', 'subcat', 'conversion', 'formato', 'categoria_producto',
+]
+
+def _normalizar_columnas(df: pd.DataFrame) -> pd.DataFrame:
+    """Limpia y normaliza los nombres de columna del Excel fuente."""
+    df = df.copy()
+    df.columns = (
+        df.columns
+        .str.strip()
+        .str.lower()
+        .str.replace(r'[\s]+', '_', regex=True)
+        .str.replace(r'[áàä]', 'a', regex=True)
+        .str.replace(r'[éèë]', 'e', regex=True)
+        .str.replace(r'[íìï]', 'i', regex=True)
+        .str.replace(r'[óòö]', 'o', regex=True)
+        .str.replace(r'[úùü]', 'u', regex=True)
+        .str.replace(r'[^a-z0-9_]', '_', regex=True)
+    )
+    # Alias frecuentes
+    aliases = {
+        'categoria_producto': ['categoria_producto', 'categoria producto', 'categoria'],
+        'recargo_global':     ['recargo_global', 'recargo global'],
+        'descuento_global':   ['descuento_global', 'descuento global'],
+        'codigo_impuesto':    ['codigo_impuesto', 'codigo impuesto', 'cod_impuesto'],
+    }
+    for canonical, variants in aliases.items():
+        for v in variants:
+            v_norm = v.replace(' ', '_')
+            if v_norm in df.columns and canonical not in df.columns:
+                df = df.rename(columns={v_norm: canonical})
+    return df
+
+
+def procesar_compras(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+    """
+    Recibe el DataFrame crudo del Excel de compras y devuelve
+    (df_procesado, lista_de_advertencias).
+
+    Columnas calculadas:
+        cant_conv       = cantidad × conversion
+        monto_real      = total_item  (negativo si tipo_dte == 61)
+        recargo2        = (Recargo_Global - Descuento_Global) × participación línea en folio
+        total_neto2     = monto_real + recargo2
+        imp_adic        = monto_real × tasa según codigo_impuesto
+        IVA_2           = total_neto2 × 0.19  (0 si IVA del folio == 0)
+        tootal2         = total_neto2 + imp_adic + IVA_2
+        costo_realfinal = tootal2 + despacho_distribuido + ajuste_redondeo  (0 en líneas de despacho)
+        MUC             = costo_realfinal / (cant_conv × formato)
+                          si formato == 1 → MUC = costo_realfinal / cant_conv
+    """
+    warnings = []
+    df = _normalizar_columnas(df_raw)
+
+    # ── Verificar columnas mínimas ──────────────────────────────────────────
+    faltantes = [c for c in COLS_REQUERIDAS if c not in df.columns]
+    if faltantes:
+        warnings.append(f"⚠️ Columnas no encontradas en el archivo: {', '.join(faltantes)}")
+
+    # ── Tipos básicos ────────────────────────────────────────────────────────
+    df['tipo_dte']        = pd.to_numeric(df.get('tipo_dte', 33), errors='coerce').fillna(33).astype(int)
+    df['total_item']      = pd.to_numeric(df.get('total_item', 0), errors='coerce').fillna(0)
+    df['cantidad']        = pd.to_numeric(df.get('cantidad', 1), errors='coerce').fillna(1)
+    df['conversion']      = pd.to_numeric(df.get('conversion', 1), errors='coerce').fillna(1)
+    df['formato']         = pd.to_numeric(df.get('formato', 1), errors='coerce').fillna(1)
+    df['recargo_global']  = pd.to_numeric(df.get('recargo_global', 0), errors='coerce').fillna(0)
+    df['descuento_global']= pd.to_numeric(df.get('descuento_global', 0), errors='coerce').fillna(0)
+    df['iva']             = pd.to_numeric(df.get('iva', 0), errors='coerce').fillna(0)
+    df['total']           = pd.to_numeric(df.get('total', 0), errors='coerce').fillna(0)
+
+    # ── PASO 1: cant_conv ────────────────────────────────────────────────────
+    df['cant_conv'] = df['cantidad'] * df['conversion']
+
+    # ── PASO 2: monto_real ───────────────────────────────────────────────────
+    df['monto_real'] = np.where(df['tipo_dte'] == 61, -df['total_item'], df['total_item'])
+
+    # ── PASO 3: recargo2  (distribución proporcional por folio) ─────────────
+    # participación = monto_real_línea / suma_monto_real_folio
+    df['_tot_folio'] = df.groupby('folio')['monto_real'].transform('sum')
+    df['_recargo_neto'] = df['recargo_global'] - df['descuento_global']
+    df['_part'] = np.where(df['_tot_folio'] != 0, df['monto_real'] / df['_tot_folio'], 0)
+    df['recargo2'] = df['_part'] * df['_recargo_neto']
+    df['total_neto2'] = df['monto_real'] + df['recargo2']
+
+    # ── PASO 4: imp_adic ─────────────────────────────────────────────────────
+    cod_str = (
+        df.get('codigo_impuesto', pd.Series([''] * len(df)))
+        .fillna('')
+        .astype(str)
+        .str.strip()
+        .str.replace(r'\.0$', '', regex=True)
+        .str.replace(r'^nan$', '', regex=True)
+    )
+    tasa = cod_str.map(TASAS_IMP_ADIC).fillna(0)
+    df['imp_adic'] = df['monto_real'] * tasa
+
+    # ── PASO 5: IVA_2  (por folio: si el folio tiene IVA registrado > 0) ────
+    df['_tiene_iva'] = df.groupby('folio')['iva'].transform('max') != 0
+    df['iva_2'] = np.where(df['_tiene_iva'], df['total_neto2'] * 0.19, 0)
+
+    # ── PASO 6: tootal2 ──────────────────────────────────────────────────────
+    df['tootal2'] = df['total_neto2'] + df['imp_adic'] + df['iva_2']
+
+    # ── PASO 7: identificar líneas de despacho ───────────────────────────────
+    nombre_lower = df['nombre_producto'].str.lower().fillna('')
+    df['_es_despacho'] = (
+        nombre_lower.str.contains('despacho', na=False) |
+        nombre_lower.str.contains('flete',    na=False) |
+        nombre_lower.str.contains('distribucion', na=False)
+    )
+
+    # ── PASO 8: Desp_Folio = suma(monto_real de líneas despacho) × 1.19 ─────
+    df['_desp_linea'] = np.where(df['_es_despacho'], df['monto_real'] * 1.19, 0)
+    df['_desp_folio'] = df.groupby('folio')['_desp_linea'].transform('sum')
+
+    # ── PASO 9: ajuste redondeo = Total_factura - suma(tootal2) del folio ────
+    df['_suma_tootal2_folio'] = df.groupby('folio')['tootal2'].transform('sum')
+    df['_total_factura']      = df.groupby('folio')['total'].transform('max')
+    df['_diferencia']         = df['_total_factura'] - df['_suma_tootal2_folio']
+
+    # desp+red2 por folio = Desp_Folio + diferencia
+    df['_desp_red2'] = df['_desp_folio'] + df['_diferencia']
+
+    # ── PASO 10: Part_Item (excluye despachos del denominador) ───────────────
+    df['_monto_limpio'] = np.where(df['_es_despacho'], 0, df['monto_real'].abs())
+    df['_tot_limpio_folio'] = df.groupby('folio')['_monto_limpio'].transform('sum')
+    df['_part_item'] = np.where(
+        df['_tot_limpio_folio'] != 0,
+        df['_monto_limpio'] / df['_tot_limpio_folio'],
+        0
+    )
+
+    # ── PASO 11: dist_desp = part_item × desp_red2  (redondeado a entero) ───
+    df['_dist_desp'] = (df['_part_item'] * df['_desp_red2']).round(0)
+
+    # ── PASO 12: costo_realfinal ─────────────────────────────────────────────
+    df['costo_realfinal'] = np.where(
+        df['_es_despacho'],
+        0,
+        df['tootal2'] + df['_dist_desp']
+    )
+
+    # ── PASO 13: MUC ─────────────────────────────────────────────────────────
+    denominador = np.where(
+        df['formato'] == 1,
+        df['cant_conv'],
+        df['cant_conv'] * df['formato']
+    )
+    df['muc'] = np.where(
+        (denominador != 0) & (~df['_es_despacho']),
+        df['costo_realfinal'] / denominador,
+        0
+    )
+
+    # ── Limpiar columnas temporales ──────────────────────────────────────────
+    cols_temp = [c for c in df.columns if c.startswith('_')]
+    df = df.drop(columns=cols_temp)
+
+    # ── Renombrar IVA_2 para consistencia con BD ─────────────────────────────
+    df = df.rename(columns={'iva_2': 'iva_2'})  # ya en minúsculas
+
+    # ── Advertencias sobre datos ─────────────────────────────────────────────
+    sin_sku = df['sku'].isna().sum() if 'sku' in df.columns else 0
+    if sin_sku > 0:
+        warnings.append(f"⚠️ {sin_sku} líneas sin SKU asignado.")
+    sin_conv = (df['conversion'] == 0).sum()
+    if sin_conv > 0:
+        warnings.append(f"⚠️ {sin_conv} líneas con Conversion = 0.")
+
+    return df, warnings
+
+
+def save_compras(df: pd.DataFrame):
+    """Guarda el DataFrame ya procesado en la tabla compras de Supabase."""
     engine = get_engine()
     if engine is None:
         return
-    df.columns = df.columns.str.strip().str.lower()
-    df.columns = [c.replace('suma de ', '').replace(' ', '_').replace('(', '').replace(')', '')
-                  for c in df.columns]
-    cols_req = ['local', 'fecha_dte', 'rut_proveedor', 'nombre_proveedor', 'tipo_dte',
-                'folio', 'nombre_producto', 'sku', 'subcat', 'codigo_impuesto',
-                'cantidad', 'conversion', 'formato', 'categoria_producto',
-                'cant_conv', 'monto_real', 'recargo2', 'total_neto2',
-                'imp_adic', 'iva_2', 'tootal2', 'costo_realfinal', 'muc']
+    cols_req = [
+        'local', 'fecha_dte', 'rut_proveedor', 'nombre_proveedor', 'tipo_dte',
+        'folio', 'nombre_producto', 'sku', 'subcat', 'codigo_impuesto',
+        'cantidad', 'conversion', 'formato', 'categoria_producto',
+        'cant_conv', 'monto_real', 'recargo2', 'total_neto2',
+        'imp_adic', 'iva_2', 'tootal2', 'costo_realfinal', 'muc'
+    ]
+    # Sólo guardar columnas que existen en el df
+    cols_ok = [c for c in cols_req if c in df.columns]
     try:
-        df[cols_req].to_sql('compras', engine, if_exists='append', index=False)
-        st.success(f"✅ {len(df)} registros de compras guardados.")
+        df[cols_ok].to_sql('compras', engine, if_exists='append', index=False)
+        st.success(f"✅ {len(df)} registros de compras guardados en la base de datos.")
     except Exception as e:
         st.error(f"Error al guardar compras: {e}")
 
@@ -823,10 +1017,138 @@ if modulo.startswith("📦"):
             st.dataframe(df_rec_view, use_container_width=True, hide_index=True)
 
     with tab2:
-        st.markdown("<div class='info-box'>Carga el Excel de facturas/compras. Se añade al historial existente (append).</div>", unsafe_allow_html=True)
-        f_comp = st.file_uploader("Excel de Compras (.xlsx)", type="xlsx", key="comp")
-        if f_comp and st.button("💾 Guardar Compras"):
-            save_compras(pd.read_excel(f_comp))
+        st.markdown("""
+        <div style="margin-bottom:1.5rem">
+            <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#555;margin-bottom:4px">Gestión de Datos</div>
+            <div style="font-family:'DM Serif Display',serif;font-size:2rem;color:#f0ede8;letter-spacing:-0.02em;line-height:1.1">
+                🧾 Procesado de Compras
+            </div>
+            <div style="font-size:0.8rem;color:#888;margin-top:4px">Carga · Procesa · Valida · Guarda</div>
+            <div style="width:40px;height:2px;background:#d4a853;margin-top:8px;border-radius:2px"></div>
+        </div>
+        """, unsafe_allow_html=True)
+        st.markdown("""
+        <div class='info-box'>
+        Carga el Excel de facturas del período. El sistema calcula automáticamente
+        <strong>cant_conv, monto_real, recargo2, imp_adic, IVA_2, tootal2, costo_realfinal y MUC</strong>,
+        distribuye despachos y ajusta redondeos antes de guardar en la base de datos.
+        </div>
+        """, unsafe_allow_html=True)
+
+        f_comp = st.file_uploader("📂 Excel de Compras fuente (.xlsx)", type="xlsx", key="comp")
+
+        if f_comp:
+            # ── Leer archivo ─────────────────────────────────────────────
+            if 'df_compras_procesado' not in st.session_state or \
+               st.session_state.get('comp_filename') != f_comp.name:
+                with st.spinner("Procesando archivo..."):
+                    df_raw = pd.read_excel(f_comp)
+                    df_proc, warns = procesar_compras(df_raw)
+                    st.session_state['df_compras_procesado'] = df_proc
+                    st.session_state['comp_warnings'] = warns
+                    st.session_state['comp_filename'] = f_comp.name
+
+            df_proc = st.session_state['df_compras_procesado']
+            warns   = st.session_state.get('comp_warnings', [])
+
+            # ── Advertencias ─────────────────────────────────────────────
+            for w in warns:
+                st.warning(w)
+
+            # ── Métricas resumen ─────────────────────────────────────────
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Líneas procesadas", f"{len(df_proc):,}")
+            with col2:
+                n_folios = df_proc['folio'].nunique() if 'folio' in df_proc.columns else 0
+                st.metric("Folios únicos", f"{n_folios:,}")
+            with col3:
+                tot = df_proc['costo_realfinal'].sum() if 'costo_realfinal' in df_proc.columns else 0
+                st.metric("Costo total procesado", f"${tot:,.0f}")
+            with col4:
+                n_desp = df_proc['nombre_producto'].str.lower().str.contains(
+                    'despacho|flete|distribucion', na=False).sum()
+                st.metric("Líneas despacho", f"{n_desp:,}")
+
+            st.markdown("---")
+
+            # ── Validador: comparar costo_realfinal vs Total factura ──────────
+            with st.expander("🔍 Validación por folio — Diferencias vs Total declarado", expanded=False):
+                if 'total' in df_proc.columns and 'folio' in df_proc.columns:
+                    # Separar por subcat para validación relevante
+                    subcat_col = next((c for c in df_proc.columns if 'subcat' in c.lower()), None)
+                    if subcat_col:
+                        df_mrp = df_proc[df_proc[subcat_col].isin(['Directo','Indirecto'])]
+                    else:
+                        df_mrp = df_proc
+
+                    val = df_mrp.groupby('folio').agg(
+                        total_declarado=('total', 'max'),
+                        costo_calculado=('costo_realfinal', 'sum')
+                    ).reset_index()
+                    val['diferencia'] = val['total_declarado'] - val['costo_calculado']
+                    val['dif_abs'] = val['diferencia'].abs()
+                    val_issues = val[val['dif_abs'] > 1].sort_values('dif_abs', ascending=False)
+
+                    c1v, c2v = st.columns(2)
+                    c1v.metric("Folios Directo/Indirecto", f"{val['folio'].nunique():,}")
+                    c2v.metric("Folios con diferencia > $1", f"{len(val_issues):,}")
+
+                    if val_issues.empty:
+                        st.success("✅ Todos los folios Directo/Indirecto cuadran con el total declarado.")
+                    else:
+                        st.warning(f"⚠️ {len(val_issues)} folio(s) con diferencia > $1")
+                        st.dataframe(
+                            val_issues[['folio','total_declarado','costo_calculado','diferencia']],
+                            use_container_width=True, hide_index=True
+                        )
+                    st.caption("ℹ️ Los folios de Administración (arriendos, seguros, etc.) pueden mostrar diferencias por ítems exentos mixtos — no afectan el MRP.")
+                else:
+                    st.info("No se encontró columna 'total' para validar.")
+
+            # ── Vista previa del resultado ────────────────────────────────
+            cols_preview = [
+                'local', 'fecha_dte', 'folio', 'nombre_producto', 'sku', 'subcat',
+                'cantidad', 'conversion', 'cant_conv',
+                'monto_real', 'recargo2', 'total_neto2',
+                'imp_adic', 'iva_2', 'tootal2', 'costo_realfinal', 'muc'
+            ]
+            cols_preview = [c for c in cols_preview if c in df_proc.columns]
+
+            st.markdown("#### Vista previa")
+            filtro_local_c = st.selectbox(
+                "Filtrar por local",
+                ["Todos"] + sorted(df_proc['local'].dropna().unique().tolist()) if 'local' in df_proc.columns else ["Todos"],
+                key="comp_filtro_local"
+            )
+            df_vista = df_proc if filtro_local_c == "Todos" else df_proc[df_proc['local'] == filtro_local_c]
+            st.caption(f"{len(df_vista):,} líneas")
+            st.dataframe(df_vista[cols_preview].head(500), use_container_width=True, hide_index=True)
+
+            st.markdown("---")
+
+            # ── Descargar resultado procesado ────────────────────────────
+            buf = io.BytesIO()
+            df_proc.to_excel(buf, index=False)
+            buf.seek(0)
+            st.download_button(
+                label="⬇️ Descargar Excel procesado",
+                data=buf,
+                file_name=f"compras_procesadas_{f_comp.name}",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+
+            # ── Guardar en base de datos ─────────────────────────────────
+            st.markdown("#### Guardar en base de datos")
+            st.markdown(
+                "<div class='info-box'>Al guardar se hace <strong>append</strong> — "
+                "asegúrate de no cargar el mismo período dos veces.</div>",
+                unsafe_allow_html=True
+            )
+            if st.button("💾 Guardar en base de datos", type="primary"):
+                save_compras(df_proc)
+        else:
+            st.info("Carga el archivo Excel fuente para comenzar el procesado.")
 
     with tab3:
         st.markdown("<div class='info-box'>Carga el historial de ventas exportado desde tu POS. Se añade al historial existente (append).</div>", unsafe_allow_html=True)
