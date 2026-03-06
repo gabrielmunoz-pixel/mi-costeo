@@ -856,7 +856,7 @@ elif modulo == "📊 Informes":
 
     informe_sel = st.radio(
         "Seleccionar informe",
-        ["Informe 1 — Rentabilidad por Producto", "Informe 2 — Desviación Real vs Teórico"],
+        ["Informe 1 — Rentabilidad por Producto", "Informe 2 — Desviación Real vs Teórico", "Informe 3 — Evolución de Precios"],
         horizontal=True,
         label_visibility="collapsed"
     )
@@ -991,7 +991,7 @@ elif modulo == "📊 Informes":
     # ----------------------------------------------------------
     # INFORME 2
     # ----------------------------------------------------------
-    else:
+    elif "Informe 2" in informe_sel:
         st.markdown("### 📉 Informe de Desviación")
         st.markdown(f"<div class='info-box'>Período: <b>{f_inicio}</b> → <b>{f_fin}</b> · Local: <b>{f_local}</b><br>Consumo teórico = ventas × CantReal. Comprado real = cant_conv de facturas. Variación % = (Comprado - Teórico) / Teórico × 100.</div>", unsafe_allow_html=True)
 
@@ -1119,3 +1119,195 @@ elif modulo == "📊 Informes":
                 with pd.ExcelWriter(buf3, engine='openpyxl') as w:
                     df_inf2[export_cols].to_excel(w, sheet_name='Desviacion', index=False)
                 st.download_button("📥 Descargar Excel", buf3.getvalue(), "Informe2_Desviacion.xlsx")
+
+    # ----------------------------------------------------------
+    # INFORME 3
+    # ----------------------------------------------------------
+    elif "Informe 3" in informe_sel:
+        st.markdown("### 📊 Evolución de Precios por Ingrediente")
+        st.markdown(f"<div class='info-box'>Ventana de 3 meses centrada en el mes seleccionado. Precio = promedio mensual (monto_real / cant_conv). Variación % vs mes anterior.</div>", unsafe_allow_html=True)
+
+        # Selector de mes de referencia
+        meses_disp = run_query("""
+            SELECT DISTINCT DATE_TRUNC('month', fecha_dte)::date as mes
+            FROM compras
+            WHERE subcat IN ('Directo','Indirecto')
+            ORDER BY 1
+        """)
+
+        if meses_disp.empty:
+            st.warning("No hay datos de compras disponibles.")
+        else:
+            meses_list = pd.to_datetime(meses_disp['mes']).tolist()
+            meses_fmt  = [m.strftime('%B %Y').capitalize() for m in meses_list]
+
+            col_mes, col_cat = st.columns([2, 2])
+            with col_mes:
+                mes_idx = st.selectbox("Mes de referencia", range(len(meses_fmt)),
+                                       format_func=lambda i: meses_fmt[i],
+                                       index=len(meses_list)-1)
+            mes_ref = meses_list[mes_idx]
+
+            # Calcular ventana de 3 meses
+            mes_sig = meses_list[mes_idx + 1] if mes_idx + 1 < len(meses_list) else None
+            mes_ant = meses_list[mes_idx - 1] if mes_idx - 1 >= 0 else None
+            mes_ant2 = meses_list[mes_idx - 2] if mes_idx - 2 >= 0 else None
+
+            if mes_sig:
+                ventana = [m for m in [mes_ant, mes_ref, mes_sig] if m is not None]
+            else:
+                ventana = [m for m in [mes_ant2, mes_ant, mes_ref] if m is not None]
+
+            # Categorías disponibles
+            cats_q = run_query("SELECT DISTINCT subcat FROM compras WHERE subcat IN ('Directo','Indirecto') ORDER BY 1")
+            cats_disp = ['Todos'] + cats_q['subcat'].tolist() if not cats_q.empty else ['Todos']
+
+            with col_cat:
+                cat_sel = st.selectbox("Categoría", cats_disp)
+
+            if st.button("▶ Generar Informe 3"):
+                # Query precios por mes
+                filtro_cat = f"AND subcat = '{cat_sel}'" if cat_sel != 'Todos' else ""
+                fechas_in  = ", ".join([f"'{m.strftime('%Y-%m-%d')}'" for m in ventana])
+
+                q_precios = f"""
+                    SELECT
+                        sku,
+                        MIN(nombre_producto) as nombre,
+                        subcat,
+                        DATE_TRUNC('month', fecha_dte)::date as mes,
+                        SUM(monto_real) / NULLIF(SUM(cant_conv), 0) as precio_prom
+                    FROM compras
+                    WHERE DATE_TRUNC('month', fecha_dte)::date IN ({fechas_in})
+                      AND subcat IN ('Directo','Indirecto')
+                      AND cant_conv > 0
+                      {filtro_cat}
+                    GROUP BY sku, subcat, DATE_TRUNC('month', fecha_dte)::date
+                    ORDER BY sku, mes
+                """
+                df_p = run_query(q_precios)
+
+                if df_p.empty:
+                    st.warning("Sin datos para los meses seleccionados.")
+                else:
+                    df_p['mes'] = pd.to_datetime(df_p['mes'])
+                    meses_cols = sorted(df_p['mes'].unique())
+                    meses_labels = {m: pd.Timestamp(m).strftime('%b %Y').capitalize() for m in meses_cols}
+
+                    # Pivot: sku × mes → precio
+                    pivot = df_p.pivot_table(index=['sku','nombre','subcat'], columns='mes', values='precio_prom').reset_index()
+                    pivot.columns = [meses_labels.get(c, c) if not isinstance(c, str) else c for c in pivot.columns]
+                    mes_cols_str = [meses_labels[m] for m in meses_cols]
+
+                    # Calcular Δ% entre columnas de mes disponibles
+                    for i in range(1, len(mes_cols_str)):
+                        prev_col = mes_cols_str[i-1]
+                        curr_col = mes_cols_str[i]
+                        delta_col = f'Δ% {curr_col}'
+                        if prev_col in pivot.columns and curr_col in pivot.columns:
+                            pivot[delta_col] = ((pivot[curr_col] - pivot[prev_col]) / pivot[prev_col].replace(0, None) * 100).round(1)
+
+                    # ---------- VISTA RESUMEN POR CATEGORÍA ----------
+                    st.markdown("#### Resumen por Categoría")
+                    cat_res = df_p.groupby(['subcat','mes']).agg(
+                        precio_prom=('precio_prom','mean'),
+                        skus=('sku','nunique')
+                    ).reset_index()
+                    cat_res['mes'] = pd.to_datetime(cat_res['mes'])
+                    cat_pivot = cat_res.pivot_table(index=['subcat','skus'], columns='mes', values='precio_prom').reset_index()
+                    cat_pivot.columns = [meses_labels.get(c, c) if not isinstance(c, str) else c for c in cat_pivot.columns]
+
+                    hs = 'padding:11px 14px;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
+
+                    def badge_delta(val):
+                        if val is None or (isinstance(val, float) and pd.isna(val)):
+                            return '<span style="color:#444">—</span>'
+                        if val > 10:
+                            return f'<span style="background:#3a1a1a;color:#e84545;padding:2px 7px;border-radius:10px;font-size:0.75rem;font-weight:600">{val:+.1f}%</span>'
+                        elif val > 3:
+                            return f'<span style="background:#3a2a1a;color:#e89c45;padding:2px 7px;border-radius:10px;font-size:0.75rem;font-weight:600">{val:+.1f}%</span>'
+                        elif val < -3:
+                            return f'<span style="background:#1a3a2a;color:#4caf7d;padding:2px 7px;border-radius:10px;font-size:0.75rem;font-weight:600">{val:+.1f}%</span>'
+                        return f'<span style="color:#aaa;font-size:0.75rem">{val:+.1f}%</span>'
+
+                    def fmt_precio(val):
+                        if val is None or (isinstance(val, float) and pd.isna(val)):
+                            return '<span style="color:#333">—</span>'
+                        return f'<span style="color:#ccc">${val:,.2f}</span>'
+
+                    # Tabla resumen categorías
+                    cat_hdrs = ['Categoría', 'SKUs'] + mes_cols_str
+                    cat_rows_html = ''
+                    for _, r in cat_pivot.iterrows():
+                        cat_rows_html += '<tr style="border-bottom:1px solid #1e1e1e">'
+                        cat_rows_html += f'<td style="padding:10px 14px;font-weight:500;color:#e8e4de">{r.get("subcat","")}</td>'
+                        cat_rows_html += f'<td style="padding:10px 14px;text-align:right;color:#666">{int(r.get("skus",0)) if not pd.isna(r.get("skus",0)) else 0}</td>'
+                        prev_val = None
+                        for mc in mes_cols_str:
+                            v = r.get(mc, None)
+                            delta_html = ''
+                            if prev_val is not None and v is not None and not pd.isna(v) and prev_val != 0:
+                                delta = (v - prev_val) / prev_val * 100
+                                delta_html = f' {badge_delta(delta)}'
+                            cat_rows_html += f'<td style="padding:10px 14px;text-align:right">{fmt_precio(v)}{delta_html}</td>'
+                            prev_val = v if (v is not None and not pd.isna(v)) else prev_val
+                        cat_rows_html += '</tr>'
+
+                    cat_table = (
+                        '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
+                        '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.84rem">'
+                        '<thead><tr style="background:#111">'
+                        + ''.join([f'<th style="{hs};text-align:{"left" if i<2 else "right"}">{h}</th>' for i, h in enumerate(cat_hdrs)])
+                        + f'</tr></thead><tbody>{cat_rows_html}</tbody></table></div>'
+                    )
+                    st.markdown(cat_table, unsafe_allow_html=True)
+
+                    # ---------- FILTROS + TABLA DETALLE ----------
+                    st.markdown("---")
+                    st.markdown("#### Detalle por Ingrediente")
+
+                    fc1, fc2 = st.columns(2)
+                    with fc1:
+                        filtro_sku  = st.text_input("🔍 Filtrar por SKU", "").strip().upper()
+                    with fc2:
+                        filtro_nom  = st.text_input("🔍 Filtrar por nombre", "").strip().lower()
+
+                    df_det = pivot.copy()
+                    if filtro_sku:
+                        df_det = df_det[df_det['sku'].str.upper().str.contains(filtro_sku, na=False)]
+                    if filtro_nom:
+                        df_det = df_det[df_det['nombre'].str.lower().str.contains(filtro_nom, na=False)]
+
+                    det_hdrs = ['SKU', 'Ingrediente', 'Cat.'] + mes_cols_str
+                    det_rows_html = ''
+                    for _, r in df_det.iterrows():
+                        det_rows_html += '<tr style="border-bottom:1px solid #1e1e1e">'
+                        det_rows_html += f'<td style="padding:10px 14px;color:#666;font-family:monospace;font-size:0.76rem">{r.get("sku","")}</td>'
+                        det_rows_html += f'<td style="padding:10px 14px;font-weight:500;color:#e8e4de">{r.get("nombre","")}</td>'
+                        det_rows_html += f'<td style="padding:10px 14px;color:#555;font-size:0.8rem">{r.get("subcat","")}</td>'
+                        prev_val = None
+                        for mc in mes_cols_str:
+                            v = r.get(mc, None)
+                            delta_html = ''
+                            if prev_val is not None and v is not None and not pd.isna(v) and prev_val != 0:
+                                delta = (v - prev_val) / prev_val * 100
+                                delta_html = f'<br>{badge_delta(delta)}'
+                            det_rows_html += f'<td style="padding:10px 14px;text-align:right;vertical-align:middle">{fmt_precio(v)}{delta_html}</td>'
+                            prev_val = v if (v is not None and not pd.isna(v)) else prev_val
+                        det_rows_html += '</tr>'
+
+                    det_table = (
+                        '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
+                        '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.84rem">'
+                        '<thead><tr style="background:#111">'
+                        + ''.join([f'<th style="{hs};text-align:{"left" if i<3 else "right"}">{h}</th>' for i, h in enumerate(det_hdrs)])
+                        + f'</tr></thead><tbody>{det_rows_html}</tbody></table></div>'
+                    )
+                    st.markdown(det_table, unsafe_allow_html=True)
+
+                    # Descarga
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    buf4 = io.BytesIO()
+                    with pd.ExcelWriter(buf4, engine='openpyxl') as w:
+                        pivot.to_excel(w, sheet_name='Precios', index=False)
+                    st.download_button("📥 Descargar Excel", buf4.getvalue(), "Informe3_Precios.xlsx")
