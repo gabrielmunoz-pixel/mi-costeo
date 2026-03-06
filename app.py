@@ -463,14 +463,13 @@ def informe_desviacion(fecha_i, fecha_f, local):
     q_c = f"""
         SELECT
             sku,
-            subcat,
             SUM(cant_conv) AS cant_real_comprada,
             AVG(muc) AS muc_promedio
         FROM compras
         WHERE fecha_dte::date BETWEEN :i AND :f
-          AND subcat IN ('Directo', 'Indirecto')
+          AND subcat = 'Directo'
         {filtro_local_c}
-        GROUP BY 1, 2
+        GROUP BY 1
     """
     df_c = run_query(q_c, params_c)
 
@@ -479,13 +478,12 @@ def informe_desviacion(fecha_i, fecha_f, local):
         q_c2 = f"""
             SELECT
                 sku,
-                subcat,
                 SUM(cant_conv) AS cant_real_comprada,
                 AVG(muc) AS muc_promedio
             FROM compras
-            WHERE subcat IN ('Directo', 'Indirecto')
+            WHERE subcat = 'Directo'
             {filtro_local_c}
-            GROUP BY 1, 2
+            GROUP BY 1
         """
         df_c = run_query(q_c2, params_c)
         if not df_c.empty:
@@ -496,8 +494,8 @@ def informe_desviacion(fecha_i, fecha_f, local):
     if not df_equiv.empty:
         dict_equiv = dict(zip(df_equiv['sku_compra'], df_equiv['sku_receta']))
         df_c['sku'] = df_c['sku'].map(lambda x: dict_equiv.get(x, x))
-        # Re-agrupar por si hay múltiples SKUs que ahora apuntan al mismo
-        df_c = df_c.groupby(['sku', 'subcat'], as_index=False).agg({
+        # Re-agrupar consolidando equivalencias (sin subcat para no fragmentar)
+        df_c = df_c.groupby('sku', as_index=False).agg({
             'cant_real_comprada': 'sum',
             'muc_promedio': 'mean'
         })
@@ -521,11 +519,23 @@ def informe_desviacion(fecha_i, fecha_f, local):
             if sku_dest not in dict_nombres and sku_orig in dict_nombres:
                 dict_nombres[sku_dest] = dict_nombres[sku_orig]
 
+    # Subcat por SKU (para categorización en informe)
+    df_subcat = run_query("""
+        SELECT sku, MIN(subcat) as subcat
+        FROM compras
+        WHERE subcat IN ('Directo','Indirecto')
+        GROUP BY sku
+    """)
+    dict_subcat = dict(zip(df_subcat['sku'], df_subcat['subcat'])) if not df_subcat.empty else {}
+
     informe = pd.merge(
         cons_teo, df_c,
         left_on='sku_ingrediente', right_on='sku', how='outer'
     )
     informe = informe.fillna(0)
+    informe['subcat'] = informe.apply(
+        lambda r: dict_subcat.get(str(r['sku_ingrediente']), dict_subcat.get(str(r['sku']), '')), axis=1
+    )
 
     # SKU final: unificar sku_ingrediente y sku en una sola columna
     informe['sku_final'] = informe.apply(
