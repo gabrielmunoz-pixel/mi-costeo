@@ -705,11 +705,89 @@ with st.sidebar:
 
     st.divider()
 
-    modulo = st.radio(
-        "Módulo",
-        ["📦 Gestión de Datos", "🧮 Explosión MRP", "📊 Informes"],
-        label_visibility="collapsed"
-    )
+    # Menú en cascada elegante
+    menu_items = {
+        "📦 Gestión de Datos": ["Recetario", "Compras", "Ventas", "Equivalencias SKU"],
+        "🧮 Explosión MRP":    [],
+        "📊 Informes":         ["Rentabilidad", "Desviación", "Product Mix"],
+    }
+
+    if 'menu_abierto' not in st.session_state:
+        st.session_state['menu_abierto'] = None
+    if 'modulo' not in st.session_state:
+        st.session_state['modulo'] = "📦 Gestión de Datos"
+
+    st.markdown("""
+    <style>
+    div[data-testid="stSidebar"] .menu-item {
+        display: block; width: 100%; text-align: left;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    for item, subitems in menu_items.items():
+        es_activo = st.session_state['modulo'].startswith(item[:3])
+        bg_item   = '#1f1f1f' if es_activo else 'transparent'
+        borde     = 'border-left: 2px solid #d4a853;' if es_activo else 'border-left: 2px solid transparent;'
+
+        col_btn, col_arrow = st.sidebar.columns([9, 1])
+        with col_btn:
+            if st.button(
+                item,
+                key=f"menu_{item}",
+                use_container_width=True,
+            ):
+                if st.session_state['menu_abierto'] == item:
+                    st.session_state['menu_abierto'] = None
+                else:
+                    st.session_state['menu_abierto'] = item
+                    st.session_state['modulo'] = item
+
+        # Subitems en cascada
+        if subitems and st.session_state['menu_abierto'] == item:
+            for sub in subitems:
+                sub_key = f"{item} — {sub}"
+                es_sub_activo = st.session_state['modulo'] == sub_key
+                color_sub = '#d4a853' if es_sub_activo else '#888'
+                st.sidebar.markdown(
+                    f"""<div style="
+                        padding: 6px 12px 6px 28px;
+                        font-size: 0.82rem;
+                        color: {color_sub};
+                        letter-spacing: 0.03em;
+                        cursor: pointer;
+                        border-left: 1px solid #2a2a2a;
+                        margin-left: 8px;
+                    ">{'▸ ' if es_sub_activo else '· '}{sub}</div>""",
+                    unsafe_allow_html=True
+                )
+                if st.sidebar.button(sub, key=f"sub_{sub_key}", use_container_width=True,
+                                     label_visibility="collapsed"):
+                    st.session_state['modulo'] = sub_key
+
+    modulo = st.session_state['modulo']
+
+    # CSS para estilizar botones del menú
+    st.markdown("""
+    <style>
+    section[data-testid="stSidebar"] button[kind="secondary"] {
+        background: transparent !important;
+        border: none !important;
+        border-radius: 6px !important;
+        color: #c8c4be !important;
+        font-size: 0.88rem !important;
+        font-weight: 500 !important;
+        text-align: left !important;
+        padding: 8px 12px !important;
+        transition: all 0.15s !important;
+        letter-spacing: 0.02em !important;
+    }
+    section[data-testid="stSidebar"] button[kind="secondary"]:hover {
+        background: #1f1f1f !important;
+        color: #d4a853 !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
     st.divider()
     st.markdown("<div style='font-size:0.75rem; color:#666; text-transform:uppercase; letter-spacing:0.08em;'>Filtros globales</div>", unsafe_allow_html=True)
@@ -723,7 +801,7 @@ with st.sidebar:
 # ============================================================
 # MÓDULO: GESTIÓN DE DATOS
 # ============================================================
-if modulo == "📦 Gestión de Datos":
+if modulo.startswith("📦"):
     st.markdown("<div class='section-title'>Gestión de Datos</div>", unsafe_allow_html=True)
 
     tab1, tab2, tab3, tab4 = st.tabs(["📖 Recetario", "🛒 Compras", "📈 Ventas", "🔀 Equivalencias SKU"])
@@ -809,7 +887,7 @@ if modulo == "📦 Gestión de Datos":
 # ============================================================
 # MÓDULO: EXPLOSIÓN MRP
 # ============================================================
-elif modulo == "🧮 Explosión MRP":
+elif modulo.startswith("🧮"):
     st.markdown("<div class='section-title'>Explosión MRP</div>", unsafe_allow_html=True)
     st.markdown("<div class='info-box'>Sube el Excel con las hojas <b>Ventas</b>, <b>Directos</b> y <b>Procesados</b>. La lógica de cálculo es la versión validada.</div>", unsafe_allow_html=True)
 
@@ -851,7 +929,7 @@ elif modulo == "🧮 Explosión MRP":
 # ============================================================
 # MÓDULO: INFORMES
 # ============================================================
-elif modulo == "📊 Informes":
+elif modulo.startswith("📊"):
     st.markdown("<div class='section-title'>Informes</div>", unsafe_allow_html=True)
 
     informe_sel = st.radio(
