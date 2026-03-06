@@ -228,40 +228,54 @@ def process_bom(df_v, df_d, df_p):
 def calcular_costo_platos(engine, fecha_i, fecha_f, local):
     """
     Devuelve DataFrame con costo teórico por código de venta (plato).
-    Usa último MUC de compras dentro del período (o el último histórico si no hay en período).
+    Precio unitario = monto_real / cant_conv (último registro por SKU).
+    Aplica factor_um para convertir unidades del recetario a unidades de compra.
     """
-    # Último MUC por SKU (último registro histórico, ordenado por fecha_dte)
-    muc_sql = """
-        SELECT DISTINCT ON (sku) sku, muc
+    # Precio unitario real = monto_real / cant_conv (último registro por SKU)
+    precio_sql = """
+        SELECT DISTINCT ON (sku) sku,
+               monto_real / NULLIF(cant_conv, 0) as precio_unitario
         FROM compras
+        WHERE cant_conv > 0
         ORDER BY sku, fecha_dte DESC
     """
-    df_muc = run_query(muc_sql)
-    if df_muc.empty:
+    df_precio = run_query(precio_sql)
+    if df_precio.empty:
         return pd.DataFrame()
+
+    # Factor conversión unidades: G/CC/ML → /1000, resto → 1
+    def factor_um(um):
+        if pd.isna(um): return 1
+        um = str(um).strip().upper()
+        if um in ['G', 'CC', 'ML']: return 1/1000
+        return 1
 
     # Recetario completo
     df_rec = run_query("SELECT * FROM recetas")
     if df_rec.empty:
         return pd.DataFrame()
 
-    # Separar directos y procesados
     df_dir  = df_rec[df_rec['es_procesado'] == False].copy()
     df_proc = df_rec[df_rec['es_procesado'] == True].copy()
 
-    # ---- DIRECTOS: cant_real × MUC ----
-    dir_m = pd.merge(df_dir, df_muc, left_on='sku_ingrediente', right_on='sku', how='left')
-    dir_m['costo_parcial'] = dir_m['cant_real'] * dir_m['muc'].fillna(0)
+    # ---- DIRECTOS: cant_efic × factor_um × precio_unitario ----
+    dir_m = pd.merge(df_dir, df_precio, left_on='sku_ingrediente', right_on='sku', how='left')
+    dir_m['cant_efic']      = pd.to_numeric(dir_m['cant_efic'], errors='coerce').fillna(0)
+    dir_m['precio_unitario']= pd.to_numeric(dir_m['precio_unitario'], errors='coerce').fillna(0)
+    dir_m['factor']         = dir_m['um_salida'].apply(factor_um)
+    dir_m['costo_parcial']  = dir_m['cant_efic'] * dir_m['factor'] * dir_m['precio_unitario']
     costo_dir = dir_m.groupby('codigo_venta')['costo_parcial'].sum().reset_index()
 
-    # ---- PROCESADOS: cant_efic × MUC ----
-    proc_m = pd.merge(df_proc, df_muc, left_on='sku_ingrediente', right_on='sku', how='left')
-    proc_m['cant_efic'] = pd.to_numeric(proc_m['cant_efic'], errors='coerce').fillna(0)
-    proc_m['costo_parcial'] = proc_m['cant_efic'] * proc_m['muc'].fillna(0)
+    # ---- PROCESADOS: cant_efic × factor_um × precio_unitario ----
+    proc_m = pd.merge(df_proc, df_precio, left_on='sku_ingrediente', right_on='sku', how='left')
+    proc_m['cant_efic']      = pd.to_numeric(proc_m['cant_efic'], errors='coerce').fillna(0)
+    proc_m['precio_unitario']= pd.to_numeric(proc_m['precio_unitario'], errors='coerce').fillna(0)
+    proc_m['factor']         = proc_m['um_salida'].apply(factor_um)
+    proc_m['costo_parcial']  = proc_m['cant_efic'] * proc_m['factor'] * proc_m['precio_unitario']
     costo_proc = proc_m.groupby('codigo_venta')['costo_parcial'].sum().reset_index()
 
     # ---- Combinar ----
-    costo_total = pd.concat([costo_dir, costo_proc], ignore_index=True)
+    costo_total  = pd.concat([costo_dir, costo_proc], ignore_index=True)
     costo_platos = costo_total.groupby('codigo_venta')['costo_parcial'].sum().reset_index()
     costo_platos.columns = ['sku_producto', 'costo_unitario_teorico']
 
