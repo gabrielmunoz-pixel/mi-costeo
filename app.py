@@ -1640,6 +1640,7 @@ elif modulo.startswith("📊"):
                         LEFT JOIN equiv e ON c.sku = e.sku_compra
                         WHERE c.fecha_dte::date BETWEEN '{base_i}' AND '{base_f}'
                           AND c.subcat IN ('Directo','Indirecto')
+                          AND c.costo_realfinal > 0
                           {filtro_cat3}
                         GROUP BY 1
                     ),
@@ -1651,10 +1652,7 @@ elif modulo.startswith("📊"):
                         LEFT JOIN equiv e ON c.sku = e.sku_compra
                         WHERE c.fecha_dte::date BETWEEN '{comp_i}' AND '{comp_f}'
                           AND c.subcat IN ('Directo','Indirecto')
-                        GROUP BY 1
-                    )
-                    SELECT
-                        b.sku, b.nombre, b.subcat, b.categoria,
+                          AND c.costo_realfinal > 0
                         b.cant_base, b.precio_base,
                         c.precio_comp,
                         b.cant_base * b.precio_base as impacto_base,
