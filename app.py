@@ -1635,7 +1635,7 @@ elif modulo.startswith("📊"):
                             MIN(c.subcat) as subcat,
                             MIN(c.categoria_producto) as categoria,
                             SUM(c.cant_conv) as cant_base,
-                            SUM(c.monto_real) / NULLIF(SUM(c.cant_conv), 0) as precio_base
+                            SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv), 0) as precio_base
                         FROM compras c
                         LEFT JOIN equiv e ON c.sku = e.sku_compra
                         WHERE c.fecha_dte::date BETWEEN '{base_i}' AND '{base_f}'
@@ -1646,7 +1646,7 @@ elif modulo.startswith("📊"):
                     comp AS (
                         SELECT
                             COALESCE(e.sku_receta, c.sku) as sku,
-                            SUM(c.monto_real) / NULLIF(SUM(c.cant_conv), 0) as precio_comp
+                            SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv), 0) as precio_comp
                         FROM compras c
                         LEFT JOIN equiv e ON c.sku = e.sku_compra
                         WHERE c.fecha_dte::date BETWEEN '{comp_i}' AND '{comp_f}'
