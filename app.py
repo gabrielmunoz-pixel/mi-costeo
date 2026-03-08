@@ -1633,7 +1633,7 @@ elif modulo.startswith("📊"):
                         SELECT
                             c.sku,
                             c.nombre_producto                                                          AS nombre,
-                            MIN(c.proveedor)                                                           AS proveedor,
+                            MIN(c.nombre_proveedor)                                                    AS proveedor,
                             MIN(c.categoria_producto)                                                  AS categoria,
                             SUM(c.cant_conv)                                                           AS cant_base,
                             SUM(c.costo_realfinal) / NULLIF(SUM(c.costo_realfinal / NULLIF(c.muc,0)),0) AS precio_base
