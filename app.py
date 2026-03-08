@@ -1279,8 +1279,8 @@ if modulo.startswith("📦"):
                     c.cant_conv,
                     c.monto_real,
                     c.costo_realfinal,
-                    ROUND((c.costo_realfinal / NULLIF(c.cant_conv, 0))::numeric, 2)                     AS precio_unit,
-                    ROUND((m.muc_mediana * NULLIF(c.formato, 0))::numeric, 2)                           AS precio_unit_mediana,
+                    ROUND((c.costo_realfinal / NULLIF(c.cant_conv, 0))::numeric, 2)        AS precio_unit,
+                    ROUND((c.monto_real      / NULLIF(c.cant_conv, 0))::numeric, 2)        AS precio_factura,
                     c.muc,
                     m.muc_mediana,
                     ROUND((c.muc / NULLIF(m.muc_mediana, 0))::numeric, 2) AS ratio_vs_mediana,
@@ -1431,7 +1431,7 @@ if modulo.startswith("📦"):
                         buf_audit = io.BytesIO()
                         export_cols = ['fecha','local','folio','sku','nombre_producto','proveedor',
                                        'categoria','cantidad','conversion','formato','cant_conv',
-                                       'precio_unit_mediana','precio_unit',
+                                       'precio_factura','precio_unit',
                                        'muc_mediana','muc','ratio_vs_mediana','n_registros']
                         export_cols_exist = [c for c in export_cols if c in df_audit.columns]
                         with pd.ExcelWriter(buf_audit, engine='openpyxl') as w:
@@ -1466,8 +1466,8 @@ if modulo.startswith("📦"):
                         f'<td style="padding:9px 12px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">{r.get("cantidad","")}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#888;font-variant-numeric:tabular-nums">{r.get("conversion","")}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#888;font-variant-numeric:tabular-nums">{r.get("formato","")}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">${float(r.get("precio_unit_mediana",0) or 0):,.0f}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:{sev_color};font-weight:600;font-variant-numeric:tabular-nums">${float(r.get("precio_unit",0) or 0):,.0f}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">${float(r.get("precio_factura",0) or 0):,.2f}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:{sev_color};font-weight:600;font-variant-numeric:tabular-nums">${float(r.get("precio_unit",0) or 0):,.2f}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#4caf7d;font-variant-numeric:tabular-nums">{float(r.get("muc_mediana",0) or 0):,.4f}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:{sev_color};font-weight:600;font-variant-numeric:tabular-nums">{float(r.get("muc",0) or 0):,.4f}</td>'
                         f'<td style="padding:9px 12px;text-align:center;color:{sev_color};font-weight:600">{ratio:,.1f}×</td>'
@@ -1478,7 +1478,7 @@ if modulo.startswith("📦"):
 
                 hdrs_a = ['Fecha','Local','SKU','Producto','Proveedor','Cant.',
                           'Conv.','Formato',
-                          'P/u Esperado','P/u Real',
+                          'Neto Factura/u','Costo Final/u',
                           'MUC Esperado','MUC Real','Ratio','Severidad','Rev.']
                 tabla_a = (
                     '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
