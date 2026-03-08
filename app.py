@@ -1412,8 +1412,8 @@ if modulo.startswith("📦"):
                                                        "ids": ids_lote})
                                                 conn.commit()
                                             st.success(f"✅ {len(ids_lote)} registros corregidos — recalculando auditoría...")
-                                            # Borrar caché para re-ejecutar desde BD con datos frescos
                                             del st.session_state['audit_df']
+                                            st.session_state.pop('audit_grupo_sel', None)
                                             st.rerun()
                                         except Exception as e:
                                             st.error(f"Error: {e}")
