@@ -1314,23 +1314,134 @@ if modulo.startswith("📦"):
 
                 st.markdown("<br>", unsafe_allow_html=True)
 
-                # Tabla interactiva
+                # ── Acciones ARRIBA de la tabla ──────────────────────────
+                ids_disp    = df_audit['id'].astype(str).tolist() if 'id' in df_audit.columns else []
+                nombres_disp = (df_audit['sku'] + ' — ' + df_audit['nombre_producto']).tolist()
+
+                # Construir grupos por SKU + conversion + formato para corrección en lote
+                if not df_audit.empty:
+                    df_audit['_grupo'] = (
+                        df_audit['sku'].astype(str) + ' | conv=' +
+                        df_audit['conversion'].astype(str) + ' | fmt=' +
+                        df_audit['formato'].astype(str)
+                    )
+                    grupos = df_audit.groupby('_grupo').agg(
+                        sku        = ('sku', 'first'),
+                        nombre     = ('nombre_producto', 'first'),
+                        conversion = ('conversion', 'first'),
+                        formato    = ('formato', 'first'),
+                        n_filas    = ('id', 'count'),
+                        ids        = ('id', list)
+                    ).reset_index()
+                    grupos['label'] = grupos.apply(
+                        lambda r: f"{r['sku']} — {r['nombre'][:40]} ({r['n_filas']} reg.)", axis=1
+                    )
+                else:
+                    grupos = pd.DataFrame()
+
+                with st.expander("⚙️ Acciones", expanded=True):
+                    acc1, acc2, acc3 = st.columns([3, 3, 2])
+
+                    # ── Corrección en lote ──
+                    with acc1:
+                        st.markdown("**Corregir grupo (lote)**")
+                        if not grupos.empty:
+                            grupo_labels = grupos['label'].tolist()
+                            grupo_sel_idx = st.selectbox("Grupo SKU + parámetros",
+                                                          range(len(grupo_labels)),
+                                                          format_func=lambda i: grupo_labels[i],
+                                                          key='audit_grupo_sel')
+                            grupo_row = grupos.iloc[grupo_sel_idx]
+                            lc1, lc2 = st.columns(2)
+                            with lc1:
+                                nuevo_conv_lote = st.number_input("Nueva conversion",
+                                    value=float(grupo_row['conversion'] or 1),
+                                    min_value=0.001, step=0.1, key='audit_conv_lote')
+                            with lc2:
+                                nuevo_fmt_lote = st.number_input("Nuevo formato",
+                                    value=float(grupo_row['formato'] or 1),
+                                    min_value=0.001, step=1.0, key='audit_fmt_lote')
+                            st.caption(f"Afecta **{int(grupo_row['n_filas'])}** registros")
+                            if st.button("💾 Aplicar a todo el grupo"):
+                                engine = get_engine()
+                                ids_lote = [int(i) for i in grupo_row['ids']]
+                                try:
+                                    with engine.connect() as conn:
+                                        conn.execute(text("""
+                                            UPDATE compras SET
+                                                conversion = :conv,
+                                                formato    = :fmt,
+                                                cant_conv  = cantidad * :conv,
+                                                muc        = CASE WHEN :fmt = 1
+                                                             THEN costo_realfinal / NULLIF(cantidad * :conv, 0)
+                                                             ELSE costo_realfinal / NULLIF(cantidad * :conv * :fmt, 0)
+                                                             END
+                                            WHERE id = ANY(:ids)
+                                        """), {"conv": nuevo_conv_lote, "fmt": nuevo_fmt_lote,
+                                               "ids": ids_lote})
+                                        conn.commit()
+                                    st.success(f"✅ {len(ids_lote)} registros corregidos")
+                                    # Actualizar df en session_state sin re-ejecutar auditoría
+                                    mask = st.session_state['audit_df']['id'].isin(ids_lote)
+                                    st.session_state['audit_df'].loc[mask, 'conversion'] = nuevo_conv_lote
+                                    st.session_state['audit_df'].loc[mask, 'formato']    = nuevo_fmt_lote
+                                    cant_conv_nuevo = st.session_state['audit_df'].loc[mask, 'cantidad'] * nuevo_conv_lote
+                                    costo           = st.session_state['audit_df'].loc[mask, 'cant_conv'] * st.session_state['audit_df'].loc[mask, 'muc']
+                                    if nuevo_fmt_lote == 1:
+                                        st.session_state['audit_df'].loc[mask, 'muc'] = costo / cant_conv_nuevo.replace(0, np.nan)
+                                    else:
+                                        st.session_state['audit_df'].loc[mask, 'muc'] = costo / (cant_conv_nuevo * nuevo_fmt_lote).replace(0, np.nan)
+                                    st.session_state['audit_df'].loc[mask, 'cant_conv'] = cant_conv_nuevo
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
+
+                    # ── Marcar revisado ──
+                    with acc2:
+                        st.markdown("**Marcar revisado**")
+                        # Marcar grupo completo
+                        if not grupos.empty:
+                            grupo_rev_idx = st.selectbox("Marcar grupo como revisado",
+                                                          range(len(grupo_labels)),
+                                                          format_func=lambda i: grupo_labels[i],
+                                                          key='audit_rev_grupo')
+                            if st.button("✅ Marcar grupo revisado"):
+                                ids_rev = [str(i) for i in grupos.iloc[grupo_rev_idx]['ids']]
+                                st.session_state['audit_revisados'].update(ids_rev)
+                                st.rerun()
+                        if st.button("🔄 Limpiar todos los revisados"):
+                            st.session_state['audit_revisados'] = set()
+                            st.rerun()
+
+                    # ── Exportar ──
+                    with acc3:
+                        st.markdown("**Exportar**")
+                        buf_audit = io.BytesIO()
+                        export_cols = ['fecha','local','folio','sku','nombre_producto','proveedor',
+                                       'categoria','cantidad','conversion','formato',
+                                       'cant_conv','muc','muc_mediana','ratio_vs_mediana','n_registros']
+                        export_cols_exist = [c for c in export_cols if c in df_audit.columns]
+                        with pd.ExcelWriter(buf_audit, engine='openpyxl') as w:
+                            df_audit[export_cols_exist].to_excel(w, sheet_name='Inconsistencias', index=False)
+                        st.download_button("📥 Descargar Excel", buf_audit.getvalue(),
+                                           "Auditoria_Compras.xlsx",
+                                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                # ── Tabla ────────────────────────────────────────────────
                 hs_a = 'padding:9px 12px;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
                 rows_a = ''
                 for _, r in df_audit.iterrows():
                     rid      = str(r.get('id', ''))
                     revisado = rid in st.session_state['audit_revisados']
                     ratio    = float(r.get('ratio_vs_mediana', 1) or 1)
-                    # Color según severidad
                     if ratio > 8 or ratio < 0.125:
-                        sev_color = '#e84545'
-                        sev_label = '🔴 Alta'
+                        sev_color = '#e84545'; sev_label = '🔴 Alta'
                     elif ratio > 3 or ratio < 0.33:
-                        sev_color = '#e89c45'
-                        sev_label = '🟡 Media'
+                        sev_color = '#e89c45'; sev_label = '🟡 Media'
                     else:
-                        sev_color = '#aaa'
-                        sev_label = '⚪ Baja'
+                        sev_color = '#aaa';    sev_label = '⚪ Baja'
                     row_bg = '#1a2a1a' if revisado else ''
                     rows_a += (
                         f'<tr style="border-bottom:1px solid #1e1e1e;background:{row_bg};opacity:{"0.5" if revisado else "1"}">'
@@ -1340,7 +1451,6 @@ if modulo.startswith("📦"):
                         f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de;font-size:0.8rem">{r.get("nombre_producto","")}</td>'
                         f'<td style="padding:9px 12px;color:#666;font-size:0.75rem">{r.get("proveedor","")}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">{r.get("cantidad","")}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">${float(r.get("precio",0) or 0):,.0f}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#888;font-variant-numeric:tabular-nums">{r.get("conversion","")}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#888;font-variant-numeric:tabular-nums">{r.get("formato","")}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#4caf7d;font-variant-numeric:tabular-nums">{float(r.get("muc_mediana",0) or 0):,.4f}</td>'
@@ -1351,83 +1461,16 @@ if modulo.startswith("📦"):
                         f'</tr>'
                     )
 
-                hdrs_a = ['Fecha','Local','SKU','Producto','Proveedor','Cant.','Precio',
+                hdrs_a = ['Fecha','Local','SKU','Producto','Proveedor','Cant.',
                           'Conv.','Formato','MUC Mediana','MUC Real','Ratio','Severidad','Rev.']
                 tabla_a = (
                     '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
                     '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
                     '<thead><tr style="background:#111">'
-                    + ''.join([f'<th style="{hs_a};text-align:{"left" if i<5 else "right" if i<13 else "center"}">{h}</th>' for i, h in enumerate(hdrs_a)])
+                    + ''.join([f'<th style="{hs_a};text-align:{"left" if i<5 else "right" if i<12 else "center"}">{h}</th>' for i, h in enumerate(hdrs_a)])
                     + f'</tr></thead><tbody>{rows_a}</tbody></table></div>'
                 )
                 st.markdown(tabla_a, unsafe_allow_html=True)
-
-                st.markdown("<br>", unsafe_allow_html=True)
-
-                # ── Acciones ────────────────────────────────────────────
-                st.markdown("#### Acciones")
-                ba1, ba2, ba3 = st.columns(3)
-
-                # Marcar como revisado
-                with ba1:
-                    ids_disp = df_audit['id'].astype(str).tolist() if 'id' in df_audit.columns else []
-                    nombres_disp = (df_audit['sku'] + ' — ' + df_audit['nombre_producto']).tolist()
-                    id_rev_sel = st.selectbox("Marcar como revisado", ids_disp,
-                                              format_func=lambda x: nombres_disp[ids_disp.index(x)] if x in ids_disp else x,
-                                              key='audit_rev_sel')
-                    if st.button("✅ Marcar revisado"):
-                        st.session_state['audit_revisados'].add(str(id_rev_sel))
-                        st.rerun()
-                    if st.button("🔄 Limpiar revisados"):
-                        st.session_state['audit_revisados'] = set()
-                        st.rerun()
-
-                # Corregir conversion/formato
-                with ba2:
-                    st.markdown("**Corregir registro**")
-                    id_corr = st.selectbox("Registro a corregir", ids_disp,
-                                           format_func=lambda x: nombres_disp[ids_disp.index(x)] if x in ids_disp else x,
-                                           key='audit_corr_sel')
-                    fila_sel = df_audit[df_audit['id'].astype(str) == str(id_corr)].iloc[0] if len(df_audit) > 0 else None
-                    if fila_sel is not None:
-                        nuevo_conv = st.number_input("Nueva conversion", value=float(fila_sel.get('conversion') or 1), min_value=0.001, step=0.1, key='audit_conv')
-                        nuevo_fmt  = st.number_input("Nuevo formato",    value=float(fila_sel.get('formato') or 1),    min_value=0.001, step=1.0,  key='audit_fmt')
-                        if st.button("💾 Aplicar corrección"):
-                            engine = get_engine()
-                            try:
-                                with engine.connect() as conn:
-                                    # Recalcular cant_conv y muc con nuevos valores
-                                    conn.execute(text("""
-                                        UPDATE compras SET
-                                            conversion = :conv,
-                                            formato    = :fmt,
-                                            cant_conv  = cantidad * :conv,
-                                            muc        = CASE WHEN :fmt = 1
-                                                         THEN costo_realfinal / NULLIF(cantidad * :conv, 0)
-                                                         ELSE costo_realfinal / NULLIF(cantidad * :conv * :fmt, 0)
-                                                         END
-                                        WHERE id = :id
-                                    """), {"conv": nuevo_conv, "fmt": nuevo_fmt, "id": int(id_corr)})
-                                    conn.commit()
-                                st.success(f"✅ Registro {id_corr} corregido. Conversion={nuevo_conv}, Formato={nuevo_fmt}")
-                                del st.session_state['audit_df']
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Error al corregir: {e}")
-
-                # Exportar
-                with ba3:
-                    st.markdown("**Exportar lista**")
-                    buf_audit = io.BytesIO()
-                    export_cols = ['fecha','local','folio','sku','nombre_producto','proveedor',
-                                   'categoria','cantidad','conversion','formato',
-                                   'cant_conv','muc','muc_mediana','ratio_vs_mediana','n_registros']
-                    export_cols_exist = [c for c in export_cols if c in df_audit.columns]
-                    with pd.ExcelWriter(buf_audit, engine='openpyxl') as w:
-                        df_audit[export_cols_exist].to_excel(w, sheet_name='Inconsistencias', index=False)
-                    st.download_button("📥 Descargar Excel", buf_audit.getvalue(),
-                                       "Auditoria_Compras.xlsx",
-                                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
 # ============================================================
