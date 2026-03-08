@@ -1442,10 +1442,22 @@ if modulo.startswith("📦"):
 
                 st.markdown("<br>", unsafe_allow_html=True)
 
-                # ── Tabla ────────────────────────────────────────────────
+                # ── Tabla — filtrada por grupo seleccionado ───────────────
+                grupo_activo = st.session_state.get('audit_grupo_sel', None)
+                if grupo_activo and not grupos.empty:
+                    grupo_activo_row = grupos[grupos['label'] == grupo_activo]
+                    if not grupo_activo_row.empty:
+                        ids_activos = grupo_activo_row.iloc[0]['ids']
+                        df_tabla = df_audit[df_audit['id'].isin(ids_activos)]
+                        st.caption(f"Mostrando {len(df_tabla)} registros del grupo seleccionado — cambia la búsqueda arriba para ver otro grupo, o borra el texto para ver todos.")
+                    else:
+                        df_tabla = df_audit
+                else:
+                    df_tabla = df_audit
+
                 hs_a = 'padding:9px 12px;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
                 rows_a = ''
-                for _, r in df_audit.iterrows():
+                for _, r in df_tabla.iterrows():
                     rid      = str(r.get('id', ''))
                     revisado = rid in st.session_state['audit_revisados']
                     ratio    = float(r.get('ratio_vs_mediana', 1) or 1)
