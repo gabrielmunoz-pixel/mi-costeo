@@ -1370,17 +1370,12 @@ if modulo.startswith("📦"):
                         st.markdown("**Corregir grupo (lote)**")
                         if not grupos.empty:
                             grupo_labels = grupos['label'].tolist()
-                            # Filtro de texto con autocompletado
-                            busq = st.text_input("Buscar SKU o producto", key='audit_busq_grupo',
-                                                 placeholder="Ej: azucar, AL-PA-001...")
-                            if busq:
-                                labels_filtrados = [l for l in grupo_labels if busq.lower() in l.lower()]
-                            else:
-                                labels_filtrados = grupo_labels  # muestra el primero (más severo) por defecto
-
-                            if labels_filtrados:
-                                label_sel = st.selectbox("Seleccionar grupo", labels_filtrados,
-                                                         key='audit_grupo_sel')
+                            # Un solo selectbox: empieza sin selección, busca escribiendo
+                            label_sel = st.selectbox("Grupo SKU + parámetros",
+                                                     [None] + grupo_labels,
+                                                     format_func=lambda x: "— Selecciona o escribe para buscar —" if x is None else x,
+                                                     key='audit_grupo_sel')
+                            if label_sel:
                                 grupo_row = grupos[grupos['label'] == label_sel].iloc[0]
                                 lc1, lc2 = st.columns(2)
                                 with lc1:
@@ -1432,8 +1427,6 @@ if modulo.startswith("📦"):
                                     if st.button("✅ Marcar revisado"):
                                         st.session_state['audit_revisados'].update([str(i) for i in ids_lote])
                                         st.rerun()
-                            else:
-                                st.caption("Sin resultados para la búsqueda.")
 
                     # ── Marcar revisado / limpiar ──
                     with acc2:
@@ -1467,7 +1460,7 @@ if modulo.startswith("📦"):
                     if not grupo_activo_row.empty:
                         ids_activos = grupo_activo_row.iloc[0]['ids']
                         df_tabla = df_audit[df_audit['id'].isin(ids_activos)]
-                        st.caption(f"Mostrando {len(df_tabla)} registros del grupo seleccionado — cambia la búsqueda arriba para ver otro grupo, o borra el texto para ver todos.")
+                        st.caption(f"Mostrando {len(df_tabla)} registros del grupo seleccionado — sin selección muestra todos.")
                     else:
                         df_tabla = df_audit
                 else:
