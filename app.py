@@ -1259,7 +1259,7 @@ if modulo.startswith("📦"):
                         COUNT(*) AS n_registros
                     FROM compras
                     WHERE muc > 0
-                      AND fecha_dte >= CURRENT_DATE - INTERVAL '{meses_audit} months'
+                      AND fecha_dte::date >= CURRENT_DATE - INTERVAL '{meses_audit} months'
                       {filtro_cat_audit}
                     GROUP BY sku
                     HAVING COUNT(*) >= 3
