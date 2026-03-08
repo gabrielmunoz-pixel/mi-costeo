@@ -1244,15 +1244,18 @@ if modulo.startswith("📦"):
         with ac2:
             cat_audit_q = run_query("SELECT DISTINCT categoria_producto FROM compras WHERE categoria_producto IS NOT NULL ORDER BY 1")
             cats_raw = cat_audit_q['categoria_producto'].tolist() if not cat_audit_q.empty else []
-            cats_colacion = [c for c in cats_raw if 'colaci' in c.lower()]
+            cats_colacion = [c for c in cats_raw if 'colacion' in c.lower().replace('ó','o').replace('ô','o') or c.upper() == 'COLACION']
             cats_normales = [c for c in cats_raw if c not in cats_colacion]
             cats_audit = ['Todas (sin Colación)'] + cats_normales + (['── Colación ──'] if cats_colacion else []) + cats_colacion
             cat_audit_sel = st.selectbox("Categoría", cats_audit, key='audit_cat')
 
         if st.button("▶ Ejecutar Auditoría"):
             if cat_audit_sel in ('Todas (sin Colación)', '── Colación ──'):
-                excluir_sql = ", ".join([f"'{c}'" for c in cats_colacion])
-                filtro_cat_audit = f"AND categoria_producto NOT IN ({excluir_sql})" if cats_colacion else ""
+                if cats_colacion:
+                    excluir_sql = ", ".join([f"'{c}'" for c in cats_colacion])
+                    filtro_cat_audit = f"AND UPPER(categoria_producto) != 'COLACION'"
+                else:
+                    filtro_cat_audit = ""
             else:
                 filtro_cat_audit = f"AND categoria_producto = '{cat_audit_sel}'"
             q_audit = f"""
