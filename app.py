@@ -1419,18 +1419,10 @@ if modulo.startswith("📦"):
                                                        "ids": ids_lote})
                                                 conn.commit()
                                             st.success(f"✅ {len(ids_lote)} registros corregidos")
-                                            mask = st.session_state['audit_df']['id'].isin(ids_lote)
-                                            st.session_state['audit_df'].loc[mask, 'conversion'] = nuevo_conv_lote
-                                            st.session_state['audit_df'].loc[mask, 'formato']    = nuevo_fmt_lote
-                                            cant_conv_nuevo = st.session_state['audit_df'].loc[mask, 'cantidad'] * nuevo_conv_lote
-                                            costo = st.session_state['audit_df'].loc[mask, 'costo_realfinal']
-                                            if nuevo_fmt_lote == 1:
-                                                nuevo_muc = costo / cant_conv_nuevo.replace(0, np.nan)
-                                            else:
-                                                nuevo_muc = costo / (cant_conv_nuevo * nuevo_fmt_lote).replace(0, np.nan)
-                                            st.session_state['audit_df'].loc[mask, 'cant_conv'] = cant_conv_nuevo
-                                            st.session_state['audit_df'].loc[mask, 'muc_real']  = nuevo_muc
-                                            st.session_state['audit_df'].loc[mask, 'muc_esperado'] = nuevo_muc
+                                            # Eliminar del df los registros corregidos — ya no son anomalías
+                                            st.session_state['audit_df'] = st.session_state['audit_df'][
+                                                ~st.session_state['audit_df']['id'].isin(ids_lote)
+                                            ].reset_index(drop=True)
                                             st.rerun()
                                         except Exception as e:
                                             st.error(f"Error: {e}")
