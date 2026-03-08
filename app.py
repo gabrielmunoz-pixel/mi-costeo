@@ -1251,11 +1251,11 @@ if modulo.startswith("📦"):
 
         if st.button("▶ Ejecutar Auditoría"):
             if cat_audit_sel in ('Todas (sin Colación)', '── Colación ──'):
-                filtro_cat_audit     = "AND UPPER(sku) != 'COLACION'"
-                filtro_cat_audit_c   = "AND UPPER(c.sku) != 'COLACION'"
+                filtro_cat_audit   = "AND UPPER(categoria_producto) != 'COLACION'"
+                filtro_cat_audit_c = "AND UPPER(c.categoria_producto) != 'COLACION'"
             else:
-                filtro_cat_audit     = f"AND categoria_producto = '{cat_audit_sel}'"
-                filtro_cat_audit_c   = f"AND c.categoria_producto = '{cat_audit_sel}'"
+                filtro_cat_audit   = f"AND categoria_producto = '{cat_audit_sel}'"
+                filtro_cat_audit_c = f"AND c.categoria_producto = '{cat_audit_sel}'"
             q_audit = f"""
                 WITH muc_stats AS (
                     -- Estadísticas de MUC por SKU: detectar dispersión
