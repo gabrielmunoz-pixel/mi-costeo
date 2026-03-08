@@ -1240,7 +1240,7 @@ if modulo.startswith("📦"):
         ac1, ac2 = st.columns([2, 2])
         with ac1:
             umbral_audit = st.slider("Umbral de alerta (× esperado)", min_value=2.0, max_value=20.0, value=5.0, step=0.5,
-                                     help="Marcar si MUC calculado difiere N× del MUC esperado según precio de factura y formato")
+                                     key='audit_umbral')
         with ac2:
             cat_audit_q = run_query("SELECT DISTINCT categoria_producto FROM compras WHERE categoria_producto IS NOT NULL ORDER BY 1")
             cats_raw = cat_audit_q['categoria_producto'].tolist() if not cat_audit_q.empty else []
@@ -1249,14 +1249,29 @@ if modulo.startswith("📦"):
             cats_audit = ['Todas (sin Colación)'] + cats_normales + (['── Colación ──'] if cats_colacion else []) + cats_colacion
             cat_audit_sel = st.selectbox("Categoría", cats_audit, key='audit_cat')
 
-        if st.button("▶ Ejecutar Auditoría"):
+        def _run_audit_query():
             cat_sel = st.session_state.get('audit_cat', 'Todas (sin Colación)')
             if cat_sel in ('Todas (sin Colación)', '── Colación ──'):
+                fcat   = "AND UPPER(categoria_producto) NOT LIKE '%COLACION%' AND UPPER(categoria_producto) NOT LIKE '%COLACIÓN%'"
+                fcat_c = "AND UPPER(g.categoria) NOT LIKE '%COLACION%' AND UPPER(g.categoria) NOT LIKE '%COLACIÓN%'"
+            else:
+                fcat   = f"AND categoria_producto = '{cat_sel}'"
+                fcat_c = f"AND g.categoria = '{cat_sel}'"
+            umbral = st.session_state.get('audit_umbral', 5.0)
+            return fcat, fcat_c, umbral
+
+        if st.button("▶ Ejecutar Auditoría"):
+            st.session_state.pop('audit_df', None)
+
+        if 'audit_df' not in st.session_state:
+            cat_sel = st.session_state.get('audit_cat', 'Todas (sin Colación)')
+            umbral_audit = st.session_state.get('audit_umbral', 5.0)
+            if cat_sel in ('Todas (sin Colación)', '── Colación ──'):
                 filtro_cat_audit   = "AND UPPER(categoria_producto) NOT LIKE '%COLACION%' AND UPPER(categoria_producto) NOT LIKE '%COLACIÓN%'"
-                filtro_cat_audit_c = "AND UPPER(c.categoria_producto) NOT LIKE '%COLACION%' AND UPPER(c.categoria_producto) NOT LIKE '%COLACIÓN%'"
+                filtro_cat_audit_c = "AND UPPER(g.categoria) NOT LIKE '%COLACION%' AND UPPER(g.categoria) NOT LIKE '%COLACIÓN%'"
             else:
                 filtro_cat_audit   = f"AND categoria_producto = '{cat_sel}'"
-                filtro_cat_audit_c = f"AND c.categoria_producto = '{cat_sel}'"
+                filtro_cat_audit_c = f"AND g.categoria = '{cat_sel}'"
             q_audit = f"""
                 WITH grupos AS (
                     SELECT
