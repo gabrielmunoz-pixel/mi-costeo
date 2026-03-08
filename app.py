@@ -1277,6 +1277,10 @@ if modulo.startswith("📦"):
                     c.conversion,
                     c.formato,
                     c.cant_conv,
+                    c.monto_real,
+                    c.costo_realfinal,
+                    ROUND((c.costo_realfinal / NULLIF(c.cant_conv, 0))::numeric, 2)        AS precio_unit,
+                    ROUND((m.muc_mediana * NULLIF(c.cant_conv, 0) / NULLIF(c.cantidad, 0))::numeric, 2) AS precio_unit_mediana,
                     c.muc,
                     m.muc_mediana,
                     ROUND((c.muc / NULLIF(m.muc_mediana, 0))::numeric, 2) AS ratio_vs_mediana,
@@ -1426,8 +1430,9 @@ if modulo.startswith("📦"):
                         st.markdown("**Exportar**")
                         buf_audit = io.BytesIO()
                         export_cols = ['fecha','local','folio','sku','nombre_producto','proveedor',
-                                       'categoria','cantidad','conversion','formato',
-                                       'cant_conv','muc','muc_mediana','ratio_vs_mediana','n_registros']
+                                       'categoria','cantidad','conversion','formato','cant_conv',
+                                       'precio_unit_mediana','precio_unit',
+                                       'muc_mediana','muc','ratio_vs_mediana','n_registros']
                         export_cols_exist = [c for c in export_cols if c in df_audit.columns]
                         with pd.ExcelWriter(buf_audit, engine='openpyxl') as w:
                             df_audit[export_cols_exist].to_excel(w, sheet_name='Inconsistencias', index=False)
@@ -1461,6 +1466,8 @@ if modulo.startswith("📦"):
                         f'<td style="padding:9px 12px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">{r.get("cantidad","")}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#888;font-variant-numeric:tabular-nums">{r.get("conversion","")}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#888;font-variant-numeric:tabular-nums">{r.get("formato","")}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">${float(r.get("precio_unit_mediana",0) or 0):,.0f}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:{sev_color};font-weight:600;font-variant-numeric:tabular-nums">${float(r.get("precio_unit",0) or 0):,.0f}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#4caf7d;font-variant-numeric:tabular-nums">{float(r.get("muc_mediana",0) or 0):,.4f}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:{sev_color};font-weight:600;font-variant-numeric:tabular-nums">{float(r.get("muc",0) or 0):,.4f}</td>'
                         f'<td style="padding:9px 12px;text-align:center;color:{sev_color};font-weight:600">{ratio:,.1f}×</td>'
@@ -1470,12 +1477,14 @@ if modulo.startswith("📦"):
                     )
 
                 hdrs_a = ['Fecha','Local','SKU','Producto','Proveedor','Cant.',
-                          'Conv.','Formato','MUC Mediana','MUC Real','Ratio','Severidad','Rev.']
+                          'Conv.','Formato',
+                          'P/u Esperado','P/u Real',
+                          'MUC Esperado','MUC Real','Ratio','Severidad','Rev.']
                 tabla_a = (
                     '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
                     '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
                     '<thead><tr style="background:#111">'
-                    + ''.join([f'<th style="{hs_a};text-align:{"left" if i<5 else "right" if i<12 else "center"}">{h}</th>' for i, h in enumerate(hdrs_a)])
+                    + ''.join([f'<th style="{hs_a};text-align:{"left" if i<5 else "right" if i<14 else "center"}">{h}</th>' for i, h in enumerate(hdrs_a)])
                     + f'</tr></thead><tbody>{rows_a}</tbody></table></div>'
                 )
                 st.markdown(tabla_a, unsafe_allow_html=True)
