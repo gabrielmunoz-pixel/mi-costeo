@@ -1417,12 +1417,14 @@ if modulo.startswith("📦"):
                                             st.session_state['audit_df'].loc[mask, 'conversion'] = nuevo_conv_lote
                                             st.session_state['audit_df'].loc[mask, 'formato']    = nuevo_fmt_lote
                                             cant_conv_nuevo = st.session_state['audit_df'].loc[mask, 'cantidad'] * nuevo_conv_lote
-                                            costo = st.session_state['audit_df'].loc[mask, 'cant_conv'] * st.session_state['audit_df'].loc[mask, 'muc']
+                                            costo = st.session_state['audit_df'].loc[mask, 'costo_realfinal']
                                             if nuevo_fmt_lote == 1:
-                                                st.session_state['audit_df'].loc[mask, 'muc'] = costo / cant_conv_nuevo.replace(0, np.nan)
+                                                nuevo_muc = costo / cant_conv_nuevo.replace(0, np.nan)
                                             else:
-                                                st.session_state['audit_df'].loc[mask, 'muc'] = costo / (cant_conv_nuevo * nuevo_fmt_lote).replace(0, np.nan)
+                                                nuevo_muc = costo / (cant_conv_nuevo * nuevo_fmt_lote).replace(0, np.nan)
                                             st.session_state['audit_df'].loc[mask, 'cant_conv'] = cant_conv_nuevo
+                                            st.session_state['audit_df'].loc[mask, 'muc_real']  = nuevo_muc
+                                            st.session_state['audit_df'].loc[mask, 'muc_esperado'] = nuevo_muc
                                             st.rerun()
                                         except Exception as e:
                                             st.error(f"Error: {e}")
