@@ -1334,7 +1334,7 @@ if modulo.startswith("📦"):
 
                 st.markdown("<br>", unsafe_allow_html=True)
 
-                # ── Acciones ARRIBA de la tabla ──────────────────────────
+                # ── Construir grupos ──────────────────────────────────────
                 ids_disp    = df_audit['id'].astype(str).tolist() if 'id' in df_audit.columns else []
                 nombres_disp = (df_audit['sku'] + ' — ' + df_audit['nombre_producto']).tolist()
 
@@ -1372,6 +1372,13 @@ if modulo.startswith("📦"):
                 else:
                     grupos = pd.DataFrame()
 
+                # Selector de grupo — fuera del expander para que filtre la tabla
+                grupo_labels = grupos['label'].tolist() if not grupos.empty else []
+                label_sel = st.selectbox("🔍 Filtrar por grupo",
+                                         [None] + grupo_labels,
+                                         format_func=lambda x: "— Todos los registros —" if x is None else x,
+                                         key='audit_grupo_sel')
+
                 with st.expander("⚙️ Acciones", expanded=True):
                     acc1, acc2, acc3 = st.columns([3, 3, 2])
 
@@ -1379,12 +1386,6 @@ if modulo.startswith("📦"):
                     with acc1:
                         st.markdown("**Corregir grupo (lote)**")
                         if not grupos.empty:
-                            grupo_labels = grupos['label'].tolist()
-                            # Un solo selectbox: empieza sin selección, busca escribiendo
-                            label_sel = st.selectbox("Grupo SKU + parámetros",
-                                                     [None] + grupo_labels,
-                                                     format_func=lambda x: "— Selecciona o escribe para buscar —" if x is None else x,
-                                                     key='audit_grupo_sel')
                             if label_sel:
                                 grupo_row = grupos[grupos['label'] == label_sel].iloc[0]
                                 lc1, lc2 = st.columns(2)
@@ -1464,13 +1465,12 @@ if modulo.startswith("📦"):
                 st.markdown("<br>", unsafe_allow_html=True)
 
                 # ── Tabla — filtrada por grupo seleccionado ───────────────
-                grupo_activo = st.session_state.get('audit_grupo_sel', None)
-                if grupo_activo and not grupos.empty:
-                    grupo_activo_row = grupos[grupos['label'] == grupo_activo]
+                if label_sel and not grupos.empty:
+                    grupo_activo_row = grupos[grupos['label'] == label_sel]
                     if not grupo_activo_row.empty:
                         ids_activos = grupo_activo_row.iloc[0]['ids']
                         df_tabla = df_audit[df_audit['id'].isin(ids_activos)]
-                        st.caption(f"Mostrando {len(df_tabla)} de {len(df_audit)} registros — grupo: {grupo_activo}")
+                        st.caption(f"Mostrando {len(df_tabla)} de {len(df_audit)} registros — grupo: {label_sel}")
                     else:
                         df_tabla = df_audit
                 else:
