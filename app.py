@@ -1269,6 +1269,7 @@ if modulo.startswith("📦"):
                     FROM compras
                     WHERE muc > 0
                       AND costo_realfinal > 0
+                      AND UPPER(sku) != 'COLACION'
                       {filtro_cat_audit}
                     GROUP BY sku
                     HAVING COUNT(*) >= 2
@@ -1299,6 +1300,7 @@ if modulo.startswith("📦"):
                 JOIN muc_stats m ON c.sku = m.sku
                 WHERE c.muc > 0
                   AND c.costo_realfinal > 0
+                  AND UPPER(c.sku) != 'COLACION'
                   {filtro_cat_audit_c}
                 ORDER BY m.muc_max / NULLIF(m.muc_min, 0) DESC, c.sku, c.muc
                 LIMIT 1000
