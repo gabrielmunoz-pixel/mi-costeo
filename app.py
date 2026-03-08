@@ -1279,7 +1279,7 @@ if modulo.startswith("📦"):
                     MAX(c.categoria_producto)                                       AS categoria,
                     MAX(c.conversion)                                               AS conversion,
                     MAX(c.formato)                                                  AS formato,
-                    ROUND(c.muc::numeric, 6)                                       AS muc,
+                    ROUND(c.muc::numeric, 1)                                        AS muc,
                     COUNT(*)                                                        AS n_registros,
                     ARRAY_AGG(c.id)                                                AS ids,
                     d.muc_min,
@@ -1291,8 +1291,8 @@ if modulo.startswith("📦"):
                   AND c.costo_realfinal > 0
                   AND UPPER(c.sku) != 'COLACION'
                   {filtro_cat_audit_c}
-                GROUP BY c.sku, ROUND(c.muc::numeric, 6), d.muc_min, d.muc_max, d.dispersion
-                ORDER BY d.dispersion DESC, c.sku, ROUND(c.muc::numeric, 6)
+                GROUP BY c.sku, ROUND(c.muc::numeric, 1), d.muc_min, d.muc_max, d.dispersion
+                ORDER BY d.dispersion DESC, c.sku, ROUND(c.muc::numeric, 1)
                 LIMIT 500
             """
             df_audit = run_query(q_audit)
