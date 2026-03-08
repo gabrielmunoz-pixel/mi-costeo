@@ -1389,7 +1389,60 @@ if modulo.startswith("📦"):
                 else:
                     label_sel = None
 
-                with st.expander("⚙️ Acciones", expanded=True):
+                # ── Inspector libre de SKU ────────────────────────────────
+                with st.expander("🔎 Inspeccionar cualquier SKU", expanded=False):
+                    sku_inspect = st.text_input("SKU exacto", key='audit_inspect_sku', placeholder="ej: AL-AF-095")
+                    if sku_inspect:
+                        q_inspect = f"""
+                            SELECT
+                                ROUND(muc::numeric, 1)                                    AS muc,
+                                COUNT(*)                                                  AS n_registros,
+                                ROUND(AVG(monto_real / NULLIF(cant_conv,0))::numeric, 2) AS precio_factura,
+                                MAX(conversion)                                           AS conversion,
+                                MAX(formato)                                              AS formato,
+                                MAX(nombre_producto)                                      AS nombre_producto
+                            FROM compras
+                            WHERE UPPER(sku) = UPPER('{sku_inspect}')
+                              AND muc > 0 AND costo_realfinal > 0
+                            GROUP BY ROUND(muc::numeric, 1)
+                            ORDER BY ROUND(muc::numeric, 1)
+                        """
+                        df_inspect = run_query(q_inspect)
+                        if df_inspect.empty:
+                            st.warning(f"SKU '{sku_inspect}' no encontrado o sin registros.")
+                        else:
+                            nombre_insp = df_inspect['nombre_producto'].iloc[0]
+                            muc_min_i   = float(df_inspect['muc'].min())
+                            muc_max_i   = float(df_inspect['muc'].max())
+                            disp_i      = round(muc_max_i / muc_min_i, 1) if muc_min_i > 0 else 0
+                            st.caption(f"**{nombre_insp}** — {len(df_inspect)} grupos MUC | dispersión {disp_i}×")
+                            hs_i = 'padding:7px 10px;font-size:0.67rem;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
+                            rows_i = ''
+                            for _, r in df_inspect.iterrows():
+                                muc_i  = float(r['muc'])
+                                es_min = abs(muc_i - muc_min_i) < 0.0001
+                                es_max = abs(muc_i - muc_max_i) < 0.0001
+                                c = '#e84545' if (es_min or es_max) else '#aaa'
+                                rows_i += (
+                                    f'<tr style="border-bottom:1px solid #1e1e1e">'
+                                    f'<td style="padding:7px 10px;text-align:right;color:{c};font-weight:{"700" if (es_min or es_max) else "400"};font-variant-numeric:tabular-nums">{muc_i:.4f}</td>'
+                                    f'<td style="padding:7px 10px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">${float(r["precio_factura"]):,.2f}</td>'
+                                    f'<td style="padding:7px 10px;text-align:right;color:#888">{r["conversion"]}</td>'
+                                    f'<td style="padding:7px 10px;text-align:right;color:#888">{r["formato"]}</td>'
+                                    f'<td style="padding:7px 10px;text-align:right;color:#666">{int(r["n_registros"])}</td>'
+                                    f'</tr>'
+                                )
+                            hdrs_i = ['MUC','Neto Fact/u','Conv.','Formato','# Reg.']
+                            st.markdown(
+                                '<div style="overflow-x:auto;border-radius:10px;border:1px solid #1e1e1e;background:#0d0d0d">'
+                                '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.8rem">'
+                                '<thead><tr style="background:#111">'
+                                + ''.join([f'<th style="{hs_i};text-align:right">{h}</th>' for h in hdrs_i])
+                                + f'</tr></thead><tbody>{rows_i}</tbody></table></div>',
+                                unsafe_allow_html=True
+                            )
+
+
                     acc1, acc2, acc3 = st.columns([3, 3, 2])
 
                     # ── Corrección en lote ──
