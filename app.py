@@ -1606,15 +1606,19 @@ elif modulo.startswith("📊"):
             mes_base3_str = mes_base3.strftime('%B %Y').capitalize()
             mes_comp3_str = mes_comp3.strftime('%B %Y').capitalize()
 
-            # Ordenamiento fuera del botón
-            ord3_col, ord3_dir_col = st.columns([3, 1])
-            with ord3_col:
+            # Filtro texto + ordenamiento
+            fc1, fc2, fc3 = st.columns([3, 2, 1])
+            with fc1:
+                filtro_texto3 = st.text_input("🔍 Buscar SKU o producto",
+                                              placeholder="Ej: AL-AF-276 o papas...",
+                                              key='inf3_buscar')
+            with fc2:
                 ord3_col_sel = st.selectbox("Ordenar por", [
-                    'Ingrediente', f'Cant. {mes_base3_str}',
+                    'Producto', f'Cant. {mes_base3_str}',
                     f'Costo {mes_base3_str}', f'Costo {mes_comp3_str}',
                     'Δ$ Precio', 'Δ% Precio'
                 ], key='ord3_col')
-            with ord3_dir_col:
+            with fc3:
                 ord3_dir = st.selectbox("Dir.", ['↓', '↑'], key='ord3_dir')
 
             if st.button("▶ Generar Informe 3"):
@@ -1625,45 +1629,43 @@ elif modulo.startswith("📊"):
                 filtro_cat3 = f"AND categoria_producto = '{cat3_sel}'" if cat3_sel != 'Todos' else ""
 
                 q_ing = f"""
-                    WITH equiv AS (
-                        SELECT sku_compra, sku_receta FROM sku_equivalencias
-                    ),
-                    base AS (
+                    WITH base AS (
                         SELECT
-                            COALESCE(e.sku_receta, c.sku) as sku,
-                            MIN(c.nombre_producto) as nombre,
-                            MIN(c.subcat) as subcat,
-                            MIN(c.categoria_producto) as categoria,
-                            SUM(c.cant_conv) as cant_base,
-                            SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv), 0) as precio_base
+                            c.sku,
+                            c.nombre_producto                                                          AS nombre,
+                            MIN(c.proveedor)                                                           AS proveedor,
+                            MIN(c.categoria_producto)                                                  AS categoria,
+                            SUM(c.cant_conv)                                                           AS cant_base,
+                            SUM(c.costo_realfinal) / NULLIF(SUM(c.costo_realfinal / NULLIF(c.muc,0)),0) AS precio_base
                         FROM compras c
-                        LEFT JOIN equiv e ON c.sku = e.sku_compra
                         WHERE c.fecha_dte::date BETWEEN '{base_i}' AND '{base_f}'
                           AND c.subcat IN ('Directo','Indirecto')
                           AND c.costo_realfinal > 0
+                          AND c.muc > 0
                           {filtro_cat3}
-                        GROUP BY 1
+                        GROUP BY c.sku, c.nombre_producto
                     ),
                     comp AS (
                         SELECT
-                            COALESCE(e.sku_receta, c.sku) as sku,
-                            SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv), 0) as precio_comp
+                            c.sku,
+                            c.nombre_producto                                                          AS nombre,
+                            SUM(c.costo_realfinal) / NULLIF(SUM(c.costo_realfinal / NULLIF(c.muc,0)),0) AS precio_comp
                         FROM compras c
-                        LEFT JOIN equiv e ON c.sku = e.sku_compra
                         WHERE c.fecha_dte::date BETWEEN '{comp_i}' AND '{comp_f}'
                           AND c.subcat IN ('Directo','Indirecto')
                           AND c.costo_realfinal > 0
-                        GROUP BY 1
+                          AND c.muc > 0
+                        GROUP BY c.sku, c.nombre_producto
                     )
                     SELECT
-                        b.sku, b.nombre, b.subcat, b.categoria,
+                        b.sku, b.nombre, b.proveedor, b.categoria,
                         b.cant_base, b.precio_base,
                         c.precio_comp,
-                        b.cant_base * b.precio_base as impacto_base,
-                        b.cant_base * COALESCE(c.precio_comp, b.precio_base) as impacto_comp
+                        b.cant_base * b.precio_base                            AS impacto_base,
+                        b.cant_base * COALESCE(c.precio_comp, b.precio_base)   AS impacto_comp
                     FROM base b
-                    LEFT JOIN comp c ON b.sku = c.sku
-                    ORDER BY b.sku
+                    LEFT JOIN comp c ON b.sku = c.sku AND b.nombre = c.nombre
+                    ORDER BY b.nombre
                 """
                 df3 = run_query(q_ing)
 
@@ -1690,7 +1692,7 @@ elif modulo.startswith("📊"):
                 # Ordenar
                 asc3 = ord3_dir == '↑'
                 sort_map3 = {
-                    'Ingrediente':              ('nombre',       asc3),
+                    'Producto':                 ('nombre',       asc3),
                     f'Cant. {mes_base3_str}':   ('cant_base',    asc3),
                     f'Costo {mes_base3_str}':   ('impacto_base', asc3),
                     f'Costo {mes_comp3_str}':   ('impacto_comp', asc3),
@@ -1700,6 +1702,14 @@ elif modulo.startswith("📊"):
                 if ord3_col_sel in sort_map3:
                     col_s, asc_s = sort_map3[ord3_col_sel]
                     df3 = df3.sort_values(col_s, ascending=asc_s, na_position='last')
+
+                # Filtro de texto
+                if filtro_texto3:
+                    mask3 = (
+                        df3['sku'].str.contains(filtro_texto3, case=False, na=False) |
+                        df3['nombre'].str.contains(filtro_texto3, case=False, na=False)
+                    )
+                    df3 = df3[mask3]
 
                 # Métricas
                 tot_base = df3['impacto_base'].sum()
@@ -1746,7 +1756,7 @@ elif modulo.startswith("📊"):
                         f'<td style="padding:10px 14px;color:#666;font-family:monospace;font-size:0.76rem">{r.get("sku","")}</td>'
                         f'<td style="padding:10px 14px;font-weight:500;color:{"#4a9eda" if sin_p else "#e8e4de"}">{icono_cell}{r.get("nombre","")}</td>'
                         f'<td style="padding:10px 14px;color:#555;font-size:0.8rem">{r.get("categoria","")}</td>'
-                        f'<td style="padding:10px 14px;color:#444;font-size:0.78rem">{r.get("subcat","")}</td>'
+                        f'<td style="padding:10px 14px;color:#666;font-size:0.78rem">{r.get("proveedor","")}</td>'
                         f'<td style="padding:10px 14px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">{r.get("cant_base",0):,.2f}</td>'
                         f'<td style="padding:10px 14px;text-align:right;color:#888;font-variant-numeric:tabular-nums">${r.get("precio_base",0):,.2f}</td>'
                         f'<td style="padding:10px 14px;text-align:right;color:{precio_comp_color};font-variant-numeric:tabular-nums">${r.get("precio_comp",0):,.2f}</td>'
@@ -1758,16 +1768,16 @@ elif modulo.startswith("📊"):
                     )
 
                 hs3 = 'padding:11px 14px;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
-                hdrs3 = ['SKU','Ingrediente','Categoría','Tipo',
+                hdrs3 = ['SKU', 'Producto', 'Categoría', 'Proveedor',
                           f'Cant. {mes_base3_str}',
                           f'P. Unit {mes_base3_str}', f'P. Unit {mes_comp3_str}',
                           f'Total {mes_base3_str}', f'Total {mes_comp3_str}',
-                          'Δ$','Δ%']
+                          'Δ$', 'Δ%']
                 tabla3 = (
                     '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
                     '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.84rem">'
                     '<thead><tr style="background:#111">'
-                    + ''.join([f'<th style="{hs3};text-align:{'left' if i<4 else 'right'}">{h}</th>' for i, h in enumerate(hdrs3)])
+                    + ''.join([f'<th style="{hs3};text-align:{"left" if i<4 else "right"}">{h}</th>' for i, h in enumerate(hdrs3)])
                     + f'</tr></thead><tbody>{rows3}</tbody></table></div>'
                 )
                 st.markdown(tabla3, unsafe_allow_html=True)
@@ -1775,7 +1785,7 @@ elif modulo.startswith("📊"):
                 st.markdown("<br>", unsafe_allow_html=True)
                 buf_inf3 = io.BytesIO()
                 with pd.ExcelWriter(buf_inf3, engine='openpyxl') as w:
-                    df3[['sku','nombre','categoria','subcat','cant_base',
+                    df3[['sku','nombre','categoria','proveedor','cant_base',
                           'precio_base','precio_comp','impacto_base',
                           'impacto_comp','delta_dinero','delta_pct']].to_excel(w, sheet_name='Canasta', index=False)
                 st.download_button("📥 Descargar Excel", buf_inf3.getvalue(), "Informe3_Canasta.xlsx")
