@@ -1290,6 +1290,7 @@ if modulo.startswith("📦"):
                       AND UPPER(sku) != 'COLACION'
                       {filtro_cat_audit}
                     GROUP BY sku, ROUND(muc::numeric, 1)
+                    HAVING ROUND(muc::numeric, 1) > 0
                 ),
                 dispersos AS (
                     SELECT
@@ -1299,6 +1300,7 @@ if modulo.startswith("📦"):
                         ROUND((MAX(muc_grupo) / NULLIF(MIN(muc_grupo), 0))::numeric, 1) AS dispersion,
                         COUNT(*)                                                        AS n_grupos
                     FROM grupos
+                    WHERE muc_grupo > 0
                     GROUP BY sku
                     HAVING COUNT(*) >= 2
                        AND MAX(muc_grupo) / NULLIF(MIN(muc_grupo), 0) > {umbral_audit}
@@ -1397,13 +1399,16 @@ if modulo.startswith("📦"):
                             SELECT
                                 ROUND(muc::numeric, 1)                                    AS muc,
                                 COUNT(*)                                                  AS n_registros,
+                                ARRAY_AGG(id)                                             AS ids,
                                 ROUND(AVG(monto_real / NULLIF(cant_conv,0))::numeric, 2) AS precio_factura,
                                 MAX(conversion)                                           AS conversion,
                                 MAX(formato)                                              AS formato,
-                                MAX(nombre_producto)                                      AS nombre_producto
+                                MAX(nombre_producto)                                      AS nombre_producto,
+                                MAX(categoria_producto)                                   AS categoria
                             FROM compras
                             WHERE UPPER(sku) = UPPER('{sku_inspect}')
                               AND muc > 0 AND costo_realfinal > 0
+                              AND ROUND(muc::numeric, 1) > 0
                             GROUP BY ROUND(muc::numeric, 1)
                             ORDER BY ROUND(muc::numeric, 1)
                         """
@@ -1412,35 +1417,91 @@ if modulo.startswith("📦"):
                             st.warning(f"SKU '{sku_inspect}' no encontrado o sin registros.")
                         else:
                             nombre_insp = df_inspect['nombre_producto'].iloc[0]
+                            cat_insp    = df_inspect['categoria'].iloc[0]
                             muc_min_i   = float(df_inspect['muc'].min())
                             muc_max_i   = float(df_inspect['muc'].max())
                             disp_i      = round(muc_max_i / muc_min_i, 1) if muc_min_i > 0 else 0
-                            st.caption(f"**{nombre_insp}** — {len(df_inspect)} grupos MUC | dispersión {disp_i}×")
-                            hs_i = 'padding:7px 10px;font-size:0.67rem;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
+                            if disp_i > 8:
+                                badge = f'🔴 {disp_i:.0f}×'
+                            elif disp_i > 2:
+                                badge = f'🟡 {disp_i:.1f}×'
+                            else:
+                                badge = f'⚪ {disp_i:.1f}×'
+                            st.caption(f"**{nombre_insp}** | {cat_insp} | {len(df_inspect)} grupos MUC | dispersión {badge}")
+
+                            # Tabla igual al informe
+                            hs_i = 'padding:9px 12px;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
                             rows_i = ''
                             for _, r in df_inspect.iterrows():
                                 muc_i  = float(r['muc'])
                                 es_min = abs(muc_i - muc_min_i) < 0.0001
                                 es_max = abs(muc_i - muc_max_i) < 0.0001
-                                c = '#e84545' if (es_min or es_max) else '#aaa'
+                                es_out = es_min or es_max
+                                mc     = '#e84545' if es_out else '#aaa'
+                                precio_i = float(r['precio_factura'] or 0)
                                 rows_i += (
                                     f'<tr style="border-bottom:1px solid #1e1e1e">'
-                                    f'<td style="padding:7px 10px;text-align:right;color:{c};font-weight:{"700" if (es_min or es_max) else "400"};font-variant-numeric:tabular-nums">{muc_i:.4f}</td>'
-                                    f'<td style="padding:7px 10px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">${float(r["precio_factura"]):,.2f}</td>'
-                                    f'<td style="padding:7px 10px;text-align:right;color:#888">{r["conversion"]}</td>'
-                                    f'<td style="padding:7px 10px;text-align:right;color:#888">{r["formato"]}</td>'
-                                    f'<td style="padding:7px 10px;text-align:right;color:#666">{int(r["n_registros"])}</td>'
+                                    f'<td style="padding:9px 12px;color:#666;font-size:0.75rem">{r.get("categoria","")}</td>'
+                                    f'<td style="padding:9px 12px;text-align:right;color:#888">{r["conversion"]}</td>'
+                                    f'<td style="padding:9px 12px;text-align:right;color:#888">{r["formato"]}</td>'
+                                    f'<td style="padding:9px 12px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">${precio_i:,.2f}</td>'
+                                    f'<td style="padding:9px 12px;text-align:right;color:{mc};font-weight:{"700" if es_out else "400"};font-variant-numeric:tabular-nums">{muc_i:.4f}</td>'
+                                    f'<td style="padding:9px 12px;text-align:right;color:#666">{int(r["n_registros"])}</td>'
                                     f'</tr>'
                                 )
-                            hdrs_i = ['MUC','Neto Fact/u','Conv.','Formato','# Reg.']
+                            hdrs_i = ['Categoría','Conv.','Formato','Neto Fact/u','MUC','# Reg.']
                             st.markdown(
-                                '<div style="overflow-x:auto;border-radius:10px;border:1px solid #1e1e1e;background:#0d0d0d">'
-                                '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.8rem">'
+                                '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
+                                '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
                                 '<thead><tr style="background:#111">'
-                                + ''.join([f'<th style="{hs_i};text-align:right">{h}</th>' for h in hdrs_i])
+                                + ''.join([f'<th style="{hs_i};text-align:{"left" if i==0 else "right"}">{h}</th>' for i, h in enumerate(hdrs_i)])
                                 + f'</tr></thead><tbody>{rows_i}</tbody></table></div>',
                                 unsafe_allow_html=True
                             )
+
+                            # Acciones de corrección
+                            st.markdown("<br>", unsafe_allow_html=True)
+                            st.markdown("**Corregir grupo**")
+                            mucs_i = sorted(df_inspect['muc'].dropna().unique().tolist())
+                            muc_fix = st.selectbox(
+                                "MUC a corregir",
+                                mucs_i,
+                                format_func=lambda m: f"{float(m):.4f}  ({int(df_inspect[df_inspect['muc']==m]['n_registros'].sum())} reg.)",
+                                key='inspect_muc_fix'
+                            )
+                            fila_fix = df_inspect[df_inspect['muc'] == muc_fix].iloc[0]
+                            ic1, ic2 = st.columns(2)
+                            with ic1:
+                                conv_fix = st.number_input("Nueva conversion", value=float(fila_fix['conversion'] or 1),
+                                                           min_value=0.001, step=0.1, key='inspect_conv_fix')
+                            with ic2:
+                                fmt_fix  = st.number_input("Nuevo formato", value=float(fila_fix['formato'] or 1),
+                                                           min_value=0.001, step=1.0, key='inspect_fmt_fix')
+                            import ast as _ast2
+                            raw_ids_i = fila_fix['ids']
+                            if isinstance(raw_ids_i, str):
+                                raw_ids_i = _ast2.literal_eval(raw_ids_i)
+                            ids_fix = [int(i) for i in raw_ids_i]
+                            st.caption(f"Afecta **{len(ids_fix)}** registros")
+                            if st.button("💾 Aplicar corrección", key='inspect_apply'):
+                                engine = get_engine()
+                                try:
+                                    with engine.connect() as conn:
+                                        conn.execute(text("""
+                                            UPDATE compras SET
+                                                conversion = :conv, formato = :fmt,
+                                                cant_conv  = cantidad * :conv,
+                                                muc        = CASE WHEN :fmt = 1
+                                                             THEN costo_realfinal / NULLIF(cantidad * :conv, 0)
+                                                             ELSE costo_realfinal / NULLIF(cantidad * :conv * :fmt, 0) END
+                                            WHERE id = ANY(:ids)
+                                        """), {"conv": conv_fix, "fmt": fmt_fix, "ids": ids_fix})
+                                        conn.commit()
+                                    st.success(f"✅ {len(ids_fix)} registros corregidos")
+                                    st.session_state.pop('audit_df', None)
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
 
 
                     acc1, acc2, acc3 = st.columns([3, 3, 2])
