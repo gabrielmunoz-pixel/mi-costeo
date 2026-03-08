@@ -1243,11 +1243,18 @@ if modulo.startswith("📦"):
                                      help="Marcar si MUC calculado difiere N× del MUC esperado según precio de factura y formato")
         with ac2:
             cat_audit_q = run_query("SELECT DISTINCT categoria_producto FROM compras WHERE categoria_producto IS NOT NULL ORDER BY 1")
-            cats_audit = ['Todas'] + cat_audit_q['categoria_producto'].tolist() if not cat_audit_q.empty else ['Todas']
+            cats_raw = cat_audit_q['categoria_producto'].tolist() if not cat_audit_q.empty else []
+            cats_colacion = [c for c in cats_raw if 'colaci' in c.lower()]
+            cats_normales = [c for c in cats_raw if c not in cats_colacion]
+            cats_audit = ['Todas (sin Colación)'] + cats_normales + (['── Colación ──'] if cats_colacion else []) + cats_colacion
             cat_audit_sel = st.selectbox("Categoría", cats_audit, key='audit_cat')
 
         if st.button("▶ Ejecutar Auditoría"):
-            filtro_cat_audit = f"AND categoria_producto = '{cat_audit_sel}'" if cat_audit_sel != 'Todas' else ""
+            if cat_audit_sel in ('Todas (sin Colación)', '── Colación ──'):
+                excluir_sql = ", ".join([f"'{c}'" for c in cats_colacion])
+                filtro_cat_audit = f"AND categoria_producto NOT IN ({excluir_sql})" if cats_colacion else ""
+            else:
+                filtro_cat_audit = f"AND categoria_producto = '{cat_audit_sel}'"
             q_audit = f"""
                 WITH consistentes AS (
                     -- Solo registros donde el muc guardado coincide con el recalculado (sin corrupción)
@@ -1263,6 +1270,7 @@ if modulo.startswith("📦"):
                                        ELSE costo_realfinal / NULLIF(cant_conv * formato, 0)
                                   END
                           ) / NULLIF(muc, 0) < 0.05   -- tolerancia 5% por redondeos
+                      {filtro_cat_audit}
                 ),
                 mediana_sku AS (
                     SELECT
