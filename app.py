@@ -1419,9 +1419,10 @@ if modulo.startswith("📦"):
                                                        "ids": ids_lote})
                                                 conn.commit()
                                             st.success(f"✅ {len(ids_lote)} registros corregidos")
-                                            # Eliminar del df los registros corregidos — ya no son anomalías
+                                            # Eliminar del df los registros corregidos
+                                            ids_lote_str = [str(int(i)) for i in ids_lote]
                                             st.session_state['audit_df'] = st.session_state['audit_df'][
-                                                ~st.session_state['audit_df']['id'].isin(ids_lote)
+                                                ~st.session_state['audit_df']['id'].astype(str).str.split('.').str[0].isin(ids_lote_str)
                                             ].reset_index(drop=True)
                                             st.rerun()
                                         except Exception as e:
