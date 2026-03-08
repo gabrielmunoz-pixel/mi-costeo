@@ -1251,13 +1251,11 @@ if modulo.startswith("📦"):
 
         if st.button("▶ Ejecutar Auditoría"):
             if cat_audit_sel in ('Todas (sin Colación)', '── Colación ──'):
-                if cats_colacion:
-                    excluir_sql = ", ".join([f"'{c}'" for c in cats_colacion])
-                    filtro_cat_audit = f"AND UPPER(categoria_producto) != 'COLACION'"
-                else:
-                    filtro_cat_audit = ""
+                filtro_cat_audit     = "AND UPPER(sku) != 'COLACION'"
+                filtro_cat_audit_c   = "AND UPPER(c.sku) != 'COLACION'"
             else:
-                filtro_cat_audit = f"AND categoria_producto = '{cat_audit_sel}'"
+                filtro_cat_audit     = f"AND categoria_producto = '{cat_audit_sel}'"
+                filtro_cat_audit_c   = f"AND c.categoria_producto = '{cat_audit_sel}'"
             q_audit = f"""
                 WITH muc_stats AS (
                     -- Estadísticas de MUC por SKU: detectar dispersión
@@ -1300,7 +1298,7 @@ if modulo.startswith("📦"):
                 JOIN muc_stats m ON c.sku = m.sku
                 WHERE c.muc > 0
                   AND c.costo_realfinal > 0
-                  {filtro_cat_audit}
+                  {filtro_cat_audit_c}
                 ORDER BY m.muc_max / NULLIF(m.muc_min, 0) DESC, c.sku, c.muc
                 LIMIT 1000
             """
