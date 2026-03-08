@@ -1249,44 +1249,59 @@ if modulo.startswith("📦"):
         if st.button("▶ Ejecutar Auditoría"):
             filtro_cat_audit = f"AND categoria_producto = '{cat_audit_sel}'" if cat_audit_sel != 'Todas' else ""
             q_audit = f"""
-                WITH calc AS (
+                WITH consistentes AS (
+                    -- Solo registros donde el muc guardado coincide con el recalculado (sin corrupción)
+                    SELECT sku, muc
+                    FROM compras
+                    WHERE costo_realfinal > 0
+                      AND cant_conv > 0
+                      AND formato > 0
+                      AND muc > 0
+                      AND ABS(
+                            muc - CASE WHEN formato = 1
+                                       THEN costo_realfinal / NULLIF(cant_conv, 0)
+                                       ELSE costo_realfinal / NULLIF(cant_conv * formato, 0)
+                                  END
+                          ) / NULLIF(muc, 0) < 0.05   -- tolerancia 5% por redondeos
+                ),
+                mediana_sku AS (
                     SELECT
-                        c.id,
-                        c.fecha_dte::date                                                        AS fecha,
-                        c.local,
-                        c.folio,
-                        c.sku,
-                        c.nombre_producto,
-                        c.nombre_proveedor                                                       AS proveedor,
-                        c.categoria_producto                                                     AS categoria,
-                        c.cantidad,
-                        c.conversion,
-                        c.formato,
-                        c.cant_conv,
-                        c.monto_real,
-                        c.costo_realfinal,
-                        -- Precio neto por unidad de cant_conv (directo de factura)
-                        ROUND((c.monto_real     / NULLIF(c.cant_conv, 0))::numeric, 2)          AS precio_factura,
-                        ROUND((c.costo_realfinal / NULLIF(c.cant_conv, 0))::numeric, 2)         AS precio_unit,
-                        -- MUC que debería resultar si conversion y formato son correctos
-                        ROUND((c.monto_real / NULLIF(c.cant_conv * c.formato, 0))::numeric, 6)  AS muc_esperado,
-                        c.muc                                                                    AS muc_real
-                    FROM compras c
-                    WHERE c.muc > 0
-                      AND c.monto_real > 0
-                      AND c.formato > 0
-                      AND c.cant_conv > 0
-                      {filtro_cat_audit}
+                        sku,
+                        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY muc) AS muc_mediana,
+                        COUNT(*) AS n_consistentes
+                    FROM consistentes
+                    GROUP BY sku
+                    HAVING COUNT(*) >= 2
                 )
                 SELECT
-                    *,
-                    ROUND((muc_real / NULLIF(muc_esperado, 0))::numeric, 2)   AS ratio_vs_esperado,
-                    COUNT(*) OVER (PARTITION BY sku)                           AS n_registros
-                FROM calc
-                WHERE
-                    muc_real > muc_esperado * {umbral_audit}
-                    OR muc_real < muc_esperado / {umbral_audit}
-                ORDER BY ABS(muc_real / NULLIF(muc_esperado, 0) - 1) DESC
+                    c.id,
+                    c.fecha_dte::date                                                    AS fecha,
+                    c.local,
+                    c.folio,
+                    c.sku,
+                    c.nombre_producto,
+                    c.nombre_proveedor                                                   AS proveedor,
+                    c.categoria_producto                                                 AS categoria,
+                    c.cantidad,
+                    c.conversion,
+                    c.formato,
+                    c.cant_conv,
+                    c.monto_real,
+                    c.costo_realfinal,
+                    ROUND((c.monto_real / NULLIF(c.cant_conv, 0))::numeric, 2)          AS precio_factura,
+                    m.muc_mediana                                                        AS muc_esperado,
+                    c.muc                                                                AS muc_real,
+                    ROUND((c.muc / NULLIF(m.muc_mediana, 0))::numeric, 4)               AS ratio_vs_esperado,
+                    m.n_consistentes                                                     AS n_registros
+                FROM compras c
+                JOIN mediana_sku m ON c.sku = m.sku
+                WHERE c.muc > 0
+                  AND (
+                      c.muc > m.muc_mediana * {umbral_audit}
+                      OR c.muc < m.muc_mediana / {umbral_audit}
+                  )
+                  {filtro_cat_audit}
+                ORDER BY ABS(c.muc / NULLIF(m.muc_mediana, 0) - 1) DESC
                 LIMIT 500
             """
             df_audit = run_query(q_audit)
