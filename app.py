@@ -1629,42 +1629,46 @@ elif modulo.startswith("📊"):
                 filtro_cat3 = f"AND categoria_producto = '{cat3_sel}'" if cat3_sel != 'Todos' else ""
 
                 q_ing = f"""
-                    WITH base AS (
+                    WITH equiv AS (
+                        SELECT sku_compra, sku_receta FROM sku_equivalencias
+                    ),
+                    base AS (
                         SELECT
-                            c.sku,
-                            c.nombre_producto                                                          AS nombre,
+                            COALESCE(e.sku_receta, c.sku)                                              AS sku,
+                            MIN(c.nombre_producto)                                                     AS nombre,
                             MIN(c.nombre_proveedor)                                                    AS proveedor,
                             MIN(c.categoria_producto)                                                  AS categoria,
                             SUM(c.cant_conv)                                                           AS cant_base,
                             SUM(c.costo_realfinal) / NULLIF(SUM(c.costo_realfinal / NULLIF(c.muc,0)),0) AS precio_base
                         FROM compras c
+                        LEFT JOIN equiv e ON c.sku = e.sku_compra
                         WHERE c.fecha_dte::date BETWEEN '{base_i}' AND '{base_f}'
                           AND c.subcat IN ('Directo','Indirecto')
                           AND c.costo_realfinal > 0
                           AND c.muc > 0
                           {filtro_cat3}
-                        GROUP BY c.sku, c.nombre_producto
+                        GROUP BY 1
                     ),
                     comp AS (
                         SELECT
-                            c.sku,
-                            c.nombre_producto                                                          AS nombre,
+                            COALESCE(e.sku_receta, c.sku)                                              AS sku,
                             SUM(c.costo_realfinal) / NULLIF(SUM(c.costo_realfinal / NULLIF(c.muc,0)),0) AS precio_comp
                         FROM compras c
+                        LEFT JOIN equiv e ON c.sku = e.sku_compra
                         WHERE c.fecha_dte::date BETWEEN '{comp_i}' AND '{comp_f}'
                           AND c.subcat IN ('Directo','Indirecto')
                           AND c.costo_realfinal > 0
                           AND c.muc > 0
-                        GROUP BY c.sku, c.nombre_producto
+                        GROUP BY 1
                     )
                     SELECT
                         b.sku, b.nombre, b.proveedor, b.categoria,
                         b.cant_base, b.precio_base,
                         c.precio_comp,
-                        b.cant_base * b.precio_base                            AS impacto_base,
-                        b.cant_base * COALESCE(c.precio_comp, b.precio_base)   AS impacto_comp
+                        b.cant_base * b.precio_base                          AS impacto_base,
+                        b.cant_base * COALESCE(c.precio_comp, b.precio_base) AS impacto_comp
                     FROM base b
-                    LEFT JOIN comp c ON b.sku = c.sku AND b.nombre = c.nombre
+                    LEFT JOIN comp c ON b.sku = c.sku
                     ORDER BY b.nombre
                 """
                 df3 = run_query(q_ing)
