@@ -1418,12 +1418,9 @@ if modulo.startswith("📦"):
                                                 """), {"conv": nuevo_conv_lote, "fmt": nuevo_fmt_lote,
                                                        "ids": ids_lote})
                                                 conn.commit()
-                                            st.success(f"✅ {len(ids_lote)} registros corregidos")
-                                            # Eliminar del df los registros corregidos
-                                            ids_lote_str = [str(int(i)) for i in ids_lote]
-                                            st.session_state['audit_df'] = st.session_state['audit_df'][
-                                                ~st.session_state['audit_df']['id'].astype(str).str.split('.').str[0].isin(ids_lote_str)
-                                            ].reset_index(drop=True)
+                                            st.success(f"✅ {len(ids_lote)} registros corregidos — recalculando auditoría...")
+                                            # Borrar caché para re-ejecutar desde BD con datos frescos
+                                            del st.session_state['audit_df']
                                             st.rerun()
                                         except Exception as e:
                                             st.error(f"Error: {e}")
