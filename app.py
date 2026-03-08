@@ -1267,7 +1267,8 @@ if modulo.startswith("📦"):
                         MAX(nombre_producto)                                            AS nombre_producto,
                         MAX(categoria_producto)                                         AS categoria,
                         MAX(conversion)                                                 AS conversion,
-                        MAX(formato)                                                    AS formato
+                        MAX(formato)                                                    AS formato,
+                        ROUND(AVG(monto_real / NULLIF(cant_conv, 0))::numeric, 2)       AS precio_factura
                     FROM compras
                     WHERE muc > 0
                       AND costo_realfinal > 0
@@ -1296,6 +1297,7 @@ if modulo.startswith("📦"):
                     g.muc_grupo                                                         AS muc,
                     g.n_registros,
                     g.ids,
+                    g.precio_factura,
                     d.muc_min,
                     d.muc_max,
                     d.dispersion
@@ -1476,6 +1478,7 @@ if modulo.startswith("📦"):
                     else:
                         sev_color = '#aaa';    sev_label = f'⚪ {dispersion:.1f}×'
                     muc_color = '#e84545' if es_outlier else '#aaa'
+                    precio    = float(r.get('precio_factura', 0) or 0)
                     rows_a += (
                         f'<tr style="border-bottom:1px solid #1e1e1e">'
                         f'<td style="padding:9px 12px;color:#666;font-family:monospace;font-size:0.72rem">{r.get("sku","")}</td>'
@@ -1483,18 +1486,19 @@ if modulo.startswith("📦"):
                         f'<td style="padding:9px 12px;color:#666;font-size:0.75rem">{r.get("categoria","")}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#888;font-variant-numeric:tabular-nums">{r.get("conversion","")}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#888;font-variant-numeric:tabular-nums">{r.get("formato","")}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">${precio:,.2f}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:{muc_color};font-weight:{"700" if es_outlier else "400"};font-variant-numeric:tabular-nums">{muc:,.4f}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#666;font-variant-numeric:tabular-nums">{n_reg}</td>'
                         f'<td style="padding:9px 12px;text-align:center;color:{sev_color};font-weight:600">{sev_label}</td>'
                         f'</tr>'
                     )
 
-                hdrs_a = ['SKU','Producto','Categoría','Conv.','Formato','MUC','# Registros','Dispersión']
+                hdrs_a = ['SKU','Producto','Categoría','Conv.','Formato','Neto Fact/u','MUC','# Reg.','Dispersión']
                 tabla_a = (
                     '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
                     '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
                     '<thead><tr style="background:#111">'
-                    + ''.join([f'<th style="{hs_a};text-align:{"left" if i<3 else "right" if i<7 else "center"}">{h}</th>' for i, h in enumerate(hdrs_a)])
+                    + ''.join([f'<th style="{hs_a};text-align:{"left" if i<3 else "right" if i<8 else "center"}">{h}</th>' for i, h in enumerate(hdrs_a)])
                     + f'</tr></thead><tbody>{rows_a}</tbody></table></div>'
                 )
                 st.markdown(tabla_a, unsafe_allow_html=True)
