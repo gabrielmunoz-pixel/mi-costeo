@@ -1263,7 +1263,6 @@ if modulo.startswith("📦"):
                         sku,
                         MAX(muc) AS muc_max,
                         MIN(muc) AS muc_min,
-                        COUNT(*) AS n_registros,
                         ROUND((MAX(muc) / NULLIF(MIN(muc), 0))::numeric, 1) AS dispersion
                     FROM compras
                     WHERE muc > 0
@@ -1275,34 +1274,26 @@ if modulo.startswith("📦"):
                        AND MAX(muc) / NULLIF(MIN(muc), 0) > {umbral_audit}
                 )
                 SELECT
-                    c.id,
-                    c.fecha_dte::date                                            AS fecha,
-                    c.local,
-                    c.folio,
                     c.sku,
-                    c.nombre_producto,
-                    c.nombre_proveedor                                          AS proveedor,
-                    c.categoria_producto                                        AS categoria,
-                    c.cantidad,
-                    c.conversion,
-                    c.formato,
-                    c.cant_conv,
-                    c.monto_real,
-                    c.costo_realfinal,
-                    ROUND((c.monto_real / NULLIF(c.cant_conv, 0))::numeric, 2) AS precio_factura,
-                    c.muc,
+                    MAX(c.nombre_producto)                                          AS nombre_producto,
+                    MAX(c.categoria_producto)                                       AS categoria,
+                    MAX(c.conversion)                                               AS conversion,
+                    MAX(c.formato)                                                  AS formato,
+                    ROUND(c.muc::numeric, 6)                                       AS muc,
+                    COUNT(*)                                                        AS n_registros,
+                    ARRAY_AGG(c.id)                                                AS ids,
                     d.muc_min,
                     d.muc_max,
-                    d.dispersion,
-                    d.n_registros
+                    d.dispersion
                 FROM compras c
                 JOIN dispersos d ON c.sku = d.sku
                 WHERE c.muc > 0
                   AND c.costo_realfinal > 0
                   AND UPPER(c.sku) != 'COLACION'
                   {filtro_cat_audit_c}
-                ORDER BY d.dispersion DESC, c.sku, c.muc
-                LIMIT 2000
+                GROUP BY c.sku, ROUND(c.muc::numeric, 6), d.muc_min, d.muc_max, d.dispersion
+                ORDER BY d.dispersion DESC, c.sku, ROUND(c.muc::numeric, 6)
+                LIMIT 500
             """
             df_audit = run_query(q_audit)
             st.session_state['audit_df'] = df_audit
@@ -1330,29 +1321,31 @@ if modulo.startswith("📦"):
                 ids_disp    = df_audit['id'].astype(str).tolist() if 'id' in df_audit.columns else []
                 nombres_disp = (df_audit['sku'] + ' — ' + df_audit['nombre_producto']).tolist()
 
-                # Construir grupos por SKU — un grupo por SKU, ordenado por dispersión desc
+                # Cada fila ya es un grupo SKU+MUC — construir labels para el buscador
                 if not df_audit.empty:
+                    df_audit['_label'] = df_audit.apply(
+                        lambda r: f"{r['sku']} — {r['nombre_producto'][:40]} | MUC {float(r['muc']):.4f} ({int(r['n_registros'])} reg. | {float(r['dispersion']):.0f}×)",
+                        axis=1
+                    )
+                    # Para el selector de SKU (agrupa todas las filas del mismo SKU)
                     grupos = df_audit.groupby('sku').agg(
-                        sku        = ('sku', 'first'),
                         nombre     = ('nombre_producto', 'first'),
-                        conversion = ('conversion', 'first'),
-                        formato    = ('formato', 'first'),
                         dispersion = ('dispersion', 'first'),
-                        n_filas    = ('id', 'count'),
-                        ids        = ('id', list)
-                    ).reset_index(drop=True)
+                        n_filas    = ('n_registros', 'sum'),
+                    ).reset_index()
                     grupos = grupos.sort_values('dispersion', ascending=False).reset_index(drop=True)
                     grupos['label'] = grupos.apply(
-                        lambda r: f"{r['sku']} — {r['nombre'][:40]} ({r['n_filas']} reg. | {r['dispersion']:.0f}×)", axis=1
+                        lambda r: f"{r['sku']} — {r['nombre'][:40]} ({int(r['n_filas'])} reg. | {float(r['dispersion']):.0f}×)",
+                        axis=1
                     )
                 else:
                     grupos = pd.DataFrame()
 
-                # Selector de grupo
+                # Selector por SKU — al elegir uno muestra sus filas MUC agrupadas
                 grupo_labels = grupos['label'].tolist() if not grupos.empty else []
-                label_sel = st.selectbox("🔍 Filtrar por grupo",
+                label_sel = st.selectbox("🔍 Filtrar por SKU",
                                          [None] + grupo_labels,
-                                         format_func=lambda x: "— Todos los registros —" if x is None else x,
+                                         format_func=lambda x: "— Todos los SKUs —" if x is None else x,
                                          key='audit_grupo_sel')
 
                 with st.expander("⚙️ Acciones", expanded=True):
@@ -1361,20 +1354,36 @@ if modulo.startswith("📦"):
                     # ── Corrección en lote ──
                     with acc1:
                         st.markdown("**Corregir grupo (lote)**")
-                        if not grupos.empty:
-                            if label_sel:
-                                grupo_row = grupos[grupos['label'] == label_sel].iloc[0]
+                        if not df_audit.empty and label_sel:
+                            sku_sel = grupos[grupos['label'] == label_sel].iloc[0]['sku'] if not grupos.empty else None
+                            if sku_sel:
+                                filas_sku = df_audit[df_audit['sku'] == sku_sel]
+                                # Selector de MUC dentro del SKU
+                                mucs_disp = sorted(filas_sku['muc'].dropna().unique().tolist())
+                                muc_sel_lote = st.selectbox(
+                                    "MUC a corregir",
+                                    mucs_disp,
+                                    format_func=lambda m: f"{float(m):.4f}  ({int(filas_sku[filas_sku['muc']==m]['n_registros'].sum())} reg.)",
+                                    key='audit_muc_lote'
+                                )
+                                fila_sel = filas_sku[filas_sku['muc'] == muc_sel_lote].iloc[0]
                                 lc1, lc2 = st.columns(2)
                                 with lc1:
                                     nuevo_conv_lote = st.number_input("Nueva conversion",
-                                        value=float(grupo_row['conversion'] or 1),
+                                        value=float(fila_sel['conversion'] or 1),
                                         min_value=0.001, step=0.1, key='audit_conv_lote')
                                 with lc2:
                                     nuevo_fmt_lote = st.number_input("Nuevo formato",
-                                        value=float(grupo_row['formato'] or 1),
+                                        value=float(fila_sel['formato'] or 1),
                                         min_value=0.001, step=1.0, key='audit_fmt_lote')
-                                ids_lote = [int(i) for i in grupo_row['ids']]
-                                st.caption(f"Afecta **{int(grupo_row['n_filas'])}** registros")
+                                # ids: están en la columna ids (lista)
+                                import ast as _ast
+                                raw_ids = fila_sel['ids']
+                                if isinstance(raw_ids, str):
+                                    raw_ids = _ast.literal_eval(raw_ids)
+                                ids_lote = [int(i) for i in raw_ids]
+                                st.caption(f"Afecta **{len(ids_lote)}** registros")
+
                                 bc1, bc2 = st.columns(2)
                                 with bc1:
                                     if st.button("💾 Aplicar corrección"):
@@ -1429,13 +1438,13 @@ if modulo.startswith("📦"):
 
                 st.markdown("<br>", unsafe_allow_html=True)
 
-                # ── Tabla — filtrada por grupo seleccionado ───────────────
+                # ── Tabla — una fila por SKU+MUC ─────────────────────────
                 if label_sel and not grupos.empty:
                     grupo_activo_row = grupos[grupos['label'] == label_sel]
                     if not grupo_activo_row.empty:
                         sku_activo = grupo_activo_row.iloc[0]['sku']
                         df_tabla = df_audit[df_audit['sku'] == sku_activo]
-                        st.caption(f"Mostrando {len(df_tabla)} registros del SKU {sku_activo} — los outliers aparecen en rojo")
+                        st.caption(f"Mostrando {len(df_tabla)} grupos MUC del SKU {sku_activo}")
                     else:
                         df_tabla = df_audit
                 else:
@@ -1444,12 +1453,11 @@ if modulo.startswith("📦"):
                 hs_a = 'padding:9px 12px;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
                 rows_a = ''
                 for _, r in df_tabla.iterrows():
-                    rid        = str(r.get('id', ''))
-                    revisado   = rid in st.session_state['audit_revisados']
                     muc        = float(r.get('muc', 0) or 0)
                     muc_min    = float(r.get('muc_min', 0) or 0)
                     muc_max    = float(r.get('muc_max', 0) or 0)
                     dispersion = float(r.get('dispersion', 1) or 1)
+                    n_reg      = int(r.get('n_registros', 1) or 1)
                     es_outlier = muc_min > 0 and (abs(muc - muc_min) < 0.0001 or abs(muc - muc_max) < 0.0001)
                     if dispersion > 8:
                         sev_color = '#e84545'; sev_label = f'🔴 {dispersion:.0f}×'
@@ -1457,32 +1465,26 @@ if modulo.startswith("📦"):
                         sev_color = '#e89c45'; sev_label = f'🟡 {dispersion:.1f}×'
                     else:
                         sev_color = '#aaa';    sev_label = f'⚪ {dispersion:.1f}×'
-                    row_bg    = '#1a2a1a' if revisado else ''
                     muc_color = '#e84545' if es_outlier else '#aaa'
                     rows_a += (
-                        f'<tr style="border-bottom:1px solid #1e1e1e;background:{row_bg};opacity:{"0.5" if revisado else "1"}">'
-                        f'<td style="padding:9px 12px;color:#666;font-size:0.72rem">{r.get("fecha","")}</td>'
-                        f'<td style="padding:9px 12px;color:#888;font-size:0.75rem">{r.get("local","")}</td>'
+                        f'<tr style="border-bottom:1px solid #1e1e1e">'
                         f'<td style="padding:9px 12px;color:#666;font-family:monospace;font-size:0.72rem">{r.get("sku","")}</td>'
                         f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de;font-size:0.8rem">{r.get("nombre_producto","")}</td>'
-                        f'<td style="padding:9px 12px;color:#666;font-size:0.75rem">{r.get("proveedor","")}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">{r.get("cantidad","")}</td>'
+                        f'<td style="padding:9px 12px;color:#666;font-size:0.75rem">{r.get("categoria","")}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#888;font-variant-numeric:tabular-nums">{r.get("conversion","")}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#888;font-variant-numeric:tabular-nums">{r.get("formato","")}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">${float(r.get("precio_factura",0) or 0):,.2f}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:{muc_color};font-weight:{"700" if es_outlier else "400"};font-variant-numeric:tabular-nums">{muc:,.4f}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#666;font-variant-numeric:tabular-nums">{n_reg}</td>'
                         f'<td style="padding:9px 12px;text-align:center;color:{sev_color};font-weight:600">{sev_label}</td>'
-                        f'<td style="padding:9px 12px;text-align:center;color:#555;font-size:0.72rem">{"✅" if revisado else "—"}</td>'
                         f'</tr>'
                     )
 
-                hdrs_a = ['Fecha','Local','SKU','Producto','Proveedor','Cant.',
-                          'Conv.','Formato','Neto Factura/u','MUC','Dispersión','Rev.']
+                hdrs_a = ['SKU','Producto','Categoría','Conv.','Formato','MUC','# Registros','Dispersión']
                 tabla_a = (
                     '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
                     '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
                     '<thead><tr style="background:#111">'
-                    + ''.join([f'<th style="{hs_a};text-align:{"left" if i<5 else "right" if i<11 else "center"}">{h}</th>' for i, h in enumerate(hdrs_a)])
+                    + ''.join([f'<th style="{hs_a};text-align:{"left" if i<3 else "right" if i<7 else "center"}">{h}</th>' for i, h in enumerate(hdrs_a)])
                     + f'</tr></thead><tbody>{rows_a}</tbody></table></div>'
                 )
                 st.markdown(tabla_a, unsafe_allow_html=True)
