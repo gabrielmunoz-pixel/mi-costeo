@@ -1439,22 +1439,31 @@ if modulo.startswith("📦"):
                                 es_out = es_min or es_max
                                 mc     = '#e84545' if es_out else '#aaa'
                                 precio_i = float(r['precio_factura'] or 0)
+                                if disp_i > 8:
+                                    sc = '#e84545'; sl = f'🔴 {disp_i:.0f}×'
+                                elif disp_i > 2:
+                                    sc = '#e89c45'; sl = f'🟡 {disp_i:.1f}×'
+                                else:
+                                    sc = '#aaa';    sl = f'⚪ {disp_i:.1f}×'
                                 rows_i += (
                                     f'<tr style="border-bottom:1px solid #1e1e1e">'
+                                    f'<td style="padding:9px 12px;color:#666;font-family:monospace;font-size:0.72rem">{sku_inspect.upper()}</td>'
+                                    f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de;font-size:0.8rem">{r.get("nombre_producto","")}</td>'
                                     f'<td style="padding:9px 12px;color:#666;font-size:0.75rem">{r.get("categoria","")}</td>'
                                     f'<td style="padding:9px 12px;text-align:right;color:#888">{r["conversion"]}</td>'
                                     f'<td style="padding:9px 12px;text-align:right;color:#888">{r["formato"]}</td>'
                                     f'<td style="padding:9px 12px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">${precio_i:,.2f}</td>'
                                     f'<td style="padding:9px 12px;text-align:right;color:{mc};font-weight:{"700" if es_out else "400"};font-variant-numeric:tabular-nums">{muc_i:.4f}</td>'
                                     f'<td style="padding:9px 12px;text-align:right;color:#666">{int(r["n_registros"])}</td>'
+                                    f'<td style="padding:9px 12px;text-align:center;color:{sc};font-weight:600">{sl}</td>'
                                     f'</tr>'
                                 )
-                            hdrs_i = ['Categoría','Conv.','Formato','Neto Fact/u','MUC','# Reg.']
+                            hdrs_i = ['SKU','Producto','Categoría','Conv.','Formato','Neto Fact/u','MUC','# Reg.','Dispersión']
                             st.markdown(
                                 '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
                                 '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
                                 '<thead><tr style="background:#111">'
-                                + ''.join([f'<th style="{hs_i};text-align:{"left" if i==0 else "right"}">{h}</th>' for i, h in enumerate(hdrs_i)])
+                                + ''.join([f'<th style="{hs_i};text-align:{"left" if i<3 else "right" if i<8 else "center"}">{h}</th>' for i, h in enumerate(hdrs_i)])
                                 + f'</tr></thead><tbody>{rows_i}</tbody></table></div>',
                                 unsafe_allow_html=True
                             )
@@ -1504,94 +1513,79 @@ if modulo.startswith("📦"):
                                     st.error(f"Error: {e}")
 
 
-                    acc1, acc2, acc3 = st.columns([3, 3, 2])
 
-                    # ── Corrección en lote ──
-                    with acc1:
-                        st.markdown("**Corregir grupo (lote)**")
-                        if not df_audit.empty and label_sel:
-                            sku_sel = grupos[grupos['label'] == label_sel].iloc[0]['sku'] if not grupos.empty else None
-                            if sku_sel:
-                                filas_sku = df_audit[df_audit['sku'] == sku_sel]
-                                # Selector de MUC dentro del SKU
-                                mucs_disp = sorted(filas_sku['muc'].dropna().unique().tolist())
-                                muc_sel_lote = st.selectbox(
-                                    "MUC a corregir",
-                                    mucs_disp,
-                                    format_func=lambda m: f"{float(m):.4f}  ({int(filas_sku[filas_sku['muc']==m]['n_registros'].sum())} reg.)",
-                                    key='audit_muc_lote'
-                                )
-                                fila_sel = filas_sku[filas_sku['muc'] == muc_sel_lote].iloc[0]
-                                lc1, lc2 = st.columns(2)
-                                with lc1:
-                                    nuevo_conv_lote = st.number_input("Nueva conversion",
-                                        value=float(fila_sel['conversion'] or 1),
-                                        min_value=0.001, step=0.1, key='audit_conv_lote')
-                                with lc2:
-                                    nuevo_fmt_lote = st.number_input("Nuevo formato",
-                                        value=float(fila_sel['formato'] or 1),
-                                        min_value=0.001, step=1.0, key='audit_fmt_lote')
-                                # ids: están en la columna ids (lista)
-                                import ast as _ast
-                                raw_ids = fila_sel['ids']
-                                if isinstance(raw_ids, str):
-                                    raw_ids = _ast.literal_eval(raw_ids)
-                                ids_lote = [int(i) for i in raw_ids]
-                                st.caption(f"Afecta **{len(ids_lote)}** registros")
-
-                                bc1, bc2 = st.columns(2)
-                                with bc1:
-                                    if st.button("💾 Aplicar corrección"):
-                                        engine = get_engine()
-                                        try:
-                                            with engine.connect() as conn:
-                                                conn.execute(text("""
-                                                    UPDATE compras SET
-                                                        conversion = :conv,
-                                                        formato    = :fmt,
-                                                        cant_conv  = cantidad * :conv,
-                                                        muc        = CASE WHEN :fmt = 1
-                                                                     THEN costo_realfinal / NULLIF(cantidad * :conv, 0)
-                                                                     ELSE costo_realfinal / NULLIF(cantidad * :conv * :fmt, 0)
-                                                                     END
-                                                    WHERE id = ANY(:ids)
-                                                """), {"conv": nuevo_conv_lote, "fmt": nuevo_fmt_lote,
-                                                       "ids": ids_lote})
-                                                conn.commit()
-                                            st.success(f"✅ {len(ids_lote)} registros corregidos — recalculando auditoría...")
-                                            del st.session_state['audit_df']
-                                            st.session_state.pop('audit_grupo_sel', None)
-                                            st.rerun()
-                                        except Exception as e:
-                                            st.error(f"Error: {e}")
-                                with bc2:
-                                    if st.button("✅ Marcar revisado"):
-                                        st.session_state['audit_revisados'].update([str(i) for i in ids_lote])
+                # ── Corrección informe (arriba de la tabla) ─────────────────
+                if not df_audit.empty and label_sel_muc:
+                    sku_sel_inf = label_sel_muc.split(' — ')[0].strip()
+                    filas_sku = df_audit[df_audit['sku'] == sku_sel_inf]
+                    if not filas_sku.empty:
+                        st.markdown(f'**⚙️ Corregir — {sku_sel_inf}**')
+                        ca1, ca2, ca3, ca4 = st.columns([2, 2, 2, 2])
+                        mucs_disp = sorted(filas_sku['muc'].dropna().unique().tolist())
+                        with ca1:
+                            muc_sel_lote = st.selectbox(
+                                'MUC a corregir', mucs_disp,
+                                format_func=lambda m: f'{float(m):.4f} ({int(filas_sku[filas_sku["muc"]==m]["n_registros"].sum())} reg.)',
+                                key='audit_muc_lote'
+                            )
+                        fila_sel = filas_sku[filas_sku['muc'] == muc_sel_lote].iloc[0]
+                        with ca2:
+                            nuevo_conv_lote = st.number_input('Nueva conversion',
+                                value=float(fila_sel['conversion'] or 1),
+                                min_value=0.001, step=0.1, key='audit_conv_lote')
+                        with ca3:
+                            nuevo_fmt_lote = st.number_input('Nuevo formato',
+                                value=float(fila_sel['formato'] or 1),
+                                min_value=0.001, step=1.0, key='audit_fmt_lote')
+                        import ast as _ast
+                        raw_ids = fila_sel['ids']
+                        if isinstance(raw_ids, str):
+                            raw_ids = _ast.literal_eval(raw_ids)
+                        ids_lote = [int(i) for i in raw_ids]
+                        with ca4:
+                            st.caption(f'Afecta **{len(ids_lote)}** registros')
+                            cb1, cb2 = st.columns(2)
+                            with cb1:
+                                if st.button('💾 Aplicar', key='audit_apply'):
+                                    engine = get_engine()
+                                    try:
+                                        with engine.connect() as conn:
+                                            conn.execute(text(
+                                                'UPDATE compras SET conversion=:conv,formato=:fmt,'
+                                                'cant_conv=cantidad*:conv,'
+                                                'muc=CASE WHEN :fmt=1 THEN costo_realfinal/NULLIF(cantidad*:conv,0)'
+                                                ' ELSE costo_realfinal/NULLIF(cantidad*:conv*:fmt,0) END'
+                                                ' WHERE id=ANY(:ids)'
+                            ), {'conv': nuevo_conv_lote, 'fmt': nuevo_fmt_lote, 'ids': ids_lote})
+                                            conn.commit()
+                                        st.success(f'✅ {len(ids_lote)} registros corregidos')
+                                        st.session_state.pop('audit_df', None)
+                                        st.session_state.pop('audit_grupo_sel', None)
                                         st.rerun()
+                                    except Exception as e:
+                                        st.error(f'Error: {e}')
+                            with cb2:
+                                if st.button('✅ Revisado', key='audit_mark'):
+                                    st.session_state['audit_revisados'].update([str(i) for i in ids_lote])
+                                    st.rerun()
 
-                    # ── Marcar revisado / limpiar ──
-                    with acc2:
-                        st.markdown("**Revisados**")
-                        st.caption(f"{len(st.session_state['audit_revisados'])} marcados como revisados — dimean en la tabla para que no distraigan al auditar.")
-                        if st.button("🔄 Limpiar todos los revisados"):
-                            st.session_state['audit_revisados'] = set()
-                            st.rerun()
-
-                    # ── Exportar ──
-                    with acc3:
-                        st.markdown("**Exportar**")
-                        buf_audit = io.BytesIO()
-                        export_cols = ['fecha','local','folio','sku','nombre_producto','proveedor',
-                                       'categoria','cantidad','conversion','formato','cant_conv',
-                                       'precio_factura','muc','muc_min','muc_max','dispersion','n_registros']
-                        export_cols_exist = [c for c in export_cols if c in df_audit.columns]
-                        with pd.ExcelWriter(buf_audit, engine='openpyxl') as w:
-                            df_audit[export_cols_exist].to_excel(w, sheet_name='Inconsistencias', index=False)
-                        st.download_button("📥 Descargar Excel", buf_audit.getvalue(),
-                                           "Auditoria_Compras.xlsx",
-                                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-                st.markdown("<br>", unsafe_allow_html=True)
+                # ── Exportar y limpiar revisados ──────────────────────────
+                ex1, ex2 = st.columns([1, 1])
+                with ex1:
+                    buf_audit = io.BytesIO()
+                    export_cols = ['sku','nombre_producto','categoria','conversion','formato',
+                                   'precio_factura','muc','muc_min','muc_max','dispersion','n_registros']
+                    export_cols_exist = [c for c in export_cols if c in df_audit.columns]
+                    with pd.ExcelWriter(buf_audit, engine='openpyxl') as w:
+                        df_audit[export_cols_exist].to_excel(w, sheet_name='Inconsistencias', index=False)
+                    st.download_button('📥 Exportar Excel', buf_audit.getvalue(),
+                                       'Auditoria_Compras.xlsx',
+                                       mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+                with ex2:
+                    st.caption(f"{len(st.session_state['audit_revisados'])} marcados revisados")
+                    if st.button('🔄 Limpiar revisados'):
+                        st.session_state['audit_revisados'] = set()
+                        st.rerun()
 
                 # ── Tabla — una fila por SKU+MUC ─────────────────────────
                 if label_sel and not grupos.empty:
