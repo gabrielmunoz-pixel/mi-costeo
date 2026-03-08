@@ -1338,26 +1338,36 @@ if modulo.startswith("📦"):
                 ids_disp    = df_audit['id'].astype(str).tolist() if 'id' in df_audit.columns else []
                 nombres_disp = (df_audit['sku'] + ' — ' + df_audit['nombre_producto']).tolist()
 
-                # Construir grupos por SKU + conversion + formato para corrección en lote
+                # Construir grupos por SKU + conversion + formato + cluster de MUC
+                # El cluster se define por el orden de magnitud del muc_real (log10 redondeado)
+                # Así registros con salto x10 quedan en grupos separados aunque tengan mismos parámetros
                 if not df_audit.empty:
+                    import math
+                    def muc_cluster(muc):
+                        if muc and muc > 0:
+                            return str(round(math.log10(float(muc))))
+                        return '0'
+                    df_audit['_cluster_muc'] = df_audit['muc_real'].apply(muc_cluster)
                     df_audit['_grupo'] = (
                         df_audit['sku'].astype(str) + ' | conv=' +
                         df_audit['conversion'].astype(str) + ' | fmt=' +
-                        df_audit['formato'].astype(str)
+                        df_audit['formato'].astype(str) + ' | mag=' +
+                        df_audit['_cluster_muc']
                     )
-                    # Preservar orden: primera aparición de cada grupo en df_audit (ya ordenado por ratio desc)
+                    # Preservar orden: primera aparición de cada grupo (ya ordenado por ratio desc)
                     orden_grupos = df_audit['_grupo'].drop_duplicates().reset_index(drop=True)
                     grupos = df_audit.groupby('_grupo').agg(
                         sku        = ('sku', 'first'),
                         nombre     = ('nombre_producto', 'first'),
                         conversion = ('conversion', 'first'),
                         formato    = ('formato', 'first'),
+                        muc_ref    = ('muc_real', 'median'),
                         n_filas    = ('id', 'count'),
                         ids        = ('id', list)
                     ).reset_index()
                     grupos = orden_grupos.to_frame().merge(grupos, on='_grupo', how='left')
                     grupos['label'] = grupos.apply(
-                        lambda r: f"{r['sku']} — {r['nombre'][:40]} ({r['n_filas']} reg.)", axis=1
+                        lambda r: f"{r['sku']} — {r['nombre'][:35]} | MUC~{float(r['muc_ref']):.4f} ({r['n_filas']} reg.)", axis=1
                     )
                 else:
                     grupos = pd.DataFrame()
@@ -1460,7 +1470,7 @@ if modulo.startswith("📦"):
                     if not grupo_activo_row.empty:
                         ids_activos = grupo_activo_row.iloc[0]['ids']
                         df_tabla = df_audit[df_audit['id'].isin(ids_activos)]
-                        st.caption(f"Mostrando {len(df_tabla)} registros del grupo seleccionado — sin selección muestra todos.")
+                        st.caption(f"Mostrando {len(df_tabla)} de {len(df_audit)} registros — grupo: {grupo_activo}")
                     else:
                         df_tabla = df_audit
                 else:
