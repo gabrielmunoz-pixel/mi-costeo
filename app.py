@@ -1258,14 +1258,13 @@ if modulo.startswith("📦"):
                 filtro_cat_audit   = f"AND categoria_producto = '{cat_sel}'"
                 filtro_cat_audit_c = f"AND c.categoria_producto = '{cat_sel}'"
             q_audit = f"""
-                WITH muc_stats AS (
-                    -- Estadísticas de MUC por SKU: detectar dispersión
+                WITH dispersos AS (
                     SELECT
                         sku,
-                        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY muc) AS muc_mediana,
                         MAX(muc) AS muc_max,
                         MIN(muc) AS muc_min,
-                        COUNT(*) AS n_registros
+                        COUNT(*) AS n_registros,
+                        ROUND((MAX(muc) / NULLIF(MIN(muc), 0))::numeric, 1) AS dispersion
                     FROM compras
                     WHERE muc > 0
                       AND costo_realfinal > 0
@@ -1277,33 +1276,33 @@ if modulo.startswith("📦"):
                 )
                 SELECT
                     c.id,
-                    c.fecha_dte::date                                                AS fecha,
+                    c.fecha_dte::date                                            AS fecha,
                     c.local,
                     c.folio,
                     c.sku,
                     c.nombre_producto,
-                    c.nombre_proveedor                                              AS proveedor,
-                    c.categoria_producto                                            AS categoria,
+                    c.nombre_proveedor                                          AS proveedor,
+                    c.categoria_producto                                        AS categoria,
                     c.cantidad,
                     c.conversion,
                     c.formato,
                     c.cant_conv,
                     c.monto_real,
                     c.costo_realfinal,
-                    ROUND((c.monto_real / NULLIF(c.cant_conv, 0))::numeric, 2)     AS precio_factura,
-                    m.muc_mediana                                                   AS muc_esperado,
-                    c.muc                                                           AS muc_real,
-                    ROUND((c.muc / NULLIF(m.muc_mediana, 0))::numeric, 4)          AS ratio_vs_esperado,
-                    m.n_registros,
-                    ROUND((m.muc_max / NULLIF(m.muc_min, 0))::numeric, 1)          AS dispersion_max
+                    ROUND((c.monto_real / NULLIF(c.cant_conv, 0))::numeric, 2) AS precio_factura,
+                    c.muc,
+                    d.muc_min,
+                    d.muc_max,
+                    d.dispersion,
+                    d.n_registros
                 FROM compras c
-                JOIN muc_stats m ON c.sku = m.sku
+                JOIN dispersos d ON c.sku = d.sku
                 WHERE c.muc > 0
                   AND c.costo_realfinal > 0
                   AND UPPER(c.sku) != 'COLACION'
                   {filtro_cat_audit_c}
-                ORDER BY m.muc_max / NULLIF(m.muc_min, 0) DESC, c.sku, c.muc
-                LIMIT 1000
+                ORDER BY d.dispersion DESC, c.sku, c.muc
+                LIMIT 2000
             """
             df_audit = run_query(q_audit)
             st.session_state['audit_df'] = df_audit
@@ -1451,9 +1450,9 @@ if modulo.startswith("📦"):
                 if label_sel and not grupos.empty:
                     grupo_activo_row = grupos[grupos['label'] == label_sel]
                     if not grupo_activo_row.empty:
-                        ids_activos = grupo_activo_row.iloc[0]['ids']
-                        df_tabla = df_audit[df_audit['id'].isin(ids_activos)]
-                        st.caption(f"Mostrando {len(df_tabla)} de {len(df_audit)} registros — grupo: {label_sel}")
+                        sku_activo = grupo_activo_row.iloc[0]['sku']
+                        df_tabla = df_audit[df_audit['sku'] == sku_activo]
+                        st.caption(f"Mostrando {len(df_tabla)} registros del SKU {sku_activo} — los outliers aparecen en rojo")
                     else:
                         df_tabla = df_audit
                 else:
@@ -1462,19 +1461,21 @@ if modulo.startswith("📦"):
                 hs_a = 'padding:9px 12px;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
                 rows_a = ''
                 for _, r in df_tabla.iterrows():
-                    rid      = str(r.get('id', ''))
-                    revisado = rid in st.session_state['audit_revisados']
-                    dispersion = float(r.get('dispersion_max', 1) or 1)
-                    ratio      = float(r.get('ratio_vs_esperado', 1) or 1)
+                    rid        = str(r.get('id', ''))
+                    revisado   = rid in st.session_state['audit_revisados']
+                    muc        = float(r.get('muc', 0) or 0)
+                    muc_min    = float(r.get('muc_min', 0) or 0)
+                    muc_max    = float(r.get('muc_max', 0) or 0)
+                    dispersion = float(r.get('dispersion', 1) or 1)
+                    es_outlier = muc_min > 0 and (abs(muc - muc_min) < 0.0001 or abs(muc - muc_max) < 0.0001)
                     if dispersion > 8:
                         sev_color = '#e84545'; sev_label = f'🔴 {dispersion:.0f}×'
-                    elif dispersion > 3:
-                        sev_color = '#e89c45'; sev_label = f'🟡 {dispersion:.0f}×'
+                    elif dispersion > 2:
+                        sev_color = '#e89c45'; sev_label = f'🟡 {dispersion:.1f}×'
                     else:
                         sev_color = '#aaa';    sev_label = f'⚪ {dispersion:.1f}×'
-                    # Marcar visualmente si este registro es outlier dentro del grupo
-                    es_outlier = ratio > 3 or ratio < 0.33
-                    row_bg = '#1a2a1a' if revisado else ('#2a1a1a' if es_outlier else '')
+                    row_bg    = '#1a2a1a' if revisado else ''
+                    muc_color = '#e84545' if es_outlier else '#aaa'
                     rows_a += (
                         f'<tr style="border-bottom:1px solid #1e1e1e;background:{row_bg};opacity:{"0.5" if revisado else "1"}">'
                         f'<td style="padding:9px 12px;color:#666;font-size:0.72rem">{r.get("fecha","")}</td>'
@@ -1486,21 +1487,19 @@ if modulo.startswith("📦"):
                         f'<td style="padding:9px 12px;text-align:right;color:#888;font-variant-numeric:tabular-nums">{r.get("conversion","")}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#888;font-variant-numeric:tabular-nums">{r.get("formato","")}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">${float(r.get("precio_factura",0) or 0):,.2f}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:#4caf7d;font-variant-numeric:tabular-nums">{float(r.get("muc_esperado",0) or 0):,.4f}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:{"#e84545" if es_outlier else "#aaa"};font-weight:{"700" if es_outlier else "400"};font-variant-numeric:tabular-nums">{float(r.get("muc_real",0) or 0):,.4f}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:{muc_color};font-weight:{"700" if es_outlier else "400"};font-variant-numeric:tabular-nums">{muc:,.4f}</td>'
                         f'<td style="padding:9px 12px;text-align:center;color:{sev_color};font-weight:600">{sev_label}</td>'
                         f'<td style="padding:9px 12px;text-align:center;color:#555;font-size:0.72rem">{"✅" if revisado else "—"}</td>'
                         f'</tr>'
                     )
 
                 hdrs_a = ['Fecha','Local','SKU','Producto','Proveedor','Cant.',
-                          'Conv.','Formato',
-                          'Neto Factura/u','MUC Mediana','MUC Real','Dispersión','Rev.']
+                          'Conv.','Formato','Neto Factura/u','MUC','Dispersión','Rev.']
                 tabla_a = (
                     '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
                     '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
                     '<thead><tr style="background:#111">'
-                    + ''.join([f'<th style="{hs_a};text-align:{"left" if i<5 else "right" if i<12 else "center"}">{h}</th>' for i, h in enumerate(hdrs_a)])
+                    + ''.join([f'<th style="{hs_a};text-align:{"left" if i<5 else "right" if i<11 else "center"}">{h}</th>' for i, h in enumerate(hdrs_a)])
                     + f'</tr></thead><tbody>{rows_a}</tbody></table></div>'
                 )
                 st.markdown(tabla_a, unsafe_allow_html=True)
