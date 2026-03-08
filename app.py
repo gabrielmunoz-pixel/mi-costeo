@@ -1325,6 +1325,8 @@ if modulo.startswith("📦"):
                         df_audit['conversion'].astype(str) + ' | fmt=' +
                         df_audit['formato'].astype(str)
                     )
+                    # Preservar orden: primera aparición de cada grupo en df_audit (ya ordenado por ratio desc)
+                    orden_grupos = df_audit['_grupo'].drop_duplicates().reset_index(drop=True)
                     grupos = df_audit.groupby('_grupo').agg(
                         sku        = ('sku', 'first'),
                         nombre     = ('nombre_producto', 'first'),
@@ -1333,6 +1335,7 @@ if modulo.startswith("📦"):
                         n_filas    = ('id', 'count'),
                         ids        = ('id', list)
                     ).reset_index()
+                    grupos = orden_grupos.to_frame().merge(grupos, on='_grupo', how='left')
                     grupos['label'] = grupos.apply(
                         lambda r: f"{r['sku']} — {r['nombre'][:40]} ({r['n_filas']} reg.)", axis=1
                     )
