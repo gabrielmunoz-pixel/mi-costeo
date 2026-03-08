@@ -1250,12 +1250,13 @@ if modulo.startswith("📦"):
             cat_audit_sel = st.selectbox("Categoría", cats_audit, key='audit_cat')
 
         if st.button("▶ Ejecutar Auditoría"):
-            if cat_audit_sel in ('Todas (sin Colación)', '── Colación ──'):
-                filtro_cat_audit   = "AND UPPER(categoria_producto) != 'COLACION'"
-                filtro_cat_audit_c = "AND UPPER(c.categoria_producto) != 'COLACION'"
+            cat_sel = st.session_state.get('audit_cat', 'Todas (sin Colación)')
+            if cat_sel in ('Todas (sin Colación)', '── Colación ──'):
+                filtro_cat_audit   = "AND UPPER(categoria_producto) NOT LIKE '%COLACION%' AND UPPER(categoria_producto) NOT LIKE '%COLACIÓN%'"
+                filtro_cat_audit_c = "AND UPPER(c.categoria_producto) NOT LIKE '%COLACION%' AND UPPER(c.categoria_producto) NOT LIKE '%COLACIÓN%'"
             else:
-                filtro_cat_audit   = f"AND categoria_producto = '{cat_audit_sel}'"
-                filtro_cat_audit_c = f"AND c.categoria_producto = '{cat_audit_sel}'"
+                filtro_cat_audit   = f"AND categoria_producto = '{cat_sel}'"
+                filtro_cat_audit_c = f"AND c.categoria_producto = '{cat_sel}'"
             q_audit = f"""
                 WITH muc_stats AS (
                     -- Estadísticas de MUC por SKU: detectar dispersión
