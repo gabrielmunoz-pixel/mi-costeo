@@ -1330,41 +1330,25 @@ if modulo.startswith("📦"):
                 ids_disp    = df_audit['id'].astype(str).tolist() if 'id' in df_audit.columns else []
                 nombres_disp = (df_audit['sku'] + ' — ' + df_audit['nombre_producto']).tolist()
 
-                # Construir grupos por SKU + conversion + formato + cluster de MUC
-                # El cluster se define por el orden de magnitud del muc_real (log10 redondeado)
-                # Así registros con salto x10 quedan en grupos separados aunque tengan mismos parámetros
+                # Construir grupos por SKU — un grupo por SKU, ordenado por dispersión desc
                 if not df_audit.empty:
-                    import math
-                    def muc_cluster(muc):
-                        if muc and muc > 0:
-                            return str(round(math.log10(float(muc))))
-                        return '0'
-                    df_audit['_cluster_muc'] = df_audit['muc_real'].apply(muc_cluster)
-                    df_audit['_grupo'] = (
-                        df_audit['sku'].astype(str) + ' | conv=' +
-                        df_audit['conversion'].astype(str) + ' | fmt=' +
-                        df_audit['formato'].astype(str) + ' | mag=' +
-                        df_audit['_cluster_muc']
-                    )
-                    # Preservar orden: primera aparición de cada grupo (ya ordenado por ratio desc)
-                    orden_grupos = df_audit['_grupo'].drop_duplicates().reset_index(drop=True)
-                    grupos = df_audit.groupby('_grupo').agg(
+                    grupos = df_audit.groupby('sku').agg(
                         sku        = ('sku', 'first'),
                         nombre     = ('nombre_producto', 'first'),
                         conversion = ('conversion', 'first'),
                         formato    = ('formato', 'first'),
-                        muc_ref    = ('muc_real', 'median'),
+                        dispersion = ('dispersion', 'first'),
                         n_filas    = ('id', 'count'),
                         ids        = ('id', list)
-                    ).reset_index()
-                    grupos = orden_grupos.to_frame().merge(grupos, on='_grupo', how='left')
+                    ).reset_index(drop=True)
+                    grupos = grupos.sort_values('dispersion', ascending=False).reset_index(drop=True)
                     grupos['label'] = grupos.apply(
-                        lambda r: f"{r['sku']} — {r['nombre'][:35]} | MUC~{float(r['muc_ref']):.4f} ({r['n_filas']} reg.)", axis=1
+                        lambda r: f"{r['sku']} — {r['nombre'][:40]} ({r['n_filas']} reg. | {r['dispersion']:.0f}×)", axis=1
                     )
                 else:
                     grupos = pd.DataFrame()
 
-                # Selector de grupo — fuera del expander para que filtre la tabla
+                # Selector de grupo
                 grupo_labels = grupos['label'].tolist() if not grupos.empty else []
                 label_sel = st.selectbox("🔍 Filtrar por grupo",
                                          [None] + grupo_labels,
@@ -1435,8 +1419,7 @@ if modulo.startswith("📦"):
                         buf_audit = io.BytesIO()
                         export_cols = ['fecha','local','folio','sku','nombre_producto','proveedor',
                                        'categoria','cantidad','conversion','formato','cant_conv',
-                                       'precio_factura','muc_esperado','muc_real',
-                                       'ratio_vs_esperado','n_registros']
+                                       'precio_factura','muc','muc_min','muc_max','dispersion','n_registros']
                         export_cols_exist = [c for c in export_cols if c in df_audit.columns]
                         with pd.ExcelWriter(buf_audit, engine='openpyxl') as w:
                             df_audit[export_cols_exist].to_excel(w, sheet_name='Inconsistencias', index=False)
