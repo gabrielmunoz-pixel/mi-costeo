@@ -1259,7 +1259,7 @@ if modulo.startswith("📦"):
                         COUNT(*) AS n_registros
                     FROM compras
                     WHERE muc > 0
-                      AND fecha_dte::date >= CURRENT_DATE - INTERVAL '{meses_audit} months'
+                      AND fecha_dte::date >= (CURRENT_DATE - ('{meses_audit} months')::interval)
                       {filtro_cat_audit}
                     GROUP BY sku
                     HAVING COUNT(*) >= 3
@@ -1274,8 +1274,6 @@ if modulo.startswith("📦"):
                     c.nombre_proveedor         AS proveedor,
                     c.categoria_producto       AS categoria,
                     c.cantidad,
-                    c.unidad,
-                    c.precio,
                     c.conversion,
                     c.formato,
                     c.cant_conv,
@@ -1422,7 +1420,7 @@ if modulo.startswith("📦"):
                     st.markdown("**Exportar lista**")
                     buf_audit = io.BytesIO()
                     export_cols = ['fecha','local','folio','sku','nombre_producto','proveedor',
-                                   'categoria','cantidad','unidad','precio','conversion','formato',
+                                   'categoria','cantidad','conversion','formato',
                                    'cant_conv','muc','muc_mediana','ratio_vs_mediana','n_registros']
                     export_cols_exist = [c for c in export_cols if c in df_audit.columns]
                     with pd.ExcelWriter(buf_audit, engine='openpyxl') as w:
