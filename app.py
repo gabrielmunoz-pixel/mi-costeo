@@ -1237,14 +1237,11 @@ if modulo.startswith("📦"):
         st.markdown("<div class='info-box'>Detecta inconsistencias en <b>conversion</b> y <b>formato</b> comparando el MUC de cada registro contra la mediana histórica del SKU. Un MUC muy alejado de la mediana indica que el precio, conversion o formato están mal configurados.</div>", unsafe_allow_html=True)
 
         # Controles
-        ac1, ac2, ac3 = st.columns([2, 2, 2])
+        ac1, ac2 = st.columns([2, 2])
         with ac1:
-            umbral_audit = st.slider("Umbral de alerta (× mediana)", min_value=2.0, max_value=20.0, value=5.0, step=0.5,
-                                     help="Marcar si MUC > N × mediana del SKU o < mediana / N")
+            umbral_audit = st.slider("Umbral de alerta (× esperado)", min_value=2.0, max_value=20.0, value=5.0, step=0.5,
+                                     help="Marcar si MUC calculado difiere N× del MUC esperado según precio de factura y formato")
         with ac2:
-            meses_audit = st.slider("Meses histórico", min_value=1, max_value=12, value=3,
-                                    help="Cuántos meses hacia atrás calcular la mediana")
-        with ac3:
             cat_audit_q = run_query("SELECT DISTINCT categoria_producto FROM compras WHERE categoria_producto IS NOT NULL ORDER BY 1")
             cats_audit = ['Todas'] + cat_audit_q['categoria_producto'].tolist() if not cat_audit_q.empty else ['Todas']
             cat_audit_sel = st.selectbox("Categoría", cats_audit, key='audit_cat')
@@ -1252,48 +1249,44 @@ if modulo.startswith("📦"):
         if st.button("▶ Ejecutar Auditoría"):
             filtro_cat_audit = f"AND categoria_producto = '{cat_audit_sel}'" if cat_audit_sel != 'Todas' else ""
             q_audit = f"""
-                WITH mediana_sku AS (
+                WITH calc AS (
                     SELECT
-                        sku,
-                        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY muc) AS muc_mediana,
-                        COUNT(*) AS n_registros
-                    FROM compras
-                    WHERE muc > 0
-                      AND fecha_dte::date >= (CURRENT_DATE - ('{meses_audit} months')::interval)
+                        c.id,
+                        c.fecha_dte::date                                                        AS fecha,
+                        c.local,
+                        c.folio,
+                        c.sku,
+                        c.nombre_producto,
+                        c.nombre_proveedor                                                       AS proveedor,
+                        c.categoria_producto                                                     AS categoria,
+                        c.cantidad,
+                        c.conversion,
+                        c.formato,
+                        c.cant_conv,
+                        c.monto_real,
+                        c.costo_realfinal,
+                        -- Precio neto por unidad de cant_conv (directo de factura)
+                        ROUND((c.monto_real     / NULLIF(c.cant_conv, 0))::numeric, 2)          AS precio_factura,
+                        ROUND((c.costo_realfinal / NULLIF(c.cant_conv, 0))::numeric, 2)         AS precio_unit,
+                        -- MUC que debería resultar si conversion y formato son correctos
+                        ROUND((c.monto_real / NULLIF(c.cant_conv * c.formato, 0))::numeric, 6)  AS muc_esperado,
+                        c.muc                                                                    AS muc_real
+                    FROM compras c
+                    WHERE c.muc > 0
+                      AND c.monto_real > 0
+                      AND c.formato > 0
+                      AND c.cant_conv > 0
                       {filtro_cat_audit}
-                    GROUP BY sku
-                    HAVING COUNT(*) >= 3
                 )
                 SELECT
-                    c.id,
-                    c.fecha_dte::date          AS fecha,
-                    c.local,
-                    c.folio,
-                    c.sku,
-                    c.nombre_producto,
-                    c.nombre_proveedor         AS proveedor,
-                    c.categoria_producto       AS categoria,
-                    c.cantidad,
-                    c.conversion,
-                    c.formato,
-                    c.cant_conv,
-                    c.monto_real,
-                    c.costo_realfinal,
-                    ROUND((c.costo_realfinal / NULLIF(c.cant_conv, 0))::numeric, 2)        AS precio_unit,
-                    ROUND((c.monto_real      / NULLIF(c.cant_conv, 0))::numeric, 2)        AS precio_factura,
-                    c.muc,
-                    m.muc_mediana,
-                    ROUND((c.muc / NULLIF(m.muc_mediana, 0))::numeric, 2) AS ratio_vs_mediana,
-                    m.n_registros
-                FROM compras c
-                JOIN mediana_sku m ON c.sku = m.sku
-                WHERE c.muc > 0
-                  AND (
-                      c.muc > m.muc_mediana * {umbral_audit}
-                      OR c.muc < m.muc_mediana / {umbral_audit}
-                  )
-                  {filtro_cat_audit}
-                ORDER BY ABS(c.muc / NULLIF(m.muc_mediana,0) - 1) DESC
+                    *,
+                    ROUND((muc_real / NULLIF(muc_esperado, 0))::numeric, 2)   AS ratio_vs_esperado,
+                    COUNT(*) OVER (PARTITION BY sku)                           AS n_registros
+                FROM calc
+                WHERE
+                    muc_real > muc_esperado * {umbral_audit}
+                    OR muc_real < muc_esperado / {umbral_audit}
+                ORDER BY ABS(muc_real / NULLIF(muc_esperado, 0) - 1) DESC
                 LIMIT 500
             """
             df_audit = run_query(q_audit)
@@ -1431,8 +1424,8 @@ if modulo.startswith("📦"):
                         buf_audit = io.BytesIO()
                         export_cols = ['fecha','local','folio','sku','nombre_producto','proveedor',
                                        'categoria','cantidad','conversion','formato','cant_conv',
-                                       'precio_factura','precio_unit',
-                                       'muc_mediana','muc','ratio_vs_mediana','n_registros']
+                                       'precio_factura','muc_esperado','muc_real',
+                                       'ratio_vs_esperado','n_registros']
                         export_cols_exist = [c for c in export_cols if c in df_audit.columns]
                         with pd.ExcelWriter(buf_audit, engine='openpyxl') as w:
                             df_audit[export_cols_exist].to_excel(w, sheet_name='Inconsistencias', index=False)
@@ -1460,7 +1453,7 @@ if modulo.startswith("📦"):
                 for _, r in df_tabla.iterrows():
                     rid      = str(r.get('id', ''))
                     revisado = rid in st.session_state['audit_revisados']
-                    ratio    = float(r.get('ratio_vs_mediana', 1) or 1)
+                    ratio    = float(r.get('ratio_vs_esperado', 1) or 1)
                     if ratio > 8 or ratio < 0.125:
                         sev_color = '#e84545'; sev_label = '🔴 Alta'
                     elif ratio > 3 or ratio < 0.33:
@@ -1479,9 +1472,8 @@ if modulo.startswith("📦"):
                         f'<td style="padding:9px 12px;text-align:right;color:#888;font-variant-numeric:tabular-nums">{r.get("conversion","")}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#888;font-variant-numeric:tabular-nums">{r.get("formato","")}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">${float(r.get("precio_factura",0) or 0):,.2f}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:{sev_color};font-weight:600;font-variant-numeric:tabular-nums">${float(r.get("precio_unit",0) or 0):,.2f}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:#4caf7d;font-variant-numeric:tabular-nums">{float(r.get("muc_mediana",0) or 0):,.4f}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:{sev_color};font-weight:600;font-variant-numeric:tabular-nums">{float(r.get("muc",0) or 0):,.4f}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">{float(r.get("muc_esperado",0) or 0):,.4f}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:{sev_color};font-weight:600;font-variant-numeric:tabular-nums">{float(r.get("muc_real",0) or 0):,.4f}</td>'
                         f'<td style="padding:9px 12px;text-align:center;color:{sev_color};font-weight:600">{ratio:,.1f}×</td>'
                         f'<td style="padding:9px 12px;text-align:center;font-size:0.75rem;color:{sev_color}">{sev_label}</td>'
                         f'<td style="padding:9px 12px;text-align:center;color:#555;font-size:0.72rem">{"✅" if revisado else "—"}</td>'
@@ -1490,13 +1482,12 @@ if modulo.startswith("📦"):
 
                 hdrs_a = ['Fecha','Local','SKU','Producto','Proveedor','Cant.',
                           'Conv.','Formato',
-                          'Neto Factura/u','Costo Final/u',
-                          'MUC Esperado','MUC Real','Ratio','Severidad','Rev.']
+                          'Neto Factura/u','MUC Esperado','MUC Real','Ratio','Severidad','Rev.']
                 tabla_a = (
                     '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
                     '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
                     '<thead><tr style="background:#111">'
-                    + ''.join([f'<th style="{hs_a};text-align:{"left" if i<5 else "right" if i<14 else "center"}">{h}</th>' for i, h in enumerate(hdrs_a)])
+                    + ''.join([f'<th style="{hs_a};text-align:{"left" if i<5 else "right" if i<13 else "center"}">{h}</th>' for i, h in enumerate(hdrs_a)])
                     + f'</tr></thead><tbody>{rows_a}</tbody></table></div>'
                 )
                 st.markdown(tabla_a, unsafe_allow_html=True)
