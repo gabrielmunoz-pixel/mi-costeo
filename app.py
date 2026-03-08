@@ -1353,10 +1353,16 @@ if modulo.startswith("📦"):
                 else:
                     grupos = pd.DataFrame()
 
-                # Selector por SKU — al elegir uno muestra sus filas MUC agrupadas
-                grupo_labels = grupos['label'].tolist() if not grupos.empty else []
-                label_sel = st.selectbox("🔍 Filtrar por SKU",
-                                         [None] + grupo_labels,
+                # Buscador de SKU con filtro de texto
+                busq = st.text_input("🔍 Buscar SKU o producto", key='audit_busq', placeholder="Escribe SKU o nombre...")
+                if busq:
+                    mask = grupos['label'].str.contains(busq, case=False, na=False)
+                    opciones = grupos[mask]['label'].tolist()
+                else:
+                    opciones = grupos['label'].tolist() if not grupos.empty else []
+
+                label_sel = st.selectbox("Seleccionar",
+                                         [None] + opciones,
                                          format_func=lambda x: "— Todos los SKUs —" if x is None else x,
                                          key='audit_grupo_sel')
 
