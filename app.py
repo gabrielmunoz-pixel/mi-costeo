@@ -1258,41 +1258,51 @@ if modulo.startswith("📦"):
                 filtro_cat_audit   = f"AND categoria_producto = '{cat_sel}'"
                 filtro_cat_audit_c = f"AND c.categoria_producto = '{cat_sel}'"
             q_audit = f"""
-                WITH dispersos AS (
+                WITH grupos AS (
                     SELECT
                         sku,
-                        MAX(muc) AS muc_max,
-                        MIN(muc) AS muc_min,
-                        ROUND((MAX(muc) / NULLIF(MIN(muc), 0))::numeric, 1) AS dispersion
+                        ROUND(muc::numeric, 1)                                          AS muc_grupo,
+                        COUNT(*)                                                        AS n_registros,
+                        ARRAY_AGG(id)                                                   AS ids,
+                        MAX(nombre_producto)                                            AS nombre_producto,
+                        MAX(categoria_producto)                                         AS categoria,
+                        MAX(conversion)                                                 AS conversion,
+                        MAX(formato)                                                    AS formato
                     FROM compras
                     WHERE muc > 0
                       AND costo_realfinal > 0
                       AND UPPER(sku) != 'COLACION'
                       {filtro_cat_audit}
+                    GROUP BY sku, ROUND(muc::numeric, 1)
+                ),
+                dispersos AS (
+                    SELECT
+                        sku,
+                        MAX(muc_grupo)                                                  AS muc_max,
+                        MIN(muc_grupo)                                                  AS muc_min,
+                        ROUND((MAX(muc_grupo) / NULLIF(MIN(muc_grupo), 0))::numeric, 1) AS dispersion,
+                        COUNT(*)                                                        AS n_grupos
+                    FROM grupos
                     GROUP BY sku
                     HAVING COUNT(*) >= 2
-                       AND MAX(muc) / NULLIF(MIN(muc), 0) > {umbral_audit}
+                       AND MAX(muc_grupo) / NULLIF(MIN(muc_grupo), 0) > {umbral_audit}
                 )
                 SELECT
-                    c.sku,
-                    MAX(c.nombre_producto)                                          AS nombre_producto,
-                    MAX(c.categoria_producto)                                       AS categoria,
-                    MAX(c.conversion)                                               AS conversion,
-                    MAX(c.formato)                                                  AS formato,
-                    ROUND(c.muc::numeric, 1)                                        AS muc,
-                    COUNT(*)                                                        AS n_registros,
-                    ARRAY_AGG(c.id)                                                AS ids,
+                    g.sku,
+                    g.nombre_producto,
+                    g.categoria,
+                    g.conversion,
+                    g.formato,
+                    g.muc_grupo                                                         AS muc,
+                    g.n_registros,
+                    g.ids,
                     d.muc_min,
                     d.muc_max,
                     d.dispersion
-                FROM compras c
-                JOIN dispersos d ON c.sku = d.sku
-                WHERE c.muc > 0
-                  AND c.costo_realfinal > 0
-                  AND UPPER(c.sku) != 'COLACION'
-                  {filtro_cat_audit_c}
-                GROUP BY c.sku, ROUND(c.muc::numeric, 1), d.muc_min, d.muc_max, d.dispersion
-                ORDER BY d.dispersion DESC, c.sku, ROUND(c.muc::numeric, 1)
+                FROM grupos g
+                JOIN dispersos d ON g.sku = d.sku
+                  {filtro_cat_audit_c.replace('c.sku', 'g.sku').replace('c.categoria_producto', 'g.categoria')}
+                ORDER BY d.dispersion DESC, g.sku, g.muc_grupo
                 LIMIT 500
             """
             df_audit = run_query(q_audit)
