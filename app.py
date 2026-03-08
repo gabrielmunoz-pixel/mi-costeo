@@ -1350,68 +1350,73 @@ if modulo.startswith("📦"):
                         st.markdown("**Corregir grupo (lote)**")
                         if not grupos.empty:
                             grupo_labels = grupos['label'].tolist()
-                            grupo_sel_idx = st.selectbox("Grupo SKU + parámetros",
-                                                          range(len(grupo_labels)),
-                                                          format_func=lambda i: grupo_labels[i],
-                                                          key='audit_grupo_sel')
-                            grupo_row = grupos.iloc[grupo_sel_idx]
-                            lc1, lc2 = st.columns(2)
-                            with lc1:
-                                nuevo_conv_lote = st.number_input("Nueva conversion",
-                                    value=float(grupo_row['conversion'] or 1),
-                                    min_value=0.001, step=0.1, key='audit_conv_lote')
-                            with lc2:
-                                nuevo_fmt_lote = st.number_input("Nuevo formato",
-                                    value=float(grupo_row['formato'] or 1),
-                                    min_value=0.001, step=1.0, key='audit_fmt_lote')
-                            st.caption(f"Afecta **{int(grupo_row['n_filas'])}** registros")
-                            if st.button("💾 Aplicar a todo el grupo"):
-                                engine = get_engine()
-                                ids_lote = [int(i) for i in grupo_row['ids']]
-                                try:
-                                    with engine.connect() as conn:
-                                        conn.execute(text("""
-                                            UPDATE compras SET
-                                                conversion = :conv,
-                                                formato    = :fmt,
-                                                cant_conv  = cantidad * :conv,
-                                                muc        = CASE WHEN :fmt = 1
-                                                             THEN costo_realfinal / NULLIF(cantidad * :conv, 0)
-                                                             ELSE costo_realfinal / NULLIF(cantidad * :conv * :fmt, 0)
-                                                             END
-                                            WHERE id = ANY(:ids)
-                                        """), {"conv": nuevo_conv_lote, "fmt": nuevo_fmt_lote,
-                                               "ids": ids_lote})
-                                        conn.commit()
-                                    st.success(f"✅ {len(ids_lote)} registros corregidos")
-                                    # Actualizar df en session_state sin re-ejecutar auditoría
-                                    mask = st.session_state['audit_df']['id'].isin(ids_lote)
-                                    st.session_state['audit_df'].loc[mask, 'conversion'] = nuevo_conv_lote
-                                    st.session_state['audit_df'].loc[mask, 'formato']    = nuevo_fmt_lote
-                                    cant_conv_nuevo = st.session_state['audit_df'].loc[mask, 'cantidad'] * nuevo_conv_lote
-                                    costo           = st.session_state['audit_df'].loc[mask, 'cant_conv'] * st.session_state['audit_df'].loc[mask, 'muc']
-                                    if nuevo_fmt_lote == 1:
-                                        st.session_state['audit_df'].loc[mask, 'muc'] = costo / cant_conv_nuevo.replace(0, np.nan)
-                                    else:
-                                        st.session_state['audit_df'].loc[mask, 'muc'] = costo / (cant_conv_nuevo * nuevo_fmt_lote).replace(0, np.nan)
-                                    st.session_state['audit_df'].loc[mask, 'cant_conv'] = cant_conv_nuevo
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Error: {e}")
+                            # Filtro de texto con autocompletado
+                            busq = st.text_input("Buscar SKU o producto", key='audit_busq_grupo',
+                                                 placeholder="Ej: azucar, AL-PA-001...")
+                            if busq:
+                                labels_filtrados = [l for l in grupo_labels if busq.lower() in l.lower()]
+                            else:
+                                labels_filtrados = grupo_labels  # muestra el primero (más severo) por defecto
 
-                    # ── Marcar revisado ──
+                            if labels_filtrados:
+                                label_sel = st.selectbox("Seleccionar grupo", labels_filtrados,
+                                                         key='audit_grupo_sel')
+                                grupo_row = grupos[grupos['label'] == label_sel].iloc[0]
+                                lc1, lc2 = st.columns(2)
+                                with lc1:
+                                    nuevo_conv_lote = st.number_input("Nueva conversion",
+                                        value=float(grupo_row['conversion'] or 1),
+                                        min_value=0.001, step=0.1, key='audit_conv_lote')
+                                with lc2:
+                                    nuevo_fmt_lote = st.number_input("Nuevo formato",
+                                        value=float(grupo_row['formato'] or 1),
+                                        min_value=0.001, step=1.0, key='audit_fmt_lote')
+                                ids_lote = [int(i) for i in grupo_row['ids']]
+                                st.caption(f"Afecta **{int(grupo_row['n_filas'])}** registros")
+                                bc1, bc2 = st.columns(2)
+                                with bc1:
+                                    if st.button("💾 Aplicar corrección"):
+                                        engine = get_engine()
+                                        try:
+                                            with engine.connect() as conn:
+                                                conn.execute(text("""
+                                                    UPDATE compras SET
+                                                        conversion = :conv,
+                                                        formato    = :fmt,
+                                                        cant_conv  = cantidad * :conv,
+                                                        muc        = CASE WHEN :fmt = 1
+                                                                     THEN costo_realfinal / NULLIF(cantidad * :conv, 0)
+                                                                     ELSE costo_realfinal / NULLIF(cantidad * :conv * :fmt, 0)
+                                                                     END
+                                                    WHERE id = ANY(:ids)
+                                                """), {"conv": nuevo_conv_lote, "fmt": nuevo_fmt_lote,
+                                                       "ids": ids_lote})
+                                                conn.commit()
+                                            st.success(f"✅ {len(ids_lote)} registros corregidos")
+                                            mask = st.session_state['audit_df']['id'].isin(ids_lote)
+                                            st.session_state['audit_df'].loc[mask, 'conversion'] = nuevo_conv_lote
+                                            st.session_state['audit_df'].loc[mask, 'formato']    = nuevo_fmt_lote
+                                            cant_conv_nuevo = st.session_state['audit_df'].loc[mask, 'cantidad'] * nuevo_conv_lote
+                                            costo = st.session_state['audit_df'].loc[mask, 'cant_conv'] * st.session_state['audit_df'].loc[mask, 'muc']
+                                            if nuevo_fmt_lote == 1:
+                                                st.session_state['audit_df'].loc[mask, 'muc'] = costo / cant_conv_nuevo.replace(0, np.nan)
+                                            else:
+                                                st.session_state['audit_df'].loc[mask, 'muc'] = costo / (cant_conv_nuevo * nuevo_fmt_lote).replace(0, np.nan)
+                                            st.session_state['audit_df'].loc[mask, 'cant_conv'] = cant_conv_nuevo
+                                            st.rerun()
+                                        except Exception as e:
+                                            st.error(f"Error: {e}")
+                                with bc2:
+                                    if st.button("✅ Marcar revisado"):
+                                        st.session_state['audit_revisados'].update([str(i) for i in ids_lote])
+                                        st.rerun()
+                            else:
+                                st.caption("Sin resultados para la búsqueda.")
+
+                    # ── Marcar revisado / limpiar ──
                     with acc2:
-                        st.markdown("**Marcar revisado**")
-                        # Marcar grupo completo
-                        if not grupos.empty:
-                            grupo_rev_idx = st.selectbox("Marcar grupo como revisado",
-                                                          range(len(grupo_labels)),
-                                                          format_func=lambda i: grupo_labels[i],
-                                                          key='audit_rev_grupo')
-                            if st.button("✅ Marcar grupo revisado"):
-                                ids_rev = [str(i) for i in grupos.iloc[grupo_rev_idx]['ids']]
-                                st.session_state['audit_revisados'].update(ids_rev)
-                                st.rerun()
+                        st.markdown("**Revisados**")
+                        st.caption(f"{len(st.session_state['audit_revisados'])} marcados como revisados — dimean en la tabla para que no distraigan al auditar.")
                         if st.button("🔄 Limpiar todos los revisados"):
                             st.session_state['audit_revisados'] = set()
                             st.rerun()
