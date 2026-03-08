@@ -1013,7 +1013,7 @@ if modulo.startswith("📦"):
     </div>
     """, unsafe_allow_html=True)
 
-    tab1, tab2, tab3, tab4 = st.tabs(["📖 Recetario", "🛒 Compras", "📈 Ventas", "🔀 Equivalencias SKU"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📖 Recetario", "🛒 Compras", "📈 Ventas", "🔀 Equivalencias SKU", "🔍 Auditoría Compras"])
 
     with tab1:
         st.markdown("<div class='info-box'>Carga las hojas <b>Directos</b> y <b>Procesados</b> de tu recetario. Esto reemplaza el recetario actual.</div>", unsafe_allow_html=True)
@@ -1229,6 +1229,207 @@ if modulo.startswith("📦"):
                     st.rerun()
                 except Exception as e:
                     st.error(f"Error: {e}")
+
+    # ================================================================
+    # TAB 5 — AUDITORÍA DE COMPRAS
+    # ================================================================
+    with tab5:
+        st.markdown("<div class='info-box'>Detecta inconsistencias en <b>conversion</b> y <b>formato</b> comparando el MUC de cada registro contra la mediana histórica del SKU. Un MUC muy alejado de la mediana indica que el precio, conversion o formato están mal configurados.</div>", unsafe_allow_html=True)
+
+        # Controles
+        ac1, ac2, ac3 = st.columns([2, 2, 2])
+        with ac1:
+            umbral_audit = st.slider("Umbral de alerta (× mediana)", min_value=2.0, max_value=20.0, value=5.0, step=0.5,
+                                     help="Marcar si MUC > N × mediana del SKU o < mediana / N")
+        with ac2:
+            meses_audit = st.slider("Meses histórico", min_value=1, max_value=12, value=3,
+                                    help="Cuántos meses hacia atrás calcular la mediana")
+        with ac3:
+            cat_audit_q = run_query("SELECT DISTINCT categoria_producto FROM compras WHERE categoria_producto IS NOT NULL ORDER BY 1")
+            cats_audit = ['Todas'] + cat_audit_q['categoria_producto'].tolist() if not cat_audit_q.empty else ['Todas']
+            cat_audit_sel = st.selectbox("Categoría", cats_audit, key='audit_cat')
+
+        if st.button("▶ Ejecutar Auditoría"):
+            filtro_cat_audit = f"AND categoria_producto = '{cat_audit_sel}'" if cat_audit_sel != 'Todas' else ""
+            q_audit = f"""
+                WITH mediana_sku AS (
+                    SELECT
+                        sku,
+                        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY muc) AS muc_mediana,
+                        COUNT(*) AS n_registros
+                    FROM compras
+                    WHERE muc > 0
+                      AND fecha_dte >= CURRENT_DATE - INTERVAL '{meses_audit} months'
+                      {filtro_cat_audit}
+                    GROUP BY sku
+                    HAVING COUNT(*) >= 3
+                )
+                SELECT
+                    c.id,
+                    c.fecha_dte::date          AS fecha,
+                    c.local,
+                    c.folio,
+                    c.sku,
+                    c.nombre_producto,
+                    c.nombre_proveedor         AS proveedor,
+                    c.categoria_producto       AS categoria,
+                    c.cantidad,
+                    c.unidad,
+                    c.precio,
+                    c.conversion,
+                    c.formato,
+                    c.cant_conv,
+                    c.muc,
+                    m.muc_mediana,
+                    ROUND((c.muc / NULLIF(m.muc_mediana, 0))::numeric, 2) AS ratio_vs_mediana,
+                    m.n_registros
+                FROM compras c
+                JOIN mediana_sku m ON c.sku = m.sku
+                WHERE c.muc > 0
+                  AND (
+                      c.muc > m.muc_mediana * {umbral_audit}
+                      OR c.muc < m.muc_mediana / {umbral_audit}
+                  )
+                  {filtro_cat_audit}
+                ORDER BY ABS(c.muc / NULLIF(m.muc_mediana,0) - 1) DESC
+                LIMIT 500
+            """
+            df_audit = run_query(q_audit)
+            st.session_state['audit_df'] = df_audit
+
+        if 'audit_df' in st.session_state:
+            df_audit = st.session_state['audit_df'].copy()
+
+            if df_audit.empty:
+                st.success("✅ Sin inconsistencias detectadas con el umbral configurado.")
+            else:
+                # Marcar revisados en session_state
+                if 'audit_revisados' not in st.session_state:
+                    st.session_state['audit_revisados'] = set()
+
+                n_total = len(df_audit)
+                n_rev   = len(st.session_state['audit_revisados'])
+                am1, am2, am3 = st.columns(3)
+                am1.metric("⚠️ Inconsistencias", n_total)
+                am2.metric("✅ Revisadas", n_rev)
+                am3.metric("⏳ Pendientes", n_total - n_rev)
+
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                # Tabla interactiva
+                hs_a = 'padding:9px 12px;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
+                rows_a = ''
+                for _, r in df_audit.iterrows():
+                    rid      = str(r.get('id', ''))
+                    revisado = rid in st.session_state['audit_revisados']
+                    ratio    = float(r.get('ratio_vs_mediana', 1) or 1)
+                    # Color según severidad
+                    if ratio > 8 or ratio < 0.125:
+                        sev_color = '#e84545'
+                        sev_label = '🔴 Alta'
+                    elif ratio > 3 or ratio < 0.33:
+                        sev_color = '#e89c45'
+                        sev_label = '🟡 Media'
+                    else:
+                        sev_color = '#aaa'
+                        sev_label = '⚪ Baja'
+                    row_bg = '#1a2a1a' if revisado else ''
+                    rows_a += (
+                        f'<tr style="border-bottom:1px solid #1e1e1e;background:{row_bg};opacity:{"0.5" if revisado else "1"}">'
+                        f'<td style="padding:9px 12px;color:#666;font-size:0.72rem">{r.get("fecha","")}</td>'
+                        f'<td style="padding:9px 12px;color:#888;font-size:0.75rem">{r.get("local","")}</td>'
+                        f'<td style="padding:9px 12px;color:#666;font-family:monospace;font-size:0.72rem">{r.get("sku","")}</td>'
+                        f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de;font-size:0.8rem">{r.get("nombre_producto","")}</td>'
+                        f'<td style="padding:9px 12px;color:#666;font-size:0.75rem">{r.get("proveedor","")}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">{r.get("cantidad","")}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">${float(r.get("precio",0) or 0):,.0f}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#888;font-variant-numeric:tabular-nums">{r.get("conversion","")}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#888;font-variant-numeric:tabular-nums">{r.get("formato","")}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#4caf7d;font-variant-numeric:tabular-nums">{float(r.get("muc_mediana",0) or 0):,.4f}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:{sev_color};font-weight:600;font-variant-numeric:tabular-nums">{float(r.get("muc",0) or 0):,.4f}</td>'
+                        f'<td style="padding:9px 12px;text-align:center;color:{sev_color};font-weight:600">{ratio:,.1f}×</td>'
+                        f'<td style="padding:9px 12px;text-align:center;font-size:0.75rem;color:{sev_color}">{sev_label}</td>'
+                        f'<td style="padding:9px 12px;text-align:center;color:#555;font-size:0.72rem">{"✅" if revisado else "—"}</td>'
+                        f'</tr>'
+                    )
+
+                hdrs_a = ['Fecha','Local','SKU','Producto','Proveedor','Cant.','Precio',
+                          'Conv.','Formato','MUC Mediana','MUC Real','Ratio','Severidad','Rev.']
+                tabla_a = (
+                    '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
+                    '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
+                    '<thead><tr style="background:#111">'
+                    + ''.join([f'<th style="{hs_a};text-align:{"left" if i<5 else "right" if i<13 else "center"}">{h}</th>' for i, h in enumerate(hdrs_a)])
+                    + f'</tr></thead><tbody>{rows_a}</tbody></table></div>'
+                )
+                st.markdown(tabla_a, unsafe_allow_html=True)
+
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                # ── Acciones ────────────────────────────────────────────
+                st.markdown("#### Acciones")
+                ba1, ba2, ba3 = st.columns(3)
+
+                # Marcar como revisado
+                with ba1:
+                    ids_disp = df_audit['id'].astype(str).tolist() if 'id' in df_audit.columns else []
+                    nombres_disp = (df_audit['sku'] + ' — ' + df_audit['nombre_producto']).tolist()
+                    id_rev_sel = st.selectbox("Marcar como revisado", ids_disp,
+                                              format_func=lambda x: nombres_disp[ids_disp.index(x)] if x in ids_disp else x,
+                                              key='audit_rev_sel')
+                    if st.button("✅ Marcar revisado"):
+                        st.session_state['audit_revisados'].add(str(id_rev_sel))
+                        st.rerun()
+                    if st.button("🔄 Limpiar revisados"):
+                        st.session_state['audit_revisados'] = set()
+                        st.rerun()
+
+                # Corregir conversion/formato
+                with ba2:
+                    st.markdown("**Corregir registro**")
+                    id_corr = st.selectbox("Registro a corregir", ids_disp,
+                                           format_func=lambda x: nombres_disp[ids_disp.index(x)] if x in ids_disp else x,
+                                           key='audit_corr_sel')
+                    fila_sel = df_audit[df_audit['id'].astype(str) == str(id_corr)].iloc[0] if len(df_audit) > 0 else None
+                    if fila_sel is not None:
+                        nuevo_conv = st.number_input("Nueva conversion", value=float(fila_sel.get('conversion') or 1), min_value=0.001, step=0.1, key='audit_conv')
+                        nuevo_fmt  = st.number_input("Nuevo formato",    value=float(fila_sel.get('formato') or 1),    min_value=0.001, step=1.0,  key='audit_fmt')
+                        if st.button("💾 Aplicar corrección"):
+                            engine = get_engine()
+                            try:
+                                with engine.connect() as conn:
+                                    # Recalcular cant_conv y muc con nuevos valores
+                                    conn.execute(text("""
+                                        UPDATE compras SET
+                                            conversion = :conv,
+                                            formato    = :fmt,
+                                            cant_conv  = cantidad * :conv,
+                                            muc        = CASE WHEN :fmt = 1
+                                                         THEN costo_realfinal / NULLIF(cantidad * :conv, 0)
+                                                         ELSE costo_realfinal / NULLIF(cantidad * :conv * :fmt, 0)
+                                                         END
+                                        WHERE id = :id
+                                    """), {"conv": nuevo_conv, "fmt": nuevo_fmt, "id": int(id_corr)})
+                                    conn.commit()
+                                st.success(f"✅ Registro {id_corr} corregido. Conversion={nuevo_conv}, Formato={nuevo_fmt}")
+                                del st.session_state['audit_df']
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Error al corregir: {e}")
+
+                # Exportar
+                with ba3:
+                    st.markdown("**Exportar lista**")
+                    buf_audit = io.BytesIO()
+                    export_cols = ['fecha','local','folio','sku','nombre_producto','proveedor',
+                                   'categoria','cantidad','unidad','precio','conversion','formato',
+                                   'cant_conv','muc','muc_mediana','ratio_vs_mediana','n_registros']
+                    export_cols_exist = [c for c in export_cols if c in df_audit.columns]
+                    with pd.ExcelWriter(buf_audit, engine='openpyxl') as w:
+                        df_audit[export_cols_exist].to_excel(w, sheet_name='Inconsistencias', index=False)
+                    st.download_button("📥 Descargar Excel", buf_audit.getvalue(),
+                                       "Auditoria_Compras.xlsx",
+                                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
 # ============================================================
