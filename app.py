@@ -1353,18 +1353,26 @@ if modulo.startswith("📦"):
                 else:
                     grupos = pd.DataFrame()
 
-                # Buscador de SKU con filtro de texto
-                busq = st.text_input("🔍 Buscar SKU o producto", key='audit_busq', placeholder="Escribe SKU o nombre...")
-                if busq:
-                    mask = grupos['label'].str.contains(busq, case=False, na=False)
-                    opciones = grupos[mask]['label'].tolist()
+                # Buscador: selectbox con búsqueda nativa — una opción por SKU+MUC
+                if not df_audit.empty:
+                    opciones_muc = df_audit.apply(
+                        lambda r: f"{r['sku']} — {r['nombre_producto'][:40]} | MUC {float(r['muc']):.1f} ({int(r['n_registros'])} reg.)",
+                        axis=1
+                    ).tolist()
                 else:
-                    opciones = grupos['label'].tolist() if not grupos.empty else []
+                    opciones_muc = []
 
-                label_sel = st.selectbox("Seleccionar",
-                                         [None] + opciones,
-                                         format_func=lambda x: "— Todos los SKUs —" if x is None else x,
-                                         key='audit_grupo_sel')
+                label_sel_muc = st.selectbox("🔍 Buscar SKU / producto / MUC",
+                                             [None] + opciones_muc,
+                                             format_func=lambda x: "— Todos —" if x is None else x,
+                                             key='audit_grupo_sel')
+
+                # Extraer SKU seleccionado del label
+                if label_sel_muc:
+                    sku_activo = label_sel_muc.split(" — ")[0].strip()
+                    label_sel = grupos[grupos['sku'] == sku_activo]['label'].iloc[0] if not grupos.empty and sku_activo in grupos['sku'].values else None
+                else:
+                    label_sel = None
 
                 with st.expander("⚙️ Acciones", expanded=True):
                     acc1, acc2, acc3 = st.columns([3, 3, 2])
