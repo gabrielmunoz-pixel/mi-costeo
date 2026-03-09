@@ -2235,7 +2235,7 @@ if modulo.startswith("🍹"):
         return f"{meses[m-1]} {str(y)[-2:]}"
 
     # ── Controles globales del módulo ─────────────────────────
-    ca, cb, cc = st.columns([2, 4, 2])
+    ca, cb, cc, cd = st.columns([2, 3, 2, 2])
     with ca:
         bar_local = st.selectbox("Local", ["Todos"] + [l for l in get_locales() if l != "Todos"], key="bar_local")
     with cb:
@@ -2245,8 +2245,70 @@ if modulo.startswith("🍹"):
         if st.button("▶ Cargar análisis Bar", key="bar_run", use_container_width=True):
             for k in ['bar_resumen_df','bar_vol_df','bar_gasto_df','bar_freq_df']:
                 st.session_state.pop(k, None)
+    with cd:
+        st.markdown("<div style='height:1.6rem'></div>", unsafe_allow_html=True)
+        exportar_base = st.button("📥 Exportar Base", key="bar_export_base", use_container_width=True)
 
     filtro_local_bar = _bar_local_filter(bar_local)
+
+    # ── Export base mensual/semanal ───────────────────────────
+    if exportar_base:
+        sql_base_mensual = f"""
+            SELECT
+                local,
+                sku,
+                MODE() WITHIN GROUP (ORDER BY nombre_producto) AS producto,
+                MODE() WITHIN GROUP (ORDER BY nombre_proveedor) AS proveedor,
+                TO_CHAR(DATE_TRUNC('month', fecha_dte::timestamp), 'YYYY-MM') AS mes,
+                ROUND(SUM(cant_conv)::numeric, 2)              AS compra_q,
+                ROUND(SUM(costo_realfinal)::numeric, 0)        AS compra_pesos
+            FROM compras
+            WHERE UPPER(categoria_producto) LIKE '%BAR%'
+              AND cant_conv > 0
+              AND costo_realfinal > 0
+              AND tipo_dte != '61'
+              {filtro_local_bar}
+            GROUP BY local, sku, DATE_TRUNC('month', fecha_dte::timestamp)
+            ORDER BY local, sku, mes
+        """
+        sql_base_semanal = f"""
+            SELECT
+                local,
+                sku,
+                MODE() WITHIN GROUP (ORDER BY nombre_producto) AS producto,
+                MODE() WITHIN GROUP (ORDER BY nombre_proveedor) AS proveedor,
+                TO_CHAR(DATE_TRUNC('week', fecha_dte::timestamp), 'IYYY-IW') AS semana,
+                DATE_TRUNC('week', fecha_dte::timestamp)::date  AS inicio_semana,
+                ROUND(SUM(cant_conv)::numeric, 2)               AS compra_q,
+                ROUND(SUM(costo_realfinal)::numeric, 0)         AS compra_pesos
+            FROM compras
+            WHERE UPPER(categoria_producto) LIKE '%BAR%'
+              AND cant_conv > 0
+              AND costo_realfinal > 0
+              AND tipo_dte != '61'
+              {filtro_local_bar}
+            GROUP BY local, sku, DATE_TRUNC('week', fecha_dte::timestamp)
+            ORDER BY local, sku, semana
+        """
+        with st.spinner("Generando base de datos…"):
+            try:
+                df_base_m = run_query(sql_base_mensual)
+                df_base_s = run_query(sql_base_semanal)
+                df_base_m.columns = ['Local','SKU','Producto','Proveedor','Mes','Compra Q','Compra $']
+                df_base_s.columns = ['Local','SKU','Producto','Proveedor','Semana','Inicio Semana','Compra Q','Compra $']
+                buf_base = io.BytesIO()
+                with pd.ExcelWriter(buf_base, engine='openpyxl') as w:
+                    df_base_m.to_excel(w, sheet_name='Mensual', index=False)
+                    df_base_s.to_excel(w, sheet_name='Semanal', index=False)
+                st.download_button(
+                    "⬇️ Descargar Excel",
+                    buf_base.getvalue(),
+                    file_name=f"Bar_Base_Compras{'_'+bar_local if bar_local != 'Todos' else ''}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="bar_export_dl"
+                )
+            except Exception as e:
+                st.error(f"Error generando base: {e}")
 
     # ════════════════════════════════════════════════════════════
     # QUERY RESUMEN — Una fila por SKU con todos los indicadores
