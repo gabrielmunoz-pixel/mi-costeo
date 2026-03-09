@@ -1280,7 +1280,8 @@ if modulo.startswith("📦"):
                         ROUND(muc::numeric, 1)                                          AS muc_grupo,
                         COUNT(*)                                                        AS n_registros,
                         ARRAY_AGG(id)                                                   AS ids,
-                        MODE() WITHIN GROUP (ORDER BY nombre_producto)                                            AS nombre_producto,
+                        MODE() WITHIN GROUP (ORDER BY nombre_producto)                  AS nombre_producto,
+                        MODE() WITHIN GROUP (ORDER BY nombre_proveedor)                 AS proveedor,
                         MAX(categoria_producto)                                         AS categoria,
                         MAX(conversion)                                                 AS conversion,
                         MAX(formato)                                                    AS formato,
@@ -1310,6 +1311,7 @@ if modulo.startswith("📦"):
                 SELECT
                     g.sku,
                     g.nombre_producto,
+                    g.proveedor,
                     g.categoria,
                     g.conversion,
                     g.formato,
@@ -1624,6 +1626,7 @@ if modulo.startswith("📦"):
                         f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de;font-size:0.8rem">{r.get("nombre_producto","")}</td>'
                         f'<td style="padding:9px 12px;color:#666;font-size:0.75rem">{r.get("categoria","")}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#888;font-variant-numeric:tabular-nums">{r.get("conversion","")}</td>'
+                         f'<td style="padding:9px 12px;color:#777;font-size:0.75rem;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{r.get("proveedor","")}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#888;font-variant-numeric:tabular-nums">{r.get("formato","")}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">${precio:,.2f}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:{muc_color};font-weight:{"700" if es_outlier else "400"};font-variant-numeric:tabular-nums">{muc:,.4f}</td>'
@@ -1632,12 +1635,12 @@ if modulo.startswith("📦"):
                         f'</tr>'
                     )
 
-                hdrs_a = ['SKU','Producto','Categoría','Conv.','Formato','Neto Fact/u','MUC','# Reg.','Dispersión']
+                hdrs_a = ['SKU','Producto','Categoría','Proveedor','Conv.','Formato','Neto Fact/u','MUC','# Reg.','Dispersión']
                 tabla_a = (
                     '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
                     '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
                     '<thead><tr style="background:#111">'
-                    + ''.join([f'<th style="{hs_a};text-align:{"left" if i<3 else "right" if i<8 else "center"}">{h}</th>' for i, h in enumerate(hdrs_a)])
+                    + ''.join([f'<th style="{hs_a};text-align:{"left" if i<4 else "right" if i<9 else "center"}">{h}</th>' for i, h in enumerate(hdrs_a)])
                     + f'</tr></thead><tbody>{rows_a}</tbody></table></div>'
                 )
                 st.markdown(tabla_a, unsafe_allow_html=True)
@@ -2260,6 +2263,8 @@ if modulo.startswith("🍹"):
                 MODE() WITHIN GROUP (ORDER BY nombre_producto) AS producto,
                 MODE() WITHIN GROUP (ORDER BY nombre_proveedor) AS proveedor,
                 TO_CHAR(DATE_TRUNC('month', fecha_dte::timestamp), 'YYYY-MM') AS mes,
+                MAX(conversion)                                AS conversion,
+                MAX(formato)                                   AS formato,
                 ROUND(SUM(cant_conv)::numeric, 2)              AS compra_q,
                 ROUND(SUM(costo_realfinal)::numeric, 0)        AS compra_pesos
             FROM compras
@@ -2279,6 +2284,8 @@ if modulo.startswith("🍹"):
                 MODE() WITHIN GROUP (ORDER BY nombre_proveedor) AS proveedor,
                 TO_CHAR(DATE_TRUNC('week', fecha_dte::timestamp), 'IYYY-IW') AS semana,
                 DATE_TRUNC('week', fecha_dte::timestamp)::date  AS inicio_semana,
+                MAX(conversion)                                 AS conversion,
+                MAX(formato)                                    AS formato,
                 ROUND(SUM(cant_conv)::numeric, 2)               AS compra_q,
                 ROUND(SUM(costo_realfinal)::numeric, 0)         AS compra_pesos
             FROM compras
@@ -2294,8 +2301,8 @@ if modulo.startswith("🍹"):
             try:
                 df_base_m = run_query(sql_base_mensual)
                 df_base_s = run_query(sql_base_semanal)
-                df_base_m.columns = ['Local','SKU','Producto','Proveedor','Mes','Compra Q','Compra $']
-                df_base_s.columns = ['Local','SKU','Producto','Proveedor','Semana','Inicio Semana','Compra Q','Compra $']
+                df_base_m.columns = ['Local','SKU','Producto','Proveedor','Mes','Conversion','Formato','Compra Q','Compra $']
+                df_base_s.columns = ['Local','SKU','Producto','Proveedor','Semana','Inicio Semana','Conversion','Formato','Compra Q','Compra $']
                 buf_base = io.BytesIO()
                 with pd.ExcelWriter(buf_base, engine='openpyxl') as w:
                     df_base_m.to_excel(w, sheet_name='Mensual', index=False)
