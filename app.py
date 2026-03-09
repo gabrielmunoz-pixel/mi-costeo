@@ -2209,6 +2209,9 @@ elif modulo.startswith("📊"):
 # ============================================================
 # MÓDULO: TENDENCIAS BAR
 # ============================================================
+# ============================================================
+# MÓDULO: TENDENCIAS BAR
+# ============================================================
 if modulo.startswith("🍹"):
     st.markdown("""
     <div style="margin-bottom:1.5rem">
@@ -2216,448 +2219,546 @@ if modulo.startswith("🍹"):
         <div style="font-family:'DM Serif Display',serif;font-size:2rem;color:#f0ede8;letter-spacing:-0.02em;line-height:1.1">
             🍹 Tendencias Bar
         </div>
-        <div style="font-size:0.82rem;color:#666;margin-top:4px">Análisis de compras · Volumen · Gasto · Frecuencia</div>
+        <div style="font-size:0.82rem;color:#666;margin-top:4px">Análisis completo de compras · Todos los productos · Resumen + Detalle</div>
     </div>
     """, unsafe_allow_html=True)
 
-    # ── Tabs principales ──────────────────────────────────────
-    tb1, tb2, tb3 = st.tabs(["📦 Volumen por SKU", "💰 Gasto Mensual", "🔄 Frecuencia de Compra"])
-
-    # ── Helpers comunes ───────────────────────────────────────
-    def _bar_filtro_local(local):
+    # ── Helpers ───────────────────────────────────────────────
+    def _bar_local_filter(local):
         if local and local != "Todos":
             return f"AND UPPER(local) = UPPER('{local}')"
         return ""
 
-    def _mes_label(y, m):
+    def _mes_lbl(y, m):
         meses = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"]
         return f"{meses[m-1]} {str(y)[-2:]}"
 
-    # ════════════════════════════════════════════════════════
-    # TAB 1 — VOLUMEN MENSUAL (cant_conv kg/lt)
-    # ════════════════════════════════════════════════════════
-    with tb1:
-        st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+    # ── Controles globales del módulo ─────────────────────────
+    ca, cb, cc = st.columns([2, 4, 2])
+    with ca:
+        bar_local = st.selectbox("Local", ["Todos"] + [l for l in get_locales() if l != "Todos"], key="bar_local")
+    with cb:
+        bar_texto = st.text_input("Filtrar SKU / Producto", key="bar_texto", placeholder="Ej: RON, VODKA, CERVEZA…")
+    with cc:
+        st.markdown("<div style='height:1.6rem'></div>", unsafe_allow_html=True)
+        if st.button("▶ Cargar análisis Bar", key="bar_run", use_container_width=True):
+            for k in ['bar_resumen_df','bar_vol_df','bar_gasto_df','bar_freq_df']:
+                st.session_state.pop(k, None)
 
-        # Controles
-        c1a, c1b, c1c = st.columns([2,2,3])
-        with c1a:
-            vol_local = st.selectbox("Local", ["Todos"] + [l for l in get_locales() if l != "Todos"],
-                                     key="vol_local")
-        with c1b:
-            vol_top = st.slider("Top SKUs a mostrar", 5, 30, 15, key="vol_top")
-        with c1c:
-            vol_texto = st.text_input("Filtrar SKU / Producto", key="vol_texto", placeholder="Ej: RON, VODKA…")
+    filtro_local_bar = _bar_local_filter(bar_local)
 
-        filtro_local_vol = _bar_filtro_local(vol_local)
-
-        sql_vol = f"""
+    # ════════════════════════════════════════════════════════════
+    # QUERY RESUMEN — Una fila por SKU con todos los indicadores
+    # ════════════════════════════════════════════════════════════
+    sql_resumen = f"""
+        WITH base AS (
             SELECT
                 sku,
-                MAX(nombre_producto)                              AS nombre,
-                DATE_TRUNC('month', fecha_dte::timestamp)::date   AS mes,
-                ROUND(SUM(cant_conv)::numeric, 2)                 AS vol_total,
-                MAX(conversion)                                   AS conversion
+                MAX(nombre_producto)                                      AS nombre,
+                MAX(nombre_proveedor)                                     AS proveedor,
+                DATE_TRUNC('month', fecha_dte::timestamp)::date           AS mes,
+                fecha_dte::timestamp::date                                AS fecha_compra,
+                SUM(cant_conv)                                            AS vol_mes,
+                SUM(costo_realfinal)                                      AS gasto_mes,
+                AVG(muc)                                                  AS muc_mes
+            FROM compras
+            WHERE UPPER(categoria_producto) LIKE '%BAR%'
+              AND cant_conv > 0
+              AND costo_realfinal > 0
+              AND tipo_dte != '61'
+              {filtro_local_bar}
+            GROUP BY sku, DATE_TRUNC('month', fecha_dte::timestamp), fecha_dte::timestamp::date
+        ),
+        por_mes AS (
+            SELECT sku, MAX(nombre) AS nombre, MAX(proveedor) AS proveedor,
+                   mes,
+                   SUM(vol_mes)   AS vol_total_mes,
+                   SUM(gasto_mes) AS gasto_total_mes,
+                   AVG(muc_mes)   AS muc_promedio_mes
+            FROM base
+            GROUP BY sku, mes
+        ),
+        stats AS (
+            SELECT
+                sku,
+                MAX(nombre)   AS nombre,
+                MAX(proveedor) AS proveedor,
+                COUNT(DISTINCT mes)                                        AS n_meses,
+                ROUND(AVG(vol_total_mes)::numeric, 2)                     AS vol_prom_mes,
+                ROUND(STDDEV(vol_total_mes)::numeric, 2)                  AS vol_std,
+                ROUND(SUM(vol_total_mes)::numeric, 2)                     AS vol_total,
+                ROUND(AVG(gasto_total_mes)::numeric, 0)                   AS gasto_prom_mes,
+                ROUND(SUM(gasto_total_mes)::numeric, 0)                   AS gasto_total,
+                ROUND(AVG(muc_promedio_mes)::numeric, 4)                  AS muc_actual,
+                -- Tendencia: promedio últimos 2 meses vs 2 anteriores
+                ROUND(AVG(CASE WHEN mes >= (SELECT MAX(mes) - INTERVAL '1 month' FROM por_mes p2 WHERE p2.sku = por_mes.sku)
+                               THEN vol_total_mes END)::numeric, 2)       AS vol_ult2m,
+                ROUND(AVG(CASE WHEN mes < (SELECT MAX(mes) - INTERVAL '1 month' FROM por_mes p2 WHERE p2.sku = por_mes.sku)
+                               AND mes >= (SELECT MAX(mes) - INTERVAL '3 months' FROM por_mes p2 WHERE p2.sku = por_mes.sku)
+                               THEN vol_total_mes END)::numeric, 2)       AS vol_ant2m
+            FROM por_mes
+            GROUP BY sku
+        ),
+        ultima_compra AS (
+            SELECT sku,
+                   MAX(fecha_compra) AS ultima_compra,
+                   (CURRENT_DATE - MAX(fecha_compra))  AS dias_sin_comprar
+            FROM base
+            GROUP BY sku
+        ),
+        ciclo AS (
+            SELECT sku,
+                   CASE WHEN COUNT(DISTINCT fecha_compra) > 1
+                        THEN ROUND((MAX(fecha_compra) - MIN(fecha_compra))::numeric
+                             / NULLIF(COUNT(DISTINCT fecha_compra) - 1, 0), 1)
+                        ELSE NULL END AS dias_entre_compras,
+                   COUNT(DISTINCT fecha_compra) AS n_compras
+            FROM base
+            GROUP BY sku
+        )
+        SELECT
+            s.sku, s.nombre, s.proveedor,
+            s.n_meses, s.vol_prom_mes, s.vol_std, s.vol_total,
+            s.gasto_prom_mes, s.gasto_total, s.muc_actual,
+            s.vol_ult2m, s.vol_ant2m,
+            CASE WHEN s.vol_ant2m > 0
+                 THEN ROUND(((s.vol_ult2m - s.vol_ant2m) / s.vol_ant2m * 100)::numeric, 1)
+                 ELSE NULL END                                             AS tendencia_pct,
+            CASE WHEN s.vol_prom_mes > 0
+                 THEN ROUND((s.vol_std / s.vol_prom_mes * 100)::numeric, 1)
+                 ELSE NULL END                                             AS cv_pct,
+            -- Stock seguridad = promedio + 1.65 * std (95% nivel servicio) / 30 * ciclo
+            CASE WHEN c.dias_entre_compras IS NOT NULL AND s.vol_prom_mes > 0
+                 THEN ROUND(((s.vol_prom_mes + 1.65 * COALESCE(s.vol_std, 0))
+                              / 30.0 * c.dias_entre_compras)::numeric, 2)
+                 ELSE NULL END                                             AS stock_seg_sugerido,
+            c.dias_entre_compras,
+            c.n_compras,
+            u.ultima_compra,
+            u.dias_sin_comprar
+        FROM stats s
+        JOIN ultima_compra u ON s.sku = u.sku
+        JOIN ciclo c ON s.sku = c.sku
+        ORDER BY s.gasto_total DESC
+    """
+
+    # ── QUERY VOLUMEN PIVOT ────────────────────────────────────
+    sql_vol = f"""
+        SELECT
+            sku,
+            MAX(nombre_producto)                              AS nombre,
+            DATE_TRUNC('month', fecha_dte::timestamp)::date   AS mes,
+            ROUND(SUM(cant_conv)::numeric, 2)                 AS vol_total
+        FROM compras
+        WHERE UPPER(categoria_producto) LIKE '%BAR%'
+          AND cant_conv > 0
+          AND tipo_dte != '61'
+          {filtro_local_bar}
+        GROUP BY sku, DATE_TRUNC('month', fecha_dte::timestamp)
+        ORDER BY mes, sku
+    """
+
+    # ── QUERY GASTO PIVOT ─────────────────────────────────────
+    sql_gasto = f"""
+        SELECT
+            sku,
+            MAX(nombre_producto)                              AS nombre,
+            DATE_TRUNC('month', fecha_dte::timestamp)::date   AS mes,
+            ROUND(SUM(costo_realfinal)::numeric, 0)           AS gasto_total
+        FROM compras
+        WHERE UPPER(categoria_producto) LIKE '%BAR%'
+          AND costo_realfinal > 0
+          AND tipo_dte != '61'
+          {filtro_local_bar}
+        GROUP BY sku, DATE_TRUNC('month', fecha_dte::timestamp)
+        ORDER BY mes, sku
+    """
+
+    # ── QUERY FRECUENCIA ──────────────────────────────────────
+    sql_freq = f"""
+        WITH fechas AS (
+            SELECT sku, MAX(nombre_producto) AS nombre, local,
+                   fecha_dte::timestamp::date AS fecha_compra,
+                   SUM(cant_conv)             AS vol_dia,
+                   SUM(costo_realfinal)       AS gasto_dia
             FROM compras
             WHERE UPPER(categoria_producto) LIKE '%BAR%'
               AND cant_conv > 0
               AND tipo_dte != '61'
-              {filtro_local_vol}
-            GROUP BY sku, DATE_TRUNC('month', fecha_dte::timestamp)
-            ORDER BY mes, sku
-        """
+              {filtro_local_bar}
+            GROUP BY sku, local, fecha_dte::timestamp::date
+        )
+        SELECT
+            sku, MAX(nombre) AS nombre, local,
+            COUNT(*)                                                          AS n_compras,
+            MIN(fecha_compra)                                                 AS primera_compra,
+            MAX(fecha_compra)                                                 AS ultima_compra,
+            (CURRENT_DATE - MAX(fecha_compra))                                AS dias_sin_comprar,
+            CASE WHEN COUNT(*) > 1
+                 THEN ROUND((MAX(fecha_compra) - MIN(fecha_compra))::numeric
+                      / NULLIF(COUNT(*) - 1, 0), 1)
+                 ELSE NULL END                                                AS dias_entre_compras,
+            ROUND(AVG(vol_dia)::numeric, 2)                                  AS vol_promedio,
+            ROUND(AVG(gasto_dia)::numeric, 0)                                AS gasto_promedio,
+            ROUND(STDDEV(vol_dia)::numeric, 2)                               AS vol_std
+        FROM fechas
+        GROUP BY sku, local
+        ORDER BY dias_entre_compras ASC NULLS LAST, sku
+    """
 
-        if st.button("▶ Cargar Volumen", key="vol_run"):
-            st.session_state.pop('vol_df', None)
+    # ── Carga automática ──────────────────────────────────────
+    if 'bar_resumen_df' not in st.session_state:
+        with st.spinner("Cargando análisis completo del bar…"):
+            try:
+                st.session_state['bar_resumen_df'] = run_query(sql_resumen)
+                st.session_state['bar_vol_df']     = run_query(sql_vol)
+                st.session_state['bar_gasto_df']   = run_query(sql_gasto)
+                st.session_state['bar_freq_df']    = run_query(sql_freq)
+            except Exception as e:
+                st.error(f"Error cargando datos bar: {e}")
+                st.stop()
 
-        if 'vol_df' not in st.session_state:
-            with st.spinner("Consultando volumen…"):
-                try:
-                    df_vol = run_query(sql_vol)
-                    st.session_state['vol_df'] = df_vol
-                except Exception as e:
-                    st.error(f"Error: {e}")
-                    st.stop()
+    df_res  = st.session_state.get('bar_resumen_df', pd.DataFrame())
+    df_vol  = st.session_state.get('bar_vol_df',     pd.DataFrame())
+    df_gasto= st.session_state.get('bar_gasto_df',   pd.DataFrame())
+    df_freq = st.session_state.get('bar_freq_df',    pd.DataFrame())
 
-        df_vol = st.session_state.get('vol_df', pd.DataFrame())
+    # ── Filtro texto (aplica a todos los tabs) ────────────────
+    def _filtrar_texto(df, texto, cols=('sku','nombre')):
+        if texto and not df.empty:
+            mask = pd.Series([False]*len(df), index=df.index)
+            for c in cols:
+                if c in df.columns:
+                    mask |= df[c].astype(str).str.contains(texto, case=False, na=False)
+            return df[mask]
+        return df
 
-        if df_vol is not None and not df_vol.empty:
-            # Filtro texto
-            if vol_texto:
-                mask_v = (
-                    df_vol['sku'].str.contains(vol_texto, case=False, na=False) |
-                    df_vol['nombre'].str.contains(vol_texto, case=False, na=False)
-                )
-                df_vol = df_vol[mask_v]
+    df_res_f   = _filtrar_texto(df_res,   bar_texto)
+    df_vol_f   = _filtrar_texto(df_vol,   bar_texto)
+    df_gasto_f = _filtrar_texto(df_gasto, bar_texto)
+    df_freq_f  = _filtrar_texto(df_freq,  bar_texto)
 
-            # Pivot: filas=SKU, columnas=mes
-            df_vol['mes_label'] = df_vol['mes'].apply(lambda x: _mes_label(x.year, x.month))
-            pivot_vol = df_vol.pivot_table(index=['sku','nombre'], columns='mes_label',
-                                           values='vol_total', aggfunc='sum').reset_index()
+    # ════════════════════════════════════════════════════════════
+    # TABS
+    # ════════════════════════════════════════════════════════════
+    tb_res, tb_vol, tb_gasto, tb_freq = st.tabs([
+        "📋 Resumen Ejecutivo",
+        "📦 Volumen por Mes",
+        "💰 Gasto por Mes",
+        "🔄 Frecuencia de Compra"
+    ])
 
-            # Ordenar columnas por fecha real
-            meses_order = sorted(df_vol['mes'].unique())
-            col_meses   = [_mes_label(m.year, m.month) for m in meses_order]
-            col_meses   = [c for c in col_meses if c in pivot_vol.columns]
+    # ════════════════════════════════════════════════════════════
+    # TAB RESUMEN EJECUTIVO
+    # ════════════════════════════════════════════════════════════
+    with tb_res:
+        st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
-            pivot_vol['_total'] = pivot_vol[col_meses].sum(axis=1, skipna=True)
-            pivot_vol = pivot_vol.sort_values('_total', ascending=False).head(vol_top)
+        if df_res_f is not None and not df_res_f.empty:
+            # KPIs globales
+            k1, k2, k3, k4, k5 = st.columns(5)
+            k1.metric("SKUs Bar", str(len(df_res_f)))
+            k2.metric("Gasto Total", f"${df_res_f['gasto_total'].sum():,.0f}")
+            k3.metric("Vol. Total (kg/lt)", f"{df_res_f['vol_total'].sum():,.1f}")
+            k4.metric("Prom. días entre compras",
+                      f"{df_res_f['dias_entre_compras'].median():.0f}d"
+                      if not df_res_f['dias_entre_compras'].isna().all() else "—")
+            n_urgente = (df_res_f['dias_sin_comprar'] >= df_res_f['dias_entre_compras'].fillna(999)).sum()
+            k5.metric("⚠️ Próximos a pedir", str(int(n_urgente)))
 
-            # Métricas resumen
-            m1v, m2v, m3v = st.columns(3)
-            total_vol = pivot_vol['_total'].sum()
-            n_skus    = len(pivot_vol)
-            meses_n   = len(col_meses)
-            m1v.metric("Total kg/lt comprados", f"{total_vol:,.1f}")
-            m2v.metric("SKUs distintos", str(n_skus))
-            m3v.metric("Meses cubiertos", str(meses_n))
+            st.markdown("<div style='height:0.75rem'></div>", unsafe_allow_html=True)
 
-            st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
-
-            # Tabla HTML con heatmap por fila
-            def heatmap_cell(val, row_max, row_min):
-                if pd.isna(val) or row_max == row_min:
-                    return f'<td style="padding:9px 12px;text-align:right;color:#444">—</td>'
-                ratio = (val - row_min) / (row_max - row_min)
-                if ratio > 0.75:
-                    bg, fg = '#1a3a2a', '#4cdd8a'
-                elif ratio > 0.4:
-                    bg, fg = '#1a2a3a', '#4aaded'
-                elif ratio > 0.1:
-                    bg, fg = '#2a2a1a', '#c8b94a'
+            # Helpers visuales
+            def tend_badge(pct):
+                if pd.isna(pct):
+                    return '<span style="color:#444">—</span>'
+                if pct > 10:
+                    return f'<span style="color:#4cdd8a;font-weight:600">▲ {pct:.1f}%</span>'
+                elif pct < -10:
+                    return f'<span style="color:#e84545;font-weight:600">▼ {pct:.1f}%</span>'
                 else:
-                    bg, fg = '#1a1a1a', '#555'
-                return f'<td style="padding:9px 12px;text-align:right;background:{bg};color:{fg};font-weight:600;font-variant-numeric:tabular-nums">{val:,.1f}</td>'
+                    return f'<span style="color:#888">→ {pct:.1f}%</span>'
 
-            hs = 'padding:10px 12px;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #1e1e1e;white-space:nowrap'
-            hdrs = ['SKU', 'Producto'] + col_meses + ['Total']
-            thead = '<tr style="background:#111">' + ''.join(
-                [f'<th style="{hs};text-align:left">{h}</th>' if i < 2
+            def cv_badge(cv):
+                if pd.isna(cv):
+                    return '<span style="color:#444">—</span>'
+                if cv <= 20:
+                    return f'<span style="background:#1a3a2a;color:#4cdd8a;padding:2px 8px;border-radius:10px;font-size:0.74rem">{cv:.0f}%</span>'
+                elif cv <= 50:
+                    return f'<span style="background:#2a2a1a;color:#e8c14a;padding:2px 8px;border-radius:10px;font-size:0.74rem">{cv:.0f}%</span>'
+                else:
+                    return f'<span style="background:#2a1a1a;color:#e84545;padding:2px 8px;border-radius:10px;font-size:0.74rem">{cv:.0f}%</span>'
+
+            def urgencia_cell(dias_sin, ciclo):
+                if pd.isna(ciclo) or pd.isna(dias_sin):
+                    return f'<span style="color:#555;font-size:0.78rem">{int(dias_sin) if not pd.isna(dias_sin) else "—"}d</span>'
+                ratio = dias_sin / ciclo
+                if ratio >= 0.9:
+                    return f'<span style="background:#3a1a1a;color:#ff6b6b;padding:2px 8px;border-radius:10px;font-size:0.74rem;font-weight:700">🔴 {int(dias_sin)}d</span>'
+                elif ratio >= 0.6:
+                    return f'<span style="background:#2a2a1a;color:#e8c14a;padding:2px 8px;border-radius:10px;font-size:0.74rem">🟡 {int(dias_sin)}d</span>'
+                else:
+                    return f'<span style="color:#555;font-size:0.78rem">{int(dias_sin)}d</span>'
+
+            hs = 'padding:10px 12px;font-size:0.67rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #1e1e1e;white-space:nowrap'
+            hdrs_r = ['SKU','Producto','Proveedor','Meses','Vol.Prom/mes','CV%','Tendencia','MUC actual','Ciclo(d)','Sin comprar','Stock Seg.','Gasto Prom/mes']
+            thead_r = '<tr style="background:#111">' + ''.join(
+                [f'<th style="{hs};text-align:left">{h}</th>' if i < 3
                  else f'<th style="{hs};text-align:right">{h}</th>'
-                 for i, h in enumerate(hdrs)]
+                 for i, h in enumerate(hdrs_r)]
             ) + '</tr>'
 
-            rows_vol = ''
-            for _, r in pivot_vol.iterrows():
-                vals = [r.get(c, float('nan')) for c in col_meses]
-                vals_num = [v for v in vals if not pd.isna(v)]
-                row_max = max(vals_num) if vals_num else 1
-                row_min = min(vals_num) if vals_num else 0
-                total_r = sum(v for v in vals if not pd.isna(v))
-                rows_vol += (
+            rows_r = ''
+            for _, r in df_res_f.iterrows():
+                rows_r += (
                     f'<tr style="border-bottom:1px solid #161616">'
-                    f'<td style="padding:9px 12px;color:#666;font-family:monospace;font-size:0.75rem">{r["sku"]}</td>'
-                    f'<td style="padding:9px 12px;color:#ccc;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{r["nombre"][:45]}</td>'
-                    + ''.join([heatmap_cell(v, row_max, row_min) for v in vals])
-                    + f'<td style="padding:9px 12px;text-align:right;color:#d4a853;font-weight:700;font-variant-numeric:tabular-nums">{total_r:,.1f}</td>'
+                    f'<td style="padding:9px 12px;color:#666;font-family:monospace;font-size:0.74rem;white-space:nowrap">{r["sku"]}</td>'
+                    f'<td style="padding:9px 12px;color:#ccc;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{r["nombre"]}">{str(r["nombre"])[:38]}</td>'
+                    f'<td style="padding:9px 12px;color:#777;font-size:0.78rem;white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis">{str(r["proveedor"])[:22]}</td>'
+                    f'<td style="padding:9px 12px;text-align:right;color:#aaa">{int(r["n_meses"])}</td>'
+                    f'<td style="padding:9px 12px;text-align:right;color:#7ab8e8;font-variant-numeric:tabular-nums">{r["vol_prom_mes"]:,.2f}</td>'
+                    f'<td style="padding:9px 12px;text-align:right">{cv_badge(r["cv_pct"])}</td>'
+                    f'<td style="padding:9px 12px;text-align:right">{tend_badge(r["tendencia_pct"])}</td>'
+                    f'<td style="padding:9px 12px;text-align:right;color:#d4a853;font-variant-numeric:tabular-nums">{r["muc_actual"]:.4f}</td>'
+                    f'<td style="padding:9px 12px;text-align:right;color:#888">'
+                    + (f'{r["dias_entre_compras"]:.0f}d' if not pd.isna(r["dias_entre_compras"]) else '—') +
+                    f'</td>'
+                    f'<td style="padding:9px 12px;text-align:right">{urgencia_cell(r["dias_sin_comprar"], r["dias_entre_compras"])}</td>'
+                    f'<td style="padding:9px 12px;text-align:right;color:#b8e8c0;font-variant-numeric:tabular-nums">'
+                    + (f'{r["stock_seg_sugerido"]:,.2f}' if not pd.isna(r["stock_seg_sugerido"]) else '—') +
+                    f'</td>'
+                    f'<td style="padding:9px 12px;text-align:right;color:#d4a853;font-variant-numeric:tabular-nums">${r["gasto_prom_mes"]:,.0f}</td>'
                     f'</tr>'
                 )
 
-            tabla_vol = (
+            tabla_r = (
                 '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;background:#0d0d0d">'
                 '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.83rem">'
-                f'<thead>{thead}</thead><tbody>{rows_vol}</tbody></table></div>'
+                f'<thead>{thead_r}</thead><tbody>{rows_r}</tbody></table></div>'
             )
-            st.markdown(tabla_vol, unsafe_allow_html=True)
+            st.markdown(tabla_r, unsafe_allow_html=True)
 
+            st.markdown("""
+            <div style='margin-top:0.75rem;font-size:0.75rem;color:#555'>
+            <b style='color:#666'>CV%</b>: Coeficiente de variación mensual — 
+            <span style='color:#4cdd8a'>≤20% estable</span> · 
+            <span style='color:#e8c14a'>21-50% variable</span> · 
+            <span style='color:#e84545'>>50% errático</span> &nbsp;|&nbsp;
+            <b style='color:#666'>Tendencia</b>: últimos 2 meses vs 2 anteriores &nbsp;|&nbsp;
+            <b style='color:#666'>Stock Seg.</b>: kg/lt recomendados al momento de pedir (95% nivel servicio)
+            </div>
+            """, unsafe_allow_html=True)
+
+            st.markdown("<div style='height:0.75rem'></div>", unsafe_allow_html=True)
+            buf_r = io.BytesIO()
+            export_r = df_res_f[['sku','nombre','proveedor','n_meses','vol_prom_mes','cv_pct',
+                                  'tendencia_pct','muc_actual','dias_entre_compras',
+                                  'dias_sin_comprar','stock_seg_sugerido','gasto_prom_mes','gasto_total']].copy()
+            export_r.columns = ['SKU','Producto','Proveedor','Meses','Vol.Prom/mes','CV%',
+                                 'Tendencia%','MUC actual','Ciclo(días)',
+                                 'Días sin comprar','Stock Seg.','Gasto Prom/mes','Gasto Total']
+            with pd.ExcelWriter(buf_r, engine='openpyxl') as w:
+                export_r.to_excel(w, sheet_name='Resumen_Bar', index=False)
+            st.download_button("📥 Exportar Resumen", buf_r.getvalue(), "Bar_Resumen.xlsx")
+        else:
+            st.info("Presiona ▶ Cargar análisis Bar para ejecutar.")
+
+    # ════════════════════════════════════════════════════════════
+    # TAB VOLUMEN POR MES
+    # ════════════════════════════════════════════════════════════
+    with tb_vol:
+        st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+        if df_vol_f is not None and not df_vol_f.empty:
+            df_vol_f['mes_lbl'] = df_vol_f['mes'].apply(lambda x: _mes_lbl(x.year, x.month))
+            pivot_v = df_vol_f.pivot_table(index=['sku','nombre'], columns='mes_lbl',
+                                            values='vol_total', aggfunc='sum').reset_index()
+            meses_ord = sorted(df_vol_f['mes'].unique())
+            col_m = [_mes_lbl(m.year, m.month) for m in meses_ord]
+            col_m = [c for c in col_m if c in pivot_v.columns]
+            pivot_v['_prom'] = pivot_v[col_m].mean(axis=1, skipna=True)
+            pivot_v['_total'] = pivot_v[col_m].sum(axis=1, skipna=True)
+            pivot_v = pivot_v.sort_values('_total', ascending=False)
+
+            mv1, mv2, mv3 = st.columns(3)
+            mv1.metric("SKUs", str(len(pivot_v)))
+            mv2.metric("Vol. Total (kg/lt)", f"{pivot_v['_total'].sum():,.1f}")
+            mv3.metric("Meses", str(len(col_m)))
+            st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+
+            def hm(val, rmax, rmin):
+                if pd.isna(val) or rmax == rmin:
+                    return '<td style="padding:9px 12px;text-align:right;color:#333">—</td>'
+                ratio = (val - rmin) / (rmax - rmin)
+                if ratio > 0.75:   bg,fg = '#1a3a2a','#4cdd8a'
+                elif ratio > 0.4:  bg,fg = '#1a2a3a','#4aaded'
+                elif ratio > 0.1:  bg,fg = '#2a2a1a','#c8b94a'
+                else:              bg,fg = '#1a1a1a','#555'
+                return f'<td style="padding:9px 12px;text-align:right;background:{bg};color:{fg};font-weight:600;font-variant-numeric:tabular-nums">{val:,.2f}</td>'
+
+            hs = 'padding:10px 12px;font-size:0.67rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #1e1e1e;white-space:nowrap'
+            hdrs_v = ['SKU','Producto'] + col_m + ['Prom/mes','Total']
+            thead_v = '<tr style="background:#111">' + ''.join(
+                [f'<th style="{hs};text-align:left">{h}</th>' if i<2 else f'<th style="{hs};text-align:right">{h}</th>'
+                 for i,h in enumerate(hdrs_v)]) + '</tr>'
+            rows_v = ''
+            for _, r in pivot_v.iterrows():
+                vals = [r.get(c, float('nan')) for c in col_m]
+                vnum = [v for v in vals if not pd.isna(v)]
+                rmx,rmn = (max(vnum),min(vnum)) if vnum else (1,0)
+                rows_v += (
+                    f'<tr style="border-bottom:1px solid #161616">'
+                    f'<td style="padding:9px 12px;color:#666;font-family:monospace;font-size:0.74rem">{r["sku"]}</td>'
+                    f'<td style="padding:9px 12px;color:#ccc;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{str(r["nombre"])[:44]}</td>'
+                    + ''.join([hm(v,rmx,rmn) for v in vals])
+                    + f'<td style="padding:9px 12px;text-align:right;color:#7ab8e8;font-variant-numeric:tabular-nums">{r["_prom"]:,.2f}</td>'
+                    + f'<td style="padding:9px 12px;text-align:right;color:#d4a853;font-weight:700;font-variant-numeric:tabular-nums">{r["_total"]:,.1f}</td>'
+                    f'</tr>'
+                )
+            st.markdown(
+                '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;background:#0d0d0d">'
+                '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.83rem">'
+                f'<thead>{thead_v}</thead><tbody>{rows_v}</tbody></table></div>',
+                unsafe_allow_html=True)
             st.markdown("<div style='height:0.75rem'></div>", unsafe_allow_html=True)
             buf_v = io.BytesIO()
-            export_vol = pivot_vol[['sku','nombre'] + col_meses + ['_total']].copy()
-            export_vol.columns = ['SKU','Producto'] + col_meses + ['Total']
+            exp_v = pivot_v[['sku','nombre']+col_m+['_prom','_total']].copy()
+            exp_v.columns = ['SKU','Producto']+col_m+['Prom/mes','Total']
             with pd.ExcelWriter(buf_v, engine='openpyxl') as w:
-                export_vol.to_excel(w, sheet_name='Volumen_Bar', index=False)
-            st.download_button("📥 Exportar Excel", buf_v.getvalue(), "Bar_Volumen.xlsx",
-                               use_container_width=False)
+                exp_v.to_excel(w, sheet_name='Volumen_Bar', index=False)
+            st.download_button("📥 Exportar Excel", buf_v.getvalue(), "Bar_Volumen.xlsx")
         else:
-            st.info("Presiona ▶ Cargar Volumen para ejecutar el análisis.")
+            st.info("Presiona ▶ Cargar análisis Bar para ejecutar.")
 
-    # ════════════════════════════════════════════════════════
-    # TAB 2 — GASTO MENSUAL ($)
-    # ════════════════════════════════════════════════════════
-    with tb2:
+    # ════════════════════════════════════════════════════════════
+    # TAB GASTO POR MES
+    # ════════════════════════════════════════════════════════════
+    with tb_gasto:
         st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+        if df_gasto_f is not None and not df_gasto_f.empty:
+            df_gasto_f['mes_lbl'] = df_gasto_f['mes'].apply(lambda x: _mes_lbl(x.year, x.month))
+            pivot_g = df_gasto_f.pivot_table(index=['sku','nombre'], columns='mes_lbl',
+                                              values='gasto_total', aggfunc='sum').reset_index()
+            meses_ord_g = sorted(df_gasto_f['mes'].unique())
+            col_mg = [_mes_lbl(m.year, m.month) for m in meses_ord_g]
+            col_mg = [c for c in col_mg if c in pivot_g.columns]
+            pivot_g['_prom'] = pivot_g[col_mg].mean(axis=1, skipna=True)
+            pivot_g['_total'] = pivot_g[col_mg].sum(axis=1, skipna=True)
+            pivot_g = pivot_g.sort_values('_total', ascending=False)
 
-        c2a, c2b, c2c = st.columns([2,2,3])
-        with c2a:
-            gasto_local = st.selectbox("Local", ["Todos"] + [l for l in get_locales() if l != "Todos"],
-                                       key="gasto_local")
-        with c2b:
-            gasto_top = st.slider("Top SKUs", 5, 30, 15, key="gasto_top")
-        with c2c:
-            gasto_texto = st.text_input("Filtrar SKU / Producto", key="gasto_texto")
-
-        filtro_local_gasto = _bar_filtro_local(gasto_local)
-
-        sql_gasto = f"""
-            SELECT
-                sku,
-                MAX(nombre_producto)                              AS nombre,
-                DATE_TRUNC('month', fecha_dte::timestamp)::date   AS mes,
-                ROUND(SUM(costo_realfinal)::numeric, 0)           AS gasto_total
-            FROM compras
-            WHERE UPPER(categoria_producto) LIKE '%BAR%'
-              AND costo_realfinal > 0
-              AND tipo_dte != '61'
-              {filtro_local_gasto}
-            GROUP BY sku, DATE_TRUNC('month', fecha_dte::timestamp)
-            ORDER BY mes, sku
-        """
-
-        if st.button("▶ Cargar Gasto", key="gasto_run"):
-            st.session_state.pop('gasto_df', None)
-
-        if 'gasto_df' not in st.session_state:
-            with st.spinner("Consultando gasto…"):
-                try:
-                    df_gasto = run_query(sql_gasto)
-                    st.session_state['gasto_df'] = df_gasto
-                except Exception as e:
-                    st.error(f"Error: {e}")
-                    st.stop()
-
-        df_gasto = st.session_state.get('gasto_df', pd.DataFrame())
-
-        if df_gasto is not None and not df_gasto.empty:
-            if gasto_texto:
-                mask_g = (
-                    df_gasto['sku'].str.contains(gasto_texto, case=False, na=False) |
-                    df_gasto['nombre'].str.contains(gasto_texto, case=False, na=False)
-                )
-                df_gasto = df_gasto[mask_g]
-
-            df_gasto['mes_label'] = df_gasto['mes'].apply(lambda x: _mes_label(x.year, x.month))
-            pivot_gasto = df_gasto.pivot_table(index=['sku','nombre'], columns='mes_label',
-                                               values='gasto_total', aggfunc='sum').reset_index()
-
-            meses_order_g = sorted(df_gasto['mes'].unique())
-            col_meses_g   = [_mes_label(m.year, m.month) for m in meses_order_g]
-            col_meses_g   = [c for c in col_meses_g if c in pivot_gasto.columns]
-
-            pivot_gasto['_total'] = pivot_gasto[col_meses_g].sum(axis=1, skipna=True)
-            pivot_gasto = pivot_gasto.sort_values('_total', ascending=False).head(gasto_top)
-
-            # KPIs
-            total_gasto = pivot_gasto['_total'].sum()
-            avg_mensual = pivot_gasto[col_meses_g].sum().mean() if col_meses_g else 0
-            m1g, m2g, m3g = st.columns(3)
-            m1g.metric("Gasto total período", f"${total_gasto:,.0f}")
-            m2g.metric("Promedio mensual", f"${avg_mensual:,.0f}")
-            m3g.metric("SKUs distintos", str(len(pivot_gasto)))
-
+            mg1, mg2, mg3 = st.columns(3)
+            mg1.metric("SKUs", str(len(pivot_g)))
+            mg2.metric("Gasto Total", f"${pivot_g['_total'].sum():,.0f}")
+            mg3.metric("Meses", str(len(col_mg)))
             st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
-            # Variación mes a mes (últimos 2 meses con data)
-            if len(col_meses_g) >= 2:
-                mes_ult  = col_meses_g[-1]
-                mes_ant  = col_meses_g[-2]
-                tot_ult  = pivot_gasto[mes_ult].sum(skipna=True)
-                tot_ant  = pivot_gasto[mes_ant].sum(skipna=True)
-                delta_g  = ((tot_ult - tot_ant) / tot_ant * 100) if tot_ant > 0 else 0
-                color_d  = "#e84545" if delta_g > 5 else "#4caf7d" if delta_g < -5 else "#888"
-                st.markdown(
-                    f'<div style="display:inline-block;background:#111;border:1px solid #222;'
-                    f'border-radius:10px;padding:8px 18px;margin-bottom:12px;font-size:0.83rem">'
-                    f'Variación <b style="color:#ccc">{mes_ant}</b> → <b style="color:#ccc">{mes_ult}</b>: '
-                    f'<b style="color:{color_d}">{delta_g:+.1f}%</b> '
-                    f'<span style="color:#555">(${tot_ult-tot_ant:+,.0f})</span></div>',
-                    unsafe_allow_html=True
-                )
+            def hmg(val, rmax, rmin):
+                if pd.isna(val) or rmax == rmin:
+                    return '<td style="padding:9px 12px;text-align:right;color:#333">—</td>'
+                ratio = (val - rmin) / (rmax - rmin)
+                if ratio > 0.75:   bg,fg = '#3a1a1a','#ff8c8c'
+                elif ratio > 0.4:  bg,fg = '#2a1a2a','#c87ae8'
+                elif ratio > 0.1:  bg,fg = '#1a2a2a','#4ae8c8'
+                else:              bg,fg = '#1a1a1a','#555'
+                return f'<td style="padding:9px 12px;text-align:right;background:{bg};color:{fg};font-weight:600;font-variant-numeric:tabular-nums">${val:,.0f}</td>'
 
-            # Tabla con barras de progreso visuales
-            bar_max = pivot_gasto['_total'].max() or 1
-
-            def bar_cell(val, max_val):
-                if pd.isna(val): return '<td style="padding:9px 12px;text-align:right;color:#333">—</td>'
-                w = int(val / max_val * 60)
-                return (
-                    f'<td style="padding:9px 12px;text-align:right">'
-                    f'<span style="color:#d4a853;font-variant-numeric:tabular-nums;font-weight:600">${val:,.0f}</span>'
-                    f'</td>'
-                )
-
-            hs2 = 'padding:10px 12px;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #1e1e1e;white-space:nowrap'
-            hdrs2 = ['SKU', 'Producto'] + col_meses_g + ['Total']
-            thead2 = '<tr style="background:#111">' + ''.join(
-                [f'<th style="{hs2};text-align:left">{h}</th>' if i < 2
-                 else f'<th style="{hs2};text-align:right">{h}</th>'
-                 for i, h in enumerate(hdrs2)]
-            ) + '</tr>'
-
+            hs = 'padding:10px 12px;font-size:0.67rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #1e1e1e;white-space:nowrap'
+            hdrs_g = ['SKU','Producto'] + col_mg + ['Prom/mes','Total']
+            thead_g = '<tr style="background:#111">' + ''.join(
+                [f'<th style="{hs};text-align:left">{h}</th>' if i<2 else f'<th style="{hs};text-align:right">{h}</th>'
+                 for i,h in enumerate(hdrs_g)]) + '</tr>'
             rows_g = ''
-            for _, r in pivot_gasto.iterrows():
-                vals_g = [r.get(c, float('nan')) for c in col_meses_g]
-                total_r_g = sum(v for v in vals_g if not pd.isna(v))
-                # Tendencia: ↑↓ comparando primer y último mes con data
-                vals_num_g = [(i, v) for i, v in enumerate(vals_g) if not pd.isna(v)]
-                if len(vals_num_g) >= 2:
-                    tend = '↑' if vals_num_g[-1][1] > vals_num_g[0][1] else '↓'
-                    tend_c = '#e84545' if tend == '↑' else '#4caf7d'
-                else:
-                    tend, tend_c = '—', '#555'
-
+            for _, r in pivot_g.iterrows():
+                vals = [r.get(c, float('nan')) for c in col_mg]
+                vnum = [v for v in vals if not pd.isna(v)]
+                rmx,rmn = (max(vnum),min(vnum)) if vnum else (1,0)
                 rows_g += (
                     f'<tr style="border-bottom:1px solid #161616">'
-                    f'<td style="padding:9px 12px;color:#666;font-family:monospace;font-size:0.75rem">{r["sku"]}</td>'
-                    f'<td style="padding:9px 12px;color:#ccc;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'
-                    f'<span style="color:{tend_c};font-size:0.8rem;margin-right:6px">{tend}</span>{r["nombre"][:45]}</td>'
-                    + ''.join([bar_cell(v, bar_max) for v in vals_g])
-                    + f'<td style="padding:9px 12px;text-align:right;color:#d4a853;font-weight:700;font-variant-numeric:tabular-nums">${total_r_g:,.0f}</td>'
+                    f'<td style="padding:9px 12px;color:#666;font-family:monospace;font-size:0.74rem">{r["sku"]}</td>'
+                    f'<td style="padding:9px 12px;color:#ccc;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{str(r["nombre"])[:44]}</td>'
+                    + ''.join([hmg(v,rmx,rmn) for v in vals])
+                    + f'<td style="padding:9px 12px;text-align:right;color:#c87ae8;font-variant-numeric:tabular-nums">${r["_prom"]:,.0f}</td>'
+                    + f'<td style="padding:9px 12px;text-align:right;color:#d4a853;font-weight:700;font-variant-numeric:tabular-nums">${r["_total"]:,.0f}</td>'
                     f'</tr>'
                 )
-
-            tabla_gasto = (
+            st.markdown(
                 '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;background:#0d0d0d">'
                 '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.83rem">'
-                f'<thead>{thead2}</thead><tbody>{rows_g}</tbody></table></div>'
-            )
-            st.markdown(tabla_gasto, unsafe_allow_html=True)
-
+                f'<thead>{thead_g}</thead><tbody>{rows_g}</tbody></table></div>',
+                unsafe_allow_html=True)
             st.markdown("<div style='height:0.75rem'></div>", unsafe_allow_html=True)
             buf_g = io.BytesIO()
-            export_g = pivot_gasto[['sku','nombre'] + col_meses_g + ['_total']].copy()
-            export_g.columns = ['SKU','Producto'] + col_meses_g + ['Total']
+            exp_g = pivot_g[['sku','nombre']+col_mg+['_prom','_total']].copy()
+            exp_g.columns = ['SKU','Producto']+col_mg+['Prom/mes','Total']
             with pd.ExcelWriter(buf_g, engine='openpyxl') as w:
-                export_g.to_excel(w, sheet_name='Gasto_Bar', index=False)
+                exp_g.to_excel(w, sheet_name='Gasto_Bar', index=False)
             st.download_button("📥 Exportar Excel", buf_g.getvalue(), "Bar_Gasto.xlsx")
         else:
-            st.info("Presiona ▶ Cargar Gasto para ejecutar el análisis.")
+            st.info("Presiona ▶ Cargar análisis Bar para ejecutar.")
 
-    # ════════════════════════════════════════════════════════
-    # TAB 3 — FRECUENCIA DE COMPRA
-    # ════════════════════════════════════════════════════════
-    with tb3:
+    # ════════════════════════════════════════════════════════════
+    # TAB FRECUENCIA DE COMPRA
+    # ════════════════════════════════════════════════════════════
+    with tb_freq:
         st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
-
-        c3a, c3b = st.columns([2, 4])
-        with c3a:
-            freq_local = st.selectbox("Local", ["Todos"] + [l for l in get_locales() if l != "Todos"],
-                                      key="freq_local")
-        with c3b:
-            freq_texto = st.text_input("Filtrar SKU / Producto", key="freq_texto")
-
-        filtro_local_freq = _bar_filtro_local(freq_local)
-
-        sql_freq = f"""
-            WITH fechas AS (
-                SELECT
-                    sku,
-                    MAX(nombre_producto)           AS nombre,
-                    local,
-                    fecha_dte::timestamp::date     AS fecha_compra,
-                    SUM(cant_conv)                 AS vol_dia,
-                    SUM(costo_realfinal)           AS gasto_dia
-                FROM compras
-                WHERE UPPER(categoria_producto) LIKE '%BAR%'
-                  AND cant_conv > 0
-                  AND tipo_dte != '61'
-                  {filtro_local_freq}
-                GROUP BY sku, local, fecha_dte::timestamp::date
-            ),
-            intervalos AS (
-                SELECT
-                    sku,
-                    MAX(nombre) AS nombre,
-                    local,
-                    COUNT(*)                                                        AS n_compras,
-                    MIN(fecha_compra)                                               AS primera_compra,
-                    MAX(fecha_compra)                                               AS ultima_compra,
-                    ROUND(AVG(vol_dia)::numeric, 2)                                AS vol_promedio,
-                    ROUND(AVG(gasto_dia)::numeric, 0)                              AS gasto_promedio,
-                    CASE WHEN COUNT(*) > 1
-                         THEN ROUND(
-                                (MAX(fecha_compra) - MIN(fecha_compra))::numeric
-                                / NULLIF(COUNT(*) - 1, 0), 1)
-                         ELSE NULL END                                             AS dias_entre_compras
-                FROM fechas
-                GROUP BY sku, local
-            )
-            SELECT * FROM intervalos
-            ORDER BY dias_entre_compras ASC NULLS LAST, sku
-        """
-
-        if st.button("▶ Cargar Frecuencia", key="freq_run"):
-            st.session_state.pop('freq_df', None)
-
-        if 'freq_df' not in st.session_state:
-            with st.spinner("Consultando frecuencias…"):
-                try:
-                    df_freq = run_query(sql_freq)
-                    st.session_state['freq_df'] = df_freq
-                except Exception as e:
-                    st.error(f"Error: {e}")
-                    st.stop()
-
-        df_freq = st.session_state.get('freq_df', pd.DataFrame())
-
-        if df_freq is not None and not df_freq.empty:
-            if freq_texto:
-                mask_f = (
-                    df_freq['sku'].str.contains(freq_texto, case=False, na=False) |
-                    df_freq['nombre'].str.contains(freq_texto, case=False, na=False)
-                )
-                df_freq = df_freq[mask_f]
-
-            # KPIs
-            m1f, m2f, m3f, m4f = st.columns(4)
-            median_dias = df_freq['dias_entre_compras'].median()
-            skus_semanal = (df_freq['dias_entre_compras'] <= 7).sum()
-            skus_quincenal = ((df_freq['dias_entre_compras'] > 7) & (df_freq['dias_entre_compras'] <= 15)).sum()
-            skus_mensual = (df_freq['dias_entre_compras'] > 15).sum()
-            m1f.metric("Mediana ciclo (días)", f"{median_dias:.0f}" if not pd.isna(median_dias) else "—")
-            m2f.metric("🟢 Ciclo ≤7 días", str(int(skus_semanal)))
-            m3f.metric("🟡 8–15 días", str(int(skus_quincenal)))
-            m4f.metric("🔴 >15 días", str(int(skus_mensual)))
-
+        if df_freq_f is not None and not df_freq_f.empty:
+            mf1, mf2, mf3, mf4 = st.columns(4)
+            med_dias = df_freq_f['dias_entre_compras'].median()
+            mf1.metric("Mediana ciclo", f"{med_dias:.0f}d" if not pd.isna(med_dias) else "—")
+            mf2.metric("🟢 ≤7 días", str(int((df_freq_f['dias_entre_compras']<=7).sum())))
+            mf3.metric("🟡 8–15 días", str(int(((df_freq_f['dias_entre_compras']>7)&(df_freq_f['dias_entre_compras']<=15)).sum())))
+            mf4.metric("🔴 >15 días", str(int((df_freq_f['dias_entre_compras']>15).sum())))
             st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
-            # Badge ciclo
-            def badge_ciclo(dias):
+            def badge_c(dias):
                 if pd.isna(dias):
                     return '<span style="color:#444;font-size:0.75rem">1 compra</span>'
-                if dias <= 7:
+                if dias<=7:
                     return f'<span style="background:#1a3a2a;color:#4cdd8a;padding:2px 9px;border-radius:12px;font-size:0.75rem;font-weight:600">cada {dias:.0f}d</span>'
-                elif dias <= 15:
+                elif dias<=15:
                     return f'<span style="background:#2a2a1a;color:#e8c14a;padding:2px 9px;border-radius:12px;font-size:0.75rem;font-weight:600">cada {dias:.0f}d</span>'
                 else:
                     return f'<span style="background:#2a1a1a;color:#e84545;padding:2px 9px;border-radius:12px;font-size:0.75rem;font-weight:600">cada {dias:.0f}d</span>'
 
-            hsf = 'padding:10px 12px;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #1e1e1e'
-            hdrs_f = ['SKU','Producto','Local','# Compras','Ciclo','Vol. Prom. (kg/lt)','Gasto Prom. $','Primera','Última']
-            thead_f = '<tr style="background:#111">' + ''.join(
-                [f'<th style="{hsf};text-align:left">{h}</th>' if i < 3
-                 else f'<th style="{hsf};text-align:right">{h}</th>'
-                 for i, h in enumerate(hdrs_f)]
-            ) + '</tr>'
+            def urg_b(dias_sin, ciclo):
+                if pd.isna(ciclo) or pd.isna(dias_sin): return f'<span style="color:#555">{int(dias_sin) if not pd.isna(dias_sin) else "—"}d</span>'
+                ratio = dias_sin/ciclo
+                if ratio>=0.9: return f'<span style="background:#3a1a1a;color:#ff6b6b;padding:2px 8px;border-radius:10px;font-size:0.74rem;font-weight:700">🔴 {int(dias_sin)}d</span>'
+                elif ratio>=0.6: return f'<span style="background:#2a2a1a;color:#e8c14a;padding:2px 8px;border-radius:10px;font-size:0.74rem">🟡 {int(dias_sin)}d</span>'
+                return f'<span style="color:#555;font-size:0.78rem">{int(dias_sin)}d</span>'
 
+            hs = 'padding:10px 12px;font-size:0.67rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #1e1e1e;white-space:nowrap'
+            hdrs_f = ['SKU','Producto','Local','# Compras','Ciclo','Sin comprar','Vol.Prom(kg/lt)','Gasto Prom $','Primera','Última']
+            thead_f = '<tr style="background:#111">' + ''.join(
+                [f'<th style="{hs};text-align:left">{h}</th>' if i<3 else f'<th style="{hs};text-align:right">{h}</th>'
+                 for i,h in enumerate(hdrs_f)]) + '</tr>'
             rows_f = ''
-            for _, r in df_freq.iterrows():
+            for _, r in df_freq_f.iterrows():
                 rows_f += (
                     f'<tr style="border-bottom:1px solid #161616">'
-                    f'<td style="padding:9px 12px;color:#666;font-family:monospace;font-size:0.75rem">{r["sku"]}</td>'
+                    f'<td style="padding:9px 12px;color:#666;font-family:monospace;font-size:0.74rem">{r["sku"]}</td>'
                     f'<td style="padding:9px 12px;color:#ccc;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{str(r["nombre"])[:42]}</td>'
                     f'<td style="padding:9px 12px;color:#888;font-size:0.8rem">{r["local"]}</td>'
                     f'<td style="padding:9px 12px;text-align:right;color:#aaa">{int(r["n_compras"])}</td>'
-                    f'<td style="padding:9px 12px;text-align:right">{badge_ciclo(r["dias_entre_compras"])}</td>'
+                    f'<td style="padding:9px 12px;text-align:right">{badge_c(r["dias_entre_compras"])}</td>'
+                    f'<td style="padding:9px 12px;text-align:right">{urg_b(r["dias_sin_comprar"], r["dias_entre_compras"])}</td>'
                     f'<td style="padding:9px 12px;text-align:right;color:#7ab8e8;font-variant-numeric:tabular-nums">{r["vol_promedio"]:,.2f}</td>'
                     f'<td style="padding:9px 12px;text-align:right;color:#d4a853;font-variant-numeric:tabular-nums">${r["gasto_promedio"]:,.0f}</td>'
                     f'<td style="padding:9px 12px;text-align:right;color:#555;font-size:0.78rem">{str(r["primera_compra"])[:10]}</td>'
                     f'<td style="padding:9px 12px;text-align:right;color:#888;font-size:0.78rem">{str(r["ultima_compra"])[:10]}</td>'
                     f'</tr>'
                 )
-
-            tabla_freq = (
+            st.markdown(
                 '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;background:#0d0d0d">'
                 '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.83rem">'
-                f'<thead>{thead_f}</thead><tbody>{rows_f}</tbody></table></div>'
-            )
-            st.markdown(tabla_freq, unsafe_allow_html=True)
-
+                f'<thead>{thead_f}</thead><tbody>{rows_f}</tbody></table></div>',
+                unsafe_allow_html=True)
             st.markdown("<div style='height:0.75rem'></div>", unsafe_allow_html=True)
             buf_f = io.BytesIO()
             with pd.ExcelWriter(buf_f, engine='openpyxl') as w:
-                df_freq[['sku','nombre','local','n_compras','dias_entre_compras',
-                          'vol_promedio','gasto_promedio','primera_compra','ultima_compra']].to_excel(
+                df_freq_f[['sku','nombre','local','n_compras','dias_entre_compras',
+                            'dias_sin_comprar','vol_promedio','gasto_promedio',
+                            'primera_compra','ultima_compra']].to_excel(
                     w, sheet_name='Frecuencia_Bar', index=False)
             st.download_button("📥 Exportar Excel", buf_f.getvalue(), "Bar_Frecuencia.xlsx")
         else:
-            st.info("Presiona ▶ Cargar Frecuencia para ejecutar el análisis.")
+            st.info("Presiona ▶ Cargar análisis Bar para ejecutar.")
