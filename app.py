@@ -1000,6 +1000,59 @@ with st.sidebar:
     f_local  = st.selectbox("Local", locales)
 
 
+
+# ============================================================
+# FUNCIÓN: GENERAR PDF VARIACIÓN DE PRECIOS
+# ============================================================
+def generar_pdf_variacion(df, mes_base, mes_comp, local='Cadena Completa'):
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib import colors as rc
+    from reportlab.lib.units import mm
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, HRFlowable
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
+    CB=rc.HexColor('#0f0f0f'); CP=rc.HexColor('#1a1a1a'); CG=rc.HexColor('#d4a853')
+    CT=rc.HexColor('#f0ede8'); CM=rc.HexColor('#888888'); CR=rc.HexColor('#e84545')
+    CGr=rc.HexColor('#4caf7d'); CA=rc.HexColor('#141414'); CH=rc.HexColor('#111111')
+    buf=io.BytesIO()
+    doc=SimpleDocTemplate(buf,pagesize=landscape(A4),leftMargin=15*mm,rightMargin=15*mm,topMargin=15*mm,bottomMargin=15*mm)
+    def sty(sz,col,bold=False,align=TA_LEFT):
+        return ParagraphStyle('s',fontSize=sz,textColor=col,fontName='Helvetica-Bold' if bold else 'Helvetica',alignment=align,leading=sz*1.3)
+    def cell(txt,sz=7,col=None,bold=False,align=TA_RIGHT):
+        return Paragraph(str(txt),sty(sz,col or CT,bold=bold,align=align))
+    tb=df['impacto_base'].sum(); tc=df['impacto_comp'].sum(); td=tc-tb
+    tp=(td/tb*100) if tb>0 else 0; kc=CR if td>0 else CGr
+    story=[
+        Paragraph("INFORME DE VARIACIÓN DE PRECIOS",sty(16,CG,bold=True,align=TA_CENTER)),
+        Paragraph(f"LOCAL: {local.upper()}",sty(11,CT,align=TA_CENTER)),
+        Paragraph(f"Período base: {mes_base}  →  Comparación: {mes_comp}",sty(9,CM,align=TA_CENTER)),
+        Spacer(1,6*mm),
+    ]
+    kd=[[Paragraph(f"Canasta {mes_base}",sty(8,CM,align=TA_CENTER)),Paragraph(f"Canasta {mes_comp}",sty(8,CM,align=TA_CENTER)),Paragraph("Δ$ Impacto",sty(8,CM,align=TA_CENTER)),Paragraph("Δ% Total",sty(8,CM,align=TA_CENTER)),Paragraph("Productos",sty(8,CM,align=TA_CENTER))],
+        [Paragraph(f"${tb:,.0f}",sty(14,CG,bold=True,align=TA_CENTER)),Paragraph(f"${tc:,.0f}",sty(14,CT,bold=True,align=TA_CENTER)),Paragraph(f"${td:+,.0f}",sty(14,kc,bold=True,align=TA_CENTER)),Paragraph(f"{tp:+.1f}%",sty(14,kc,bold=True,align=TA_CENTER)),Paragraph(str(len(df)),sty(14,CT,bold=True,align=TA_CENTER))]]
+    kt=Table(kd,colWidths=[55*mm]*5)
+    kt.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),CP),('BOX',(0,0),(-1,-1),0.5,rc.HexColor('#2a2a2a')),('INNERGRID',(0,0),(-1,-1),0.3,rc.HexColor('#2a2a2a')),('TOPPADDING',(0,0),(-1,-1),6),('BOTTOMPADDING',(0,0),(-1,-1),6)]))
+    story+=[kt,Spacer(1,6*mm)]
+    hdrs=['SKU','Producto','Categoría','Proveedor',f'MUC {mes_base}',f'MUC {mes_comp}',f'Total {mes_base}',f'Total {mes_comp}','Δ$','Δ%']
+    rows=[[cell(h,7,CM,bold=True,align=TA_LEFT if i<4 else TA_RIGHT) for i,h in enumerate(hdrs)]]
+    for idx,(_,r) in enumerate(df.iterrows()):
+        dd=r.get('delta_dinero',0) or 0; dp=r.get('delta_pct',0) or 0
+        dc=CR if dd>0 else CGr if dd<0 else CM
+        rows.append([cell(r.get('sku',''),6.5,CM,align=TA_LEFT),cell(str(r.get('nombre',''))[:45],7,CT,align=TA_LEFT),cell(str(r.get('categoria',''))[:18],6.5,CM,align=TA_LEFT),cell(str(r.get('proveedor',''))[:22],6.5,CM,align=TA_LEFT),cell(f"${r.get('precio_base',0):,.2f}",7,CM),cell(f"${r.get('precio_comp',0):,.2f}",7,CT),cell(f"${r.get('impacto_base',0):,.0f}",7,CM),cell(f"${r.get('impacto_comp',0):,.0f}",7,CT),cell(f"${dd:+,.0f}",7,dc,bold=True),cell(f"{dp:+.1f}%",7,dc,bold=True)])
+    cw=[22*mm,58*mm,28*mm,38*mm,22*mm,22*mm,24*mm,24*mm,22*mm,17*mm]
+    tbl=Table(rows,colWidths=cw,repeatRows=1)
+    rs=[('BACKGROUND',(0,0),(-1,0),CH),('LINEBELOW',(0,0),(-1,0),0.8,CG),('TOPPADDING',(0,0),(-1,-1),4),('BOTTOMPADDING',(0,0),(-1,-1),4),('LEFTPADDING',(0,0),(-1,-1),5),('RIGHTPADDING',(0,0),(-1,-1),5)]
+    for idx,(_,r) in enumerate(df.iterrows(),start=1):
+        dd=r.get('delta_dinero',0) or 0
+        bg=rc.HexColor('#1e1212') if dd>0 else rc.HexColor('#121e14') if dd<0 else (CA if idx%2==0 else CP)
+        rs.append(('BACKGROUND',(0,idx),(-1,idx),bg)); rs.append(('LINEBELOW',(0,idx),(-1,idx),0.3,rc.HexColor('#1e1e1e')))
+    tbl.setStyle(TableStyle(rs)); story.append(tbl)
+    story+=[Spacer(1,4*mm),HRFlowable(width="100%",thickness=0.5,color=rc.HexColor('#2a2a2a')),Paragraph(f"MRP Gastro · {mes_base} vs {mes_comp} · {local}",sty(7,CM,align=TA_CENTER))]
+    def add_bg(canvas,doc):
+        canvas.saveState(); canvas.setFillColor(CB); canvas.rect(0,0,landscape(A4)[0],landscape(A4)[1],fill=1,stroke=0); canvas.restoreState()
+    doc.build(story,onFirstPage=add_bg,onLaterPages=add_bg)
+    buf.seek(0); return buf.getvalue()
+
 # ============================================================
 # MÓDULO: GESTIÓN DE DATOS
 # ============================================================
@@ -2205,12 +2258,75 @@ elif modulo.startswith("📊"):
                 st.markdown(tabla3, unsafe_allow_html=True)
 
                 st.markdown("<br>", unsafe_allow_html=True)
-                buf_inf3 = io.BytesIO()
-                with pd.ExcelWriter(buf_inf3, engine='openpyxl') as w:
-                    df3[['sku','nombre','categoria','proveedor','cant_base',
-                          'precio_base','precio_comp','impacto_base',
-                          'impacto_comp','delta_dinero','delta_pct']].to_excel(w, sheet_name='Canasta', index=False)
-                st.download_button("📥 Descargar Excel", buf_inf3.getvalue(), "Informe3_Canasta.xlsx")
+                d1, d2, d3 = st.columns([2, 2, 3])
+                with d1:
+                    buf_inf3 = io.BytesIO()
+                    with pd.ExcelWriter(buf_inf3, engine='openpyxl') as w:
+                        df3[['sku','nombre','categoria','proveedor','cant_base',
+                              'precio_base','precio_comp','impacto_base',
+                              'impacto_comp','delta_dinero','delta_pct']].to_excel(w, sheet_name='Canasta', index=False)
+                    st.download_button("📥 Excel", buf_inf3.getvalue(), "Informe3_Canasta.xlsx", use_container_width=True)
+                with d2:
+                    local_actual = f_local if f_local and f_local != 'Todos' else 'Cadena Completa'
+                    pdf_local = generar_pdf_variacion(df3, mes_base3_str, mes_comp3_str, local_actual)
+                    st.download_button("📄 PDF — Local actual", pdf_local,
+                        f"Variacion_{local_actual.replace(' ','_')}_{mes_base3_str}_vs_{mes_comp3_str}.pdf",
+                        mime="application/pdf", use_container_width=True)
+                with d3:
+                    if st.button("📄 PDF — Todos los locales", key="pdf_todos", use_container_width=True):
+                        with st.spinner("Generando PDFs por local..."):
+                            from pypdf import PdfWriter as PdfW, PdfReader as PdfR
+                            writer_all = PdfW()
+                            df3_full = st.session_state.get('inf3_df', pd.DataFrame()).copy()
+                            if not df3_full.empty:
+                                pdf_cad = generar_pdf_variacion(df3_full, mes_base3_str, mes_comp3_str, 'Cadena Completa')
+                                for pg in PdfR(io.BytesIO(pdf_cad)).pages:
+                                    writer_all.add_page(pg)
+                            for loc in [l for l in get_locales() if l not in ('Todos', None)]:
+                                filtro_loc_pdf = f"AND UPPER(c.local) = UPPER('{loc}')"
+                                q_loc = f"""
+                                    WITH equiv AS (SELECT sku_compra, sku_receta FROM sku_equivalencias),
+                                    base AS (
+                                        SELECT COALESCE(e.sku_receta,c.sku) AS sku,
+                                               MIN(c.nombre_producto) AS nombre, MIN(c.nombre_proveedor) AS proveedor,
+                                               MIN(c.categoria_producto) AS categoria, SUM(c.cant_conv) AS cant_base,
+                                               SUM(c.costo_realfinal)/NULLIF(SUM(c.costo_realfinal/NULLIF(c.muc,0)),0) AS precio_base
+                                        FROM compras c LEFT JOIN equiv e ON c.sku=e.sku_compra
+                                        WHERE c.fecha_dte::date BETWEEN '{base_i}' AND '{base_f}'
+                                          AND c.subcat IN ('Directo','Indirecto')
+                                          AND c.costo_realfinal>0 AND c.monto_real>0 AND c.muc>0
+                                          {filtro_loc_pdf} GROUP BY 1),
+                                    comp AS (
+                                        SELECT COALESCE(e.sku_receta,c.sku) AS sku,
+                                               SUM(c.costo_realfinal)/NULLIF(SUM(c.costo_realfinal/NULLIF(c.muc,0)),0) AS precio_comp
+                                        FROM compras c LEFT JOIN equiv e ON c.sku=e.sku_compra
+                                        WHERE c.fecha_dte::date BETWEEN '{comp_i}' AND '{comp_f}'
+                                          AND c.subcat IN ('Directo','Indirecto')
+                                          AND c.costo_realfinal>0 AND c.monto_real>0 AND c.muc>0
+                                          {filtro_loc_pdf} GROUP BY 1)
+                                    SELECT b.sku,b.nombre,b.proveedor,b.categoria,b.cant_base,b.precio_base,
+                                           c.precio_comp,b.cant_base*b.precio_base AS impacto_base,
+                                           b.cant_base*COALESCE(c.precio_comp,b.precio_base) AS impacto_comp
+                                    FROM base b LEFT JOIN comp c ON b.sku=c.sku ORDER BY b.nombre
+                                """
+                                try:
+                                    df_loc = run_query(q_loc)
+                                    if df_loc.empty: continue
+                                    df_loc['precio_base']  = pd.to_numeric(df_loc['precio_base'],  errors='coerce').fillna(0)
+                                    df_loc['precio_comp']  = pd.to_numeric(df_loc['precio_comp'],  errors='coerce').fillna(df_loc['precio_base'])
+                                    df_loc['impacto_base'] = pd.to_numeric(df_loc['impacto_base'], errors='coerce').fillna(0)
+                                    df_loc['impacto_comp'] = df_loc['cant_base'] * df_loc['precio_comp']
+                                    df_loc['delta_dinero'] = df_loc['impacto_comp'] - df_loc['impacto_base']
+                                    df_loc['delta_pct']    = df_loc.apply(lambda r: (r['delta_dinero']/r['impacto_base']*100) if r['impacto_base']>0 else None, axis=1)
+                                    for pg in PdfR(io.BytesIO(generar_pdf_variacion(df_loc, mes_base3_str, mes_comp3_str, loc))).pages:
+                                        writer_all.add_page(pg)
+                                except Exception:
+                                    continue
+                            buf_all = io.BytesIO()
+                            writer_all.write(buf_all)
+                            st.download_button("⬇️ Descargar PDF completo", buf_all.getvalue(),
+                                f"Variacion_Todos_{mes_base3_str}_vs_{mes_comp3_str}.pdf",
+                                mime="application/pdf", key="pdf_todos_dl")
 
 
 # ============================================================
