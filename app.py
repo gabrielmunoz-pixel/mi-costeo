@@ -1280,7 +1280,7 @@ if modulo.startswith("📦"):
                         ROUND(muc::numeric, 1)                                          AS muc_grupo,
                         COUNT(*)                                                        AS n_registros,
                         ARRAY_AGG(id)                                                   AS ids,
-                        MAX(nombre_producto)                                            AS nombre_producto,
+                        MODE() WITHIN GROUP (ORDER BY nombre_producto)                                            AS nombre_producto,
                         MAX(categoria_producto)                                         AS categoria,
                         MAX(conversion)                                                 AS conversion,
                         MAX(formato)                                                    AS formato,
@@ -1405,7 +1405,7 @@ if modulo.startswith("📦"):
                                 ROUND(AVG(monto_real / NULLIF(cant_conv,0))::numeric, 2) AS precio_factura,
                                 MAX(conversion)                                           AS conversion,
                                 MAX(formato)                                              AS formato,
-                                MAX(nombre_producto)                                      AS nombre_producto,
+                                MODE() WITHIN GROUP (ORDER BY nombre_producto)                                      AS nombre_producto,
                                 MAX(categoria_producto)                                   AS categoria
                             FROM compras
                             WHERE UPPER(sku) = UPPER('{sku_inspect}')
@@ -2255,7 +2255,7 @@ if modulo.startswith("🍹"):
         WITH base AS (
             SELECT
                 sku,
-                MAX(nombre_producto)                                      AS nombre,
+                MODE() WITHIN GROUP (ORDER BY nombre_producto)                                      AS nombre,
                 MAX(nombre_proveedor)                                     AS proveedor,
                 DATE_TRUNC('month', fecha_dte::timestamp)::date           AS mes,
                 fecha_dte::timestamp::date                                AS fecha_compra,
@@ -2347,7 +2347,7 @@ if modulo.startswith("🍹"):
     sql_vol = f"""
         SELECT
             sku,
-            MAX(nombre_producto)                              AS nombre,
+            MODE() WITHIN GROUP (ORDER BY nombre_producto)                              AS nombre,
             DATE_TRUNC('month', fecha_dte::timestamp)::date   AS mes,
             ROUND(SUM(cant_conv)::numeric, 2)                 AS vol_total
         FROM compras
@@ -2363,7 +2363,7 @@ if modulo.startswith("🍹"):
     sql_gasto = f"""
         SELECT
             sku,
-            MAX(nombre_producto)                              AS nombre,
+            MODE() WITHIN GROUP (ORDER BY nombre_producto)                              AS nombre,
             DATE_TRUNC('month', fecha_dte::timestamp)::date   AS mes,
             ROUND(SUM(costo_realfinal)::numeric, 0)           AS gasto_total
         FROM compras
@@ -2378,7 +2378,7 @@ if modulo.startswith("🍹"):
     # ── QUERY FRECUENCIA ──────────────────────────────────────
     sql_freq = f"""
         WITH fechas AS (
-            SELECT sku, MAX(nombre_producto) AS nombre, local,
+            SELECT sku, MODE() WITHIN GROUP (ORDER BY nombre_producto) AS nombre, local,
                    fecha_dte::timestamp::date AS fecha_compra,
                    SUM(cant_conv)             AS vol_dia,
                    SUM(costo_realfinal)       AS gasto_dia
