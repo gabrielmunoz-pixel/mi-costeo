@@ -1008,50 +1008,199 @@ def generar_pdf_variacion(df, mes_base, mes_comp, local='Cadena Completa'):
     from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib import colors as rc
     from reportlab.lib.units import mm
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, HRFlowable
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, HRFlowable, KeepTogether
     from reportlab.lib.styles import ParagraphStyle
     from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
-    CB=rc.HexColor('#0f0f0f'); CP=rc.HexColor('#1a1a1a'); CG=rc.HexColor('#d4a853')
-    CT=rc.HexColor('#f0ede8'); CM=rc.HexColor('#888888'); CR=rc.HexColor('#e84545')
-    CGr=rc.HexColor('#4caf7d'); CA=rc.HexColor('#141414'); CH=rc.HexColor('#111111')
-    buf=io.BytesIO()
-    doc=SimpleDocTemplate(buf,pagesize=landscape(A4),leftMargin=15*mm,rightMargin=15*mm,topMargin=15*mm,bottomMargin=15*mm)
-    def sty(sz,col,bold=False,align=TA_LEFT):
-        return ParagraphStyle('s',fontSize=sz,textColor=col,fontName='Helvetica-Bold' if bold else 'Helvetica',alignment=align,leading=sz*1.3)
-    def cell(txt,sz=7,col=None,bold=False,align=TA_RIGHT):
-        return Paragraph(str(txt),sty(sz,col or CT,bold=bold,align=align))
-    tb=df['impacto_base'].sum(); tc=df['impacto_comp'].sum(); td=tc-tb
-    tp=(td/tb*100) if tb>0 else 0; kc=CR if td>0 else CGr
-    story=[
-        Paragraph("INFORME DE VARIACIÓN DE PRECIOS",sty(16,CG,bold=True,align=TA_CENTER)),
-        Paragraph(f"LOCAL: {local.upper()}",sty(11,CT,align=TA_CENTER)),
-        Paragraph(f"Período base: {mes_base}  →  Comparación: {mes_comp}",sty(9,CM,align=TA_CENTER)),
-        Spacer(1,6*mm),
+    from reportlab.pdfgen import canvas as rl_canvas
+
+    # ── Colores ──────────────────────────────────────────────
+    CB  = rc.HexColor('#0d0d0d')   # fondo página
+    CP  = rc.HexColor('#1a1a1a')   # panel
+    CP2 = rc.HexColor('#141414')   # panel alt
+    CG  = rc.HexColor('#d4a853')   # gold
+    CT  = rc.HexColor('#f0ede8')   # texto principal
+    CM  = rc.HexColor('#666666')   # muted
+    CM2 = rc.HexColor('#444444')   # más muted
+    CR  = rc.HexColor('#e84545')   # rojo alza
+    CGr = rc.HexColor('#4caf7d')   # verde baja
+    CH  = rc.HexColor('#111111')   # header tabla
+    CBR = rc.HexColor('#2a0a0a')   # fondo fila roja suave
+    CBG = rc.HexColor('#0a1a0f')   # fondo fila verde suave
+    CBo = rc.HexColor('#2a2a2a')   # borde
+
+    PAGE = landscape(A4)
+    W, H = PAGE
+
+    def sty(sz, col, bold=False, align=TA_LEFT):
+        return ParagraphStyle('_', fontSize=sz, textColor=col,
+            fontName='Helvetica-Bold' if bold else 'Helvetica',
+            alignment=align, leading=sz * 1.35, spaceAfter=0, spaceBefore=0)
+
+    def P(txt, sz=7, col=None, bold=False, align=TA_RIGHT):
+        return Paragraph(str(txt), sty(sz, col or CT, bold=bold, align=align))
+
+    # ── Filtrar: excluir variaciones irrelevantes (<1% y <$500 impacto) ──
+    df = df.copy()
+    df['delta_pct_abs']  = df['delta_pct'].abs().fillna(0)
+    df['delta_din_abs']  = df['delta_dinero'].abs().fillna(0)
+    df_sig = df[(df['delta_pct_abs'] >= 1.0) | (df['delta_din_abs'] >= 500)].copy()
+
+    # ── Métricas totales (sobre df completo) ─────────────────
+    tb = df['impacto_base'].sum()
+    tc = df['impacto_comp'].sum()
+    td = tc - tb
+    tp = (td / tb * 100) if tb > 0 else 0
+    n_alza  = (df['delta_dinero'] > 0).sum()
+    n_baja  = (df['delta_dinero'] < 0).sum()
+    n_estab = (df['delta_dinero'] == 0).sum()
+    kc = CR if td > 0 else CGr
+
+    # Top 10 alzas y bajas por impacto $
+    top_alza = df_sig[df_sig['delta_dinero'] > 0].nlargest(10, 'delta_dinero')
+    top_baja = df_sig[df_sig['delta_dinero'] < 0].nsmallest(10, 'delta_dinero')
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=PAGE,
+        leftMargin=12*mm, rightMargin=12*mm,
+        topMargin=12*mm, bottomMargin=10*mm)
+
+    story = []
+
+    # ══════════════════════════════════════════════
+    # ENCABEZADO
+    # ══════════════════════════════════════════════
+    hdr_data = [[
+        Paragraph("INFORME DE VARIACIÓN DE PRECIOS", sty(15, CG, bold=True, align=TA_LEFT)),
+        Paragraph(f"LOCAL: {local.upper()}", sty(10, CT, bold=True, align=TA_CENTER)),
+        Paragraph(f"{mes_base}  →  {mes_comp}", sty(8, CM, align=TA_RIGHT)),
+    ]]
+    hdr_tbl = Table(hdr_data, colWidths=[110*mm, 90*mm, 60*mm])
+    hdr_tbl.setStyle(TableStyle([
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('LINEBELOW', (0,0), (-1,0), 1.2, CG),
+        ('TOPPADDING', (0,0), (-1,-1), 0),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+    ]))
+    story += [hdr_tbl, Spacer(1, 5*mm)]
+
+    # ══════════════════════════════════════════════
+    # KPIs — fila de métricas
+    # ══════════════════════════════════════════════
+    def kpi_cell(label, value, val_col=CT):
+        return [P(label, 7, CM, align=TA_CENTER), P(value, 13, val_col, bold=True, align=TA_CENTER)]
+
+    kpi_cols = [
+        kpi_cell(f"CANASTA {mes_base.upper()}", f"${tb:,.0f}", CG),
+        kpi_cell(f"CANASTA {mes_comp.upper()}", f"${tc:,.0f}", CT),
+        kpi_cell("IMPACTO Δ$", f"${td:+,.0f}", kc),
+        kpi_cell("VARIACIÓN %", f"{tp:+.1f}%", kc),
+        kpi_cell("PRODUCTOS ↑", str(int(n_alza)), CR),
+        kpi_cell("PRODUCTOS ↓", str(int(n_baja)), CGr),
+        kpi_cell("SIN CAMBIO", str(int(n_estab)), CM),
     ]
-    kd=[[Paragraph(f"Canasta {mes_base}",sty(8,CM,align=TA_CENTER)),Paragraph(f"Canasta {mes_comp}",sty(8,CM,align=TA_CENTER)),Paragraph("Δ$ Impacto",sty(8,CM,align=TA_CENTER)),Paragraph("Δ% Total",sty(8,CM,align=TA_CENTER)),Paragraph("Productos",sty(8,CM,align=TA_CENTER))],
-        [Paragraph(f"${tb:,.0f}",sty(14,CG,bold=True,align=TA_CENTER)),Paragraph(f"${tc:,.0f}",sty(14,CT,bold=True,align=TA_CENTER)),Paragraph(f"${td:+,.0f}",sty(14,kc,bold=True,align=TA_CENTER)),Paragraph(f"{tp:+.1f}%",sty(14,kc,bold=True,align=TA_CENTER)),Paragraph(str(len(df)),sty(14,CT,bold=True,align=TA_CENTER))]]
-    kt=Table(kd,colWidths=[55*mm]*5)
-    kt.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),CP),('BOX',(0,0),(-1,-1),0.5,rc.HexColor('#2a2a2a')),('INNERGRID',(0,0),(-1,-1),0.3,rc.HexColor('#2a2a2a')),('TOPPADDING',(0,0),(-1,-1),6),('BOTTOMPADDING',(0,0),(-1,-1),6)]))
-    story+=[kt,Spacer(1,6*mm)]
-    hdrs=['SKU','Producto','Categoría','Proveedor',f'MUC {mes_base}',f'MUC {mes_comp}',f'Total {mes_base}',f'Total {mes_comp}','Δ$','Δ%']
-    rows=[[cell(h,7,CM,bold=True,align=TA_LEFT if i<4 else TA_RIGHT) for i,h in enumerate(hdrs)]]
-    for idx,(_,r) in enumerate(df.iterrows()):
-        dd=r.get('delta_dinero',0) or 0; dp=r.get('delta_pct',0) or 0
-        dc=CR if dd>0 else CGr if dd<0 else CM
-        rows.append([cell(r.get('sku',''),6.5,CM,align=TA_LEFT),cell(str(r.get('nombre',''))[:45],7,CT,align=TA_LEFT),cell(str(r.get('categoria',''))[:18],6.5,CM,align=TA_LEFT),cell(str(r.get('proveedor',''))[:22],6.5,CM,align=TA_LEFT),cell(f"${r.get('precio_base',0):,.2f}",7,CM),cell(f"${r.get('precio_comp',0):,.2f}",7,CT),cell(f"${r.get('impacto_base',0):,.0f}",7,CM),cell(f"${r.get('impacto_comp',0):,.0f}",7,CT),cell(f"${dd:+,.0f}",7,dc,bold=True),cell(f"{dp:+.1f}%",7,dc,bold=True)])
-    cw=[22*mm,58*mm,28*mm,38*mm,22*mm,22*mm,24*mm,24*mm,22*mm,17*mm]
-    tbl=Table(rows,colWidths=cw,repeatRows=1)
-    rs=[('BACKGROUND',(0,0),(-1,0),CH),('LINEBELOW',(0,0),(-1,0),0.8,CG),('TOPPADDING',(0,0),(-1,-1),4),('BOTTOMPADDING',(0,0),(-1,-1),4),('LEFTPADDING',(0,0),(-1,-1),5),('RIGHTPADDING',(0,0),(-1,-1),5)]
-    for idx,(_,r) in enumerate(df.iterrows(),start=1):
-        dd=r.get('delta_dinero',0) or 0
-        bg=rc.HexColor('#1e1212') if dd>0 else rc.HexColor('#121e14') if dd<0 else (CA if idx%2==0 else CP)
-        rs.append(('BACKGROUND',(0,idx),(-1,idx),bg)); rs.append(('LINEBELOW',(0,idx),(-1,idx),0.3,rc.HexColor('#1e1e1e')))
-    tbl.setStyle(TableStyle(rs)); story.append(tbl)
-    story+=[Spacer(1,4*mm),HRFlowable(width="100%",thickness=0.5,color=rc.HexColor('#2a2a2a')),Paragraph(f"MRP Gastro · {mes_base} vs {mes_comp} · {local}",sty(7,CM,align=TA_CENTER))]
-    def add_bg(canvas,doc):
-        canvas.saveState(); canvas.setFillColor(CB); canvas.rect(0,0,landscape(A4)[0],landscape(A4)[1],fill=1,stroke=0); canvas.restoreState()
-    doc.build(story,onFirstPage=add_bg,onLaterPages=add_bg)
-    buf.seek(0); return buf.getvalue()
+    kpi_data  = [[col[0] for col in kpi_cols], [col[1] for col in kpi_cols]]
+    kpi_table = Table(kpi_data, colWidths=[38*mm]*7)
+    kpi_table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,-1), CP),
+        ('BOX',        (0,0), (-1,-1), 0.5, CBo),
+        ('LINEBEFORE', (1,0), (-1,-1), 0.3, CBo),
+        ('TOPPADDING',    (0,0), (-1,-1), 5),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 5),
+        ('LINEABOVE', (2,0), (3,-1), 1.5, kc),   # barra color en Δ
+    ]))
+    story += [kpi_table, Spacer(1, 6*mm)]
+
+    # ══════════════════════════════════════════════
+    # HELPER: construir tabla top 10
+    # ══════════════════════════════════════════════
+    def tabla_top(df_sub, titulo, color_titulo, color_fila):
+        if df_sub.empty:
+            return []
+        hdrs = ['#', 'SKU', 'Producto', 'Categoría', f'MUC {mes_base}', f'MUC {mes_comp}', 'Δ$', 'Δ%']
+        cw   = [7*mm, 22*mm, 68*mm, 30*mm, 24*mm, 24*mm, 24*mm, 18*mm]
+        rows = [[P(h, 6.5, CM, bold=True, align=TA_LEFT if i<4 else TA_RIGHT) for i,h in enumerate(hdrs)]]
+        for pos, (_, r) in enumerate(df_sub.iterrows(), 1):
+            dd = r.get('delta_dinero', 0) or 0
+            dp = r.get('delta_pct',    0) or 0
+            dc = CR if dd > 0 else CGr
+            rows.append([
+                P(str(pos),                              6.5, CM,  align=TA_CENTER),
+                P(r.get('sku', ''),                      6.5, CM,  align=TA_LEFT),
+                P(str(r.get('nombre', ''))[:50],         7,   CT,  align=TA_LEFT),
+                P(str(r.get('categoria', ''))[:20],      6.5, CM,  align=TA_LEFT),
+                P(f"${r.get('precio_base',0):,.0f}",     7,   CM),
+                P(f"${r.get('precio_comp',0):,.0f}",     7,   CT),
+                P(f"${dd:+,.0f}",                        7,   dc,  bold=True),
+                P(f"{dp:+.1f}%",                         7,   dc,  bold=True),
+            ])
+        tbl = Table(rows, colWidths=cw, repeatRows=1)
+        rs = [
+            ('BACKGROUND',    (0,0), (-1,0),  CH),
+            ('LINEBELOW',     (0,0), (-1,0),  0.6, color_titulo),
+            ('TOPPADDING',    (0,0), (-1,-1), 3),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 3),
+            ('LEFTPADDING',   (0,0), (-1,-1), 4),
+            ('RIGHTPADDING',  (0,0), (-1,-1), 4),
+        ]
+        for i in range(1, len(rows)):
+            bg = color_fila if i % 2 == 0 else CP
+            rs.append(('BACKGROUND', (0,i), (-1,i), bg))
+            rs.append(('LINEBELOW',  (0,i), (-1,i), 0.2, CM2))
+        tbl.setStyle(TableStyle(rs))
+        seccion = [
+            P(titulo, 8, color_titulo, bold=True),
+            Spacer(1, 2*mm),
+            tbl,
+        ]
+        return seccion
+
+    # ══════════════════════════════════════════════
+    # DOS COLUMNAS: TOP ALZAS | TOP BAJAS
+    # ══════════════════════════════════════════════
+    sec_alza = tabla_top(top_alza, f"▲  TOP 10 ALZAS DE PRECIO  (mayor impacto $)", CR, CBR)
+    sec_baja = tabla_top(top_baja, f"▼  TOP 10 BAJAS DE PRECIO  (mayor ahorro $)", CGr, CBG)
+
+    col_w = [130*mm, 8*mm, 130*mm]
+    separador = Spacer(1, 1)
+
+    if sec_alza or sec_baja:
+        from reportlab.platypus import KeepTogether
+        alza_content = sec_alza if sec_alza else [Spacer(1,1)]
+        baja_content = sec_baja if sec_baja else [Spacer(1,1)]
+        dos_col = Table([[alza_content, [separador], baja_content]], colWidths=col_w)
+        dos_col.setStyle(TableStyle([
+            ('VALIGN',        (0,0), (-1,-1), 'TOP'),
+            ('LINEBEFORE',    (2,0), (2,0),   0.4, CBo),
+            ('LEFTPADDING',   (0,0), (-1,-1), 0),
+            ('RIGHTPADDING',  (0,0), (-1,-1), 0),
+            ('TOPPADDING',    (0,0), (-1,-1), 0),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 0),
+        ]))
+        story.append(dos_col)
+
+    # ══════════════════════════════════════════════
+    # FOOTER
+    # ══════════════════════════════════════════════
+    story += [
+        Spacer(1, 5*mm),
+        HRFlowable(width="100%", thickness=0.4, color=CBo),
+        Spacer(1, 1*mm),
+        P(f"MRP Gastro  ·  Informe de Variación de Precios  ·  {mes_base} vs {mes_comp}  ·  {local}  ·  Solo productos con variación ≥1% o Δ$≥$500",
+          6.5, CM, align=TA_CENTER),
+    ]
+
+    # ══════════════════════════════════════════════
+    # BUILD con fondo oscuro
+    # ══════════════════════════════════════════════
+    def add_bg(c, d):
+        c.saveState()
+        c.setFillColor(CB)
+        c.rect(0, 0, W, H, fill=1, stroke=0)
+        c.restoreState()
+
+    doc.build(story, onFirstPage=add_bg, onLaterPages=add_bg)
+    buf.seek(0)
+    return buf.getvalue()
 
 # ============================================================
 # MÓDULO: GESTIÓN DE DATOS
