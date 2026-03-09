@@ -1284,7 +1284,7 @@ if modulo.startswith("📦"):
                         MAX(categoria_producto)                                         AS categoria,
                         MAX(conversion)                                                 AS conversion,
                         MAX(formato)                                                    AS formato,
-                        ROUND(AVG(monto_real / NULLIF(cant_conv, 0))::numeric, 2)       AS precio_factura
+                        ROUND(AVG(monto_real / NULLIF(cantidad, 0))::numeric, 2)       AS precio_factura
                     FROM compras
                     WHERE muc > 0
                       AND costo_realfinal > 0
@@ -1402,7 +1402,7 @@ if modulo.startswith("📦"):
                                 ROUND(muc::numeric, 1)                                    AS muc,
                                 COUNT(*)                                                  AS n_registros,
                                 ARRAY_AGG(id)                                             AS ids,
-                                ROUND(AVG(monto_real / NULLIF(cant_conv,0))::numeric, 2) AS precio_factura,
+                                ROUND(AVG(monto_real / NULLIF(cantidad, 0))::numeric, 2) AS precio_factura,
                                 MAX(conversion)                                           AS conversion,
                                 MAX(formato)                                              AS formato,
                                 MODE() WITHIN GROUP (ORDER BY nombre_producto)                                      AS nombre_producto,
