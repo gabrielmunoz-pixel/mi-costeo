@@ -1311,8 +1311,8 @@ if modulo.startswith("📦"):
                 SELECT
                     g.sku,
                     g.nombre_producto,
-                    g.proveedor,
                     g.categoria,
+                    g.proveedor,
                     g.conversion,
                     g.formato,
                     g.muc_grupo                                                         AS muc,
