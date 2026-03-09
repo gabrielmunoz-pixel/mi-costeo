@@ -2309,6 +2309,7 @@ elif modulo.startswith("📊"):
                     st.session_state['inf3_df']     = df3
                     st.session_state['inf3_labels'] = (mes_base3_str, mes_comp3_str)
                     st.session_state['inf3_fechas'] = (base_i, base_f, comp_i, comp_f)
+                    st.session_state['inf3_local_label'] = f"Cadena — {cat3_sel}" if cat3_sel != 'Todos' else 'Cadena Completa'
 
             if 'inf3_df' in st.session_state:
                 df3 = st.session_state['inf3_df'].copy()
@@ -2408,75 +2409,102 @@ elif modulo.startswith("📊"):
                 st.markdown(tabla3, unsafe_allow_html=True)
 
                 st.markdown("<br>", unsafe_allow_html=True)
-                d1, d2, d3 = st.columns([2, 2, 3])
+                d1, d2, d3 = st.columns(3)
+
+                # ── Botón 1: Excel ────────────────────────────────────
                 with d1:
                     buf_inf3 = io.BytesIO()
                     with pd.ExcelWriter(buf_inf3, engine='openpyxl') as w:
                         df3[['sku','nombre','categoria','proveedor','cant_base',
                               'precio_base','precio_comp','impacto_base',
                               'impacto_comp','delta_dinero','delta_pct']].to_excel(w, sheet_name='Canasta', index=False)
-                    st.download_button("📥 Excel", buf_inf3.getvalue(), "Informe3_Canasta.xlsx", use_container_width=True)
+                    st.download_button("📥 Excel", buf_inf3.getvalue(),
+                        "Informe3_Canasta.xlsx", use_container_width=True)
+
+                # ── Botón 2: PDF vista actual (lo que hay filtrado en pantalla) ──
                 with d2:
-                    pdf_local = generar_pdf_variacion(df3, mes_base3_str, mes_comp3_str, 'Cadena Completa')
-                    st.download_button("📄 PDF — Cadena actual", pdf_local,
-                        f"Variacion_Cadena_{mes_base3_str}_vs_{mes_comp3_str}.pdf",
+                    # Determinar etiqueta del local según filtro activo
+                    _label_pdf = st.session_state.get('inf3_local_label', 'Cadena Completa')
+                    _pdf_actual = generar_pdf_variacion(df3, mes_base3_str, mes_comp3_str, _label_pdf)
+                    st.download_button("📄 PDF — Vista actual", _pdf_actual,
+                        f"Variacion_{_label_pdf.replace(' ','_')}_{mes_base3_str}_vs_{mes_comp3_str}.pdf",
                         mime="application/pdf", use_container_width=True)
+
+                # ── Botón 3: PDF todos los locales (un PDF por local, unidos) ──
                 with d3:
                     if st.button("📄 PDF — Todos los locales", key="pdf_todos", use_container_width=True):
-                        with st.spinner("Generando PDFs por local..."):
-                            from pypdf import PdfWriter as PdfW, PdfReader as PdfR
-                            _base_i, _base_f, _comp_i, _comp_f = st.session_state.get('inf3_fechas', (base_i, base_f, comp_i, comp_f))
-                            writer_all = PdfW()
-                            df3_full = st.session_state.get('inf3_df', pd.DataFrame()).copy()
-                            if not df3_full.empty:
-                                pdf_cad = generar_pdf_variacion(df3_full, mes_base3_str, mes_comp3_str, 'Cadena Completa')
-                                for pg in PdfR(io.BytesIO(pdf_cad)).pages:
-                                    writer_all.add_page(pg)
-                            for loc in [l for l in get_locales() if l not in ('Todos', None)]:
-                                filtro_loc_pdf = f"AND UPPER(c.local) = UPPER('{loc}')"
-                                q_loc = f"""
-                                    WITH equiv AS (SELECT sku_compra, sku_receta FROM sku_equivalencias),
-                                    base AS (
-                                        SELECT COALESCE(e.sku_receta,c.sku) AS sku,
-                                               MIN(c.nombre_producto) AS nombre, MIN(c.nombre_proveedor) AS proveedor,
-                                               MIN(c.categoria_producto) AS categoria, SUM(c.cant_conv) AS cant_base,
-                                               SUM(c.costo_realfinal)/NULLIF(SUM(c.costo_realfinal/NULLIF(c.muc,0)),0) AS precio_base
-                                        FROM compras c LEFT JOIN equiv e ON c.sku=e.sku_compra
-                                        WHERE c.fecha_dte::date BETWEEN '{_base_i}' AND '{_base_f}'
-                                          AND c.subcat IN ('Directo','Indirecto')
-                                          AND c.costo_realfinal>0 AND c.monto_real>0 AND c.muc>0
-                                          {filtro_loc_pdf} GROUP BY 1),
-                                    comp AS (
-                                        SELECT COALESCE(e.sku_receta,c.sku) AS sku,
-                                               SUM(c.costo_realfinal)/NULLIF(SUM(c.costo_realfinal/NULLIF(c.muc,0)),0) AS precio_comp
-                                        FROM compras c LEFT JOIN equiv e ON c.sku=e.sku_compra
-                                        WHERE c.fecha_dte::date BETWEEN '{_comp_i}' AND '{_comp_f}'
-                                          AND c.subcat IN ('Directo','Indirecto')
-                                          AND c.costo_realfinal>0 AND c.monto_real>0 AND c.muc>0
-                                          {filtro_loc_pdf} GROUP BY 1)
-                                    SELECT b.sku,b.nombre,b.proveedor,b.categoria,b.cant_base,b.precio_base,
-                                           c.precio_comp,b.cant_base*b.precio_base AS impacto_base,
-                                           b.cant_base*COALESCE(c.precio_comp,b.precio_base) AS impacto_comp
-                                    FROM base b LEFT JOIN comp c ON b.sku=c.sku ORDER BY b.nombre
-                                """
-                                try:
-                                    df_loc = run_query(q_loc)
-                                    if df_loc.empty: continue
-                                    df_loc['precio_base']  = pd.to_numeric(df_loc['precio_base'],  errors='coerce').fillna(0)
-                                    df_loc['precio_comp']  = pd.to_numeric(df_loc['precio_comp'],  errors='coerce').fillna(df_loc['precio_base'])
-                                    df_loc['impacto_base'] = pd.to_numeric(df_loc['impacto_base'], errors='coerce').fillna(0)
-                                    df_loc['impacto_comp'] = df_loc['cant_base'] * df_loc['precio_comp']
-                                    df_loc['delta_dinero'] = df_loc['impacto_comp'] - df_loc['impacto_base']
-                                    df_loc['delta_pct']    = df_loc.apply(lambda r: (r['delta_dinero']/r['impacto_base']*100) if r['impacto_base']>0 else None, axis=1)
-                                    for pg in PdfR(io.BytesIO(generar_pdf_variacion(df_loc, mes_base3_str, mes_comp3_str, loc))).pages:
-                                        writer_all.add_page(pg)
-                                except Exception:
-                                    continue
-                            buf_all = io.BytesIO()
-                            writer_all.write(buf_all)
-                            st.download_button("⬇️ Descargar PDF completo", buf_all.getvalue(),
-                                f"Variacion_Todos_{mes_base3_str}_vs_{mes_comp3_str}.pdf",
-                                mime="application/pdf", key="pdf_todos_dl")
+                        if 'inf3_fechas' not in st.session_state:
+                            st.error("Primero genera el informe con ▶")
+                        else:
+                            with st.spinner("Generando un PDF por local..."):
+                                from pypdf import PdfWriter as PdfW, PdfReader as PdfR
+                                _bi, _bf, _ci, _cf = st.session_state['inf3_fechas']
+                                writer_all = PdfW()
+
+                                def _query_local(loc):
+                                    _fl = f"AND UPPER(c.local) = UPPER('{loc}')"
+                                    return f"""
+                                        WITH equiv AS (SELECT sku_compra, sku_receta FROM sku_equivalencias),
+                                        base AS (
+                                            SELECT COALESCE(e.sku_receta,c.sku) AS sku,
+                                                   MIN(c.nombre_producto) AS nombre,
+                                                   MIN(c.nombre_proveedor) AS proveedor,
+                                                   MIN(c.categoria_producto) AS categoria,
+                                                   SUM(c.cant_conv) AS cant_base,
+                                                   SUM(c.costo_realfinal)/NULLIF(SUM(c.costo_realfinal/NULLIF(c.muc,0)),0) AS precio_base
+                                            FROM compras c LEFT JOIN equiv e ON c.sku=e.sku_compra
+                                            WHERE c.fecha_dte::date BETWEEN '{_bi}' AND '{_bf}'
+                                              AND c.subcat IN ('Directo','Indirecto')
+                                              AND c.costo_realfinal>0 AND c.monto_real>0 AND c.muc>0
+                                              {_fl} GROUP BY 1),
+                                        comp AS (
+                                            SELECT COALESCE(e.sku_receta,c.sku) AS sku,
+                                                   SUM(c.costo_realfinal)/NULLIF(SUM(c.costo_realfinal/NULLIF(c.muc,0)),0) AS precio_comp
+                                            FROM compras c LEFT JOIN equiv e ON c.sku=e.sku_compra
+                                            WHERE c.fecha_dte::date BETWEEN '{_ci}' AND '{_cf}'
+                                              AND c.subcat IN ('Directo','Indirecto')
+                                              AND c.costo_realfinal>0 AND c.monto_real>0 AND c.muc>0
+                                              {_fl} GROUP BY 1)
+                                        SELECT b.sku,b.nombre,b.proveedor,b.categoria,b.cant_base,
+                                               b.precio_base, c.precio_comp,
+                                               b.cant_base*b.precio_base AS impacto_base,
+                                               b.cant_base*COALESCE(c.precio_comp,b.precio_base) AS impacto_comp
+                                        FROM base b LEFT JOIN comp c ON b.sku=c.sku ORDER BY b.nombre
+                                    """
+
+                                def _enrich(df_l, pb_col='precio_base'):
+                                    df_l = df_l.copy()
+                                    df_l['precio_base']  = pd.to_numeric(df_l['precio_base'],  errors='coerce').fillna(0)
+                                    df_l['precio_comp']  = pd.to_numeric(df_l['precio_comp'],  errors='coerce').fillna(df_l['precio_base'])
+                                    df_l['impacto_base'] = pd.to_numeric(df_l['impacto_base'], errors='coerce').fillna(0)
+                                    df_l['impacto_comp'] = df_l['cant_base'] * df_l['precio_comp']
+                                    df_l['delta_dinero'] = df_l['impacto_comp'] - df_l['impacto_base']
+                                    df_l['delta_pct']    = df_l.apply(
+                                        lambda r: (r['delta_dinero']/r['impacto_base']*100) if r['impacto_base']>0 else None, axis=1)
+                                    return df_l
+
+                                for loc in [l for l in get_locales() if l not in ('Todos', None)]:
+                                    try:
+                                        df_loc = run_query(_query_local(loc))
+                                        if df_loc.empty: continue
+                                        df_loc = _enrich(df_loc)
+                                        pdf_loc = generar_pdf_variacion(df_loc, mes_base3_str, mes_comp3_str, loc)
+                                        for pg in PdfR(io.BytesIO(pdf_loc)).pages:
+                                            writer_all.add_page(pg)
+                                    except Exception:
+                                        continue
+
+                                buf_all = io.BytesIO()
+                                writer_all.write(buf_all)
+                                st.session_state['pdf_todos_bytes'] = buf_all.getvalue()
+                                st.session_state['pdf_todos_nombre'] = f"Variacion_Todos_{mes_base3_str}_vs_{mes_comp3_str}.pdf"
+
+                # Botón de descarga aparece debajo una vez generado
+                if 'pdf_todos_bytes' in st.session_state:
+                    st.download_button("⬇️ Descargar PDF — Todos los locales",
+                        st.session_state['pdf_todos_bytes'],
+                        st.session_state['pdf_todos_nombre'],
+                        mime="application/pdf", key="pdf_todos_dl", use_container_width=True)
 
 
 # ============================================================
