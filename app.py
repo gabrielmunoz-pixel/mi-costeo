@@ -1289,6 +1289,7 @@ if modulo.startswith("📦"):
                     WHERE muc > 0
                       AND costo_realfinal > 0
                       AND UPPER(sku) != 'COLACION'
+                      AND UPPER(sku) NOT IN ('N. CREDITO', 'NCR')
                       {filtro_cat_audit}
                     GROUP BY sku, ROUND(muc::numeric, 1)
                     HAVING ROUND(muc::numeric, 1) > 0
