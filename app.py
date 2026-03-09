@@ -1289,6 +1289,7 @@ if modulo.startswith("📦"):
                     FROM compras
                     WHERE muc > 0
                       AND costo_realfinal > 0
+                      AND monto_real > 0
                       AND UPPER(sku) != 'COLACION'
                       AND UPPER(sku) NOT IN ('N. CREDITO', 'NCR')
                       {filtro_cat_audit}
@@ -1411,7 +1412,7 @@ if modulo.startswith("📦"):
                                 MAX(categoria_producto)                                   AS categoria
                             FROM compras
                             WHERE UPPER(sku) = UPPER('{sku_inspect}')
-                              AND muc > 0 AND costo_realfinal > 0
+                              AND muc > 0 AND costo_realfinal > 0 AND monto_real > 0
                               AND ROUND(muc::numeric, 1) > 0
                             GROUP BY ROUND(muc::numeric, 1)
                             ORDER BY ROUND(muc::numeric, 1)
@@ -2060,6 +2061,7 @@ elif modulo.startswith("📊"):
                         WHERE c.fecha_dte::date BETWEEN '{base_i}' AND '{base_f}'
                           AND c.subcat IN ('Directo','Indirecto')
                           AND c.costo_realfinal > 0
+                          AND c.monto_real > 0
                           AND c.muc > 0
                           {filtro_cat3}
                         GROUP BY 1
@@ -2073,6 +2075,7 @@ elif modulo.startswith("📊"):
                         WHERE c.fecha_dte::date BETWEEN '{comp_i}' AND '{comp_f}'
                           AND c.subcat IN ('Directo','Indirecto')
                           AND c.costo_realfinal > 0
+                          AND c.monto_real > 0
                           AND c.muc > 0
                         GROUP BY 1
                     )
