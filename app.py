@@ -2252,11 +2252,18 @@ if modulo.startswith("🍹"):
     # QUERY RESUMEN — Una fila por SKU con todos los indicadores
     # ════════════════════════════════════════════════════════════
     sql_resumen = f"""
-        WITH base AS (
+        WITH nombres AS (
+            SELECT sku,
+                   MODE() WITHIN GROUP (ORDER BY nombre_producto) AS nombre,
+                   MODE() WITHIN GROUP (ORDER BY nombre_proveedor) AS proveedor
+            FROM compras
+            WHERE UPPER(categoria_producto) LIKE '%BAR%'
+              AND tipo_dte != '61'
+            GROUP BY sku
+        ),
+        base AS (
             SELECT
                 sku,
-                MODE() WITHIN GROUP (ORDER BY nombre_producto)                                      AS nombre,
-                MAX(nombre_proveedor)                                     AS proveedor,
                 DATE_TRUNC('month', fecha_dte::timestamp)::date           AS mes,
                 fecha_dte::timestamp::date                                AS fecha_compra,
                 SUM(cant_conv)                                            AS vol_mes,
@@ -2271,7 +2278,7 @@ if modulo.startswith("🍹"):
             GROUP BY sku, DATE_TRUNC('month', fecha_dte::timestamp), fecha_dte::timestamp::date
         ),
         por_mes AS (
-            SELECT sku, MAX(nombre) AS nombre, MAX(proveedor) AS proveedor,
+            SELECT sku,
                    mes,
                    SUM(vol_mes)   AS vol_total_mes,
                    SUM(gasto_mes) AS gasto_total_mes,
@@ -2282,8 +2289,6 @@ if modulo.startswith("🍹"):
         stats AS (
             SELECT
                 sku,
-                MAX(nombre)   AS nombre,
-                MAX(proveedor) AS proveedor,
                 COUNT(DISTINCT mes)                                        AS n_meses,
                 ROUND(AVG(vol_total_mes)::numeric, 2)                     AS vol_prom_mes,
                 ROUND(STDDEV(vol_total_mes)::numeric, 2)                  AS vol_std,
@@ -2318,7 +2323,7 @@ if modulo.startswith("🍹"):
             GROUP BY sku
         )
         SELECT
-            s.sku, s.nombre, s.proveedor,
+            s.sku, n.nombre, n.proveedor,
             s.n_meses, s.vol_prom_mes, s.vol_std, s.vol_total,
             s.gasto_prom_mes, s.gasto_total, s.muc_actual,
             s.vol_ult2m, s.vol_ant2m,
@@ -2328,7 +2333,6 @@ if modulo.startswith("🍹"):
             CASE WHEN s.vol_prom_mes > 0
                  THEN ROUND((s.vol_std / s.vol_prom_mes * 100)::numeric, 1)
                  ELSE NULL END                                             AS cv_pct,
-            -- Stock seguridad = promedio + 1.65 * std (95% nivel servicio) / 30 * ciclo
             CASE WHEN c.dias_entre_compras IS NOT NULL AND s.vol_prom_mes > 0
                  THEN ROUND(((s.vol_prom_mes + 1.65 * COALESCE(s.vol_std, 0))
                               / 30.0 * c.dias_entre_compras)::numeric, 2)
@@ -2338,8 +2342,9 @@ if modulo.startswith("🍹"):
             u.ultima_compra,
             u.dias_sin_comprar
         FROM stats s
+        JOIN nombres n      ON s.sku = n.sku
         JOIN ultima_compra u ON s.sku = u.sku
-        JOIN ciclo c ON s.sku = c.sku
+        JOIN ciclo c         ON s.sku = c.sku
         ORDER BY s.gasto_total DESC
     """
 
