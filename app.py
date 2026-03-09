@@ -2159,6 +2159,7 @@ elif modulo.startswith("📊"):
                     df3['sin_precio_comp'] = df3['precio_comp'] == df3['precio_base']
                     st.session_state['inf3_df']     = df3
                     st.session_state['inf3_labels'] = (mes_base3_str, mes_comp3_str)
+                    st.session_state['inf3_fechas'] = (base_i, base_f, comp_i, comp_f)
 
             if 'inf3_df' in st.session_state:
                 df3 = st.session_state['inf3_df'].copy()
@@ -2267,15 +2268,15 @@ elif modulo.startswith("📊"):
                               'impacto_comp','delta_dinero','delta_pct']].to_excel(w, sheet_name='Canasta', index=False)
                     st.download_button("📥 Excel", buf_inf3.getvalue(), "Informe3_Canasta.xlsx", use_container_width=True)
                 with d2:
-                    local_actual = f_local if f_local and f_local != 'Todos' else 'Cadena Completa'
-                    pdf_local = generar_pdf_variacion(df3, mes_base3_str, mes_comp3_str, local_actual)
-                    st.download_button("📄 PDF — Local actual", pdf_local,
-                        f"Variacion_{local_actual.replace(' ','_')}_{mes_base3_str}_vs_{mes_comp3_str}.pdf",
+                    pdf_local = generar_pdf_variacion(df3, mes_base3_str, mes_comp3_str, 'Cadena Completa')
+                    st.download_button("📄 PDF — Cadena actual", pdf_local,
+                        f"Variacion_Cadena_{mes_base3_str}_vs_{mes_comp3_str}.pdf",
                         mime="application/pdf", use_container_width=True)
                 with d3:
                     if st.button("📄 PDF — Todos los locales", key="pdf_todos", use_container_width=True):
                         with st.spinner("Generando PDFs por local..."):
                             from pypdf import PdfWriter as PdfW, PdfReader as PdfR
+                            _base_i, _base_f, _comp_i, _comp_f = st.session_state.get('inf3_fechas', (base_i, base_f, comp_i, comp_f))
                             writer_all = PdfW()
                             df3_full = st.session_state.get('inf3_df', pd.DataFrame()).copy()
                             if not df3_full.empty:
@@ -2292,7 +2293,7 @@ elif modulo.startswith("📊"):
                                                MIN(c.categoria_producto) AS categoria, SUM(c.cant_conv) AS cant_base,
                                                SUM(c.costo_realfinal)/NULLIF(SUM(c.costo_realfinal/NULLIF(c.muc,0)),0) AS precio_base
                                         FROM compras c LEFT JOIN equiv e ON c.sku=e.sku_compra
-                                        WHERE c.fecha_dte::date BETWEEN '{base_i}' AND '{base_f}'
+                                        WHERE c.fecha_dte::date BETWEEN '{_base_i}' AND '{_base_f}'
                                           AND c.subcat IN ('Directo','Indirecto')
                                           AND c.costo_realfinal>0 AND c.monto_real>0 AND c.muc>0
                                           {filtro_loc_pdf} GROUP BY 1),
@@ -2300,7 +2301,7 @@ elif modulo.startswith("📊"):
                                         SELECT COALESCE(e.sku_receta,c.sku) AS sku,
                                                SUM(c.costo_realfinal)/NULLIF(SUM(c.costo_realfinal/NULLIF(c.muc,0)),0) AS precio_comp
                                         FROM compras c LEFT JOIN equiv e ON c.sku=e.sku_compra
-                                        WHERE c.fecha_dte::date BETWEEN '{comp_i}' AND '{comp_f}'
+                                        WHERE c.fecha_dte::date BETWEEN '{_comp_i}' AND '{_comp_f}'
                                           AND c.subcat IN ('Directo','Indirecto')
                                           AND c.costo_realfinal>0 AND c.monto_real>0 AND c.muc>0
                                           {filtro_loc_pdf} GROUP BY 1)
