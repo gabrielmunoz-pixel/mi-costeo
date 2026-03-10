@@ -2250,11 +2250,12 @@ elif modulo.startswith("📊"):
                     ),
                     base AS (
                         SELECT
-                            COALESCE(e.sku_receta, c.sku)                                              AS sku,
-                            MIN(c.nombre_producto)                                                     AS nombre,
-                            MIN(c.nombre_proveedor)                                                    AS proveedor,
-                            MIN(c.categoria_producto)                                                  AS categoria,
-                            SUM(c.cant_conv)                                                           AS cant_base,
+                            COALESCE(e.sku_receta, c.sku)                                               AS sku,
+                            MIN(c.nombre_producto)                                                      AS nombre,
+                            MIN(c.nombre_proveedor)                                                     AS proveedor,
+                            MIN(c.categoria_producto)                                                   AS categoria,
+                            MAX(c.formato)                                                              AS formato,
+                            SUM(c.cant_conv)                                                            AS cant_base,
                             SUM(c.costo_realfinal) / NULLIF(SUM(c.costo_realfinal / NULLIF(c.muc,0)),0) AS precio_base
                         FROM compras c
                         LEFT JOIN equiv e ON c.sku = e.sku_compra
@@ -2268,7 +2269,7 @@ elif modulo.startswith("📊"):
                     ),
                     comp AS (
                         SELECT
-                            COALESCE(e.sku_receta, c.sku)                                              AS sku,
+                            COALESCE(e.sku_receta, c.sku)                                               AS sku,
                             SUM(c.costo_realfinal) / NULLIF(SUM(c.costo_realfinal / NULLIF(c.muc,0)),0) AS precio_comp
                         FROM compras c
                         LEFT JOIN equiv e ON c.sku = e.sku_compra
@@ -2281,10 +2282,10 @@ elif modulo.startswith("📊"):
                     )
                     SELECT
                         b.sku, b.nombre, b.proveedor, b.categoria,
-                        b.cant_base, b.precio_base,
+                        b.formato, b.cant_base, b.precio_base,
                         c.precio_comp,
-                        b.cant_base * b.precio_base                          AS impacto_base,
-                        b.cant_base * COALESCE(c.precio_comp, b.precio_base) AS impacto_comp
+                        b.cant_base * b.precio_base * b.formato                          AS impacto_base,
+                        b.cant_base * COALESCE(c.precio_comp, b.precio_base) * b.formato AS impacto_comp
                     FROM base b
                     LEFT JOIN comp c ON b.sku = c.sku
                     ORDER BY b.nombre
@@ -2297,8 +2298,9 @@ elif modulo.startswith("📊"):
                     df3['precio_base']  = pd.to_numeric(df3['precio_base'],  errors='coerce').fillna(0)
                     df3['precio_comp']  = pd.to_numeric(df3['precio_comp'],  errors='coerce').fillna(df3['precio_base'])
                     df3['cant_base']    = pd.to_numeric(df3['cant_base'],    errors='coerce').fillna(0)
+                    df3['formato']      = pd.to_numeric(df3['formato'],      errors='coerce').fillna(1)
                     df3['impacto_base'] = pd.to_numeric(df3['impacto_base'], errors='coerce').fillna(0)
-                    df3['impacto_comp'] = df3['cant_base'] * df3['precio_comp']
+                    df3['impacto_comp'] = df3['cant_base'] * df3['precio_comp'] * df3['formato']
                     df3['delta_dinero'] = df3['impacto_comp'] - df3['impacto_base']
                     df3['delta_pct']    = df3.apply(
                         lambda r: (r['delta_dinero'] / r['impacto_base'] * 100) if r['impacto_base'] > 0 else None, axis=1
@@ -2448,6 +2450,7 @@ elif modulo.startswith("📊"):
                                                        MIN(c.nombre_producto) AS nombre,
                                                        MIN(c.nombre_proveedor) AS proveedor,
                                                        MIN(c.categoria_producto) AS categoria,
+                                                       MAX(c.formato) AS formato,
                                                        SUM(c.cant_conv) AS cant_base,
                                                        SUM(c.costo_realfinal)/NULLIF(SUM(c.costo_realfinal/NULLIF(c.muc,0)),0) AS precio_base
                                                 FROM compras c LEFT JOIN equiv e ON c.sku=e.sku_compra
@@ -2463,10 +2466,10 @@ elif modulo.startswith("📊"):
                                                   AND c.subcat IN ('Directo','Indirecto')
                                                   AND c.costo_realfinal>0 AND c.monto_real>0 AND c.muc>0
                                                   {_fl} GROUP BY 1)
-                                            SELECT b.sku,b.nombre,b.proveedor,b.categoria,b.cant_base,
+                                            SELECT b.sku,b.nombre,b.proveedor,b.categoria,b.formato,b.cant_base,
                                                    b.precio_base, c.precio_comp,
-                                                   b.cant_base*b.precio_base AS impacto_base,
-                                                   b.cant_base*COALESCE(c.precio_comp,b.precio_base) AS impacto_comp
+                                                   b.cant_base*b.precio_base*b.formato AS impacto_base,
+                                                   b.cant_base*COALESCE(c.precio_comp,b.precio_base)*b.formato AS impacto_comp
                                             FROM base b LEFT JOIN comp c ON b.sku=c.sku ORDER BY b.nombre
                                         """
                                         df_loc = run_query(q_loc)
@@ -2474,8 +2477,9 @@ elif modulo.startswith("📊"):
                                         df_loc['precio_base']  = pd.to_numeric(df_loc['precio_base'],  errors='coerce').fillna(0)
                                         df_loc['precio_comp']  = pd.to_numeric(df_loc['precio_comp'],  errors='coerce').fillna(df_loc['precio_base'])
                                         df_loc['cant_base']    = pd.to_numeric(df_loc['cant_base'],    errors='coerce').fillna(0)
+                                        df_loc['formato']      = pd.to_numeric(df_loc['formato'],      errors='coerce').fillna(1)
                                         df_loc['impacto_base'] = pd.to_numeric(df_loc['impacto_base'], errors='coerce').fillna(0)
-                                        df_loc['impacto_comp'] = df_loc['cant_base'] * df_loc['precio_comp']
+                                        df_loc['impacto_comp'] = df_loc['cant_base'] * df_loc['precio_comp'] * df_loc['formato']
                                         df_loc['delta_dinero'] = df_loc['impacto_comp'] - df_loc['impacto_base']
                                         df_loc['delta_pct']    = df_loc.apply(
                                             lambda r: (r['delta_dinero']/r['impacto_base']*100) if r['impacto_base']>0 else None, axis=1)
