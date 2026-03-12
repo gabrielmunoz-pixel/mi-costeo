@@ -1384,8 +1384,15 @@ if modulo.startswith("📦"):
                         st.success("✅ Todos los folios cuadran con el total declarado.")
                     else:
                         st.warning(f"⚠️ {len(val_issues)} folio(s) con diferencia > $1 — revisar")
+                        # Agregar producto, categoría y proveedor al detalle
+                        detalle_folio = df_val.groupby('folio').agg(
+                            productos=('nombre_producto', lambda x: ' / '.join(x.dropna().unique()[:3])),
+                            categoria=('categoria_producto', lambda x: x.dropna().mode().iloc[0] if not x.dropna().empty else ''),
+                            proveedor=('nombre_proveedor', lambda x: x.dropna().mode().iloc[0] if not x.dropna().empty else ''),
+                        ).reset_index()
+                        val_issues = val_issues.merge(detalle_folio, on='folio', how='left')
                         st.dataframe(
-                            val_issues[['folio','total_declarado','costo_calculado','diferencia']],
+                            val_issues[['folio','proveedor','categoria','productos','total_declarado','costo_calculado','diferencia']],
                             use_container_width=True, hide_index=True
                         )
                     st.caption("ℹ️ Se validan solo folios donde el 100% de líneas son Directo o Indirecto. Los folios mixtos tienen un Total de factura que incluye otras categorías.")
