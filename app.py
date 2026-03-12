@@ -1430,8 +1430,8 @@ if modulo.startswith("📦"):
             # ── Guardar en base de datos ─────────────────────────────────
             st.markdown("#### Guardar en base de datos")
             st.markdown(
-                "<div class='info-box'>Al guardar se hace <strong>append</strong> — "
-                "asegúrate de no cargar el mismo período dos veces.</div>",
+                "<div class='info-box'>Al guardar, el sistema <strong>elimina automáticamente</strong> los registros "
+                "del mismo período y locales antes de insertar — puedes recargar el mismo archivo sin riesgo de duplicados.</div>",
                 unsafe_allow_html=True
             )
             if st.button("💾 Guardar en base de datos", type="primary"):
