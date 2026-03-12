@@ -147,6 +147,27 @@ def run_query(sql, params=None):
         return pd.DataFrame()
 
 
+def init_exclusiones():
+    """Crea la tabla compras_excluidas si no existe."""
+    engine = get_engine()
+    if engine is None:
+        return
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS compras_excluidas (
+                    id         SERIAL PRIMARY KEY,
+                    compra_id  INTEGER NOT NULL UNIQUE,
+                    sku        TEXT,
+                    motivo     TEXT DEFAULT 'compra_emergencia',
+                    creado_en  TIMESTAMP DEFAULT NOW()
+                )
+            """))
+            conn.commit()
+    except Exception:
+        pass
+
+
 # ============================================================
 # LÓGICA MRP (código 1 preservado íntegramente)
 # ============================================================
@@ -911,6 +932,11 @@ def get_locales():
 
 
 # ============================================================
+# INIT
+# ============================================================
+init_exclusiones()
+
+# ============================================================
 # SIDEBAR
 # ============================================================
 with st.sidebar:
@@ -1492,6 +1518,7 @@ if modulo.startswith("📦"):
                       AND monto_real > 0
                       AND UPPER(sku) != 'COLACION'
                       AND UPPER(sku) NOT IN ('N. CREDITO', 'NCR')
+                      AND id NOT IN (SELECT compra_id FROM compras_excluidas)
                       {filtro_cat_audit}
                     GROUP BY sku, ROUND(muc::numeric, 1)
                     HAVING ROUND(muc::numeric, 1) > 0
@@ -1771,8 +1798,22 @@ if modulo.startswith("📦"):
                                         st.error(f'Error: {e}')
                             with cb2:
                                 if st.button('✅ Revisado', key='audit_mark'):
-                                    st.session_state['audit_revisados'].update([str(i) for i in ids_lote])
-                                    st.rerun()
+                                    engine = get_engine()
+                                    try:
+                                        with engine.connect() as conn:
+                                            conn.execute(text("""
+                                                INSERT INTO compras_excluidas (compra_id, sku, motivo)
+                                                SELECT unnest(:ids), :sku, 'compra_emergencia'
+                                                ON CONFLICT (compra_id) DO NOTHING
+                                            """), {'ids': ids_lote, 'sku': sku_sel_inf})
+                                            conn.commit()
+                                        st.success(f'✅ {len(ids_lote)} registros excluidos del cálculo')
+                                        st.session_state['audit_revisados'].update([str(i) for i in ids_lote])
+                                        st.session_state.pop('audit_df', None)
+                                        st.session_state.pop('audit_grupo_sel', None)
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f'Error al excluir: {e}')
 
                 # ── Exportar y limpiar revisados ──────────────────────────
                 ex1, ex2 = st.columns([1, 1])
@@ -1787,10 +1828,30 @@ if modulo.startswith("📦"):
                                        'Auditoria_Compras.xlsx',
                                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
                 with ex2:
-                    st.caption(f"{len(st.session_state['audit_revisados'])} marcados revisados")
-                    if st.button('🔄 Limpiar revisados'):
-                        st.session_state['audit_revisados'] = set()
-                        st.rerun()
+                    df_excl = run_query("""
+                        SELECT compra_id, sku, motivo, creado_en
+                        FROM compras_excluidas ORDER BY creado_en DESC LIMIT 200
+                    """)
+                    n_excl = len(df_excl) if not df_excl.empty else 0
+                    st.caption(f"{n_excl} registros excluidos del cálculo")
+                    with st.expander("Ver / revertir exclusiones", expanded=False):
+                        if df_excl.empty:
+                            st.info("Sin exclusiones registradas.")
+                        else:
+                            st.dataframe(df_excl, use_container_width=True, hide_index=True)
+                            id_revert = st.number_input("ID compra a revertir", min_value=1, step=1, key="audit_revert_id")
+                            if st.button("↩️ Revertir exclusión", key="audit_revert_btn"):
+                                engine = get_engine()
+                                try:
+                                    with engine.connect() as conn:
+                                        conn.execute(text("DELETE FROM compras_excluidas WHERE compra_id = :id"),
+                                                     {"id": int(id_revert)})
+                                        conn.commit()
+                                    st.success(f"Registro {id_revert} revertido")
+                                    st.session_state.pop("audit_df", None)
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
 
                 # ── Tabla — una fila por SKU+MUC ─────────────────────────
                 if label_sel and not grupos.empty:
