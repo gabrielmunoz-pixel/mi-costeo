@@ -895,7 +895,7 @@ def save_compras(df: pd.DataFrame):
         'folio', 'nombre_producto', 'sku', 'subcat', 'codigo_impuesto',
         'cantidad', 'conversion', 'formato', 'categoria_producto',
         'cant_conv', 'monto_real', 'recargo2', 'total_neto2',
-        'imp_adic', 'iva_2', 'tootal2', 'costo_realfinal', 'muc'
+        'imp_adic', 'iva_2', 'tootal2', 'costo_realfinal', 'muc', 'total'
     ]
     cols_ok = [c for c in cols_req if c in df.columns]
     try:
