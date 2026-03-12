@@ -148,7 +148,7 @@ def run_query(sql, params=None):
 
 
 def init_exclusiones():
-    """Crea la tabla compras_excluidas si no existe."""
+    """Crea las tablas compras_excluidas y sku_colacion si no existen."""
     engine = get_engine()
     if engine is None:
         return
@@ -161,6 +161,14 @@ def init_exclusiones():
                     sku        TEXT,
                     motivo     TEXT DEFAULT 'compra_emergencia',
                     creado_en  TIMESTAMP DEFAULT NOW()
+                )
+            """))
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS sku_colacion (
+                    id        SERIAL PRIMARY KEY,
+                    sku       TEXT NOT NULL UNIQUE,
+                    nombre    TEXT,
+                    creado_en TIMESTAMP DEFAULT NOW()
                 )
             """))
             conn.commit()
@@ -1519,6 +1527,9 @@ if modulo.startswith("📦"):
                       AND UPPER(sku) != 'COLACION'
                       AND UPPER(sku) NOT IN ('N. CREDITO', 'NCR')
                       AND id NOT IN (SELECT compra_id FROM compras_excluidas)
+                      AND sku NOT IN (SELECT sku FROM sku_colacion)
+                      AND UPPER(subcat) NOT LIKE '%COLACION%'
+                      AND UPPER(subcat) NOT LIKE '%COLACIÓN%'
                       {filtro_cat_audit}
                     GROUP BY sku, ROUND(muc::numeric, 1)
                     HAVING ROUND(muc::numeric, 1) > 0
@@ -1776,7 +1787,7 @@ if modulo.startswith("📦"):
                         ids_lote = [int(i) for i in raw_ids]
                         with ca4:
                             st.caption(f'Afecta **{len(ids_lote)}** registros')
-                            cb1, cb2 = st.columns(2)
+                            cb1, cb2, cb3 = st.columns(3)
                             with cb1:
                                 if st.button('💾 Aplicar', key='audit_apply'):
                                     engine = get_engine()
@@ -1814,6 +1825,24 @@ if modulo.startswith("📦"):
                                         st.rerun()
                                     except Exception as e:
                                         st.error(f'Error al excluir: {e}')
+                            with cb3:
+                                if st.button('🍱 Colación', key='audit_colacion'):
+                                    engine = get_engine()
+                                    try:
+                                        nombre_sku = str(filas_sku['nombre_producto'].iloc[0]) if not filas_sku.empty else ''
+                                        with engine.connect() as conn:
+                                            conn.execute(text("""
+                                                INSERT INTO sku_colacion (sku, nombre)
+                                                VALUES (:sku, :nombre)
+                                                ON CONFLICT (sku) DO NOTHING
+                                            """), {'sku': sku_sel_inf, 'nombre': nombre_sku})
+                                            conn.commit()
+                                        st.success(f'🍱 {sku_sel_inf} marcado como colación')
+                                        st.session_state.pop('audit_df', None)
+                                        st.session_state.pop('audit_grupo_sel', None)
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f'Error: {e}')
 
                 # ── Exportar y limpiar revisados ──────────────────────────
                 ex1, ex2 = st.columns([1, 1])
@@ -1833,8 +1862,7 @@ if modulo.startswith("📦"):
                         FROM compras_excluidas ORDER BY creado_en DESC LIMIT 200
                     """)
                     n_excl = len(df_excl) if not df_excl.empty else 0
-                    st.caption(f"{n_excl} registros excluidos del cálculo")
-                    with st.expander("Ver / revertir exclusiones", expanded=False):
+                    with st.expander(f"↩️ Exclusiones ({n_excl} registros)", expanded=False):
                         if df_excl.empty:
                             st.info("Sin exclusiones registradas.")
                         else:
@@ -1848,6 +1876,26 @@ if modulo.startswith("📦"):
                                                      {"id": int(id_revert)})
                                         conn.commit()
                                     st.success(f"Registro {id_revert} revertido")
+                                    st.session_state.pop("audit_df", None)
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
+                    df_col_list = run_query("SELECT sku, nombre, creado_en FROM sku_colacion ORDER BY creado_en DESC")
+                    n_col = len(df_col_list) if not df_col_list.empty else 0
+                    with st.expander(f"🍱 SKUs colación ({n_col})", expanded=False):
+                        if df_col_list.empty:
+                            st.info("Sin SKUs marcados como colación.")
+                        else:
+                            st.dataframe(df_col_list, use_container_width=True, hide_index=True)
+                            sku_revert = st.text_input("SKU a revertir", key="audit_revert_sku", placeholder="ej: AL-AF-095")
+                            if st.button("↩️ Quitar de colación", key="audit_revert_sku_btn"):
+                                engine = get_engine()
+                                try:
+                                    with engine.connect() as conn:
+                                        conn.execute(text("DELETE FROM sku_colacion WHERE sku = :sku"),
+                                                     {"sku": sku_revert.strip()})
+                                        conn.commit()
+                                    st.success(f"{sku_revert} removido de colación")
                                     st.session_state.pop("audit_df", None)
                                     st.rerun()
                                 except Exception as e:
