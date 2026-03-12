@@ -788,7 +788,7 @@ def procesar_compras(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
 
     # ── PASO 3: recargo2  (distribución proporcional por folio) ─────────────
     # participación = monto_real_línea / suma_monto_real_folio
-    df['_tot_folio'] = df.groupby('folio')['monto_real'].transform('sum')
+    df['_tot_folio'] = df.groupby(['folio','rut_proveedor'])['monto_real'].transform('sum')
     df['_recargo_neto'] = df['recargo_global'] - df['descuento_global']
     df['_part'] = np.where(df['_tot_folio'] != 0, df['monto_real'] / df['_tot_folio'], 0)
     df['recargo2'] = df['_part'] * df['_recargo_neto']
@@ -807,7 +807,7 @@ def procesar_compras(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     df['imp_adic'] = df['monto_real'] * tasa
 
     # ── PASO 5: IVA_2  (por folio: si el folio tiene IVA registrado > 0) ────
-    df['_tiene_iva'] = df.groupby('folio')['iva'].transform('max') != 0
+    df['_tiene_iva'] = df.groupby(['folio','rut_proveedor'])['iva'].transform('max') != 0
     df['iva_2'] = np.where(df['_tiene_iva'], df['total_neto2'] * 0.19, 0)
 
     # ── PASO 6: tootal2 ──────────────────────────────────────────────────────
@@ -823,11 +823,11 @@ def procesar_compras(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
 
     # ── PASO 8: Desp_Folio = suma(monto_real de líneas despacho) × 1.19 ─────
     df['_desp_linea'] = np.where(df['_es_despacho'], df['monto_real'] * 1.19, 0)
-    df['_desp_folio'] = df.groupby('folio')['_desp_linea'].transform('sum')
+    df['_desp_folio'] = df.groupby(['folio','rut_proveedor'])['_desp_linea'].transform('sum')
 
     # ── PASO 9: ajuste redondeo = Total_factura - suma(tootal2) del folio ────
-    df['_suma_tootal2_folio'] = df.groupby('folio')['tootal2'].transform('sum')
-    df['_total_factura']      = df.groupby('folio')['total'].transform('max')
+    df['_suma_tootal2_folio'] = df.groupby(['folio','rut_proveedor'])['tootal2'].transform('sum')
+    df['_total_factura']      = df.groupby(['folio','rut_proveedor'])['total'].transform('max')
     df['_diferencia']         = df['_total_factura'] - df['_suma_tootal2_folio']
 
     # desp+red2 por folio = Desp_Folio + diferencia
@@ -835,7 +835,7 @@ def procesar_compras(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
 
     # ── PASO 10: Part_Item (excluye despachos del denominador) ───────────────
     df['_monto_limpio'] = np.where(df['_es_despacho'], 0, df['monto_real'].abs())
-    df['_tot_limpio_folio'] = df.groupby('folio')['_monto_limpio'].transform('sum')
+    df['_tot_limpio_folio'] = df.groupby(['folio','rut_proveedor'])['_monto_limpio'].transform('sum')
     df['_part_item'] = np.where(
         df['_tot_limpio_folio'] != 0,
         df['_monto_limpio'] / df['_tot_limpio_folio'],
@@ -883,7 +883,10 @@ def procesar_compras(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
 
 
 def save_compras(df: pd.DataFrame):
-    """Guarda el DataFrame ya procesado en la tabla compras de Supabase."""
+    """Guarda el DataFrame ya procesado en la tabla compras de Supabase.
+    Elimina previamente los registros del mismo período (mes) y locales
+    para evitar duplicados al recargar.
+    """
     engine = get_engine()
     if engine is None:
         return
@@ -894,11 +897,33 @@ def save_compras(df: pd.DataFrame):
         'cant_conv', 'monto_real', 'recargo2', 'total_neto2',
         'imp_adic', 'iva_2', 'tootal2', 'costo_realfinal', 'muc'
     ]
-    # Sólo guardar columnas que existen en el df
     cols_ok = [c for c in cols_req if c in df.columns]
     try:
+        # Detectar rango de fechas y locales del archivo a cargar
+        fechas = pd.to_datetime(df['fecha_dte'], errors='coerce').dropna()
+        if fechas.empty:
+            st.error("No se pudo determinar el período del archivo.")
+            return
+        fecha_min = fechas.min().date().replace(day=1)
+        fecha_max = (fechas.max().to_period('M').to_timestamp('M')).date()
+        locales   = df['local'].dropna().unique().tolist() if 'local' in df.columns else []
+
+        with engine.connect() as conn:
+            if locales:
+                conn.execute(text("""
+                    DELETE FROM compras
+                    WHERE fecha_dte::date BETWEEN :fi AND :ff
+                      AND local = ANY(:locales)
+                """), {'fi': fecha_min, 'ff': fecha_max, 'locales': locales})
+            else:
+                conn.execute(text("""
+                    DELETE FROM compras
+                    WHERE fecha_dte::date BETWEEN :fi AND :ff
+                """), {'fi': fecha_min, 'ff': fecha_max})
+            conn.commit()
+
         df[cols_ok].to_sql('compras', engine, if_exists='append', index=False)
-        st.success(f"✅ {len(df)} registros de compras guardados en la base de datos.")
+        st.success(f"✅ {len(df)} registros guardados ({fecha_min} → {fecha_max}). Período anterior reemplazado.")
     except Exception as e:
         st.error(f"Error al guardar compras: {e}")
 
