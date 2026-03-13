@@ -1745,14 +1745,15 @@ if modulo.startswith("📦"):
                             # Acciones de corrección
                             st.markdown("<br>", unsafe_allow_html=True)
                             st.markdown("**Corregir grupo**")
-                            mucs_i = sorted(df_inspect['muc'].dropna().unique().tolist())
-                            muc_fix = st.selectbox(
+                            df_inspect = df_inspect.reset_index(drop=True)
+                            opciones_inspect = list(range(len(df_inspect)))
+                            idx_fix = st.selectbox(
                                 "MUC a corregir",
-                                mucs_i,
-                                format_func=lambda m: f"{float(m):.4f}  ({int(df_inspect[df_inspect['muc']==m]['n_registros'].sum())} reg.)",
+                                opciones_inspect,
+                                format_func=lambda i: f"{float(df_inspect.iloc[i]['muc']):.4f}  ({int(df_inspect.iloc[i]['n_registros'])} reg.)",
                                 key='inspect_muc_fix'
                             )
-                            fila_fix = df_inspect[df_inspect['muc'] == muc_fix].iloc[0]
+                            fila_fix = df_inspect.iloc[idx_fix]
                             ic1, ic2 = st.columns(2)
                             with ic1:
                                 conv_fix = st.number_input("Nueva conversion", value=float(fila_fix['conversion'] or 1),
@@ -1791,18 +1792,28 @@ if modulo.startswith("📦"):
                 # ── Corrección informe (arriba de la tabla) ─────────────────
                 if not df_audit.empty and label_sel_muc:
                     sku_sel_inf = label_sel_muc.split(' — ')[0].strip()
-                    filas_sku = df_audit[df_audit['sku'] == sku_sel_inf]
+                    filas_sku = df_audit[df_audit['sku'] == sku_sel_inf].reset_index(drop=True)
                     if not filas_sku.empty:
                         st.markdown(f'**⚙️ Corregir — {sku_sel_inf}**')
                         ca1, ca2, ca3, ca4 = st.columns([2, 2, 2, 2])
-                        mucs_disp = sorted(filas_sku['muc'].dropna().unique().tolist())
+
+                        # Resetear índice MUC si cambió el SKU
+                        if st.session_state.get('_last_sku_audit') != sku_sel_inf:
+                            st.session_state['_last_sku_audit'] = sku_sel_inf
+                            st.session_state.pop('audit_muc_lote', None)
+
+                        # Opciones indexadas por posición — evita comparaciones float
+                        opciones_idx = list(range(len(filas_sku)))
                         with ca1:
-                            muc_sel_lote = st.selectbox(
-                                'MUC a corregir', mucs_disp,
-                                format_func=lambda m: f'{float(m):.4f} ({int(filas_sku[filas_sku["muc"]==m]["n_registros"].sum())} reg.)',
+                            idx_sel = st.selectbox(
+                                'MUC a corregir',
+                                opciones_idx,
+                                format_func=lambda i: f'{float(filas_sku.iloc[i]["muc"]):.4f}  ({int(filas_sku.iloc[i]["n_registros"])} reg.)',
                                 key='audit_muc_lote'
                             )
-                        fila_sel = filas_sku[filas_sku['muc'] == muc_sel_lote].iloc[0]
+                        # Acceso por índice — 100% seguro, sin comparaciones float
+                        fila_sel = filas_sku.iloc[idx_sel]
+                        muc_sel_lote = fila_sel['muc']
                         with ca2:
                             nuevo_conv_lote = st.number_input('Nueva conversion',
                                 value=float(fila_sel['conversion'] or 1),
@@ -1824,18 +1835,31 @@ if modulo.startswith("📦"):
                                     engine = get_engine()
                                     try:
                                         with engine.connect() as conn:
-                                            conn.execute(text(
-                                                'UPDATE compras SET conversion=:conv,formato=:fmt,'
-                                                'cant_conv=cantidad*:conv,'
-                                                'muc=CASE WHEN :fmt=1 THEN costo_realfinal/NULLIF(cantidad*:conv,0)'
-                                                ' ELSE costo_realfinal/NULLIF(cantidad*:conv*:fmt,0) END'
-                                                ' WHERE id=ANY(:ids)'
-                                ), {'conv': nuevo_conv_lote, 'fmt': nuevo_fmt_lote, 'ids': ids_lote})
-                                            conn.commit()
-                                        st.success(f'✅ {len(ids_lote)} registros corregidos')
-                                        st.session_state.pop('audit_df', None)
-                                        st.session_state.pop('audit_grupo_sel', None)
-                                        st.rerun()
+                                            # ── Guardia: verificar que los IDs pertenecen al SKU correcto ──
+                                            check = pd.read_sql(
+                                                text('SELECT id, sku FROM compras WHERE id = ANY(:ids)'),
+                                                conn, params={'ids': ids_lote}
+                                            )
+                                            skus_encontrados = check['sku'].unique().tolist()
+                                            ids_incorrectos  = check[check['sku'] != sku_sel_inf]['id'].tolist()
+                                            if ids_incorrectos:
+                                                st.error(f'🚫 Seguridad: {len(ids_incorrectos)} IDs no pertenecen a {sku_sel_inf} '
+                                                         f'(SKUs encontrados: {skus_encontrados}). Operación cancelada.')
+                                            else:
+                                                conn.execute(text(
+                                                    'UPDATE compras SET conversion=:conv,formato=:fmt,'
+                                                    'cant_conv=cantidad*:conv,'
+                                                    'muc=CASE WHEN :fmt=1 THEN costo_realfinal/NULLIF(cantidad*:conv,0)'
+                                                    ' ELSE costo_realfinal/NULLIF(cantidad*:conv*:fmt,0) END'
+                                                    ' WHERE id=ANY(:ids) AND sku=:sku'
+                                                ), {'conv': nuevo_conv_lote, 'fmt': nuevo_fmt_lote,
+                                                    'ids': ids_lote, 'sku': sku_sel_inf})
+                                                conn.commit()
+                                                st.success(f'✅ {len(ids_lote)} registros de {sku_sel_inf} corregidos '
+                                                           f'(conv={nuevo_conv_lote}, fmt={nuevo_fmt_lote})')
+                                                st.session_state.pop('audit_df', None)
+                                                st.session_state.pop('audit_grupo_sel', None)
+                                                st.rerun()
                                     except Exception as e:
                                         st.error(f'Error: {e}')
                             with cb2:
