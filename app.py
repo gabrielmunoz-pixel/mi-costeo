@@ -922,8 +922,11 @@ def save_compras(df: pd.DataFrame):
                 """), {'fi': fecha_min, 'ff': fecha_max})
             conn.commit()
 
-        df[cols_ok].to_sql('compras', engine, if_exists='append', index=False)
-        st.success(f"✅ {len(df)} registros guardados ({fecha_min} → {fecha_max}). Período anterior reemplazado.")
+        total = len(df)
+        with st.spinner(f"Insertando {total:,} registros..."):
+            df[cols_ok].to_sql('compras', engine, if_exists='append',
+                               index=False, method='multi', chunksize=500)
+        st.success(f"✅ {total:,} registros guardados ({fecha_min} → {fecha_max}). Período anterior reemplazado.")
     except Exception as e:
         st.error(f"Error al guardar compras: {e}")
 
@@ -1815,7 +1818,7 @@ if modulo.startswith("📦"):
                         ids_lote = [int(i) for i in raw_ids]
                         with ca4:
                             st.caption(f'Afecta **{len(ids_lote)}** registros')
-                            cb1, cb2, cb3 = st.columns(3)
+                            cb1, cb2, cb3, cb4 = st.columns(4)
                             with cb1:
                                 if st.button('💾 Aplicar', key='audit_apply'):
                                     engine = get_engine()
@@ -1827,7 +1830,7 @@ if modulo.startswith("📦"):
                                                 'muc=CASE WHEN :fmt=1 THEN costo_realfinal/NULLIF(cantidad*:conv,0)'
                                                 ' ELSE costo_realfinal/NULLIF(cantidad*:conv*:fmt,0) END'
                                                 ' WHERE id=ANY(:ids)'
-                            ), {'conv': nuevo_conv_lote, 'fmt': nuevo_fmt_lote, 'ids': ids_lote})
+                                ), {'conv': nuevo_conv_lote, 'fmt': nuevo_fmt_lote, 'ids': ids_lote})
                                             conn.commit()
                                         st.success(f'✅ {len(ids_lote)} registros corregidos')
                                         st.session_state.pop('audit_df', None)
@@ -1836,7 +1839,7 @@ if modulo.startswith("📦"):
                                     except Exception as e:
                                         st.error(f'Error: {e}')
                             with cb2:
-                                if st.button('✅ Revisado', key='audit_mark'):
+                                if st.button('🚨 Emergencia', key='audit_emergencia'):
                                     engine = get_engine()
                                     try:
                                         with engine.connect() as conn:
@@ -1846,14 +1849,38 @@ if modulo.startswith("📦"):
                                                 ON CONFLICT (compra_id) DO NOTHING
                                             """), {'ids': ids_lote, 'sku': sku_sel_inf})
                                             conn.commit()
-                                        st.success(f'✅ {len(ids_lote)} registros excluidos del cálculo')
-                                        st.session_state['audit_revisados'].update([str(i) for i in ids_lote])
+                                        st.success(f'🚨 {len(ids_lote)} registros excluidos del cálculo')
                                         st.session_state.pop('audit_df', None)
                                         st.session_state.pop('audit_grupo_sel', None)
                                         st.rerun()
                                     except Exception as e:
                                         st.error(f'Error al excluir: {e}')
                             with cb3:
+                                if st.button('✅ Revisado', key='audit_mark'):
+                                    nombre_rev = str(fila_sel.get('nombre_producto', ''))
+                                    n_reg_rev  = int(fila_sel.get('n_registros', len(ids_lote)))
+                                    nota_rev   = st.session_state.get('audit_nota_rev', '')
+                                    engine = get_engine()
+                                    try:
+                                        with engine.connect() as conn:
+                                            conn.execute(text("""
+                                                INSERT INTO audit_revisados (sku, muc, nombre, n_registros, nota)
+                                                VALUES (:sku, :muc, :nombre, :n, :nota)
+                                            """), {
+                                                'sku':    sku_sel_inf,
+                                                'muc':    float(muc_sel_lote),
+                                                'nombre': nombre_rev,
+                                                'n':      n_reg_rev,
+                                                'nota':   nota_rev,
+                                            })
+                                            conn.commit()
+                                        st.success(f'✅ {sku_sel_inf} MUC {float(muc_sel_lote):.4f} marcado como revisado')
+                                        st.session_state.pop('audit_df', None)
+                                        st.session_state.pop('audit_grupo_sel', None)
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f'Error: {e}')
+                            with cb4:
                                 if st.button('🍱 Colación', key='audit_colacion'):
                                     engine = get_engine()
                                     try:
@@ -1871,8 +1898,9 @@ if modulo.startswith("📦"):
                                         st.rerun()
                                     except Exception as e:
                                         st.error(f'Error: {e}')
-
-                # ── Exportar y limpiar revisados ──────────────────────────
+                        st.text_input('📝 Nota para Revisado (opcional)', key='audit_nota_rev',
+                                      placeholder='ej: cambio de proveedor, precio puntual, negociación...')
+                # ── Exportar + Expanders de gestión ──────────────────────────
                 ex1, ex2 = st.columns([1, 1])
                 with ex1:
                     buf_audit = io.BytesIO()
@@ -1885,43 +1913,85 @@ if modulo.startswith("📦"):
                                        'Auditoria_Compras.xlsx',
                                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
                 with ex2:
-                    df_excl = run_query("""
-                        SELECT compra_id, sku, motivo, creado_en
-                        FROM compras_excluidas ORDER BY creado_en DESC LIMIT 200
+                    # ── Expander 1: Compras de emergencia ──
+                    df_emerg = run_query("""
+                        SELECT ce.sku, ce.motivo, COUNT(*) AS registros,
+                               MODE() WITHIN GROUP (ORDER BY c.nombre_producto) AS nombre,
+                               MIN(ce.creado_en)::date AS desde
+                        FROM compras_excluidas ce
+                        LEFT JOIN compras c ON c.id = ce.compra_id
+                        GROUP BY ce.sku, ce.motivo
+                        ORDER BY MIN(ce.creado_en) DESC
                     """)
-                    n_excl = len(df_excl) if not df_excl.empty else 0
-                    with st.expander(f"↩️ Exclusiones ({n_excl} registros)", expanded=False):
-                        if df_excl.empty:
-                            st.info("Sin exclusiones registradas.")
+                    n_emerg = len(df_emerg) if not df_emerg.empty else 0
+                    with st.expander(f"🚨 Compras de emergencia ({n_emerg} SKUs)", expanded=False):
+                        if df_emerg.empty:
+                            st.info("Sin compras de emergencia registradas.")
                         else:
-                            st.dataframe(df_excl, use_container_width=True, hide_index=True)
-                            id_revert = st.number_input("ID compra a revertir", min_value=1, step=1, key="audit_revert_id")
-                            if st.button("↩️ Revertir exclusión", key="audit_revert_btn"):
+                            st.dataframe(df_emerg, use_container_width=True, hide_index=True)
+                            sku_rev_emerg = st.text_input("SKU a revertir", key="revert_emerg_sku",
+                                                          placeholder="ej: AL-AF-095")
+                            if st.button("↩️ Revertir emergencia", key="revert_emerg_btn"):
                                 engine = get_engine()
                                 try:
                                     with engine.connect() as conn:
-                                        conn.execute(text("DELETE FROM compras_excluidas WHERE compra_id = :id"),
-                                                     {"id": int(id_revert)})
+                                        conn.execute(text(
+                                            "DELETE FROM compras_excluidas WHERE sku = :sku"),
+                                            {"sku": sku_rev_emerg.strip()})
                                         conn.commit()
-                                    st.success(f"Registro {id_revert} revertido")
+                                    st.success(f"↩️ {sku_rev_emerg} revertido")
                                     st.session_state.pop("audit_df", None)
                                     st.rerun()
                                 except Exception as e:
                                     st.error(f"Error: {e}")
-                    df_col_list = run_query("SELECT sku, nombre, creado_en FROM sku_colacion ORDER BY creado_en DESC")
+
+                    # ── Expander 2: Revisados ──
+                    df_rev = run_query("""
+                        SELECT id, sku, nombre, ROUND(muc::numeric,4) AS muc,
+                               n_registros, nota, creado_en::date AS fecha
+                        FROM audit_revisados
+                        ORDER BY creado_en DESC
+                    """)
+                    n_rev = len(df_rev) if not df_rev.empty else 0
+                    with st.expander(f"✅ Revisados — gestionar con proveedor ({n_rev})", expanded=False):
+                        if df_rev.empty:
+                            st.info("Sin grupos revisados registrados.")
+                        else:
+                            st.dataframe(df_rev, use_container_width=True, hide_index=True)
+                            id_rev = st.number_input("ID a revertir", min_value=1, step=1,
+                                                     key="revert_rev_id")
+                            if st.button("↩️ Revertir revisado", key="revert_rev_btn"):
+                                engine = get_engine()
+                                try:
+                                    with engine.connect() as conn:
+                                        conn.execute(text(
+                                            "DELETE FROM audit_revisados WHERE id = :id"),
+                                            {"id": int(id_rev)})
+                                        conn.commit()
+                                    st.success(f"↩️ Revisado {id_rev} revertido")
+                                    st.session_state.pop("audit_df", None)
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
+
+                    # ── Expander 3: SKUs colación ──
+                    df_col_list = run_query(
+                        "SELECT sku, nombre, creado_en::date AS fecha FROM sku_colacion ORDER BY creado_en DESC")
                     n_col = len(df_col_list) if not df_col_list.empty else 0
                     with st.expander(f"🍱 SKUs colación ({n_col})", expanded=False):
                         if df_col_list.empty:
                             st.info("Sin SKUs marcados como colación.")
                         else:
                             st.dataframe(df_col_list, use_container_width=True, hide_index=True)
-                            sku_revert = st.text_input("SKU a revertir", key="audit_revert_sku", placeholder="ej: AL-AF-095")
+                            sku_revert = st.text_input("SKU a revertir", key="audit_revert_sku",
+                                                       placeholder="ej: AL-AF-095")
                             if st.button("↩️ Quitar de colación", key="audit_revert_sku_btn"):
                                 engine = get_engine()
                                 try:
                                     with engine.connect() as conn:
-                                        conn.execute(text("DELETE FROM sku_colacion WHERE sku = :sku"),
-                                                     {"sku": sku_revert.strip()})
+                                        conn.execute(text(
+                                            "DELETE FROM sku_colacion WHERE sku = :sku"),
+                                            {"sku": sku_revert.strip()})
                                         conn.commit()
                                     st.success(f"{sku_revert} removido de colación")
                                     st.session_state.pop("audit_df", None)
