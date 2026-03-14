@@ -1802,120 +1802,42 @@ if modulo.startswith("📦"):
 
                 st.caption(f"{'SKU: ' + sku_fil if label_sel_muc else 'Todos los SKUs'} — {len(df_tabla)} grupos MUC")
 
-                # ── Tabla HTML estilizada con checkboxes Streamlit por fila ──
                 import ast as _ast
                 def _parse_ids(raw):
                     if isinstance(raw, list): return [int(i) for i in raw]
                     try: return [int(i) for i in _ast.literal_eval(str(raw))]
                     except: return []
 
-                hs_a = 'padding:9px 12px;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
-                hdrs_a = ['','SKU','Producto','Categoría','Proveedor','Conv.','Formato','Neto Fact/u','MUC','# Reg.','Dispersión']
-
-                # Header tabla
-                st.markdown(
-                    '<div style="overflow-x:auto;border-radius:14px 14px 0 0;border:1px solid #1e1e1e;border-bottom:none;background:#111">'
-                    '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
-                    '<thead><tr style="background:#111">'
-                    + ''.join([f'<th style="{hs_a};text-align:{"center" if i==0 else "left" if i<5 else "right" if i<10 else "center"}">{h}</th>' for i, h in enumerate(hdrs_a)])
-                    + '</tr></thead></table></div>',
-                    unsafe_allow_html=True
-                )
-
-                # Filas con checkboxes intercalados
-                sel_indices = []
-                for idx, r in df_tabla.iterrows():
-                    muc        = float(r.get('muc', 0) or 0)
-                    muc_min    = float(r.get('muc_min', 0) or 0)
-                    muc_max    = float(r.get('muc_max', 0) or 0)
-                    dispersion = float(r.get('dispersion', 1) or 1)
-                    n_reg      = int(r.get('n_registros', 1) or 1)
-                    precio     = float(r.get('precio_factura', 0) or 0)
-                    conv       = r.get('conversion', '')
-                    fmt        = r.get('formato', '')
-                    es_outlier = muc_min > 0 and (abs(muc - muc_min) < 0.0001 or abs(muc - muc_max) < 0.0001)
-                    if dispersion > 8:
-                        sev_color = '#e84545'; sev_label = f'🔴 {dispersion:.0f}×'
-                    elif dispersion > 2:
-                        sev_color = '#e89c45'; sev_label = f'🟡 {dispersion:.1f}×'
-                    else:
-                        sev_color = '#aaa';    sev_label = f'⚪ {dispersion:.1f}×'
-                    muc_color  = '#e84545' if es_outlier else '#aaa'
-                    muc_weight = '700' if es_outlier else '400'
-
-                    col_chk, col_row = st.columns([0.3, 9.7])
-                    with col_row:
-                        st.markdown(
-                            f'<div style="background:#0d0d0d;border-bottom:1px solid #1e1e1e">'
-                            f'<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
-                            f'<tr>'
-                            f'<td style="padding:9px 12px;color:#666;font-family:monospace;font-size:0.72rem;width:8%">{r.get("sku","")}</td>'
-                            f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de;font-size:0.8rem;width:20%">{r.get("nombre_producto","")}</td>'
-                            f'<td style="padding:9px 12px;color:#666;font-size:0.75rem;width:9%">{r.get("categoria","")}</td>'
-                            f'<td style="padding:9px 12px;color:#777;font-size:0.75rem;width:13%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{r.get("proveedor","")}</td>'
-                            f'<td style="padding:9px 12px;text-align:right;color:#888;width:6%">{conv}</td>'
-                            f'<td style="padding:9px 12px;text-align:right;color:#888;width:7%">{fmt}</td>'
-                            f'<td style="padding:9px 12px;text-align:right;color:#aaa;width:10%">${precio:,.2f}</td>'
-                            f'<td style="padding:9px 12px;text-align:right;color:{muc_color};font-weight:{muc_weight};width:10%">{muc:,.4f}</td>'
-                            f'<td style="padding:9px 12px;text-align:right;color:#666;width:6%">{n_reg}</td>'
-                            f'<td style="padding:9px 12px;text-align:center;color:{sev_color};font-weight:600;width:8%">{sev_label}</td>'
-                            f'</tr></table></div>',
-                            unsafe_allow_html=True
-                        )
-                    with col_chk:
-                        checked = st.checkbox('', key=f'chk_{idx}', label_visibility='hidden')
-                        if checked:
-                            sel_indices.append(idx)
-
-                st.markdown('<div style="height:4px"></div>', unsafe_allow_html=True)
-
-                # Filas seleccionadas
+                # Leer selección del render anterior via session_state
+                sel_indices = [idx for idx in df_tabla.index if st.session_state.get(f'chk_{idx}', False)]
                 sel_rows = df_tabla.loc[sel_indices].reset_index(drop=True) if sel_indices else pd.DataFrame()
-                n_sel    = len(sel_rows)
-
-                # Acumular todos los IDs y SKUs de las filas seleccionadas
-                ids_sel  = []
+                n_sel = len(sel_rows)
+                ids_sel = []
                 skus_sel = []
                 for _, r in sel_rows.iterrows():
-                    ids_sel  += _parse_ids(r['ids'])
+                    ids_sel += _parse_ids(r['ids'])
                     skus_sel.append(r['sku'])
                 skus_sel = list(set(skus_sel))
 
-                # ── Panel de acciones (solo si hay selección) ────────────────
+                # Panel de acciones ARRIBA de la tabla
                 if n_sel > 0:
-                    st.markdown(f"**{n_sel} grupo(s) seleccionado(s) — {len(ids_sel)} registros en total**")
+                    st.markdown(f'**⚙️ {n_sel} grupo(s) — {len(ids_sel)} registros**')
                     pa1, pa2, pa3, pa4, pa5 = st.columns([2, 2, 1, 1, 1])
-
                     with pa1:
-                        nuevo_conv = st.number_input('Nueva conversion',
-                            value=float(sel_rows.iloc[0]['conversion'] or 1),
-                            min_value=0.001, step=0.1, key='audit_conv_multi')
+                        nuevo_conv = st.number_input('Nueva conversion', value=float(sel_rows.iloc[0]['conversion'] or 1), min_value=0.001, step=0.1, key='audit_conv_multi')
                     with pa2:
-                        nuevo_fmt  = st.number_input('Nuevo formato',
-                            value=float(sel_rows.iloc[0]['formato'] or 1),
-                            min_value=0.001, step=1.0, key='audit_fmt_multi')
+                        nuevo_fmt = st.number_input('Nuevo formato', value=float(sel_rows.iloc[0]['formato'] or 1), min_value=0.001, step=1.0, key='audit_fmt_multi')
                     with pa3:
                         if st.button('💾 Aplicar', key='audit_apply_multi'):
                             engine = get_engine()
                             try:
                                 with engine.connect() as conn:
-                                    # Guardia: verificar SKUs
-                                    check = pd.read_sql(
-                                        text('SELECT id, sku FROM compras WHERE id = ANY(:ids)'),
-                                        conn, params={'ids': ids_sel}
-                                    )
+                                    check = pd.read_sql(text('SELECT id, sku FROM compras WHERE id = ANY(:ids)'), conn, params={'ids': ids_sel})
                                     ids_incorrectos = check[~check['sku'].isin(skus_sel)]['id'].tolist()
                                     if ids_incorrectos:
-                                        st.error(f'🚫 {len(ids_incorrectos)} IDs no coinciden con los SKUs seleccionados. Cancelado.')
+                                        st.error(f'🚫 {len(ids_incorrectos)} IDs no coinciden. Cancelado.')
                                     else:
-                                        conn.execute(text(
-                                            'UPDATE compras SET conversion=:conv,formato=:fmt,'
-                                            'cant_conv=cantidad*:conv,'
-                                            'muc=CASE WHEN :fmt=1 THEN costo_realfinal/NULLIF(cantidad*:conv,0)'
-                                            ' ELSE costo_realfinal/NULLIF(cantidad*:conv*:fmt,0) END'
-                                            ' WHERE id=ANY(:ids) AND sku=ANY(:skus)'
-                                        ), {'conv': nuevo_conv, 'fmt': nuevo_fmt,
-                                            'ids': ids_sel, 'skus': skus_sel})
+                                        conn.execute(text('UPDATE compras SET conversion=:conv,formato=:fmt,cant_conv=cantidad*:conv,muc=CASE WHEN :fmt=1 THEN costo_realfinal/NULLIF(cantidad*:conv,0) ELSE costo_realfinal/NULLIF(cantidad*:conv*:fmt,0) END WHERE id=ANY(:ids) AND sku=ANY(:skus)'), {'conv': nuevo_conv, 'fmt': nuevo_fmt, 'ids': ids_sel, 'skus': skus_sel})
                                         conn.commit()
                                         st.success(f'✅ {len(ids_sel)} registros corregidos')
                                         st.session_state.pop('audit_df', None)
@@ -1928,14 +1850,9 @@ if modulo.startswith("📦"):
                             try:
                                 with engine.connect() as conn:
                                     for _, r in sel_rows.iterrows():
-                                        ids_r = _parse_ids(r['ids'])
-                                        conn.execute(text("""
-                                            INSERT INTO compras_excluidas (compra_id, sku, motivo)
-                                            SELECT unnest(:ids), :sku, 'compra_emergencia'
-                                            ON CONFLICT (compra_id) DO NOTHING
-                                        """), {'ids': ids_r, 'sku': r['sku']})
+                                        conn.execute(text('INSERT INTO compras_excluidas (compra_id, sku, motivo) SELECT unnest(:ids), :sku, :motivo ON CONFLICT (compra_id) DO NOTHING'), {'ids': _parse_ids(r['ids']), 'sku': r['sku'], 'motivo': 'compra_emergencia'})
                                     conn.commit()
-                                st.success(f'🚨 {len(ids_sel)} registros excluidos del cálculo')
+                                st.success(f'🚨 {len(ids_sel)} registros excluidos')
                                 st.session_state.pop('audit_df', None)
                                 st.rerun()
                             except Exception as e:
@@ -1943,53 +1860,83 @@ if modulo.startswith("📦"):
                     with pa5:
                         if st.button('✅ Revisado', key='audit_rev_multi'):
                             nota_rev = st.session_state.get('audit_nota_rev', '')
-                            engine   = get_engine()
+                            engine = get_engine()
                             try:
                                 with engine.connect() as conn:
                                     for _, r in sel_rows.iterrows():
-                                        conn.execute(text("""
-                                            INSERT INTO audit_revisados (sku, muc, nombre, n_registros, nota)
-                                            VALUES (:sku, :muc, :nombre, :n, :nota)
-                                        """), {
-                                            'sku':    r['sku'],
-                                            'muc':    float(r['muc']),
-                                            'nombre': str(r['nombre_producto']),
-                                            'n':      int(r['n_registros']),
-                                            'nota':   nota_rev,
-                                        })
+                                        conn.execute(text('INSERT INTO audit_revisados (sku, muc, nombre, n_registros, nota) VALUES (:sku, :muc, :nombre, :n, :nota)'), {'sku': r['sku'], 'muc': float(r['muc']), 'nombre': str(r['nombre_producto']), 'n': int(r['n_registros']), 'nota': nota_rev})
                                     conn.commit()
-                                st.success(f'✅ {n_sel} grupo(s) marcados como revisados')
+                                st.success(f'✅ {n_sel} grupo(s) revisados')
                                 st.session_state.pop('audit_df', None)
                                 st.rerun()
                             except Exception as e:
                                 st.error(f'Error: {e}')
-
-                    # Nota para revisado + Colación (SKU completo)
                     pn1, pn2 = st.columns([3, 1])
                     with pn1:
-                        st.text_input('📝 Nota para Revisado (opcional)', key='audit_nota_rev',
-                                      placeholder='ej: cambio de proveedor, precio puntual...')
+                        st.text_input('📝 Nota para Revisado (opcional)', key='audit_nota_rev', placeholder='ej: cambio de proveedor, precio puntual...')
                     with pn2:
-                        if st.button('🍱 Colación (SKU completo)', key='audit_col_multi'):
+                        if st.button('🍱 Colación (SKU)', key='audit_col_multi'):
                             engine = get_engine()
                             try:
                                 with engine.connect() as conn:
                                     for sku_c in skus_sel:
                                         nombre_c = str(sel_rows[sel_rows['sku']==sku_c]['nombre_producto'].iloc[0]) if not sel_rows[sel_rows['sku']==sku_c].empty else ''
-                                        conn.execute(text("""
-                                            INSERT INTO sku_colacion (sku, nombre)
-                                            VALUES (:sku, :nombre)
-                                            ON CONFLICT (sku) DO NOTHING
-                                        """), {'sku': sku_c, 'nombre': nombre_c})
+                                        conn.execute(text('INSERT INTO sku_colacion (sku, nombre) VALUES (:sku, :nombre) ON CONFLICT (sku) DO NOTHING'), {'sku': sku_c, 'nombre': nombre_c})
                                     conn.commit()
-                                st.success(f'🍱 {len(skus_sel)} SKU(s) marcados como colación')
+                                st.success(f'🍱 {len(skus_sel)} SKU(s) colación')
                                 st.session_state.pop('audit_df', None)
                                 st.rerun()
                             except Exception as e:
                                 st.error(f'Error: {e}')
+                    st.markdown('---')
                 else:
-                    st.caption("☝️ Selecciona uno o más grupos MUC en la tabla para aplicar acciones.")
+                    st.caption('☝️ Selecciona grupos en la tabla para aplicar acciones.')
 
+                # Tabla HTML con checkboxes
+                hs_a = 'padding:9px 12px;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
+                hdrs_a = ['','SKU','Producto','Categoría','Proveedor','Conv.','Formato','Neto Fact/u','MUC','# Reg.','Dispersión']
+                st.markdown(
+                    '<div style="overflow-x:auto;border-radius:14px 14px 0 0;border:1px solid #1e1e1e;border-bottom:none;background:#111">'
+                    '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
+                    '<thead><tr style="background:#111">'
+                    + ''.join([f'<th style="{hs_a};text-align:{"center" if i==0 else "left" if i<5 else "right" if i<10 else "center"}">{h}</th>' for i, h in enumerate(hdrs_a)])
+                    + '</tr></thead></table></div>',
+                    unsafe_allow_html=True
+                )
+                for idx, r in df_tabla.iterrows():
+                    muc = float(r.get('muc', 0) or 0)
+                    muc_min = float(r.get('muc_min', 0) or 0)
+                    muc_max = float(r.get('muc_max', 0) or 0)
+                    dispersion = float(r.get('dispersion', 1) or 1)
+                    n_reg = int(r.get('n_registros', 1) or 1)
+                    precio = float(r.get('precio_factura', 0) or 0)
+                    es_outlier = muc_min > 0 and (abs(muc - muc_min) < 0.0001 or abs(muc - muc_max) < 0.0001)
+                    if dispersion > 8: sev_color = '#e84545'; sev_label = f'🔴 {dispersion:.0f}×'
+                    elif dispersion > 2: sev_color = '#e89c45'; sev_label = f'🟡 {dispersion:.1f}×'
+                    else: sev_color = '#aaa'; sev_label = f'⚪ {dispersion:.1f}×'
+                    muc_color = '#e84545' if es_outlier else '#aaa'
+                    muc_weight = '700' if es_outlier else '400'
+                    col_chk, col_row = st.columns([0.3, 9.7])
+                    with col_row:
+                        st.markdown(
+                            f'<div style="background:#0d0d0d;border-bottom:1px solid #1e1e1e">'
+                            f'<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem"><tr>'
+                            f'<td style="padding:9px 12px;color:#666;font-family:monospace;font-size:0.72rem;width:8%">{r.get("sku","")}</td>'
+                            f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de;font-size:0.8rem;width:20%">{r.get("nombre_producto","")}</td>'
+                            f'<td style="padding:9px 12px;color:#666;font-size:0.75rem;width:9%">{r.get("categoria","")}</td>'
+                            f'<td style="padding:9px 12px;color:#777;font-size:0.75rem;width:13%">{r.get("proveedor","")}</td>'
+                            f'<td style="padding:9px 12px;text-align:right;color:#888;width:6%">{r.get("conversion","")}</td>'
+                            f'<td style="padding:9px 12px;text-align:right;color:#888;width:7%">{r.get("formato","")}</td>'
+                            f'<td style="padding:9px 12px;text-align:right;color:#aaa;width:10%">${precio:,.2f}</td>'
+                            f'<td style="padding:9px 12px;text-align:right;color:{muc_color};font-weight:{muc_weight};width:10%">{muc:,.4f}</td>'
+                            f'<td style="padding:9px 12px;text-align:right;color:#666;width:6%">{n_reg}</td>'
+                            f'<td style="padding:9px 12px;text-align:center;color:{sev_color};font-weight:600;width:8%">{sev_label}</td>'
+                            f'</tr></table></div>',
+                            unsafe_allow_html=True
+                        )
+                    with col_chk:
+                        st.checkbox('', key=f'chk_{idx}', label_visibility='hidden')
+                st.markdown('<div style="height:4px"></div>', unsafe_allow_html=True)
 # ============================================================
 # MÓDULO: EXPLOSIÓN MRP
 # ============================================================
