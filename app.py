@@ -1802,49 +1802,78 @@ if modulo.startswith("📦"):
 
                 st.caption(f"{'SKU: ' + sku_fil if label_sel_muc else 'Todos los SKUs'} — {len(df_tabla)} grupos MUC")
 
-                # Preparar df para data_editor con columna de selección
-                df_editor = df_tabla[[
-                    'sku','nombre_producto','categoria','proveedor',
-                    'conversion','formato','precio_factura','muc','n_registros','dispersion','ids'
-                ]].copy()
-                df_editor.insert(0, '✓', False)
-                df_editor['muc']          = df_editor['muc'].apply(lambda x: round(float(x), 4))
-                df_editor['dispersion']   = df_editor['dispersion'].apply(lambda x: round(float(x), 1))
-                df_editor['precio_factura'] = df_editor['precio_factura'].apply(lambda x: round(float(x or 0), 2))
-
-                edited = st.data_editor(
-                    df_editor.drop(columns=['ids']),
-                    column_config={
-                        '✓':              st.column_config.CheckboxColumn('✓', width='small'),
-                        'sku':            st.column_config.TextColumn('SKU', width='small'),
-                        'nombre_producto':st.column_config.TextColumn('Producto', width='large'),
-                        'categoria':      st.column_config.TextColumn('Categoría', width='small'),
-                        'proveedor':      st.column_config.TextColumn('Proveedor', width='medium'),
-                        'conversion':     st.column_config.NumberColumn('Conv.', width='small', format='%.1f'),
-                        'formato':        st.column_config.NumberColumn('Formato', width='small', format='%.0f'),
-                        'precio_factura': st.column_config.NumberColumn('Neto Fact/u', width='small', format='$%.2f'),
-                        'muc':            st.column_config.NumberColumn('MUC', width='small', format='%.4f'),
-                        'n_registros':    st.column_config.NumberColumn('# Reg.', width='small'),
-                        'dispersion':     st.column_config.NumberColumn('Dispersión ×', width='small', format='%.1f×'),
-                    },
-                    disabled=[c for c in df_editor.columns if c not in ('✓','ids')],
-                    use_container_width=True,
-                    hide_index=True,
-                    key='audit_tabla_editor'
-                )
-
-                # Obtener filas seleccionadas
-                sel_mask  = edited['✓'] == True
-                sel_rows  = df_tabla[sel_mask.values].reset_index(drop=True)
-                n_sel     = len(sel_rows)
-
-                # Acumular todos los IDs y SKUs de las filas seleccionadas
+                # ── Tabla HTML estilizada con checkboxes Streamlit por fila ──
                 import ast as _ast
                 def _parse_ids(raw):
                     if isinstance(raw, list): return [int(i) for i in raw]
                     try: return [int(i) for i in _ast.literal_eval(str(raw))]
                     except: return []
 
+                hs_a = 'padding:9px 12px;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
+                hdrs_a = ['','SKU','Producto','Categoría','Proveedor','Conv.','Formato','Neto Fact/u','MUC','# Reg.','Dispersión']
+
+                # Header tabla
+                st.markdown(
+                    '<div style="overflow-x:auto;border-radius:14px 14px 0 0;border:1px solid #1e1e1e;border-bottom:none;background:#111">'
+                    '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
+                    '<thead><tr style="background:#111">'
+                    + ''.join([f'<th style="{hs_a};text-align:{"center" if i==0 else "left" if i<5 else "right" if i<10 else "center"}">{h}</th>' for i, h in enumerate(hdrs_a)])
+                    + '</tr></thead></table></div>',
+                    unsafe_allow_html=True
+                )
+
+                # Filas con checkboxes intercalados
+                sel_indices = []
+                for idx, r in df_tabla.iterrows():
+                    muc        = float(r.get('muc', 0) or 0)
+                    muc_min    = float(r.get('muc_min', 0) or 0)
+                    muc_max    = float(r.get('muc_max', 0) or 0)
+                    dispersion = float(r.get('dispersion', 1) or 1)
+                    n_reg      = int(r.get('n_registros', 1) or 1)
+                    precio     = float(r.get('precio_factura', 0) or 0)
+                    conv       = r.get('conversion', '')
+                    fmt        = r.get('formato', '')
+                    es_outlier = muc_min > 0 and (abs(muc - muc_min) < 0.0001 or abs(muc - muc_max) < 0.0001)
+                    if dispersion > 8:
+                        sev_color = '#e84545'; sev_label = f'🔴 {dispersion:.0f}×'
+                    elif dispersion > 2:
+                        sev_color = '#e89c45'; sev_label = f'🟡 {dispersion:.1f}×'
+                    else:
+                        sev_color = '#aaa';    sev_label = f'⚪ {dispersion:.1f}×'
+                    muc_color  = '#e84545' if es_outlier else '#aaa'
+                    muc_weight = '700' if es_outlier else '400'
+
+                    col_chk, col_row = st.columns([0.3, 9.7])
+                    with col_row:
+                        st.markdown(
+                            f'<div style="background:#0d0d0d;border-bottom:1px solid #1e1e1e">'
+                            f'<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
+                            f'<tr>'
+                            f'<td style="padding:9px 12px;color:#666;font-family:monospace;font-size:0.72rem;width:8%">{r.get("sku","")}</td>'
+                            f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de;font-size:0.8rem;width:20%">{r.get("nombre_producto","")}</td>'
+                            f'<td style="padding:9px 12px;color:#666;font-size:0.75rem;width:9%">{r.get("categoria","")}</td>'
+                            f'<td style="padding:9px 12px;color:#777;font-size:0.75rem;width:13%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{r.get("proveedor","")}</td>'
+                            f'<td style="padding:9px 12px;text-align:right;color:#888;width:6%">{conv}</td>'
+                            f'<td style="padding:9px 12px;text-align:right;color:#888;width:7%">{fmt}</td>'
+                            f'<td style="padding:9px 12px;text-align:right;color:#aaa;width:10%">${precio:,.2f}</td>'
+                            f'<td style="padding:9px 12px;text-align:right;color:{muc_color};font-weight:{muc_weight};width:10%">{muc:,.4f}</td>'
+                            f'<td style="padding:9px 12px;text-align:right;color:#666;width:6%">{n_reg}</td>'
+                            f'<td style="padding:9px 12px;text-align:center;color:{sev_color};font-weight:600;width:8%">{sev_label}</td>'
+                            f'</tr></table></div>',
+                            unsafe_allow_html=True
+                        )
+                    with col_chk:
+                        checked = st.checkbox('', key=f'chk_{idx}', label_visibility='hidden')
+                        if checked:
+                            sel_indices.append(idx)
+
+                st.markdown('<div style="height:4px"></div>', unsafe_allow_html=True)
+
+                # Filas seleccionadas
+                sel_rows = df_tabla.loc[sel_indices].reset_index(drop=True) if sel_indices else pd.DataFrame()
+                n_sel    = len(sel_rows)
+
+                # Acumular todos los IDs y SKUs de las filas seleccionadas
                 ids_sel  = []
                 skus_sel = []
                 for _, r in sel_rows.iterrows():
