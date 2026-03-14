@@ -313,6 +313,74 @@ def calcular_costo_platos(engine, fecha_i, fecha_f, local):
 
 
 # ============================================================
+# COSTO PERÍODO: MUC ponderado del período, fallback última compra
+# ============================================================
+def calcular_costo_platos_periodo(engine, fecha_i, fecha_f):
+    """
+    Igual que calcular_costo_platos pero usa MUC ponderado del período.
+    Si un SKU no tiene compras en el período, usa la última compra histórica.
+    """
+    # MUC ponderado del período
+    precio_periodo_sql = """
+        SELECT sku,
+               SUM(costo_realfinal) / NULLIF(SUM(costo_realfinal / NULLIF(muc, 0)), 0) AS precio_unitario
+        FROM compras
+        WHERE fecha_dte::date BETWEEN :i AND :f
+          AND muc > 0 AND costo_realfinal > 0 AND monto_real > 0
+        GROUP BY sku
+    """
+    # Fallback: última compra histórica
+    precio_fallback_sql = """
+        SELECT DISTINCT ON (sku) sku,
+               monto_real / NULLIF(cant_conv, 0) AS precio_unitario
+        FROM compras
+        WHERE cant_conv > 0 AND monto_real > 0
+        ORDER BY sku, fecha_dte DESC
+    """
+    df_periodo  = run_query(precio_periodo_sql,  {'i': str(fecha_i), 'f': str(fecha_f)})
+    df_fallback = run_query(precio_fallback_sql)
+    if df_fallback.empty:
+        return pd.DataFrame()
+
+    # Combinar: período primero, fallback para los que no están
+    skus_periodo = set(df_periodo['sku'].tolist()) if not df_periodo.empty else set()
+    df_fb_needed = df_fallback[~df_fallback['sku'].isin(skus_periodo)]
+    df_precio    = pd.concat([df_periodo, df_fb_needed], ignore_index=True)
+
+    def factor_um(um):
+        if pd.isna(um): return 1
+        um = str(um).strip().upper()
+        if um in ['G', 'CC', 'ML']: return 1/1000
+        return 1
+
+    df_rec = run_query("SELECT * FROM recetas")
+    if df_rec.empty:
+        return pd.DataFrame()
+
+    df_dir  = df_rec[df_rec['es_procesado'] == False].copy()
+    df_proc = df_rec[df_rec['es_procesado'] == True].copy()
+
+    dir_m = pd.merge(df_dir, df_precio, left_on='sku_ingrediente', right_on='sku', how='left')
+    dir_m['cant_real']       = pd.to_numeric(dir_m['cant_real'],       errors='coerce').fillna(0)
+    dir_m['precio_unitario'] = pd.to_numeric(dir_m['precio_unitario'], errors='coerce').fillna(0)
+    dir_m['factor']          = dir_m['um_salida'].apply(factor_um)
+    dir_m['costo_parcial']   = dir_m['cant_real'] * dir_m['factor'] * dir_m['precio_unitario']
+    costo_dir = dir_m.groupby('codigo_venta')['costo_parcial'].sum().reset_index()
+
+    proc_m = pd.merge(df_proc, df_precio, left_on='sku_ingrediente', right_on='sku', how='left')
+    proc_m['cant_efic']       = pd.to_numeric(proc_m['cant_efic'],       errors='coerce').fillna(0)
+    proc_m['precio_unitario'] = pd.to_numeric(proc_m['precio_unitario'], errors='coerce').fillna(0)
+    proc_m['factor']          = proc_m['um_salida'].apply(factor_um)
+    proc_m['costo_parcial']   = proc_m['cant_efic'] * proc_m['factor'] * proc_m['precio_unitario']
+    costo_proc = proc_m.groupby('codigo_venta')['costo_parcial'].sum().reset_index()
+
+    costo_total  = pd.concat([costo_dir, costo_proc], ignore_index=True)
+    costo_platos = costo_total.groupby('codigo_venta')['costo_parcial'].sum().reset_index()
+    costo_platos.columns = ['sku_producto', 'costo_unitario_periodo']
+    return costo_platos
+
+
+# ============================================================
 # INFORME 1: RENTABILIDAD POR PRODUCTO / CATEGORÍA
 # ============================================================
 def informe_rentabilidad(fecha_i, fecha_f, local):
@@ -340,18 +408,32 @@ def informe_rentabilidad(fecha_i, fecha_f, local):
         st.warning("No hay ventas para el período/local seleccionado.")
         return pd.DataFrame()
 
-    costo_platos = calcular_costo_platos(engine, fecha_i, fecha_f, local)
-    if costo_platos.empty:
-        st.warning("No se pudo calcular el costo teórico. Verifica recetario y MUC en compras.")
-        return pd.DataFrame()
+    costo_teorico = calcular_costo_platos(engine, fecha_i, fecha_f, local)
+    costo_periodo = calcular_costo_platos_periodo(engine, fecha_i, fecha_f)
 
-    df = pd.merge(df_v, costo_platos, on='sku_producto', how='left')
-    df['costo_unitario_teorico'] = df['costo_unitario_teorico'].fillna(0)
-    df['costo_total'] = df['cant'] * df['costo_unitario_teorico']
-    df['venta'] = df['venta'].fillna(0)
-    df['rentabilidad'] = df['venta'] - df['costo_total']
-    df['margen_pct'] = df.apply(
-        lambda x: (x['rentabilidad'] / x['venta'] * 100) if x['venta'] > 0 else 0, axis=1)
+    df = pd.merge(df_v, costo_teorico, on='sku_producto', how='left')
+    df = pd.merge(df,   costo_periodo, on='sku_producto', how='left')
+
+    df['costo_unitario_teorico'] = pd.to_numeric(df.get('costo_unitario_teorico'), errors='coerce').fillna(0)
+    df['costo_unitario_periodo'] = pd.to_numeric(df.get('costo_unitario_periodo'), errors='coerce').fillna(0)
+    df['venta']                  = pd.to_numeric(df['venta'], errors='coerce').fillna(0)
+
+    # Rentabilidad teórica (último precio)
+    df['costo_total_teorico']  = df['cant'] * df['costo_unitario_teorico']
+    df['rentabilidad_teorica'] = df['venta'] - df['costo_total_teorico']
+    df['margen_teorico']       = df.apply(
+        lambda x: (x['rentabilidad_teorica'] / x['venta'] * 100) if x['venta'] > 0 else 0, axis=1)
+
+    # Rentabilidad período (MUC ponderado + fallback)
+    df['costo_total_periodo']  = df['cant'] * df['costo_unitario_periodo']
+    df['rentabilidad_periodo'] = df['venta'] - df['costo_total_periodo']
+    df['margen_periodo']       = df.apply(
+        lambda x: (x['rentabilidad_periodo'] / x['venta'] * 100) if x['venta'] > 0 else 0, axis=1)
+
+    # Mantener compatibilidad con código existente
+    df['costo_total']  = df['costo_total_periodo']
+    df['rentabilidad'] = df['rentabilidad_periodo']
+    df['margen_pct']   = df['margen_periodo']
 
     return df.sort_values('venta', ascending=False)
 
@@ -931,21 +1013,100 @@ def save_compras(df: pd.DataFrame):
         st.error(f"Error al guardar compras: {e}")
 
 
-def save_ventas(df):
+def save_ventas(df_raw):
     engine = get_engine()
     if engine is None:
         return
-    df.columns = df.columns.str.strip().str.lower()
-    df = df.rename(columns={
-        'fecha_pura': 'fecha_venta', 'cat_menu': 'categoria_menu',
-        'nombre': 'nombre_producto', 'id_producto': 'sku_producto',
-        'cantidad': 'cantidad_vendida', 'venta_real': 'monto_venta_real'
-    })
-    df['fecha_venta'] = pd.to_datetime(df['fecha_venta'], dayfirst=True, errors='coerce').dt.date
-    df = df.dropna(subset=['fecha_venta'])
+
+    df = df_raw.copy()
+    # Si viene como string único (CSV con sep=;), re-parsear
+    if len(df.columns) == 1 and ';' in str(df.columns[0]):
+        import io as _io
+        raw_bytes = df_raw.to_csv(index=False).encode()
+        df = pd.read_csv(_io.BytesIO(raw_bytes), sep=';', dtype=str)
+    df.columns = df.columns.str.strip()
+
+    mapeo = {
+        'ID de orden': 'id_orden', 'ID Producto': 'sku_producto',
+        'Nombre': 'nombre_producto', 'Cantidad': 'cantidad_vendida',
+        'Precio a Pagar': 'precio_pagar', 'Precio Base': 'precio_base',
+        'Costo': 'costo_receta', 'Descuento': 'descuento', 'Impuesto': 'impuesto',
+        'AB.': 'ab_categoria',
+        'Categorias de Productos/Platos': 'categoria_menu',
+        'Categorías de Productos/Platos': 'categoria_menu',
+        'BA.': 'ba_opcion',
+        'Jerarquia de Extras': 'jerarquia_extras',
+        'Jerarquía de Extras': 'jerarquia_extras',
+        'AC.': 'ac_excepcion',
+        'Jerarquia de Excp.': 'jerarquia_excepcion',
+        'Jerarquía de Excp.': 'jerarquia_excepcion',
+        'Local': 'local', 'fechahora_pedido': 'fecha_pedido',
+        'fechahora_creacion': 'fecha_creacion', 'fechahora_cierre': 'fecha_cierre',
+        'Nombre de mesa': 'mesa', 'Sector': 'sector', 'Origen': 'origen',
+        'Nombre garzon apertura': 'garzon', 'Nombre garzón apertura': 'garzon',
+        'Folio': 'folio', 'Forma de Pago': 'forma_pago',
+        'Nombre Lista Precio': 'lista_precio',
+        # Compatibilidad formato anterior
+        'fecha_pura': 'fecha_pedido', 'cat_menu': 'categoria_menu',
+        'id_producto': 'sku_producto', 'cantidad': 'cantidad_vendida',
+        'venta_real': 'precio_pagar',
+    }
+    df = df.rename(columns={k: v for k, v in mapeo.items() if k in df.columns})
+
+    # Fecha venta
+    fecha_col = next((c for c in ['fecha_pedido','fecha_creacion','Fecha Pedido','Fecha de creacion']
+                      if c in df.columns), None)
+    if fecha_col:
+        df['fecha_venta'] = pd.to_datetime(
+            df[fecha_col].astype(str).str[:10], errors='coerce').dt.date
+    elif 'fecha_venta' not in df.columns:
+        st.error("No se encontró columna de fecha."); return
+
+    df = df.dropna(subset=['fecha_venta', 'sku_producto'])
+    df = df[df['sku_producto'].astype(str).str.strip() != '']
+
+    if 'precio_pagar' in df.columns and 'monto_venta_real' not in df.columns:
+        df['monto_venta_real'] = pd.to_numeric(df['precio_pagar'], errors='coerce').fillna(0)
+
+    for col in ['cantidad_vendida','monto_venta_real','precio_base','costo_receta','descuento','impuesto']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+    if 'ba_opcion' in df.columns:
+        df['es_opcion'] = df['ba_opcion'].notna() & (df['ba_opcion'].astype(str).str.strip() != '')
+    else:
+        df['es_opcion'] = False
+
+    cols_bd = ['fecha_venta','id_orden','sku_producto','nombre_producto',
+               'cantidad_vendida','monto_venta_real','precio_base',
+               'costo_receta','descuento','impuesto',
+               'ab_categoria','categoria_menu','ba_opcion','jerarquia_extras',
+               'ac_excepcion','jerarquia_excepcion','es_opcion',
+               'local','mesa','sector','origen','garzon',
+               'folio','forma_pago','lista_precio',
+               'fecha_pedido','fecha_creacion','fecha_cierre']
+    cols_ok = [c for c in cols_bd if c in df.columns]
+    df_save = df[cols_ok].copy()
+
     try:
-        df.to_sql('ventas', engine, if_exists='append', index=False, method='multi')
-        st.success(f"✅ {len(df)} registros de ventas cargados.")
+        fechas    = pd.to_datetime(df_save['fecha_venta'].astype(str), errors='coerce').dropna()
+        fecha_min = fechas.min().date().replace(day=1)
+        fecha_max = (fechas.max().to_period('M').to_timestamp('M')).date()
+        locales   = df_save['local'].dropna().unique().tolist() if 'local' in df_save.columns else []
+
+        with engine.connect() as conn:
+            if locales:
+                conn.execute(text(
+                    "DELETE FROM ventas WHERE fecha_venta BETWEEN :fi AND :ff AND local = ANY(:locales)"),
+                    {'fi': fecha_min, 'ff': fecha_max, 'locales': locales})
+            else:
+                conn.execute(text(
+                    "DELETE FROM ventas WHERE fecha_venta BETWEEN :fi AND :ff"),
+                    {'fi': fecha_min, 'ff': fecha_max})
+            conn.commit()
+
+        df_save.to_sql('ventas', engine, if_exists='append', index=False, method='multi')
+        st.success(f"✅ {len(df_save):,} registros guardados ({fecha_min} → {fecha_max}). Período anterior reemplazado.")
     except Exception as e:
         st.error(f"Error al guardar ventas: {e}")
 
@@ -1444,9 +1605,19 @@ if modulo.startswith("📦"):
 
     with tab3:
         st.markdown("<div class='info-box'>Carga el historial de ventas exportado desde tu POS. Se añade al historial existente (append).</div>", unsafe_allow_html=True)
-        f_ven = st.file_uploader("Excel de Ventas (.xlsx)", type="xlsx", key="ven")
-        if f_ven and st.button("💾 Cargar Ventas"):
-            save_ventas(pd.read_excel(f_ven))
+        f_ven = st.file_uploader("Archivo de Ventas (.xlsx o .csv)", type=["xlsx","csv"], key="ven")
+        if f_ven:
+            st.caption(f"Archivo: {f_ven.name} — separador auto-detectado")
+            if st.button("💾 Cargar Ventas"):
+                if f_ven.name.endswith('.csv'):
+                    import io as _io2
+                    raw = f_ven.read()
+                    # Detectar separador
+                    sep = ';' if b';' in raw[:500] else ','
+                    df_ven = pd.read_csv(_io2.BytesIO(raw), sep=sep, dtype=str)
+                else:
+                    df_ven = pd.read_excel(f_ven, dtype=str)
+                save_ventas(df_ven)
 
     with tab4:
         st.markdown("<div class='info-box'>Mapea SKUs de compras sin código de venta hacia SKUs equivalentes que sí tienen receta.<br>Ejemplo: Erdinger Trigo (BA-CA-078) → Erdinger Weissbier (BA-CA-066)</div>", unsafe_allow_html=True)
@@ -2080,7 +2251,7 @@ elif modulo.startswith("📊"):
     # ----------------------------------------------------------
     if "Informe 1" in informe_sel:
         st.markdown("### 💰 Rentabilidad por Producto / Categoría")
-        st.markdown(f"<div class='info-box'>Período: <b>{f_inicio}</b> → <b>{f_fin}</b> · Local: <b>{f_local}</b><br>Costo unitario = directos × MUC(CantReal) + procesados × MUC(CantEfic) usando último precio por SKU.</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='info-box'>Período: <b>{f_inicio}</b> → <b>{f_fin}</b> · Local: <b>{f_local}</b><br><b>Rent. Teórica</b>: último precio de compra por SKU · <b>Rent. Período</b>: MUC ponderado del período (fallback: última compra).</div>", unsafe_allow_html=True)
 
         if st.button("▶ Generar Informe 1"):
             with st.spinner("Calculando rentabilidad..."):
@@ -2092,11 +2263,21 @@ elif modulo.startswith("📊"):
                 rent_total  = df_inf1['rentabilidad'].sum()
                 margen_gral = (rent_total / venta_total * 100) if venta_total > 0 else 0
 
-                m1, m2, m3, m4 = st.columns(4)
-                m1.metric("💰 Venta Total",        f"${venta_total:,.0f}")
-                m2.metric("📦 Costo Teórico",       f"${costo_total:,.0f}")
-                m3.metric("📈 Rentabilidad Bruta",  f"${rent_total:,.0f}")
-                m4.metric("🎯 Margen General",      f"{margen_gral:.1f}%")
+                venta_total      = df_inf1['venta'].sum()
+                costo_teo_total  = df_inf1['costo_total_teorico'].sum()
+                costo_per_total  = df_inf1['costo_total_periodo'].sum()
+                rent_teo_total   = df_inf1['rentabilidad_teorica'].sum()
+                rent_per_total   = df_inf1['rentabilidad_periodo'].sum()
+                margen_teo       = (rent_teo_total / venta_total * 100) if venta_total > 0 else 0
+                margen_per       = (rent_per_total / venta_total * 100) if venta_total > 0 else 0
+
+                m1, m2, m3, m4, m5, m6 = st.columns(6)
+                m1.metric("💰 Venta Total",          f"${venta_total:,.0f}")
+                m2.metric("📦 Costo Teórico",         f"${costo_teo_total:,.0f}")
+                m3.metric("📦 Costo Período",         f"${costo_per_total:,.0f}")
+                m4.metric("📈 Rent. Teórica",         f"${rent_teo_total:,.0f}")
+                m5.metric("📈 Rent. Período",         f"${rent_per_total:,.0f}")
+                m6.metric("🎯 Margen Período",        f"{margen_per:.1f}%", delta=f"{margen_per-margen_teo:+.1f}% vs teórico")
 
                 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -2116,37 +2297,54 @@ elif modulo.startswith("📊"):
 
                 # --- Tabla detalle por producto ---
                 rows_html = ''
-                cols_show = ['sku_producto', 'categoria_menu', 'nombre_producto',
-                             'cant', 'venta', 'costo_total', 'rentabilidad', 'margen_pct']
-                for _, r in df_inf1[cols_show].iterrows():
-                    margen = r.get('margen_pct', 0)
-                    bg = '#121e14' if margen >= 60 else '#1e1a12' if margen >= 40 else '#1e1212'
+                cols_show = ['sku_producto', 'categoria_menu', 'nombre_producto', 'cant',
+                             'venta',
+                             'costo_total_teorico', 'rentabilidad_teorica', 'margen_teorico',
+                             'costo_total_periodo', 'rentabilidad_periodo', 'margen_periodo']
+                for _, r in df_inf1.iterrows():
+                    mg_teo = r.get('margen_teorico', 0)
+                    mg_per = r.get('margen_periodo', 0)
+                    bg = '#121e14' if mg_per >= 60 else '#1e1a12' if mg_per >= 40 else '#1e1212'
                     rows_html += (
                         f'<tr style="border-bottom:1px solid #1e1e1e;background:{bg}">'
-                        f'<td style="padding:10px 14px;color:#666;font-size:0.76rem;font-family:monospace">{r.get("sku_producto","")}</td>'
-                        f'<td style="padding:10px 14px;color:#555;font-size:0.8rem">{r.get("categoria_menu","")}</td>'
-                        f'<td style="padding:10px 14px;font-weight:500;color:#e8e4de">{r.get("nombre_producto","")}</td>'
-                        f'<td style="padding:10px 14px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">{r.get("cant",0):,.0f}</td>'
-                        f'<td style="padding:10px 14px;text-align:right;color:#ccc;font-variant-numeric:tabular-nums">${r.get("venta",0):,.0f}</td>'
-                        f'<td style="padding:10px 14px;text-align:right;color:#777;font-variant-numeric:tabular-nums">${r.get("costo_total",0):,.0f}</td>'
-                        f'<td style="padding:10px 14px;text-align:right;font-variant-numeric:tabular-nums">{fmt_rent(r.get("rentabilidad",0))}</td>'
-                        f'<td style="padding:10px 14px;text-align:center">{badge_margen(margen)}</td>'
+                        f'<td style="padding:9px 12px;color:#666;font-size:0.74rem;font-family:monospace">{r.get("sku_producto","")}</td>'
+                        f'<td style="padding:9px 12px;color:#555;font-size:0.78rem">{r.get("categoria_menu","")}</td>'
+                        f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de">{r.get("nombre_producto","")}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#aaa">{r.get("cant",0):,.0f}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#ccc">${r.get("venta",0):,.0f}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#666">${r.get("costo_total_teorico",0):,.0f}</td>'
+                        f'<td style="padding:9px 12px;text-align:right">{fmt_rent(r.get("rentabilidad_teorica",0))}</td>'
+                        f'<td style="padding:9px 12px;text-align:center">{badge_margen(mg_teo)}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#777">${r.get("costo_total_periodo",0):,.0f}</td>'
+                        f'<td style="padding:9px 12px;text-align:right">{fmt_rent(r.get("rentabilidad_periodo",0))}</td>'
+                        f'<td style="padding:9px 12px;text-align:center">{badge_margen(mg_per)}</td>'
                         f'</tr>'
                     )
 
-                hs = 'padding:11px 14px;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
+                hs  = 'padding:10px 12px;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
+                hs2 = hs + ';background:#0d1a0d'  # header teórico
+                hs3 = hs + ';background:#0a0a1a'  # header período
                 tabla_html = (
                     '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
-                    '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.84rem">'
-                    '<thead><tr style="background:#111">'
+                    '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
+                    '<thead>'
+                    '<tr style="background:#111">'
+                    f'<th colspan="5" style="{hs};text-align:left;border-right:1px solid #2a2a2a"></th>'
+                    f'<th colspan="3" style="{hs2};text-align:center;border-right:1px solid #2a2a2a;color:#4caf7d">RENTABILIDAD TEÓRICA</th>'
+                    f'<th colspan="3" style="{hs3};text-align:center;color:#d4a853">RENTABILIDAD PERÍODO</th>'
+                    f'</tr>'
+                    '<tr style="background:#111">'
                     f'<th style="{hs};text-align:left">SKU</th>'
                     f'<th style="{hs};text-align:left">Categoría</th>'
                     f'<th style="{hs};text-align:left">Producto</th>'
                     f'<th style="{hs};text-align:right">Cant.</th>'
-                    f'<th style="{hs};text-align:right">Venta</th>'
-                    f'<th style="{hs};text-align:right">Costo</th>'
-                    f'<th style="{hs};text-align:right">Rentabilidad</th>'
-                    f'<th style="{hs};text-align:center">Margen</th>'
+                    f'<th style="{hs};text-align:right;border-right:1px solid #2a2a2a">Venta</th>'
+                    f'<th style="{hs2};text-align:right">Costo</th>'
+                    f'<th style="{hs2};text-align:right">Rent.</th>'
+                    f'<th style="{hs2};text-align:center;border-right:1px solid #2a2a2a">Margen</th>'
+                    f'<th style="{hs3};text-align:right">Costo</th>'
+                    f'<th style="{hs3};text-align:right">Rent.</th>'
+                    f'<th style="{hs3};text-align:center">Margen</th>'
                     f'</tr></thead><tbody>{rows_html}</tbody></table></div>'
                 )
                 st.markdown("#### Detalle por Producto")
@@ -2157,38 +2355,51 @@ elif modulo.startswith("📊"):
                 st.markdown("#### Resumen por Categoría")
                 cat = df_inf1.groupby('categoria_menu').agg(
                     venta=('venta','sum'),
-                    costo=('costo_total','sum'),
-                    rentabilidad=('rentabilidad','sum'),
+                    costo_teo=('costo_total_teorico','sum'),
+                    rent_teo=('rentabilidad_teorica','sum'),
+                    costo_per=('costo_total_periodo','sum'),
+                    rent_per=('rentabilidad_periodo','sum'),
                     productos=('sku_producto','count')
                 ).reset_index()
-                cat['margen_pct'] = cat.apply(
-                    lambda r: r['rentabilidad']/r['venta']*100 if r['venta']>0 else 0, axis=1
-                ).round(1)
-                cat = cat.sort_values('rentabilidad', ascending=False)
+                cat['margen_teo'] = cat.apply(lambda r: r['rent_teo']/r['venta']*100 if r['venta']>0 else 0, axis=1).round(1)
+                cat['margen_per'] = cat.apply(lambda r: r['rent_per']/r['venta']*100 if r['venta']>0 else 0, axis=1).round(1)
+                cat = cat.sort_values('rent_per', ascending=False)
 
                 cat_rows = ''
                 for _, r in cat.iterrows():
                     cat_rows += (
                         f'<tr style="border-bottom:1px solid #1e1e1e">'
-                        f'<td style="padding:10px 14px;font-weight:500;color:#e8e4de">{r["categoria_menu"]}</td>'
-                        f'<td style="padding:10px 14px;text-align:right;color:#aaa">{r["productos"]:,.0f}</td>'
-                        f'<td style="padding:10px 14px;text-align:right;color:#ccc;font-variant-numeric:tabular-nums">${r["venta"]:,.0f}</td>'
-                        f'<td style="padding:10px 14px;text-align:right;color:#777;font-variant-numeric:tabular-nums">${r["costo"]:,.0f}</td>'
-                        f'<td style="padding:10px 14px;text-align:right;font-variant-numeric:tabular-nums">{fmt_rent(r["rentabilidad"])}</td>'
-                        f'<td style="padding:10px 14px;text-align:center">{badge_margen(r["margen_pct"])}</td>'
+                        f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de">{r["categoria_menu"]}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#aaa">{r["productos"]:,.0f}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#ccc">${r["venta"]:,.0f}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#666">${r["costo_teo"]:,.0f}</td>'
+                        f'<td style="padding:9px 12px;text-align:right">{fmt_rent(r["rent_teo"])}</td>'
+                        f'<td style="padding:9px 12px;text-align:center;border-right:1px solid #2a2a2a">{badge_margen(r["margen_teo"])}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#777">${r["costo_per"]:,.0f}</td>'
+                        f'<td style="padding:9px 12px;text-align:right">{fmt_rent(r["rent_per"])}</td>'
+                        f'<td style="padding:9px 12px;text-align:center">{badge_margen(r["margen_per"])}</td>'
                         f'</tr>'
                     )
 
                 cat_html = (
                     '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
-                    '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.84rem">'
-                    '<thead><tr style="background:#111">'
+                    '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
+                    '<thead>'
+                    '<tr style="background:#111">'
+                    f'<th colspan="3" style="{hs};text-align:left;border-right:1px solid #2a2a2a"></th>'
+                    f'<th colspan="3" style="{hs2};text-align:center;border-right:1px solid #2a2a2a;color:#4caf7d">TEÓRICA</th>'
+                    f'<th colspan="3" style="{hs3};text-align:center;color:#d4a853">PERÍODO</th>'
+                    '</tr>'
+                    '<tr style="background:#111">'
                     f'<th style="{hs};text-align:left">Categoría</th>'
                     f'<th style="{hs};text-align:right">Productos</th>'
-                    f'<th style="{hs};text-align:right">Venta</th>'
-                    f'<th style="{hs};text-align:right">Costo</th>'
-                    f'<th style="{hs};text-align:right">Rentabilidad</th>'
-                    f'<th style="{hs};text-align:center">Margen</th>'
+                    f'<th style="{hs};text-align:right;border-right:1px solid #2a2a2a">Venta</th>'
+                    f'<th style="{hs2};text-align:right">Costo</th>'
+                    f'<th style="{hs2};text-align:right">Rent.</th>'
+                    f'<th style="{hs2};text-align:center;border-right:1px solid #2a2a2a">Margen</th>'
+                    f'<th style="{hs3};text-align:right">Costo</th>'
+                    f'<th style="{hs3};text-align:right">Rent.</th>'
+                    f'<th style="{hs3};text-align:center">Margen</th>'
                     f'</tr></thead><tbody>{cat_rows}</tbody></table></div>'
                 )
                 st.markdown(cat_html, unsafe_allow_html=True)
@@ -2196,7 +2407,11 @@ elif modulo.startswith("📊"):
                 # Descarga
                 buf2 = io.BytesIO()
                 with pd.ExcelWriter(buf2, engine='openpyxl') as w:
-                    df_inf1[cols_show].to_excel(w, sheet_name='Rentabilidad', index=False)
+                    cols_excel = ['sku_producto','categoria_menu','nombre_producto','cant','venta',
+                                     'costo_total_teorico','rentabilidad_teorica','margen_teorico',
+                                     'costo_total_periodo','rentabilidad_periodo','margen_periodo']
+                    cols_excel = [c for c in cols_excel if c in df_inf1.columns]
+                    df_inf1[cols_excel].to_excel(w, sheet_name='Rentabilidad', index=False)
                     cat.to_excel(w, sheet_name='Por Categoria', index=False)
                 st.download_button("📥 Descargar Informe 1", buf2.getvalue(), "Informe1_Rentabilidad.xlsx")
 
