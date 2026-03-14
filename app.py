@@ -1930,7 +1930,7 @@ if modulo.startswith("📦"):
                     # Estado del acordeón en session_state (expandido por defecto)
                     acc_key = f'acc_{sku_g}'
                     if acc_key not in st.session_state:
-                        st.session_state[acc_key] = True
+                        st.session_state[acc_key] = False
 
                     # Fila resumen del SKU (clickeable para colapsar/expandir)
                     arrow = '▾' if st.session_state[acc_key] else '▸'
