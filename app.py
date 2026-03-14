@@ -1789,294 +1789,177 @@ if modulo.startswith("📦"):
 
 
 
-                # ── Corrección informe (arriba de la tabla) ─────────────────
-                if not df_audit.empty and label_sel_muc:
-                    sku_sel_inf = label_sel_muc.split(' — ')[0].strip()
-                    filas_sku = df_audit[df_audit['sku'] == sku_sel_inf].reset_index(drop=True)
-                    if not filas_sku.empty:
-                        st.markdown(f'**⚙️ Corregir — {sku_sel_inf}**')
-                        ca1, ca2, ca3, ca4 = st.columns([2, 2, 2, 2])
+                # ══════════════════════════════════════════════════════════
+                # TABLA CON CHECKBOXES + CONTROLES
+                # ══════════════════════════════════════════════════════════
 
-                        # Resetear índice MUC si cambió el SKU
-                        if st.session_state.get('_last_sku_audit') != sku_sel_inf:
-                            st.session_state['_last_sku_audit'] = sku_sel_inf
-                            st.session_state.pop('audit_muc_lote', None)
-
-                        # Opciones indexadas por posición — evita comparaciones float
-                        opciones_idx = list(range(len(filas_sku)))
-                        with ca1:
-                            idx_sel = st.selectbox(
-                                'MUC a corregir',
-                                opciones_idx,
-                                format_func=lambda i: f'{float(filas_sku.iloc[i]["muc"]):.4f}  ({int(filas_sku.iloc[i]["n_registros"])} reg.)',
-                                key='audit_muc_lote'
-                            )
-                        # Acceso por índice — 100% seguro, sin comparaciones float
-                        fila_sel = filas_sku.iloc[idx_sel]
-                        muc_sel_lote = fila_sel['muc']
-                        with ca2:
-                            nuevo_conv_lote = st.number_input('Nueva conversion',
-                                value=float(fila_sel['conversion'] or 1),
-                                min_value=0.001, step=0.1, key='audit_conv_lote')
-                        with ca3:
-                            nuevo_fmt_lote = st.number_input('Nuevo formato',
-                                value=float(fila_sel['formato'] or 1),
-                                min_value=0.001, step=1.0, key='audit_fmt_lote')
-                        import ast as _ast
-                        raw_ids = fila_sel['ids']
-                        if isinstance(raw_ids, str):
-                            raw_ids = _ast.literal_eval(raw_ids)
-                        ids_lote = [int(i) for i in raw_ids]
-                        with ca4:
-                            st.caption(f'Afecta **{len(ids_lote)}** registros')
-                            cb1, cb2, cb3, cb4 = st.columns(4)
-                            with cb1:
-                                if st.button('💾 Aplicar', key='audit_apply'):
-                                    engine = get_engine()
-                                    try:
-                                        with engine.connect() as conn:
-                                            # ── Guardia: verificar que los IDs pertenecen al SKU correcto ──
-                                            check = pd.read_sql(
-                                                text('SELECT id, sku FROM compras WHERE id = ANY(:ids)'),
-                                                conn, params={'ids': ids_lote}
-                                            )
-                                            skus_encontrados = check['sku'].unique().tolist()
-                                            ids_incorrectos  = check[check['sku'] != sku_sel_inf]['id'].tolist()
-                                            if ids_incorrectos:
-                                                st.error(f'🚫 Seguridad: {len(ids_incorrectos)} IDs no pertenecen a {sku_sel_inf} '
-                                                         f'(SKUs encontrados: {skus_encontrados}). Operación cancelada.')
-                                            else:
-                                                conn.execute(text(
-                                                    'UPDATE compras SET conversion=:conv,formato=:fmt,'
-                                                    'cant_conv=cantidad*:conv,'
-                                                    'muc=CASE WHEN :fmt=1 THEN costo_realfinal/NULLIF(cantidad*:conv,0)'
-                                                    ' ELSE costo_realfinal/NULLIF(cantidad*:conv*:fmt,0) END'
-                                                    ' WHERE id=ANY(:ids) AND sku=:sku'
-                                                ), {'conv': nuevo_conv_lote, 'fmt': nuevo_fmt_lote,
-                                                    'ids': ids_lote, 'sku': sku_sel_inf})
-                                                conn.commit()
-                                                st.success(f'✅ {len(ids_lote)} registros de {sku_sel_inf} corregidos '
-                                                           f'(conv={nuevo_conv_lote}, fmt={nuevo_fmt_lote})')
-                                                st.session_state.pop('audit_df', None)
-                                                st.session_state.pop('audit_grupo_sel', None)
-                                                st.rerun()
-                                    except Exception as e:
-                                        st.error(f'Error: {e}')
-                            with cb2:
-                                if st.button('🚨 Emergencia', key='audit_emergencia'):
-                                    engine = get_engine()
-                                    try:
-                                        with engine.connect() as conn:
-                                            conn.execute(text("""
-                                                INSERT INTO compras_excluidas (compra_id, sku, motivo)
-                                                SELECT unnest(:ids), :sku, 'compra_emergencia'
-                                                ON CONFLICT (compra_id) DO NOTHING
-                                            """), {'ids': ids_lote, 'sku': sku_sel_inf})
-                                            conn.commit()
-                                        st.success(f'🚨 {len(ids_lote)} registros excluidos del cálculo')
-                                        st.session_state.pop('audit_df', None)
-                                        st.session_state.pop('audit_grupo_sel', None)
-                                        st.rerun()
-                                    except Exception as e:
-                                        st.error(f'Error al excluir: {e}')
-                            with cb3:
-                                if st.button('✅ Revisado', key='audit_mark'):
-                                    nombre_rev = str(fila_sel.get('nombre_producto', ''))
-                                    n_reg_rev  = int(fila_sel.get('n_registros', len(ids_lote)))
-                                    nota_rev   = st.session_state.get('audit_nota_rev', '')
-                                    engine = get_engine()
-                                    try:
-                                        with engine.connect() as conn:
-                                            conn.execute(text("""
-                                                INSERT INTO audit_revisados (sku, muc, nombre, n_registros, nota)
-                                                VALUES (:sku, :muc, :nombre, :n, :nota)
-                                            """), {
-                                                'sku':    sku_sel_inf,
-                                                'muc':    float(muc_sel_lote),
-                                                'nombre': nombre_rev,
-                                                'n':      n_reg_rev,
-                                                'nota':   nota_rev,
-                                            })
-                                            conn.commit()
-                                        st.success(f'✅ {sku_sel_inf} MUC {float(muc_sel_lote):.4f} marcado como revisado')
-                                        st.session_state.pop('audit_df', None)
-                                        st.session_state.pop('audit_grupo_sel', None)
-                                        st.rerun()
-                                    except Exception as e:
-                                        st.error(f'Error: {e}')
-                            with cb4:
-                                if st.button('🍱 Colación', key='audit_colacion'):
-                                    engine = get_engine()
-                                    try:
-                                        nombre_sku = str(filas_sku['nombre_producto'].iloc[0]) if not filas_sku.empty else ''
-                                        with engine.connect() as conn:
-                                            conn.execute(text("""
-                                                INSERT INTO sku_colacion (sku, nombre)
-                                                VALUES (:sku, :nombre)
-                                                ON CONFLICT (sku) DO NOTHING
-                                            """), {'sku': sku_sel_inf, 'nombre': nombre_sku})
-                                            conn.commit()
-                                        st.success(f'🍱 {sku_sel_inf} marcado como colación')
-                                        st.session_state.pop('audit_df', None)
-                                        st.session_state.pop('audit_grupo_sel', None)
-                                        st.rerun()
-                                    except Exception as e:
-                                        st.error(f'Error: {e}')
-                        st.text_input('📝 Nota para Revisado (opcional)', key='audit_nota_rev',
-                                      placeholder='ej: cambio de proveedor, precio puntual, negociación...')
-                # ── Exportar + Expanders de gestión ──────────────────────────
-                ex1, ex2 = st.columns([1, 1])
-                with ex1:
-                    buf_audit = io.BytesIO()
-                    export_cols = ['sku','nombre_producto','categoria','conversion','formato',
-                                   'precio_factura','muc','muc_min','muc_max','dispersion','n_registros']
-                    export_cols_exist = [c for c in export_cols if c in df_audit.columns]
-                    with pd.ExcelWriter(buf_audit, engine='openpyxl') as w:
-                        df_audit[export_cols_exist].to_excel(w, sheet_name='Inconsistencias', index=False)
-                    st.download_button('📥 Exportar Excel', buf_audit.getvalue(),
-                                       'Auditoria_Compras.xlsx',
-                                       mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-                with ex2:
-                    # ── Expander 1: Compras de emergencia ──
-                    df_emerg = run_query("""
-                        SELECT ce.sku, ce.motivo, COUNT(*) AS registros,
-                               MODE() WITHIN GROUP (ORDER BY c.nombre_producto) AS nombre,
-                               MIN(ce.creado_en)::date AS desde
-                        FROM compras_excluidas ce
-                        LEFT JOIN compras c ON c.id = ce.compra_id
-                        GROUP BY ce.sku, ce.motivo
-                        ORDER BY MIN(ce.creado_en) DESC
-                    """)
-                    n_emerg = len(df_emerg) if not df_emerg.empty else 0
-                    with st.expander(f"🚨 Compras de emergencia ({n_emerg} SKUs)", expanded=False):
-                        if df_emerg.empty:
-                            st.info("Sin compras de emergencia registradas.")
-                        else:
-                            st.dataframe(df_emerg, use_container_width=True, hide_index=True)
-                            sku_rev_emerg = st.text_input("SKU a revertir", key="revert_emerg_sku",
-                                                          placeholder="ej: AL-AF-095")
-                            if st.button("↩️ Revertir emergencia", key="revert_emerg_btn"):
-                                engine = get_engine()
-                                try:
-                                    with engine.connect() as conn:
-                                        conn.execute(text(
-                                            "DELETE FROM compras_excluidas WHERE sku = :sku"),
-                                            {"sku": sku_rev_emerg.strip()})
-                                        conn.commit()
-                                    st.success(f"↩️ {sku_rev_emerg} revertido")
-                                    st.session_state.pop("audit_df", None)
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Error: {e}")
-
-                    # ── Expander 2: Revisados ──
-                    df_rev = run_query("""
-                        SELECT id, sku, nombre, ROUND(muc::numeric,4) AS muc,
-                               n_registros, nota, creado_en::date AS fecha
-                        FROM audit_revisados
-                        ORDER BY creado_en DESC
-                    """)
-                    n_rev = len(df_rev) if not df_rev.empty else 0
-                    with st.expander(f"✅ Revisados — gestionar con proveedor ({n_rev})", expanded=False):
-                        if df_rev.empty:
-                            st.info("Sin grupos revisados registrados.")
-                        else:
-                            st.dataframe(df_rev, use_container_width=True, hide_index=True)
-                            id_rev = st.number_input("ID a revertir", min_value=1, step=1,
-                                                     key="revert_rev_id")
-                            if st.button("↩️ Revertir revisado", key="revert_rev_btn"):
-                                engine = get_engine()
-                                try:
-                                    with engine.connect() as conn:
-                                        conn.execute(text(
-                                            "DELETE FROM audit_revisados WHERE id = :id"),
-                                            {"id": int(id_rev)})
-                                        conn.commit()
-                                    st.success(f"↩️ Revisado {id_rev} revertido")
-                                    st.session_state.pop("audit_df", None)
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Error: {e}")
-
-                    # ── Expander 3: SKUs colación ──
-                    df_col_list = run_query(
-                        "SELECT sku, nombre, creado_en::date AS fecha FROM sku_colacion ORDER BY creado_en DESC")
-                    n_col = len(df_col_list) if not df_col_list.empty else 0
-                    with st.expander(f"🍱 SKUs colación ({n_col})", expanded=False):
-                        if df_col_list.empty:
-                            st.info("Sin SKUs marcados como colación.")
-                        else:
-                            st.dataframe(df_col_list, use_container_width=True, hide_index=True)
-                            sku_revert = st.text_input("SKU a revertir", key="audit_revert_sku",
-                                                       placeholder="ej: AL-AF-095")
-                            if st.button("↩️ Quitar de colación", key="audit_revert_sku_btn"):
-                                engine = get_engine()
-                                try:
-                                    with engine.connect() as conn:
-                                        conn.execute(text(
-                                            "DELETE FROM sku_colacion WHERE sku = :sku"),
-                                            {"sku": sku_revert.strip()})
-                                        conn.commit()
-                                    st.success(f"{sku_revert} removido de colación")
-                                    st.session_state.pop("audit_df", None)
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Error: {e}")
-
-                # ── Tabla — una fila por SKU+MUC ─────────────────────────
-                if label_sel and not grupos.empty:
-                    grupo_activo_row = grupos[grupos['label'] == label_sel]
-                    if not grupo_activo_row.empty:
-                        sku_activo = grupo_activo_row.iloc[0]['sku']
-                        df_tabla = df_audit[df_audit['sku'] == sku_activo]
-                        st.caption(f"Mostrando {len(df_tabla)} grupos MUC del SKU {sku_activo}")
-                    else:
-                        df_tabla = df_audit
+                # Filtrar tabla según búsqueda
+                if label_sel_muc:
+                    sku_fil = label_sel_muc.split(' — ')[0].strip()
+                    df_tabla = df_audit[df_audit['sku'] == sku_fil].reset_index(drop=True)
                 else:
-                    df_tabla = df_audit
+                    df_tabla = df_audit.reset_index(drop=True)
 
-                hs_a = 'padding:9px 12px;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
-                rows_a = ''
-                for _, r in df_tabla.iterrows():
-                    muc        = float(r.get('muc', 0) or 0)
-                    muc_min    = float(r.get('muc_min', 0) or 0)
-                    muc_max    = float(r.get('muc_max', 0) or 0)
-                    dispersion = float(r.get('dispersion', 1) or 1)
-                    n_reg      = int(r.get('n_registros', 1) or 1)
-                    es_outlier = muc_min > 0 and (abs(muc - muc_min) < 0.0001 or abs(muc - muc_max) < 0.0001)
-                    if dispersion > 8:
-                        sev_color = '#e84545'; sev_label = f'🔴 {dispersion:.0f}×'
-                    elif dispersion > 2:
-                        sev_color = '#e89c45'; sev_label = f'🟡 {dispersion:.1f}×'
-                    else:
-                        sev_color = '#aaa';    sev_label = f'⚪ {dispersion:.1f}×'
-                    muc_color = '#e84545' if es_outlier else '#aaa'
-                    precio    = float(r.get('precio_factura', 0) or 0)
-                    rows_a += (
-                        f'<tr style="border-bottom:1px solid #1e1e1e">'
-                        f'<td style="padding:9px 12px;color:#666;font-family:monospace;font-size:0.72rem">{r.get("sku","")}</td>'
-                        f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de;font-size:0.8rem">{r.get("nombre_producto","")}</td>'
-                        f'<td style="padding:9px 12px;color:#666;font-size:0.75rem">{r.get("categoria","")}</td>'
-                        f'<td style="padding:9px 12px;color:#777;font-size:0.75rem;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{r.get("proveedor","")}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:#888;font-variant-numeric:tabular-nums">{r.get("conversion","")}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:#888;font-variant-numeric:tabular-nums">{r.get("formato","")}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">${precio:,.2f}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:{muc_color};font-weight:{"700" if es_outlier else "400"};font-variant-numeric:tabular-nums">{muc:,.4f}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:#666;font-variant-numeric:tabular-nums">{n_reg}</td>'
-                        f'<td style="padding:9px 12px;text-align:center;color:{sev_color};font-weight:600">{sev_label}</td>'
-                        f'</tr>'
-                    )
+                st.caption(f"{'SKU: ' + sku_fil if label_sel_muc else 'Todos los SKUs'} — {len(df_tabla)} grupos MUC")
 
-                hdrs_a = ['SKU','Producto','Categoría','Proveedor','Conv.','Formato','Neto Fact/u','MUC','# Reg.','Dispersión']
-                tabla_a = (
-                    '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
-                    '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
-                    '<thead><tr style="background:#111">'
-                    + ''.join([f'<th style="{hs_a};text-align:{"left" if i<4 else "right" if i<9 else "center"}">{h}</th>' for i, h in enumerate(hdrs_a)])
-                    + f'</tr></thead><tbody>{rows_a}</tbody></table></div>'
+                # Preparar df para data_editor con columna de selección
+                df_editor = df_tabla[[
+                    'sku','nombre_producto','categoria','proveedor',
+                    'conversion','formato','precio_factura','muc','n_registros','dispersion','ids'
+                ]].copy()
+                df_editor.insert(0, '✓', False)
+                df_editor['muc']          = df_editor['muc'].apply(lambda x: round(float(x), 4))
+                df_editor['dispersion']   = df_editor['dispersion'].apply(lambda x: round(float(x), 1))
+                df_editor['precio_factura'] = df_editor['precio_factura'].apply(lambda x: round(float(x or 0), 2))
+
+                edited = st.data_editor(
+                    df_editor.drop(columns=['ids']),
+                    column_config={
+                        '✓':              st.column_config.CheckboxColumn('✓', width='small'),
+                        'sku':            st.column_config.TextColumn('SKU', width='small'),
+                        'nombre_producto':st.column_config.TextColumn('Producto', width='large'),
+                        'categoria':      st.column_config.TextColumn('Categoría', width='small'),
+                        'proveedor':      st.column_config.TextColumn('Proveedor', width='medium'),
+                        'conversion':     st.column_config.NumberColumn('Conv.', width='small', format='%.1f'),
+                        'formato':        st.column_config.NumberColumn('Formato', width='small', format='%.0f'),
+                        'precio_factura': st.column_config.NumberColumn('Neto Fact/u', width='small', format='$%.2f'),
+                        'muc':            st.column_config.NumberColumn('MUC', width='small', format='%.4f'),
+                        'n_registros':    st.column_config.NumberColumn('# Reg.', width='small'),
+                        'dispersion':     st.column_config.NumberColumn('Dispersión ×', width='small', format='%.1f×'),
+                    },
+                    disabled=[c for c in df_editor.columns if c not in ('✓','ids')],
+                    use_container_width=True,
+                    hide_index=True,
+                    key='audit_tabla_editor'
                 )
-                st.markdown(tabla_a, unsafe_allow_html=True)
 
+                # Obtener filas seleccionadas
+                sel_mask  = edited['✓'] == True
+                sel_rows  = df_tabla[sel_mask.values].reset_index(drop=True)
+                n_sel     = len(sel_rows)
+
+                # Acumular todos los IDs y SKUs de las filas seleccionadas
+                import ast as _ast
+                def _parse_ids(raw):
+                    if isinstance(raw, list): return [int(i) for i in raw]
+                    try: return [int(i) for i in _ast.literal_eval(str(raw))]
+                    except: return []
+
+                ids_sel  = []
+                skus_sel = []
+                for _, r in sel_rows.iterrows():
+                    ids_sel  += _parse_ids(r['ids'])
+                    skus_sel.append(r['sku'])
+                skus_sel = list(set(skus_sel))
+
+                # ── Panel de acciones (solo si hay selección) ────────────────
+                if n_sel > 0:
+                    st.markdown(f"**{n_sel} grupo(s) seleccionado(s) — {len(ids_sel)} registros en total**")
+                    pa1, pa2, pa3, pa4, pa5 = st.columns([2, 2, 1, 1, 1])
+
+                    with pa1:
+                        nuevo_conv = st.number_input('Nueva conversion',
+                            value=float(sel_rows.iloc[0]['conversion'] or 1),
+                            min_value=0.001, step=0.1, key='audit_conv_multi')
+                    with pa2:
+                        nuevo_fmt  = st.number_input('Nuevo formato',
+                            value=float(sel_rows.iloc[0]['formato'] or 1),
+                            min_value=0.001, step=1.0, key='audit_fmt_multi')
+                    with pa3:
+                        if st.button('💾 Aplicar', key='audit_apply_multi'):
+                            engine = get_engine()
+                            try:
+                                with engine.connect() as conn:
+                                    # Guardia: verificar SKUs
+                                    check = pd.read_sql(
+                                        text('SELECT id, sku FROM compras WHERE id = ANY(:ids)'),
+                                        conn, params={'ids': ids_sel}
+                                    )
+                                    ids_incorrectos = check[~check['sku'].isin(skus_sel)]['id'].tolist()
+                                    if ids_incorrectos:
+                                        st.error(f'🚫 {len(ids_incorrectos)} IDs no coinciden con los SKUs seleccionados. Cancelado.')
+                                    else:
+                                        conn.execute(text(
+                                            'UPDATE compras SET conversion=:conv,formato=:fmt,'
+                                            'cant_conv=cantidad*:conv,'
+                                            'muc=CASE WHEN :fmt=1 THEN costo_realfinal/NULLIF(cantidad*:conv,0)'
+                                            ' ELSE costo_realfinal/NULLIF(cantidad*:conv*:fmt,0) END'
+                                            ' WHERE id=ANY(:ids) AND sku=ANY(:skus)'
+                                        ), {'conv': nuevo_conv, 'fmt': nuevo_fmt,
+                                            'ids': ids_sel, 'skus': skus_sel})
+                                        conn.commit()
+                                        st.success(f'✅ {len(ids_sel)} registros corregidos')
+                                        st.session_state.pop('audit_df', None)
+                                        st.rerun()
+                            except Exception as e:
+                                st.error(f'Error: {e}')
+                    with pa4:
+                        if st.button('🚨 Emergencia', key='audit_emerg_multi'):
+                            engine = get_engine()
+                            try:
+                                with engine.connect() as conn:
+                                    for _, r in sel_rows.iterrows():
+                                        ids_r = _parse_ids(r['ids'])
+                                        conn.execute(text("""
+                                            INSERT INTO compras_excluidas (compra_id, sku, motivo)
+                                            SELECT unnest(:ids), :sku, 'compra_emergencia'
+                                            ON CONFLICT (compra_id) DO NOTHING
+                                        """), {'ids': ids_r, 'sku': r['sku']})
+                                    conn.commit()
+                                st.success(f'🚨 {len(ids_sel)} registros excluidos del cálculo')
+                                st.session_state.pop('audit_df', None)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f'Error: {e}')
+                    with pa5:
+                        if st.button('✅ Revisado', key='audit_rev_multi'):
+                            nota_rev = st.session_state.get('audit_nota_rev', '')
+                            engine   = get_engine()
+                            try:
+                                with engine.connect() as conn:
+                                    for _, r in sel_rows.iterrows():
+                                        conn.execute(text("""
+                                            INSERT INTO audit_revisados (sku, muc, nombre, n_registros, nota)
+                                            VALUES (:sku, :muc, :nombre, :n, :nota)
+                                        """), {
+                                            'sku':    r['sku'],
+                                            'muc':    float(r['muc']),
+                                            'nombre': str(r['nombre_producto']),
+                                            'n':      int(r['n_registros']),
+                                            'nota':   nota_rev,
+                                        })
+                                    conn.commit()
+                                st.success(f'✅ {n_sel} grupo(s) marcados como revisados')
+                                st.session_state.pop('audit_df', None)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f'Error: {e}')
+
+                    # Nota para revisado + Colación (SKU completo)
+                    pn1, pn2 = st.columns([3, 1])
+                    with pn1:
+                        st.text_input('📝 Nota para Revisado (opcional)', key='audit_nota_rev',
+                                      placeholder='ej: cambio de proveedor, precio puntual...')
+                    with pn2:
+                        if st.button('🍱 Colación (SKU completo)', key='audit_col_multi'):
+                            engine = get_engine()
+                            try:
+                                with engine.connect() as conn:
+                                    for sku_c in skus_sel:
+                                        nombre_c = str(sel_rows[sel_rows['sku']==sku_c]['nombre_producto'].iloc[0]) if not sel_rows[sel_rows['sku']==sku_c].empty else ''
+                                        conn.execute(text("""
+                                            INSERT INTO sku_colacion (sku, nombre)
+                                            VALUES (:sku, :nombre)
+                                            ON CONFLICT (sku) DO NOTHING
+                                        """), {'sku': sku_c, 'nombre': nombre_c})
+                                    conn.commit()
+                                st.success(f'🍱 {len(skus_sel)} SKU(s) marcados como colación')
+                                st.session_state.pop('audit_df', None)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f'Error: {e}')
+                else:
+                    st.caption("☝️ Selecciona uno o más grupos MUC en la tabla para aplicar acciones.")
 
 # ============================================================
 # MÓDULO: EXPLOSIÓN MRP
