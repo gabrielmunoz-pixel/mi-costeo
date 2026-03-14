@@ -1111,6 +1111,68 @@ def save_ventas(df_raw):
         st.error(f"Error al guardar ventas: {e}")
 
 
+def save_ventas_chunk(df_raw, engine, skip_delete=False):
+    """Versión de save_ventas que inserta un chunk sin hacer DELETE previo."""
+    df = df_raw.copy()
+    df.columns = df.columns.str.strip()
+
+    mapeo = {
+        'ID de orden': 'id_orden', 'ID Producto': 'sku_producto',
+        'Nombre': 'nombre_producto', 'Cantidad': 'cantidad_vendida',
+        'Precio a Pagar': 'precio_pagar', 'Precio Base': 'precio_base',
+        'Costo': 'costo_receta', 'Descuento': 'descuento', 'Impuesto': 'impuesto',
+        'AB.': 'ab_categoria',
+        'Categorias de Productos/Platos': 'categoria_menu',
+        'Categorías de Productos/Platos': 'categoria_menu',
+        'BA.': 'ba_opcion',
+        'Jerarquia de Extras': 'jerarquia_extras',
+        'Jerarquía de Extras': 'jerarquia_extras',
+        'AC.': 'ac_excepcion',
+        'Jerarquia de Excp.': 'jerarquia_excepcion',
+        'Jerarquía de Excp.': 'jerarquia_excepcion',
+        'Local': 'local', 'fechahora_pedido': 'fecha_pedido',
+        'fechahora_creacion': 'fecha_creacion', 'fechahora_cierre': 'fecha_cierre',
+        'Nombre de mesa': 'mesa', 'Sector': 'sector', 'Origen': 'origen',
+        'Nombre garzon apertura': 'garzon', 'Nombre garzón apertura': 'garzon',
+        'Folio': 'folio', 'Forma de Pago': 'forma_pago',
+        'Nombre Lista Precio': 'lista_precio',
+    }
+    df = df.rename(columns={k: v for k, v in mapeo.items() if k in df.columns})
+
+    fecha_col = next((c for c in ['fecha_pedido','fecha_creacion'] if c in df.columns), None)
+    if fecha_col:
+        df['fecha_venta'] = pd.to_datetime(
+            df[fecha_col].astype(str).str[:10], errors='coerce').dt.date
+    else:
+        return
+
+    df = df.dropna(subset=['fecha_venta','sku_producto'])
+    df = df[df['sku_producto'].astype(str).str.strip() != '']
+
+    if 'precio_pagar' in df.columns and 'monto_venta_real' not in df.columns:
+        df['monto_venta_real'] = pd.to_numeric(df['precio_pagar'], errors='coerce').fillna(0)
+
+    for col in ['cantidad_vendida','monto_venta_real','precio_base','costo_receta','descuento','impuesto']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+    if 'ba_opcion' in df.columns:
+        df['es_opcion'] = df['ba_opcion'].notna() & (df['ba_opcion'].astype(str).str.strip() != '')
+    else:
+        df['es_opcion'] = False
+
+    cols_bd = ['fecha_venta','id_orden','sku_producto','nombre_producto',
+               'cantidad_vendida','monto_venta_real','precio_base',
+               'costo_receta','descuento','impuesto',
+               'ab_categoria','categoria_menu','ba_opcion','jerarquia_extras',
+               'ac_excepcion','jerarquia_excepcion','es_opcion',
+               'local','mesa','sector','origen','garzon',
+               'folio','forma_pago','lista_precio',
+               'fecha_pedido','fecha_creacion','fecha_cierre']
+    cols_ok = [c for c in cols_bd if c in df.columns]
+    df[cols_ok].to_sql('ventas', engine, if_exists='append', index=False, method='multi')
+
+
 # ============================================================
 # HELPERS UI
 # ============================================================
@@ -1605,19 +1667,75 @@ if modulo.startswith("📦"):
 
     with tab3:
         st.markdown("<div class='info-box'>Carga el historial de ventas exportado desde tu POS. Se añade al historial existente (append).</div>", unsafe_allow_html=True)
-        f_ven = st.file_uploader("Archivo de Ventas (.xlsx o .csv)", type=["xlsx","csv"], key="ven")
+        f_ven = st.file_uploader("Archivo de Ventas (.csv)", type=["csv"], key="ven")
         if f_ven:
-            st.caption(f"Archivo: {f_ven.name} — separador auto-detectado")
+            size_mb = f_ven.size / 1024 / 1024
+            st.caption(f"Archivo: {f_ven.name} — {size_mb:.1f} MB")
             if st.button("💾 Cargar Ventas"):
-                if f_ven.name.endswith('.csv'):
-                    import io as _io2
-                    raw = f_ven.read()
-                    # Detectar separador
-                    sep = ';' if b';' in raw[:500] else ','
-                    df_ven = pd.read_csv(_io2.BytesIO(raw), sep=sep, dtype=str)
-                else:
-                    df_ven = pd.read_excel(f_ven, dtype=str)
-                save_ventas(df_ven)
+                import io as _io2
+                raw = f_ven.read()
+                sep = ';' if b';' in raw[:500] else ','
+                buf = _io2.BytesIO(raw)
+
+                # Detectar DELETE range leyendo solo primeras/últimas filas
+                df_head = pd.read_csv(_io2.BytesIO(raw), sep=sep, dtype=str, nrows=100)
+                df_tail = pd.read_csv(_io2.BytesIO(raw), sep=sep, dtype=str, skiprows=lambda i: i > 0 and i < max(1, sum(1 for _ in _io2.BytesIO(raw))-101))
+
+                # Normalizar columnas para detectar fecha y local
+                _mapeo_tmp = {'fechahora_pedido':'fecha_pedido','fechahora_creacion':'fecha_creacion',
+                              'Local':'local','ID Producto':'sku_producto'}
+                df_head.rename(columns=_mapeo_tmp, inplace=True)
+                fecha_col_tmp = next((c for c in ['fecha_pedido','fecha_creacion'] if c in df_head.columns), None)
+                if fecha_col_tmp:
+                    todas_fechas = pd.to_datetime(df_head[fecha_col_tmp].astype(str).str[:10], errors='coerce').dropna()
+                    fecha_min = todas_fechas.min().date().replace(day=1)
+                    import calendar
+                    # Para fecha_max leer también el final del archivo
+                    df_tail.rename(columns=_mapeo_tmp, inplace=True)
+                    if fecha_col_tmp in df_tail.columns:
+                        fechas_tail = pd.to_datetime(df_tail[fecha_col_tmp].astype(str).str[:10], errors='coerce').dropna()
+                        fecha_max_dt = max(todas_fechas.max(), fechas_tail.max() if not fechas_tail.empty else todas_fechas.max())
+                    else:
+                        fecha_max_dt = todas_fechas.max()
+                    fecha_max = (fecha_max_dt.to_period('M').to_timestamp('M')).date()
+                    locales_tmp = df_head['local'].dropna().unique().tolist() if 'local' in df_head.columns else []
+
+                    st.info(f"📅 Período detectado: {fecha_min} → {fecha_max} | Locales: {', '.join(locales_tmp) if locales_tmp else 'todos'}")
+
+                    # DELETE previo
+                    engine = get_engine()
+                    with engine.connect() as conn:
+                        if locales_tmp:
+                            conn.execute(text("DELETE FROM ventas WHERE fecha_venta BETWEEN :fi AND :ff AND local = ANY(:loc)"),
+                                        {'fi': fecha_min, 'ff': fecha_max, 'loc': locales_tmp})
+                        else:
+                            conn.execute(text("DELETE FROM ventas WHERE fecha_venta BETWEEN :fi AND :ff"),
+                                        {'fi': fecha_min, 'ff': fecha_max})
+                        conn.commit()
+                    st.success(f"🗑️ Período anterior eliminado")
+
+                # Cargar en chunks de 5000 filas
+                CHUNK = 5000
+                buf.seek(0)
+                total_ok = 0
+                progress = st.progress(0)
+                status   = st.empty()
+
+                # Contar total de líneas para progress bar
+                total_lines = sum(1 for _ in _io2.BytesIO(raw)) - 1  # -1 header
+                chunks_total = max(1, total_lines // CHUNK)
+
+                buf.seek(0)
+                for i, chunk in enumerate(pd.read_csv(buf, sep=sep, dtype=str, chunksize=CHUNK)):
+                    save_ventas_chunk(chunk, engine, skip_delete=True)
+                    total_ok += len(chunk)
+                    pct = min(1.0, (i+1) / chunks_total)
+                    progress.progress(pct)
+                    status.caption(f"Procesando... {total_ok:,} filas insertadas")
+
+                progress.progress(1.0)
+                status.empty()
+                st.success(f"✅ {total_ok:,} registros cargados correctamente.")
 
     with tab4:
         st.markdown("<div class='info-box'>Mapea SKUs de compras sin código de venta hacia SKUs equivalentes que sí tienen receta.<br>Ejemplo: Erdinger Trigo (BA-CA-078) → Erdinger Weissbier (BA-CA-066)</div>", unsafe_allow_html=True)
