@@ -1105,10 +1105,11 @@ def save_ventas(df_raw):
                     {'fi': fecha_min, 'ff': fecha_max})
             conn.commit()
 
-        df_save.to_sql('ventas', engine, if_exists='append', index=False, method='multi')
+        df_save.to_sql('ventas', engine, if_exists='append', index=False)
         st.success(f"✅ {len(df_save):,} registros guardados ({fecha_min} → {fecha_max}). Período anterior reemplazado.")
     except Exception as e:
         st.error(f"Error al guardar ventas: {e}")
+        st.exception(e)
 
 
 def save_ventas_chunk(df_raw, engine, skip_delete=False):
