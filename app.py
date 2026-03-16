@@ -1675,67 +1675,9 @@ if modulo.startswith("📦"):
                 import io as _io2
                 raw = f_ven.read()
                 sep = ';' if b';' in raw[:500] else ','
-                buf = _io2.BytesIO(raw)
-
-                # Detectar DELETE range leyendo solo primeras/últimas filas
-                df_head = pd.read_csv(_io2.BytesIO(raw), sep=sep, dtype=str, nrows=100)
-                df_tail = pd.read_csv(_io2.BytesIO(raw), sep=sep, dtype=str, skiprows=lambda i: i > 0 and i < max(1, sum(1 for _ in _io2.BytesIO(raw))-101))
-
-                # Normalizar columnas para detectar fecha y local
-                _mapeo_tmp = {'fechahora_pedido':'fecha_pedido','fechahora_creacion':'fecha_creacion',
-                              'Local':'local','ID Producto':'sku_producto'}
-                df_head.rename(columns=_mapeo_tmp, inplace=True)
-                fecha_col_tmp = next((c for c in ['fecha_pedido','fecha_creacion'] if c in df_head.columns), None)
-                if fecha_col_tmp:
-                    todas_fechas = pd.to_datetime(df_head[fecha_col_tmp].astype(str).str[:10], errors='coerce').dropna()
-                    fecha_min = todas_fechas.min().date().replace(day=1)
-                    import calendar
-                    # Para fecha_max leer también el final del archivo
-                    df_tail.rename(columns=_mapeo_tmp, inplace=True)
-                    if fecha_col_tmp in df_tail.columns:
-                        fechas_tail = pd.to_datetime(df_tail[fecha_col_tmp].astype(str).str[:10], errors='coerce').dropna()
-                        fecha_max_dt = max(todas_fechas.max(), fechas_tail.max() if not fechas_tail.empty else todas_fechas.max())
-                    else:
-                        fecha_max_dt = todas_fechas.max()
-                    fecha_max = (fecha_max_dt.to_period('M').to_timestamp('M')).date()
-                    locales_tmp = df_head['local'].dropna().unique().tolist() if 'local' in df_head.columns else []
-
-                    st.info(f"📅 Período detectado: {fecha_min} → {fecha_max} | Locales: {', '.join(locales_tmp) if locales_tmp else 'todos'}")
-
-                    # DELETE previo
-                    engine = get_engine()
-                    with engine.connect() as conn:
-                        if locales_tmp:
-                            conn.execute(text("DELETE FROM ventas WHERE fecha_venta BETWEEN :fi AND :ff AND local = ANY(:loc)"),
-                                        {'fi': fecha_min, 'ff': fecha_max, 'loc': locales_tmp})
-                        else:
-                            conn.execute(text("DELETE FROM ventas WHERE fecha_venta BETWEEN :fi AND :ff"),
-                                        {'fi': fecha_min, 'ff': fecha_max})
-                        conn.commit()
-                    st.success(f"🗑️ Período anterior eliminado")
-
-                # Cargar en chunks de 5000 filas
-                CHUNK = 5000
-                buf.seek(0)
-                total_ok = 0
-                progress = st.progress(0)
-                status   = st.empty()
-
-                # Contar total de líneas para progress bar
-                total_lines = sum(1 for _ in _io2.BytesIO(raw)) - 1  # -1 header
-                chunks_total = max(1, total_lines // CHUNK)
-
-                buf.seek(0)
-                for i, chunk in enumerate(pd.read_csv(buf, sep=sep, dtype=str, chunksize=CHUNK)):
-                    save_ventas_chunk(chunk, engine, skip_delete=True)
-                    total_ok += len(chunk)
-                    pct = min(1.0, (i+1) / chunks_total)
-                    progress.progress(pct)
-                    status.caption(f"Procesando... {total_ok:,} filas insertadas")
-
-                progress.progress(1.0)
-                status.empty()
-                st.success(f"✅ {total_ok:,} registros cargados correctamente.")
+                with st.spinner("Cargando..."):
+                    df_ven = pd.read_csv(_io2.BytesIO(raw), sep=sep, dtype=str)
+                    save_ventas(df_ven)
 
     with tab4:
         st.markdown("<div class='info-box'>Mapea SKUs de compras sin código de venta hacia SKUs equivalentes que sí tienen receta.<br>Ejemplo: Erdinger Trigo (BA-CA-078) → Erdinger Weissbier (BA-CA-066)</div>", unsafe_allow_html=True)
