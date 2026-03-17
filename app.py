@@ -2059,6 +2059,27 @@ if modulo.startswith("📦"):
                     for k in [k for k in st.session_state if k.startswith('chk_')]:
                         del st.session_state[k]
 
+                # Inicializar selección vacía — se llena después de renderizar la tabla
+                sel_rows = pd.DataFrame()
+                n_sel    = 0
+                ids_sel  = []
+                skus_sel = []
+                # Leer selección del multiselect (si ya existe en session_state)
+                _prev_sel = st.session_state.get('audit_multisel', [])
+                if _prev_sel:
+                    _opciones_tmp = [
+                        f'{r["sku"]} | MUC {float(r["muc"]):.4f} | {int(r["n_registros"])} reg. | {"🔴" if float(r["dispersion"])>8 else "🟡" if float(r["dispersion"])>2 else "⚪"} {float(r["dispersion"]):.0f if float(r["dispersion"])>8 else float(r["dispersion"]):.1f}×'
+                        for _, r in df_tabla.iterrows()
+                    ]
+                    sel_indices_prev = [i for i, opt in enumerate(_opciones_tmp) if opt in _prev_sel]
+                    if sel_indices_prev:
+                        sel_rows = df_tabla.iloc[sel_indices_prev].reset_index(drop=True)
+                        n_sel    = len(sel_rows)
+                        for _, r in sel_rows.iterrows():
+                            ids_sel  += _parse_ids(r['ids'])
+                            skus_sel.append(r['sku'])
+                        skus_sel = list(set(skus_sel))
+
                 # Panel de acciones ARRIBA de la tabla
                 if n_sel > 0:
                     st.markdown(f'**⚙️ {n_sel} grupo(s) — {len(ids_sel)} registros**')
