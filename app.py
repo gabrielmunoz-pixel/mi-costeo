@@ -183,18 +183,34 @@ TIPO_BAR_CONTROL = {
 def calcular_total_kg(producto, total, crudo=0, produccion=0, cocido=0, producto_control=None):
     """
     Calcula total_kg usando TABLA_CONV_INV.
-    Fórmula: total_kg = Total × convertor_porcion
-    Fallback para cocido: crudo + prod*cocido_conv + cocido/cocido_conv
+    Si hay desglose crudo/cocido/produccion:
+        total_kg = crudo + (cocido / factor_cocido) + (produccion × porcion)
+    Si solo hay total (porcionadas precocidas, forma_b):
+        total_kg = total × porcion
     """
     key = str(producto).strip().upper()
     conv = TABLA_CONV_INV.get(key)
+    crudo     = float(crudo     or 0)
+    produccion= float(produccion or 0)
+    cocido    = float(cocido    or 0)
+    total     = float(total     or 0)
+
     if conv:
-        total_kg = float(total or 0) * conv['porcion']
-        ctrl = conv['control']
+        ctrl         = conv['control']
+        porcion      = conv['porcion']
+        factor_cocido= conv['cocido']  # factor para convertir cocido → crudo equivalente
+        hay_desglose = (crudo + produccion + cocido) > 0
+        if hay_desglose:
+            # crudo ya está en kg; cocido se divide por factor (ej: 0.8 → /0.8); produccion × porcion
+            cocido_eq  = (cocido / factor_cocido) if factor_cocido > 0 else cocido
+            prod_eq    = produccion * porcion
+            total_kg   = crudo + cocido_eq + prod_eq
+        else:
+            # Solo total disponible (ej: porcionadas, forma_b)
+            total_kg = total * porcion
     else:
-        # Sin match: asumir porcion=1, intentar con control provisto
-        total_kg = float(total or 0)
-        ctrl = producto_control or producto
+        ctrl     = producto_control or producto
+        total_kg = total
     return total_kg, ctrl
 
 
@@ -2705,31 +2721,37 @@ if modulo.startswith("📦"):
                 st.markdown("**Inventarios en BD:**")
                 st.dataframe(df_inv_bd, use_container_width=True, hide_index=True)
 
-            # ── Re-mapeo de producto_control en registros existentes ──
+            # ── Re-mapeo de producto_control y recálculo de total_kg ──
             st.markdown("---")
-            st.markdown("**🔧 Re-mapear producto_control en BD**")
-            st.caption("Corrige registros existentes cuyo producto_control no fue mapeado correctamente (ej: cargados con Forma B).")
+            st.markdown("**🔧 Re-mapear producto_control y recalcular total_kg en BD**")
+            st.caption("Corrige producto_control y recalcula total_kg usando crudo/cocido/produccion almacenados.")
             if st.button("▶ Re-mapear inventarios existentes", key="btn_remap_inv"):
                 engine = get_engine()
                 if engine:
                     try:
-                        df_all = run_query("SELECT id, producto FROM inventarios WHERE producto IS NOT NULL")
+                        df_all = run_query("SELECT id, producto, total_original, crudo, produccion, cocido FROM inventarios WHERE producto IS NOT NULL")
                         if df_all.empty:
                             st.info("No hay registros en inventarios.")
                         else:
                             updates = []
                             for _, row in df_all.iterrows():
-                                prod = str(row['producto']).strip()
-                                _, ctrl = calcular_total_kg(prod, 1)
-                                updates.append({'id': int(row['id']), 'ctrl': ctrl})
+                                prod  = str(row['producto']).strip()
+                                total_kg_new, ctrl = calcular_total_kg(
+                                    prod,
+                                    float(row.get('total_original') or 0),
+                                    float(row.get('crudo')          or 0),
+                                    float(row.get('produccion')     or 0),
+                                    float(row.get('cocido')         or 0),
+                                )
+                                updates.append({'id': int(row['id']), 'ctrl': ctrl, 'tkg': total_kg_new})
                             with engine.connect() as conn:
                                 for u in updates:
                                     conn.execute(
-                                        text("UPDATE inventarios SET producto_control=:c WHERE id=:i"),
-                                        {'c': u['ctrl'], 'i': u['id']}
+                                        text("UPDATE inventarios SET producto_control=:c, total_kg=:t WHERE id=:i"),
+                                        {'c': u['ctrl'], 't': u['tkg'], 'i': u['id']}
                                     )
                                 conn.commit()
-                            st.success(f"✅ {len(updates)} registros actualizados con producto_control mapeado.")
+                            st.success(f"✅ {len(updates)} registros actualizados (producto_control + total_kg).")
                     except Exception as e:
                         st.error(f"Error en re-mapeo: {e}")
 
@@ -4052,29 +4074,6 @@ elif modulo.startswith("📊"):
                         f'<th style="{hs};text-align:right">DESV %</th></tr></thead>'
                         f'<tbody>{r3_html}</tbody></table></div>',
                         unsafe_allow_html=True)
-
-                # ── DEBUG TEMPORAL: desglose filas inventario ini/fin ──
-                with st.expander(f"🔍 DEBUG desglose inventario — {local_show}", expanded=False):
-                    q_debug = f"""
-                        SELECT tipo_inventario, producto, producto_control,
-                               total_original, total_kg, crudo, produccion, cocido, fuente
-                        FROM inventarios
-                        WHERE TRIM(periodo)=:p
-                          AND LOWER(TRIM(local))=:l
-                          AND UPPER(TRIM(producto_control)) IN ('PECHUGA DE POLLO','PLATEADA','COSTILLAS','LOMO DE CENTRO','PERNIL','PANCETA LAMINADA')
-                        ORDER BY tipo_inventario, producto_control, producto
-                    """
-                    df_debug = run_query(q_debug, {'p': periodo_show, 'l': local_show.lower().strip()})
-                    if not df_debug.empty:
-                        st.dataframe(df_debug, use_container_width=True)
-                        # Mostrar suma por tipo+control
-                        st.markdown("**Suma total_kg por tipo_inventario + producto_control:**")
-                        st.dataframe(
-                            df_debug.groupby(['tipo_inventario','producto_control'])['total_kg'].sum().reset_index(),
-                            use_container_width=True
-                        )
-                    else:
-                        st.warning("Sin filas para esos productos en este local/período")
 
                 # ── SECCIÓN 5: Control de productos críticos ──────
                 st.markdown(f"**5. Control de Productos Críticos**")
