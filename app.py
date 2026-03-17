@@ -4026,20 +4026,24 @@ elif modulo.startswith("📊"):
 
                 # ── DEBUG TEMPORAL: ver contenido crudo de inventarios ──
                 with st.expander(f"🔍 DEBUG inventarios — {local_show}", expanded=False):
-                    st.markdown("**`ini` (Inventario Inicial) — filas para este local:**")
+                    st.markdown("**Valores únicos de `producto_control` en `ini`:**")
                     if ini is not None and not ini.empty:
-                        st.dataframe(ini, use_container_width=True)
+                        for val in ini['producto_control'].tolist():
+                            repr_val = repr(val)
+                            st.code(f"valor: {val!r}  |  bytes: {val.encode('utf-8').hex()}  |  len: {len(val)}")
                     else:
-                        st.warning("ini está VACÍO para este local")
-                    st.markdown("**`fin` (Inventario Final) — filas para este local:**")
-                    if fin is not None and not fin.empty:
-                        st.dataframe(fin, use_container_width=True)
-                    else:
-                        st.warning("fin está VACÍO para este local")
-                    st.markdown("**`df_inv_ini` raw (todos los locales, primeras 30 filas):**")
-                    st.dataframe(df_ini.head(30) if df_ini is not None and not df_ini.empty else pd.DataFrame(), use_container_width=True)
-                    st.markdown(f"**local_show:** `{local_show}` | **locales_show:** `{locales_show}`")
-                    st.markdown(f"**Valores únicos de `local` en df_inv_ini:** `{df_ini['local'].unique().tolist() if df_ini is not None and not df_ini.empty else 'N/A'}`")
+                        st.warning("ini está VACÍO")
+
+                    st.markdown("**Valores buscados en cat_labels (CARNES BLANCAS):**")
+                    for p in ['PECHUGA DE POLLO','COSTILLAS','CHULETA KASSLER','LOMO DE CENTRO','PERNIL','JAMÓN','TOCINO AHUMADO','PANCETA LAMINADA']:
+                        st.code(f"valor: {p!r}  |  bytes: {p.encode('utf-8').hex()}  |  len: {len(p)}")
+
+                    st.markdown("**Prueba de _getkg directo para PECHUGA DE POLLO:**")
+                    if ini is not None and not ini.empty and 'producto_control' in ini.columns:
+                        prod_test = 'PECHUGA DE POLLO'
+                        m = ini['producto_control'].astype(str).str.upper().str.strip() == prod_test
+                        st.write(f"Mask result: {m.tolist()}")
+                        st.write(f"Rows matched: {ini[m]}")
 
                 # ── SECCIÓN 5: Control de productos críticos ──────
                 st.markdown(f"**5. Control de Productos Críticos**")
