@@ -3538,18 +3538,22 @@ elif modulo.startswith("📊"):
         st.markdown("### 📋 Informe de Costos")
 
         # ── Controles ────────────────────────────────────────────
-        ic1, ic2, ic3 = st.columns(3)
+        ic1, ic2, ic3, ic4, ic5 = st.columns(5)
         with ic1:
-            periodo_ic = st.text_input("Período", key="ic_periodo", placeholder="ej: 2-8 Mar 2026")
+            periodo_ic = st.text_input("Período inventario", key="ic_periodo", placeholder="ej: 2-8 Mar 2026")
         with ic2:
+            fecha_ic_i = st.date_input("Fecha inicio compras/ventas", key="ic_fi", value=None)
+        with ic3:
+            fecha_ic_f = st.date_input("Fecha fin compras/ventas", key="ic_ff", value=None)
+        with ic4:
             locales_ic_q = run_query("SELECT DISTINCT local FROM inventarios WHERE local IS NOT NULL ORDER BY 1")
             locales_ic = ["Todos"] + locales_ic_q['local'].tolist() if not locales_ic_q.empty else ["Todos"]
             local_ic = st.selectbox("Local", locales_ic, key="ic_local")
-        with ic3:
+        with ic5:
             st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-            generar_ic = st.button("▶ Generar Informe de Costos", key="btn_ic", use_container_width=True)
+            generar_ic = st.button("▶ Generar", key="btn_ic", use_container_width=True)
 
-        if generar_ic and periodo_ic:
+        if generar_ic and periodo_ic and fecha_ic_i and fecha_ic_f:
             with st.spinner("Calculando informe de costos..."):
                 engine = get_engine()
 
@@ -3675,93 +3679,59 @@ elif modulo.startswith("📊"):
                     if locales: params['ls'] = [l.upper() for l in locales]
                     return run_query(q, params)
 
-                # ── Parsear fechas del período ────────────────────────
-                # Si el período tiene fechas reales usarlas, sino usar rango de inventario
-                from datetime import date, timedelta
-                inv_fechas = run_query(
-                    "SELECT MIN(periodo) as p FROM inventarios WHERE periodo=:p",
-                    {'p': periodo_ic})
-                # Usar compras del período — buscar rango de fechas en BD
-                compras_rango = run_query(
-                    "SELECT MIN(fecha_dte::date) as fi, MAX(fecha_dte::date) as ff FROM compras WHERE fecha_dte IS NOT NULL")
-                if not compras_rango.empty and compras_rango['fi'].iloc[0]:
-                    fecha_ic_i = f_inicio  # usar los filtros globales del módulo
-                    fecha_ic_f = f_fin
-                else:
-                    fecha_ic_i = date.today().replace(day=1)
-                    fecha_ic_f = date.today()
+                # ── Fechas del período — inputs explícitos ────────────
+                from datetime import date as _date
+                st.session_state['ic_needs_dates'] = True
 
-                # Cargar datos
+                # Cargar datos — ventas y compras usan rango de fechas explícito
                 df_inv_ini = get_inv(periodo_ic, 'Inicial', locales_sel)
                 df_inv_fin = get_inv(periodo_ic, 'Final',   locales_sel)
                 df_uso_ic  = get_uso(periodo_ic, locales_sel)
-                df_ventas_ic = get_ventas_ic(fecha_ic_i, fecha_ic_f, locales_sel)
+                df_ventas_ic   = get_ventas_ic(fecha_ic_i, fecha_ic_f, locales_sel)
                 df_compras_cat = get_compras_cat(fecha_ic_i, fecha_ic_f, locales_sel)
-                df_bar_ven = get_bar_ventas(fecha_ic_i, fecha_ic_f, locales_sel)
-                df_no_reg  = get_no_registrado(periodo_ic, locales_sel)
+                df_bar_ven     = get_bar_ventas(fecha_ic_i, fecha_ic_f, locales_sel)
+                df_no_reg      = get_no_registrado(periodo_ic, locales_sel)
+
+                # Compras KG por producto_control usando clasificación
+                # Cruzar compras con clas_nomb_prod usando nombre_producto
+                df_compras_kg_raw = run_query(f"""
+                    SELECT c.local,
+                           COALESCE(cn.categoria_control, UPPER(c.nombre_producto)) as producto_control,
+                           SUM(c.cant_conv / 1000.0) as kg,
+                           SUM(c.costo_realfinal) as costo
+                    FROM compras c
+                    LEFT JOIN clas_nomb_prod cn
+                           ON UPPER(c.nombre_producto) = UPPER(cn.nombre_producto)
+                    WHERE c.fecha_dte::date BETWEEN :i AND :f
+                      AND c.categoria_producto IN ('ALIMENTOS','VERDURAS','BAR')
+                      {"AND LOWER(c.local)=ANY(:ls)" if locales_sel else ""}
+                    GROUP BY c.local, COALESCE(cn.categoria_control, UPPER(c.nombre_producto))
+                """, {'i': str(fecha_ic_i), 'f': str(fecha_ic_f),
+                      **({'ls': [l.lower() for l in locales_sel]} if locales_sel else {})})
 
                 # ── Categorías de control ────────────────────────────
-                categorias_control = {
+                cat_labels = {{
                     'CARNES ROJAS':       ['POSTA','FILETE','PLATEADA','LOMO LISO','LOMO VETADO','GRASA DE WAGYU'],
                     'CARNES BLANCAS':     ['PECHUGA DE POLLO','COSTILLAS','CHULETA KASSLER','LOMO DE CENTRO','PERNIL','JAMÓN','TOCINO AHUMADO','PANCETA LAMINADA'],
                     'VERDURAS':           ['PALTA','TOMATE','LECHUGA'],
                     'PESCADOS Y MARISCOS':['FILETE SALMON','SALMON SLICE LAMINADO','CAMARON','CAMARON APANADO','ATUN','LOCOS','ERIZOS'],
                     'OTROS':              ['QUESO RANCO','QUESO CHEDDAR','QUESO PARMESANO','PAPAS FRITAS'],
-                    'PAN':                ['FICA 14 CMS','MOLDE BANQUETE','MOLDE BANQUETE INTEGRAL','PAN FRICA 12 CM','PAN FRICA N8','HOT - DOG 19 CM.'],
+                    'PAN':                ['FRICA 14 CMS','MOLDE BANQUETE','MOLDE BANQUETE INTEGRAL','PAN FRICA 12 CM','PAN FRICA N8','HOT - DOG 19 CM.'],
                     'BAR':                ['SCHOP','JUGOS'],
-                }
-
-                def calcular_control_categoria(cat_nombre, productos, local=None):
-                    rows = []
-                    for prod in productos:
-                        def _kg(df, prod, local):
-                            if df is None or df.empty: return 0.0
-                            mask = df['producto_control'].str.upper() == prod.upper()
-                            if local: mask &= (df['local'].str.lower() == local.lower())
-                            return float(df[mask]['kg'].sum() or 0)
-
-                        ini_kg  = _kg(df_inv_ini, prod, local)
-                        fin_kg  = _kg(df_inv_fin, prod, local)
-                        uso_kg  = _kg(df_uso_ic,  prod, local)
-
-                        # Compras KG: buscar en uso o inventario
-                        comp_mask = df_uso_ic['producto_control'].str.upper() == prod.upper() if not df_uso_ic.empty else pd.Series(dtype=bool)
-                        if local and not df_uso_ic.empty:
-                            comp_mask &= df_uso_ic['local'].str.lower() == local.lower()
-                        costo_comp = float(df_uso_ic[comp_mask]['costo'].sum()) if not df_uso_ic.empty and comp_mask.any() else 0
-
-                        comp_kg = ini_kg + (costo_comp / max(costo_comp/max(uso_kg,0.001), 0.001) if uso_kg > 0 else 0)
-                        real_ut = ini_kg - fin_kg + uso_kg  # simplificado sin compras KG exactas
-                        desv_kg = real_ut - uso_kg
-                        desv_pct = desv_kg / uso_kg if uso_kg > 0 else 0
-
-                        if ini_kg == 0 and fin_kg == 0 and uso_kg == 0: continue
-                        rows.append({
-                            'producto': prod,
-                            'compra_total': costo_comp,
-                            'inv_ini': ini_kg,
-                            'inv_fin': fin_kg,
-                            'comp_kg': uso_kg,  # usamos uso como proxy compras
-                            'real_ut': real_ut,
-                            'uso_rec': uso_kg,
-                            'desv_kg': desv_kg,
-                            'desv_pct': desv_pct,
-                            'costo_desv': desv_kg * (costo_comp / max(uso_kg, 0.001)),
-                            'kg_merma': 0,
-                        })
-                    return pd.DataFrame(rows)
+                }}
 
                 st.session_state['ic_data'] = {
                     'periodo': periodo_ic,
                     'locales': locales_sel,
                     'df_ventas': df_ventas_ic,
                     'df_compras_cat': df_compras_cat,
+                    'df_compras_kg': df_compras_kg_raw,
                     'df_bar_ven': df_bar_ven,
                     'df_inv_ini': df_inv_ini,
                     'df_inv_fin': df_inv_fin,
                     'df_uso': df_uso_ic,
                     'df_no_reg': df_no_reg,
-                    'categorias': categorias_control,
+                    'cat_labels': cat_labels,
                     'fecha_i': fecha_ic_i,
                     'fecha_f': fecha_ic_f,
                 }
@@ -3775,6 +3745,8 @@ elif modulo.startswith("📊"):
             df_cc  = d['df_compras_cat']
             df_bv  = d['df_bar_ven']
             df_nr  = d.get('df_no_reg', pd.DataFrame())
+            df_ckr = d.get('df_compras_kg', pd.DataFrame())
+            cat_labels = d.get('cat_labels', {})
             df_ini = d['df_inv_ini']
             df_fin = d['df_inv_fin']
             df_uso = d['df_uso']
@@ -3801,10 +3773,11 @@ elif modulo.startswith("📊"):
 
                 # ── Filtrar por local ─────────────────────────────
                 def filt(df, col='local'):
-                    if df is None or df.empty: return pd.DataFrame()
-                    return df[df[col].str.lower() == local_show.lower()].copy()
+                    if df is None or df.empty or col not in df.columns: return pd.DataFrame()
+                    return df[df[col].astype(str).str.lower() == local_show.lower()].copy()
 
-                nr  = filt(df_nr)
+                nr   = filt(df_nr)
+                ckr  = filt(df_ckr)
 
                 vv  = filt(df_v)
                 cc  = filt(df_cc)
@@ -3952,33 +3925,43 @@ elif modulo.startswith("📊"):
                 st.markdown(f"**5. Control de Productos Críticos**")
 
                 for cat_nombre, prods in cat_labels.items():
+                    def _getkg(df, prod):
+                        if df is None or df.empty or 'producto_control' not in df.columns: return 0.0
+                        m = df['producto_control'].astype(str).str.upper() == prod.upper()
+                        return float(df[m]['kg'].sum() or 0)
+                    def _getcosto(df, prod):
+                        if df is None or df.empty or 'producto_control' not in df.columns: return 0.0
+                        m = df['producto_control'].astype(str).str.upper() == prod.upper()
+                        col = 'costo' if 'costo' in df.columns else None
+                        return float(df[m][col].sum() or 0) if col else 0.0
+
                     filas_ctrl = []
                     for prod in prods:
-                        def _kg2(df, prod):
-                            if df is None or df.empty or 'producto_control' not in df.columns: return 0.0
-                            m = df['producto_control'].astype(str).str.upper() == prod.upper()
-                            return float(df[m]['kg'].sum() or 0)
-                        def _costo(df, prod):
-                            if df is None or df.empty: return 0.0
-                            m = df['producto_control'].str.upper() == prod.upper()
-                            return float(df[m]['costo'].sum() or 0) if 'costo' in df.columns else 0.0
+                        ini_kg  = _getkg(ini,  prod)   # inventario inicial KG
+                        fin_kg  = _getkg(fin,  prod)   # inventario final KG
+                        uso_kg  = _getkg(uso,  prod)   # uso teórico recetario (Toteat) KG
+                        nr_kg   = _getkg(nr,   prod)   # no registrado con signo
+                        comp_kg = _getkg(ckr,  prod)   # compras reales KG del período
+                        costo_u = _getcosto(ckr, prod) # costo real compras período
 
-                        ini_kg   = _kg2(ini, prod)
-                        fin_kg   = _kg2(fin, prod)
-                        uso_kg   = _kg2(uso, prod)
-                        costo_u  = _costo(uso, prod)
-                        nr_kg    = _kg2(nr, prod)   # no registrado (puede ser + o -)
-                        # Real utilizado = Inv.Ini + Compras + No Registrado - Inv.Fin
-                        # Como no tenemos compras KG exactas, usamos:
-                        # comp_kg (compras) = Real Utilizado = Inv.Ini - Inv.Fin + uso_kg + nr_kg
-                        comp_kg = ini_kg + uso_kg + nr_kg - fin_kg
-                        real_ut = comp_kg
-                        desv_kg = real_ut - uso_kg
+                        # Si no hay compras clasificadas disponibles, estimar por balance
+                        if comp_kg == 0:
+                            comp_kg = max(0.0, fin_kg - ini_kg + uso_kg - nr_kg)
+
+                        # Costo: si no hay de compras, usar uso_ingredientes
+                        if costo_u == 0:
+                            costo_u = _getcosto(uso, prod)
+
+                        # Real Utilizado = Inv.Ini + Compras + No Reg - Inv.Fin
+                        real_ut  = ini_kg + comp_kg + nr_kg - fin_kg
+
+                        # Desviación = Real - Recetario
+                        desv_kg  = real_ut - uso_kg
                         desv_pct = desv_kg / uso_kg if uso_kg > 0 else 0
-                        precio_u = costo_u / max(uso_kg, 0.001)
+                        precio_u = costo_u / max(comp_kg, 0.001)
                         costo_desv = desv_kg * precio_u
 
-                        if ini_kg == 0 and fin_kg == 0 and uso_kg == 0 and costo_u == 0:
+                        if ini_kg == 0 and fin_kg == 0 and uso_kg == 0 and comp_kg == 0:
                             continue
                         filas_ctrl.append((prod, costo_u, ini_kg, fin_kg, comp_kg, real_ut, uso_kg, desv_kg, desv_pct, costo_desv))
 
