@@ -1514,7 +1514,7 @@ if modulo.startswith("📦"):
     </div>
     """, unsafe_allow_html=True)
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📖 Recetario", "🛒 Compras", "📈 Ventas", "🔀 Equivalencias SKU", "🔍 Auditoría Compras"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📖 Recetario", "🛒 Compras", "📈 Ventas", "🔀 Equivalencias SKU", "🔍 Auditoría Compras", "📦 Inventario / Uso"])
 
     with tab1:
         st.markdown("<div class='info-box'>Carga las hojas <b>Directos</b> y <b>Procesados</b> de tu recetario. Esto reemplaza el recetario actual.</div>", unsafe_allow_html=True)
@@ -2225,6 +2225,209 @@ if modulo.startswith("📦"):
                         ids_sel  += _parse_ids(r['ids'])
                         skus_sel.append(r['sku'])
                     skus_sel = list(set(skus_sel))
+    with tab6:
+        st.markdown("<div class='info-box'>Carga el <b>Uso de Ingredientes</b> (Toteat) y el <b>Inventario</b> por local (hojas Alimentos y Bar). Puedes cargar un local individual o todos los locales.</div>", unsafe_allow_html=True)
+
+        t6a, t6b = st.tabs(["📊 Uso de Ingredientes", "🏪 Inventario"])
+
+        with t6a:
+            st.markdown("#### Uso de Ingredientes (Toteat)")
+            st.caption("Archivo con hoja **UsoIngredientes**: columnas Código Ingrediente, Ingrediente, Cantidad, Medida, Costo, Local")
+            f_uso = st.file_uploader("Archivo Uso de Ingredientes (.xlsx)", type=["xlsx"], key="uso_ing")
+            if f_uso:
+                col_local_uso, _ = st.columns([2,3])
+                with col_local_uso:
+                    locales_uso_disponibles = []
+                    try:
+                        df_uso_prev = pd.read_excel(f_uso, sheet_name='UsoIngredientes', header=0)
+                        locales_uso_disponibles = sorted(df_uso_prev['Local'].dropna().unique().tolist()) if 'Local' in df_uso_prev.columns else []
+                    except: pass
+                    modo_uso = st.radio("Modo de carga", ["Todos los locales", "Local específico"], key="modo_uso", horizontal=True)
+                    local_uso_sel = None
+                    if modo_uso == "Local específico" and locales_uso_disponibles:
+                        local_uso_sel = st.selectbox("Local", locales_uso_disponibles, key="local_uso_sel")
+
+                if st.button("💾 Cargar Uso de Ingredientes", key="btn_uso"):
+                    try:
+                        df_uso = pd.read_excel(f_uso, sheet_name='UsoIngredientes', header=0)
+                        df_uso.columns = df_uso.columns.str.strip()
+                        df_uso = df_uso.rename(columns={
+                            'Código Ingrediente': 'sku_ingrediente',
+                            'Ingrediente': 'nombre_ingrediente',
+                            'Cantidad': 'cantidad',
+                            'Medida': 'medida',
+                            'Costo': 'costo',
+                            'Local': 'local'
+                        })
+                        df_uso['cantidad'] = pd.to_numeric(df_uso['cantidad'], errors='coerce').fillna(0)
+                        df_uso['costo']    = pd.to_numeric(df_uso['costo'],    errors='coerce').fillna(0)
+                        df_uso = df_uso.dropna(subset=['sku_ingrediente','local'])
+
+                        if local_uso_sel:
+                            df_uso = df_uso[df_uso['local'] == local_uso_sel]
+
+                        # Agregar periodo (lo guardamos como texto para referencia)
+                        df_uso['periodo'] = f_uso.name.replace('.xlsx','').replace('.csv','')
+
+                        engine = get_engine()
+                        with engine.connect() as conn:
+                            if local_uso_sel:
+                                conn.execute(text("DELETE FROM uso_ingredientes WHERE local = :l AND periodo = :p"),
+                                             {'l': local_uso_sel, 'p': df_uso['periodo'].iloc[0]})
+                            else:
+                                conn.execute(text("DELETE FROM uso_ingredientes WHERE periodo = :p"),
+                                             {'p': df_uso['periodo'].iloc[0]})
+                            conn.commit()
+
+                        cols_bd = ['sku_ingrediente','nombre_ingrediente','cantidad','medida','costo','local','periodo']
+                        df_uso[[c for c in cols_bd if c in df_uso.columns]].to_sql(
+                            'uso_ingredientes', engine, if_exists='append', index=False)
+                        st.success(f"✅ {len(df_uso):,} registros cargados — {df_uso['local'].nunique()} local(es)")
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+                        st.exception(e)
+
+            # Vista de lo cargado
+            df_uso_bd = run_query("SELECT periodo, local, COUNT(*) as registros FROM uso_ingredientes GROUP BY periodo, local ORDER BY periodo DESC, local")
+            if not df_uso_bd.empty:
+                st.markdown("**Uso de ingredientes en BD:**")
+                st.dataframe(df_uso_bd, use_container_width=True, hide_index=True)
+
+        with t6b:
+            st.markdown("#### Inventario por Local")
+            st.caption("Archivo con hojas **Alimentos** y **Bar** (formato Inventario_Local.xlsx). Indica el local y si es inventario inicial o final.")
+
+            ci1, ci2, ci3 = st.columns(3)
+            with ci1:
+                local_inv = st.selectbox("Local", ["Chicureo","La Dehesa","La Reina","Las Condes",
+                                                    "Los Trapenses","Macul","Nueva Providencia",
+                                                    "Providencia","Quilin","Vitacura"], key="local_inv")
+            with ci2:
+                tipo_inv = st.selectbox("Tipo", ["Inicial","Final"], key="tipo_inv")
+            with ci3:
+                periodo_inv = st.text_input("Período (ej: 2-8 Mar)", key="periodo_inv", placeholder="2-8 Mar")
+
+            f_inv = st.file_uploader("Archivo Inventario (.xlsx)", type=["xlsx"], key="inv_file")
+
+            if f_inv and periodo_inv:
+                if st.button("💾 Cargar Inventario", key="btn_inv"):
+                    try:
+                        # Tablas de conversión hardcodeadas (de Tablas 1 en INV_AJUSTE)
+                        conversores = {
+                            'CHULETA KASSLER':    {'control':'CHULETA KASSLER',    'porcion':1.0,   'rend':1.0, 'crudo':1.0,   'cocido':1.0},
+                            'COSTILLAS':          {'control':'COSTILLAS',          'porcion':1.0,   'rend':1.0, 'crudo':1.0,   'cocido':0.75},
+                            'JAMÓN':              {'control':'JAMÓN',              'porcion':1.0,   'rend':1.0, 'crudo':1.0,   'cocido':1.0},
+                            'LOMO DE CENTRO':     {'control':'LOMO DE CENTRO',     'porcion':1.0,   'rend':1.0, 'crudo':1.0,   'cocido':1.0},
+                            'LOMO DE CENTRO(PORCIONADAS)': {'control':'LOMO DE CENTRO','porcion':0.18,'rend':1.0,'crudo':0.18,'cocido':1.0},
+                            'PANCETA LAMINADA':   {'control':'PANCETA LAMINADA',   'porcion':1.0,   'rend':1.0, 'crudo':1.0,   'cocido':0.5},
+                            'DESPUNTE PECHUGA DE POLLO': {'control':'PECHUGA DE POLLO','porcion':1.0,'rend':1.0,'crudo':1.0,  'cocido':1.0},
+                            'PECHUGA DE POLLO':   {'control':'PECHUGA DE POLLO',   'porcion':1.0,   'rend':1.0, 'crudo':1.0,   'cocido':0.8},
+                            'PERNIL':             {'control':'PERNIL',             'porcion':1.0,   'rend':1.0, 'crudo':1.0,   'cocido':1.0},
+                            'PERNIL(PORCIONADAS)':{'control':'PERNIL',             'porcion':0.18,  'rend':1.0, 'crudo':0.18, 'cocido':1.0},
+                            'TOCINO AHUMADO':     {'control':'TOCINO AHUMADO',     'porcion':1.0,   'rend':1.0, 'crudo':1.0,   'cocido':1.0},
+                            'FILETE':             {'control':'FILETE',             'porcion':1.0,   'rend':1.0, 'crudo':1.0,   'cocido':1.0},
+                            'PLATEADA':           {'control':'PLATEADA',           'porcion':1.0,   'rend':1.0, 'crudo':1.0,   'cocido':0.5},
+                            'LOMO LISO':          {'control':'LOMO LISO',          'porcion':1.0,   'rend':1.0, 'crudo':1.0,   'cocido':1.0},
+                            'LOMO VETADO':        {'control':'LOMO VETADO',        'porcion':1.0,   'rend':1.0, 'crudo':1.0,   'cocido':1.0},
+                            'POSTA':              {'control':'POSTA',              'porcion':1.0,   'rend':1.0, 'crudo':1.0,   'cocido':1.0},
+                            'PALTA':              {'control':'PALTA',              'porcion':1.0,   'rend':1.0, 'crudo':1.0,   'cocido':1.0},
+                            'TOMATE':             {'control':'TOMATE',             'porcion':1.0,   'rend':1.0, 'crudo':1.0,   'cocido':1.0},
+                            'LECHUGA':            {'control':'LECHUGA',            'porcion':1.0,   'rend':1.0, 'crudo':1.0,   'cocido':1.0},
+                            'QUESO RANCO':        {'control':'QUESO RANCO',        'porcion':1.0,   'rend':1.0, 'crudo':1.0,   'cocido':1.0},
+                            'QUESO CHEDDAR':      {'control':'QUESO CHEDDAR',      'porcion':1.0,   'rend':1.0, 'crudo':1.0,   'cocido':1.0},
+                            'QUESO PARMESANO':    {'control':'QUESO PARMESANO',    'porcion':1.0,   'rend':1.0, 'crudo':1.0,   'cocido':1.0},
+                            'PAPAS FRITAS':       {'control':'PAPAS FRITAS',       'porcion':1.0,   'rend':1.0, 'crudo':1.0,   'cocido':1.0},
+                            'FILETE SALMON':      {'control':'FILETE SALMON',      'porcion':1.0,   'rend':1.0, 'crudo':1.0,   'cocido':1.0},
+                            'ATUN':               {'control':'ATUN',               'porcion':1.0,   'rend':1.0, 'crudo':1.0,   'cocido':1.0},
+                            'CAMARON':            {'control':'CAMARON',            'porcion':1.0,   'rend':1.0, 'crudo':1.0,   'cocido':1.0},
+                            'CAMARON APANADO':    {'control':'CAMARON APANADO',    'porcion':1.0,   'rend':1.0, 'crudo':1.0,   'cocido':1.0},
+                            'SALMON SLICE LAMINADO':{'control':'SALMON SLICE LAMINADO','porcion':1.0,'rend':1.0,'crudo':1.0,  'cocido':1.0},
+                            'LOCOS':              {'control':'LOCOS',              'porcion':1.0,   'rend':1.0, 'crudo':1.0,   'cocido':1.0},
+                            'ERIZOS':             {'control':'ERIZOS',             'porcion':1.0,   'rend':1.0, 'crudo':1.0,   'cocido':1.0},
+                            'GRASA DE WAGYU':     {'control':'GRASA DE WAGYU',     'porcion':1.0,   'rend':1.0, 'crudo':1.0,   'cocido':1.0},
+                        }
+
+                        registros = []
+
+                        # ── Alimentos ─────────────────────────────────────
+                        df_ali = pd.read_excel(f_inv, sheet_name='Alimentos', header=None)
+                        # Header en fila 1, datos desde fila 2
+                        df_ali.columns = df_ali.iloc[1]
+                        df_ali = df_ali.iloc[2:].copy().reset_index(drop=True)
+                        df_ali = df_ali[df_ali['PRODUCTO'].notna()].copy()
+
+                        for _, row in df_ali.iterrows():
+                            prod = str(row.get('PRODUCTO','')).strip()
+                            if not prod or prod == 'nan': continue
+                            um   = str(row.get('Unidad de Medida','')).strip()
+                            crudo  = pd.to_numeric(row.get('Crudo',0),    errors='coerce') or 0
+                            prod_  = pd.to_numeric(row.get('Producción',0),errors='coerce') or 0
+                            cocido = pd.to_numeric(row.get('Cocido',0),   errors='coerce') or 0
+                            total  = pd.to_numeric(row.get('Total',0),    errors='coerce') or 0
+                            tipo   = str(row.get('TIPO','')).strip()
+
+                            # Conversión a KG equivalente
+                            conv = conversores.get(prod, {'control': prod, 'porcion':1.0,'cocido':1.0})
+                            conv_cocido = conv['cocido']
+                            if conv_cocido > 0:
+                                total_kg = crudo + prod_ + (cocido / conv_cocido)
+                            else:
+                                total_kg = crudo + prod_ + cocido
+                            # Porciones en UND: aplicar convertor_porcion
+                            if um.upper() in ['UN','UND','UNI','UNID']:
+                                total_kg = total * conv['porcion']
+                            producto_control = conv['control']
+
+                            registros.append({
+                                'local': local_inv, 'periodo': periodo_inv,
+                                'tipo_inventario': tipo_inv,
+                                'producto': prod, 'producto_control': producto_control,
+                                'um': um, 'crudo': crudo, 'produccion': prod_,
+                                'cocido': cocido, 'total_original': total,
+                                'total_kg': total_kg, 'tipo': tipo, 'fuente': 'alimentos'
+                            })
+
+                        # ── Bar ───────────────────────────────────────────
+                        df_bar = pd.read_excel(f_inv, sheet_name='Bar', header=None)
+                        df_bar.columns = df_bar.iloc[1]
+                        df_bar = df_bar.iloc[2:].copy().reset_index(drop=True)
+                        df_bar = df_bar[df_bar['PRODUCTO'].notna()].copy()
+
+                        for _, row in df_bar.iterrows():
+                            prod = str(row.get('PRODUCTO','')).strip()
+                            if not prod or prod == 'nan': continue
+                            um   = str(row.get('Unidad de Medida','')).strip()
+                            total = pd.to_numeric(row.get('Total',0), errors='coerce') or 0
+                            tipo  = str(row.get('TIPO','')).strip()
+                            registros.append({
+                                'local': local_inv, 'periodo': periodo_inv,
+                                'tipo_inventario': tipo_inv,
+                                'producto': prod, 'producto_control': prod,
+                                'um': um, 'crudo': 0, 'produccion': 0,
+                                'cocido': 0, 'total_original': total,
+                                'total_kg': total, 'tipo': tipo, 'fuente': 'bar'
+                            })
+
+                        df_inv_save = pd.DataFrame(registros)
+                        engine = get_engine()
+                        with engine.connect() as conn:
+                            conn.execute(text(
+                                "DELETE FROM inventarios WHERE local=:l AND periodo=:p AND tipo_inventario=:t"),
+                                {'l': local_inv, 'p': periodo_inv, 't': tipo_inv})
+                            conn.commit()
+                        df_inv_save.to_sql('inventarios', engine, if_exists='append', index=False)
+                        st.success(f"✅ {len(df_inv_save)} registros de inventario {tipo_inv} cargados para {local_inv} — {periodo_inv}")
+
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+                        st.exception(e)
+
+            # Vista de inventarios cargados
+            df_inv_bd = run_query("SELECT periodo, tipo_inventario, local, COUNT(*) as items FROM inventarios GROUP BY periodo, tipo_inventario, local ORDER BY periodo DESC, tipo_inventario, local")
+            if not df_inv_bd.empty:
+                st.markdown("**Inventarios en BD:**")
+                st.dataframe(df_inv_bd, use_container_width=True, hide_index=True)
+
 # ============================================================
 # MÓDULO: EXPLOSIÓN MRP
 # ============================================================
