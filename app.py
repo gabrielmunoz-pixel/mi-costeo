@@ -1514,7 +1514,7 @@ if modulo.startswith("📦"):
     </div>
     """, unsafe_allow_html=True)
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📖 Recetario", "🛒 Compras", "📈 Ventas", "🔀 Equivalencias SKU", "🔍 Auditoría Compras", "📦 Inventario / Uso"])
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📖 Recetario", "🛒 Compras", "📈 Ventas", "🔀 Equivalencias SKU", "🔍 Auditoría Compras", "📦 Inventario / Uso", "🗂️ Clasificación"])
 
     with tab1:
         st.markdown("<div class='info-box'>Carga las hojas <b>Directos</b> y <b>Procesados</b> de tu recetario. Esto reemplaza el recetario actual.</div>", unsafe_allow_html=True)
@@ -2667,6 +2667,167 @@ if modulo.startswith("📦"):
                 st.markdown("**No registrados en BD:**")
                 st.dataframe(df_nr_bd, use_container_width=True, hide_index=True)
 
+    with tab7:
+        st.markdown("#### 🗂️ Clasificación de Productos")
+        st.markdown("<div class='info-box'>Carga el archivo <b>Prod_Control.xlsx</b> con las hojas <b>Nomb Prod</b>, <b>Proveedor</b> y <b>Maestro SKU</b>. El sistema clasificará automáticamente todos los productos de compras usando 3 planes en cascada.</div>", unsafe_allow_html=True)
+
+        f_clas = st.file_uploader("Archivo de Clasificación (.xlsx)", type=["xlsx"], key="clas_file")
+
+        if f_clas:
+            if st.button("💾 Cargar y Clasificar", key="btn_clas"):
+                with st.spinner("Cargando tablas y clasificando compras..."):
+                    try:
+                        import io as _io5
+                        raw_c = f_clas.read()
+                        xls_c = pd.ExcelFile(_io5.BytesIO(raw_c))
+                        engine = get_engine()
+
+                        # ── Leer las 3 hojas ──────────────────────────────
+                        df_np   = pd.read_excel(xls_c, 'Nomb Prod',   header=0)
+                        df_prov = pd.read_excel(xls_c, 'Proveedor',   header=0)
+                        df_msku = pd.read_excel(xls_c, 'Maestro SKU', header=0)
+
+                        df_np.columns   = ['nombre_producto','categoria_control','categoria']
+                        df_prov.columns = ['nombre_proveedor','categoria']
+                        df_msku.columns = ['sku','descripcion']
+
+                        # Normalizar
+                        df_np['nombre_norm'] = df_np['nombre_producto'].fillna('').astype(str).str.strip().str.upper()
+                        df_np['categoria_control'] = df_np['categoria_control'].fillna('').astype(str).str.strip()
+                        df_np['categoria'] = df_np['categoria'].fillna('').astype(str).str.strip()
+                        df_prov['prov_norm'] = df_prov['nombre_proveedor'].fillna('').astype(str).str.strip().str.upper()
+                        df_prov['categoria'] = df_prov['categoria'].fillna('').astype(str).str.strip()
+                        df_msku['sku_norm']  = df_msku['sku'].fillna('').astype(str).str.strip().str.upper()
+                        df_msku['desc_norm'] = df_msku['descripcion'].fillna('').astype(str).str.strip().str.upper()
+
+                        # ── Guardar tablas en BD ──────────────────────────
+                        df_np_save = df_np[['nombre_producto','categoria_control','categoria']].copy()
+                        df_np_save.columns = ['nombre_producto','categoria_control','categoria']
+                        df_np_save = df_np_save[df_np_save['nombre_producto'].astype(str).str.strip() != '']
+
+                        df_prov_save = df_prov[['nombre_proveedor','categoria']].copy()
+                        df_prov_save = df_prov_save[df_prov_save['nombre_proveedor'].astype(str).str.strip() != '']
+
+                        df_msku_save = df_msku[['sku','descripcion']].copy()
+                        df_msku_save = df_msku_save[df_msku_save['sku'].astype(str).str.strip() != '']
+
+                        with engine.connect() as conn:
+                            conn.execute(text("DROP TABLE IF EXISTS clas_nomb_prod"))
+                            conn.execute(text("DROP TABLE IF EXISTS clas_proveedor"))
+                            conn.execute(text("DROP TABLE IF EXISTS clas_maestro_sku"))
+                            conn.commit()
+
+                        df_np_save.to_sql('clas_nomb_prod',   engine, if_exists='replace', index=False)
+                        df_prov_save.to_sql('clas_proveedor', engine, if_exists='replace', index=False)
+                        df_msku_save.to_sql('clas_maestro_sku', engine, if_exists='replace', index=False)
+
+                        st.info(f"📚 Tablas guardadas: {len(df_np_save)} nombres · {len(df_prov_save)} proveedores · {len(df_msku_save)} SKUs")
+
+                        # ── Clasificar compras en cascada ─────────────────
+                        # Diccionarios de lookup
+                        map_nombre = dict(zip(df_np['nombre_norm'],
+                                              zip(df_np['categoria_control'], df_np['categoria'])))
+                        map_prov   = dict(zip(df_prov['prov_norm'], df_prov['categoria']))
+                        map_msku   = dict(zip(df_msku['sku_norm'], df_msku['desc_norm']))
+
+                        # Cargar compras sin clasificar o con clasificación vacía
+                        df_comp = run_query("""
+                            SELECT id, nombre_producto, nombre_proveedor, sku,
+                                   categoria_producto, subcat
+                            FROM compras
+                            WHERE nombre_producto IS NOT NULL
+                            LIMIT 100000
+                        """)
+
+                        if df_comp.empty:
+                            st.warning("No hay compras en BD para clasificar.")
+                        else:
+                            df_comp['nombre_norm'] = df_comp['nombre_producto'].fillna('').astype(str).str.strip().str.upper()
+                            df_comp['prov_norm']   = df_comp['nombre_proveedor'].fillna('').astype(str).str.strip().str.upper()
+                            df_comp['sku_norm']    = df_comp['sku'].fillna('').astype(str).str.strip().str.upper()
+
+                            resultados = []
+                            plan_a = plan_b = plan_c = sin_match = 0
+
+                            for _, row in df_comp.iterrows():
+                                cat_ctrl = ''
+                                cat      = ''
+                                plan     = ''
+
+                                # Plan A: nombre producto
+                                if row['nombre_norm'] in map_nombre:
+                                    cat_ctrl, cat = map_nombre[row['nombre_norm']]
+                                    plan = 'A'
+                                    plan_a += 1
+
+                                # Plan B: proveedor
+                                elif row['prov_norm'] in map_prov:
+                                    cat = map_prov[row['prov_norm']]
+                                    plan = 'B'
+                                    plan_b += 1
+
+                                # Plan C: SKU → descripcion en maestro → buscar en Nomb Prod
+                                elif row['sku_norm'] in map_msku:
+                                    desc = map_msku[row['sku_norm']]
+                                    if desc in map_nombre:
+                                        cat_ctrl, cat = map_nombre[desc]
+                                        plan = 'C'
+                                        plan_c += 1
+                                    else:
+                                        plan = 'C-parcial'
+                                        sin_match += 1
+                                else:
+                                    plan = 'sin_match'
+                                    sin_match += 1
+
+                                resultados.append({
+                                    'id': row['id'],
+                                    'categoria_control': cat_ctrl if cat_ctrl and cat_ctrl != 'nan' else None,
+                                    'categoria_clasificada': cat if cat and cat != 'nan' else None,
+                                    'plan_clasificacion': plan,
+                                })
+
+                            df_res = pd.DataFrame(resultados)
+
+                            # Guardar resultados en tabla de clasificación
+                            with engine.connect() as conn:
+                                conn.execute(text("DROP TABLE IF EXISTS compras_clasificacion"))
+                                conn.commit()
+                            df_res.to_sql('compras_clasificacion', engine, if_exists='replace', index=False)
+
+                            # Mostrar resumen
+                            total = len(df_res)
+                            clasificados = total - sin_match
+                            st.success(f"✅ {clasificados:,}/{total:,} registros clasificados ({clasificados/total*100:.1f}%)")
+
+                            cc1, cc2, cc3, cc4 = st.columns(4)
+                            cc1.metric("Plan A (Nombre)", f"{plan_a:,}", f"{plan_a/total*100:.1f}%")
+                            cc2.metric("Plan B (Proveedor)", f"{plan_b:,}", f"{plan_b/total*100:.1f}%")
+                            cc3.metric("Plan C (SKU)", f"{plan_c:,}", f"{plan_c/total*100:.1f}%")
+                            cc4.metric("Sin match", f"{sin_match:,}", f"{sin_match/total*100:.1f}%")
+
+                            # Vista de sin match para revisión
+                            if sin_match > 0:
+                                df_sin = df_comp[df_res['plan_clasificacion'].isin(['sin_match','C-parcial'])][
+                                    ['nombre_producto','nombre_proveedor','sku']
+                                ].drop_duplicates('nombre_producto').head(50)
+                                with st.expander(f"⚠️ {sin_match:,} sin clasificar — revisar"):
+                                    st.dataframe(df_sin, use_container_width=True, hide_index=True)
+
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+                        st.exception(e)
+
+        # Vista resumen de clasificación existente
+        df_clas_res = run_query("""
+            SELECT plan_clasificacion, COUNT(*) as registros
+            FROM compras_clasificacion
+            GROUP BY plan_clasificacion ORDER BY registros DESC
+        """) if run_query("SELECT to_regclass('compras_clasificacion') as t")['t'].iloc[0] else pd.DataFrame()
+        if not df_clas_res.empty:
+            st.markdown("**Clasificación actual en BD:**")
+            st.dataframe(df_clas_res, use_container_width=True, hide_index=True)
+
 # ============================================================
 # MÓDULO: EXPLOSIÓN MRP
 # ============================================================
@@ -3794,8 +3955,8 @@ elif modulo.startswith("📊"):
                     filas_ctrl = []
                     for prod in prods:
                         def _kg2(df, prod):
-                            if df is None or df.empty: return 0.0
-                            m = df['producto_control'].str.upper() == prod.upper()
+                            if df is None or df.empty or 'producto_control' not in df.columns: return 0.0
+                            m = df['producto_control'].astype(str).str.upper() == prod.upper()
                             return float(df[m]['kg'].sum() or 0)
                         def _costo(df, prod):
                             if df is None or df.empty: return 0.0
