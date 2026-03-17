@@ -114,6 +114,83 @@ st.markdown("""
 
 
 # ============================================================
+# TABLA DE CONVERSIÓN INVENTARIO (desde Tablas 1 en INV_AJUSTE.xlsx)
+# Fórmula: total_kg = Total × convertor_porcion
+# ============================================================
+TABLA_CONV_INV = {
+    'CHULETA KASSLER':                                              {'control': 'CHULETA KASSLER',          'porcion': 1.0,    'cocido': 1.0},
+    'COSTILLAS':                                                    {'control': 'COSTILLAS',                'porcion': 1.0,    'cocido': 0.75},
+    'JAMÓN':                                                        {'control': 'JAMÓN',                    'porcion': 1.0,    'cocido': 1.0},
+    'LOMO DE CENTRO':                                               {'control': 'LOMO DE CENTRO',           'porcion': 1.0,    'cocido': 1.0},
+    'LOMO DE CENTRO(PORCIONADAS)':                                  {'control': 'LOMO DE CENTRO',           'porcion': 0.18,   'cocido': 1.0},
+    'PANCETA LAMINADA':                                             {'control': 'PANCETA LAMINADA',         'porcion': 1.0,    'cocido': 0.5},
+    'DESPUNTE PECHUGA DE POLLO':                                    {'control': 'PECHUGA DE POLLO',         'porcion': 1.0,    'cocido': 1.0},
+    'PECHUGA DE POLLO':                                             {'control': 'PECHUGA DE POLLO',         'porcion': 1.0,    'cocido': 0.8},
+    'PECHUGA DE POLLO  - FRITAS ESPECIALES ( 90 GR - PRECOCIDO)':  {'control': 'PECHUGA DE POLLO',         'porcion': 0.09,   'cocido': 1.0},
+    'PECHUGA DE POLLO - AVE - SANDWICH-  (200 GR - PRECOCIDO)':    {'control': 'PECHUGA DE POLLO',         'porcion': 0.2,    'cocido': 1.0},
+    'PECHUGA DE POLLO - CESAR ( 150 GR - PRECOCIDO)':              {'control': 'PECHUGA DE POLLO',         'porcion': 0.16,   'cocido': 1.0},
+    'PECHUGA DE POLLO - PANKO - PLATO (250 GR  - CRUDO)':          {'control': 'PECHUGA DE POLLO',         'porcion': 0.25,   'cocido': 1.0},
+    'PECHUGA DE POLLO - PANKO - ENSALADA - NIÑO (160 GR - CRUDO)': {'control': 'PECHUGA DE POLLO',         'porcion': 0.16,   'cocido': 1.0},
+    'PECHUGA DE POLLO - TIMBAL ( 160 GR - PRECOCIDO)':             {'control': 'PECHUGA DE POLLO',         'porcion': 0.16,   'cocido': 1.0},
+    'PERNIL':                                                       {'control': 'PERNIL',                   'porcion': 1.0,    'cocido': 1.0},
+    'PERNIL(PORCIONADAS)':                                          {'control': 'PERNIL',                   'porcion': 0.16,   'cocido': 1.0},
+    'TOCINO AHUMADO':                                               {'control': 'TOCINO AHUMADO',           'porcion': 1.0,    'cocido': 1.0},
+    'FILETE':                                                       {'control': 'FILETE',                   'porcion': 1.0,    'cocido': 1.0},
+    'GRASA DE WAGYU':                                               {'control': 'GRASA DE WAGYU',           'porcion': 1.0,    'cocido': 1.0},
+    'LOMO LISO':                                                    {'control': 'LOMO LISO',                'porcion': 1.0,    'cocido': 1.0},
+    'LOMO VETADO':                                                  {'control': 'LOMO VETADO',              'porcion': 1.0,    'cocido': 1.0},
+    'PLATEADA':                                                     {'control': 'PLATEADA',                 'porcion': 1.0,    'cocido': 0.5},
+    'PLATEADA(PORCIONADAS)':                                        {'control': 'PLATEADA',                 'porcion': 0.3,    'cocido': 1.0},
+    'DESPUNTE CARNE ROJA':                                          {'control': 'POSTA',                    'porcion': 1.0,    'cocido': 1.0},
+    'ESCALOPA':                                                     {'control': 'POSTA',                    'porcion': 0.12,   'cocido': 1.0},
+    'HAMBURGUESA GRAN EXPERTO':                                     {'control': 'POSTA',                    'porcion': 0.2,    'cocido': 1.0},
+    'HAMBURGUESA NIÑO':                                             {'control': 'POSTA',                    'porcion': 0.15,   'cocido': 1.0},
+    'HAMBURGUESAS':                                                 {'control': 'POSTA',                    'porcion': 0.2,    'cocido': 1.0},
+    'POSTA':                                                        {'control': 'POSTA',                    'porcion': 1.0,    'cocido': 1.0},
+    'POSTA - FRITAS ESPECIALES ( 90 GR - CRUDO)':                  {'control': 'POSTA',                    'porcion': 0.09,   'cocido': 1.0},
+    'PAPAS FRITAS':                                                 {'control': 'PAPAS FRITAS',             'porcion': 1.0,    'cocido': 1.0},
+    'QUESO CHEDDAR':                                                {'control': 'QUESO CHEDDAR',            'porcion': 1.0,    'cocido': 1.0},
+    'QUESO PARMESANO':                                              {'control': 'QUESO PARMESANO',          'porcion': 1.0,    'cocido': 1.0},
+    'QUESO RANCO':                                                  {'control': 'QUESO RANCO',              'porcion': 1.0,    'cocido': 1.0},
+    'FRICA 14 CMS':                                                 {'control': 'FRICA 14 CMS',             'porcion': 1.0,    'cocido': 1.0},
+    'HOT - DOG 19 CM.':                                             {'control': 'HOT - DOG 19 CM.',         'porcion': 1.0,    'cocido': 1.0},
+    'MOLDE BANQUETE':                                               {'control': 'MOLDE BANQUETE',           'porcion': 1.0,    'cocido': 1.0},
+    'MOLDE BANQUETE INTEGRAL':                                      {'control': 'MOLDE BANQUETE INTEGRAL',  'porcion': 1.0,    'cocido': 1.0},
+    'PAN FRICA 12 CM':                                              {'control': 'PAN FRICA 12 CM',          'porcion': 1.0,    'cocido': 1.0},
+    'PAN FRICA N8':                                                 {'control': 'PAN FRICA N8',             'porcion': 1.0,    'cocido': 1.0},
+    'ATUN':                                                         {'control': 'ATUN',                     'porcion': 1.0,    'cocido': 1.0},
+    'CAMARON':                                                      {'control': 'CAMARON',                  'porcion': 1.0,    'cocido': 0.31},
+    'CAMARON APANADO':                                              {'control': 'CAMARON APANADO',          'porcion': 1.0,    'cocido': 1.0},
+    'ERIZOS':                                                       {'control': 'ERIZOS',                   'porcion': 1.0,    'cocido': 1.0},
+    'FILETE SALMON':                                                {'control': 'FILETE SALMON',            'porcion': 1.0,    'cocido': 1.0},
+    'LOCOS':                                                        {'control': 'LOCOS',                    'porcion': 0.5,    'cocido': 1.0},
+    'LOCOS(DRENADOS)':                                              {'control': 'LOCOS',                    'porcion': 1.0,    'cocido': 1.0},
+    'SALMON SLICE LAMINADO':                                        {'control': 'SALMON SLICE LAMINADO',    'porcion': 1.0,    'cocido': 1.0},
+    'LECHUGA HIDROPONICA':                                          {'control': 'LECHUGA VERDE',            'porcion': 1.0,    'cocido': 1.0},
+    'MIX DE LECHUGA':                                               {'control': 'MIX DE LECHUGA',           'porcion': 0.8,    'cocido': 1.0},
+    'PALTA':                                                        {'control': 'PALTA',                    'porcion': 1.0,    'cocido': 1.0},
+    'TOMATE':                                                       {'control': 'TOMATE',                   'porcion': 1.0,    'cocido': 1.0},
+}
+
+def calcular_total_kg(producto, total, crudo=0, produccion=0, cocido=0, producto_control=None):
+    """
+    Calcula total_kg usando TABLA_CONV_INV.
+    Fórmula: total_kg = Total × convertor_porcion
+    Fallback para cocido: crudo + prod*cocido_conv + cocido/cocido_conv
+    """
+    key = str(producto).strip().upper()
+    conv = TABLA_CONV_INV.get(key)
+    if conv:
+        total_kg = float(total or 0) * conv['porcion']
+        ctrl = conv['control']
+    else:
+        # Sin match: asumir porcion=1, intentar con control provisto
+        total_kg = float(total or 0)
+        ctrl = producto_control or producto
+    return total_kg, ctrl
+
+
+# ============================================================
 # BASE DE DATOS
 # ============================================================
 @st.cache_resource
@@ -2471,11 +2548,7 @@ if modulo.startswith("📦"):
                                 # Usar columna 'control' del archivo si existe
                                 prod_ctrl = str(row.get('control', prod)).strip()
                                 if prod_ctrl == 'nan': prod_ctrl = prod
-                                conv   = conversores_c.get(prod, {'control': prod_ctrl, 'porcion':1.0, 'cocido':1.0})
-                                cv     = conv['cocido']
-                                total_kg = crudo + prod_ + (cocido / cv if cv > 0 else cocido)
-                                if um.upper() in ['UN','UND','UNI','UNID']:
-                                    total_kg = total * conv['porcion']
+                                total_kg, prod_ctrl = calcular_total_kg(prod, total, crudo, prod_, cocido, prod_ctrl)
                                 registros.append({
                                     'local': loc, 'periodo': periodo_inv,
                                     'tipo_inventario': tipo_inv,
@@ -2570,15 +2643,11 @@ if modulo.startswith("📦"):
                                 cocido = pd.to_numeric(row.get('Cocido',0),    errors='coerce') or 0
                                 total  = pd.to_numeric(row.get('Total',0),     errors='coerce') or 0
                                 tipo   = str(row.get('TIPO','')).strip()
-                                conv   = conversores.get(prod, {'control': prod, 'porcion':1.0, 'cocido':1.0})
-                                cv     = conv['cocido']
-                                total_kg = (crudo + prod_ + (cocido / cv if cv > 0 else cocido))
-                                if um.upper() in ['UN','UND','UNI','UNID']:
-                                    total_kg = total * conv['porcion']
+                                total_kg, prod_ctrl_a = calcular_total_kg(prod, total, crudo, prod_, cocido, prod)
                                 registros.append({
                                     'local': local_inv, 'periodo': periodo_inv,
                                     'tipo_inventario': tipo_inv,
-                                    'producto': prod, 'producto_control': conv['control'],
+                                    'producto': prod, 'producto_control': prod_ctrl_a,
                                     'um': um, 'crudo': crudo, 'produccion': prod_,
                                     'cocido': cocido, 'total_original': total,
                                     'total_kg': total_kg, 'tipo': tipo, 'fuente': 'alimentos'
