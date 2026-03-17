@@ -185,29 +185,27 @@ def calcular_total_kg(producto, total, crudo=0, produccion=0, cocido=0, producto
     Calcula total_kg usando TABLA_CONV_INV.
     Si hay desglose crudo/cocido/produccion:
         total_kg = crudo + (cocido / factor_cocido) + (produccion × porcion)
-    Si solo hay total (porcionadas precocidas, forma_b):
+    Si solo hay total (forma_b, porcionadas sin desglose):
         total_kg = total × porcion
     """
     key = str(producto).strip().upper()
     conv = TABLA_CONV_INV.get(key)
-    crudo     = float(crudo     or 0)
-    produccion= float(produccion or 0)
-    cocido    = float(cocido    or 0)
-    total     = float(total     or 0)
+    crudo      = float(crudo      or 0)
+    produccion = float(produccion or 0)
+    cocido     = float(cocido     or 0)
+    total      = float(total      or 0)
 
     if conv:
-        ctrl         = conv['control']
-        porcion      = conv['porcion']
-        factor_cocido= conv['cocido']  # factor para convertir cocido → crudo equivalente
-        hay_desglose = (crudo + produccion + cocido) > 0
+        ctrl          = conv['control']
+        porcion       = conv['porcion']
+        factor_cocido = conv['cocido']
+        hay_desglose  = (crudo + produccion + cocido) > 0
         if hay_desglose:
-            # crudo ya está en kg; cocido se divide por factor (ej: 0.8 → /0.8); produccion × porcion
-            cocido_eq  = (cocido / factor_cocido) if factor_cocido > 0 else cocido
-            prod_eq    = produccion * porcion
-            total_kg   = crudo + cocido_eq + prod_eq
+            cocido_eq = (cocido / factor_cocido) if factor_cocido > 0 else cocido
+            prod_eq   = produccion * porcion
+            total_kg  = crudo + cocido_eq + prod_eq
         else:
-            # Solo total disponible (ej: porcionadas, forma_b)
-            total_kg = total * porcion
+            total_kg  = total * porcion
     else:
         ctrl     = producto_control or producto
         total_kg = total
@@ -2721,37 +2719,31 @@ if modulo.startswith("📦"):
                 st.markdown("**Inventarios en BD:**")
                 st.dataframe(df_inv_bd, use_container_width=True, hide_index=True)
 
-            # ── Re-mapeo de producto_control y recálculo de total_kg ──
+            # ── Re-mapeo de producto_control en registros existentes ──
             st.markdown("---")
-            st.markdown("**🔧 Re-mapear producto_control y recalcular total_kg en BD**")
-            st.caption("Corrige producto_control y recalcula total_kg usando crudo/cocido/produccion almacenados.")
+            st.markdown("**🔧 Re-mapear producto_control en BD**")
+            st.caption("Corrige producto_control de registros existentes sin tocar total_kg.")
             if st.button("▶ Re-mapear inventarios existentes", key="btn_remap_inv"):
                 engine = get_engine()
                 if engine:
                     try:
-                        df_all = run_query("SELECT id, producto, total_original, crudo, produccion, cocido FROM inventarios WHERE producto IS NOT NULL")
+                        df_all = run_query("SELECT id, producto FROM inventarios WHERE producto IS NOT NULL")
                         if df_all.empty:
                             st.info("No hay registros en inventarios.")
                         else:
                             updates = []
                             for _, row in df_all.iterrows():
-                                prod  = str(row['producto']).strip()
-                                total_kg_new, ctrl = calcular_total_kg(
-                                    prod,
-                                    float(row.get('total_original') or 0),
-                                    float(row.get('crudo')          or 0),
-                                    float(row.get('produccion')     or 0),
-                                    float(row.get('cocido')         or 0),
-                                )
-                                updates.append({'id': int(row['id']), 'ctrl': ctrl, 'tkg': total_kg_new})
+                                prod = str(row['producto']).strip()
+                                _, ctrl = calcular_total_kg(prod, 1)
+                                updates.append({'id': int(row['id']), 'ctrl': ctrl})
                             with engine.connect() as conn:
                                 for u in updates:
                                     conn.execute(
-                                        text("UPDATE inventarios SET producto_control=:c, total_kg=:t WHERE id=:i"),
-                                        {'c': u['ctrl'], 't': u['tkg'], 'i': u['id']}
+                                        text("UPDATE inventarios SET producto_control=:c WHERE id=:i"),
+                                        {'c': u['ctrl'], 'i': u['id']}
                                     )
                                 conn.commit()
-                            st.success(f"✅ {len(updates)} registros actualizados (producto_control + total_kg).")
+                            st.success(f"✅ {len(updates)} registros actualizados (producto_control).")
                     except Exception as e:
                         st.error(f"Error en re-mapeo: {e}")
 
