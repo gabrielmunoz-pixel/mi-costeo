@@ -2470,10 +2470,11 @@ if modulo.startswith("📦"):
                                 um       = str(row.get('UND','')).strip()
                                 total_og = float(row.get('TOTAL', 0) or 0)
                                 total_kg = float(row.get('TOTAL 2', total_og) or 0)
+                                _, prod_ctrl_b = calcular_total_kg(prod, total_kg)
                                 registros.append({
                                     'local': local_fila, 'periodo': periodo_inv,
                                     'tipo_inventario': tipo_inv,
-                                    'producto': prod, 'producto_control': prod,
+                                    'producto': prod, 'producto_control': prod_ctrl_b,
                                     'um': um, 'crudo': 0, 'produccion': 0, 'cocido': 0,
                                     'total_original': total_og, 'total_kg': total_kg,
                                     'tipo': '', 'fuente': 'forma_b'
@@ -2703,6 +2704,34 @@ if modulo.startswith("📦"):
             if not df_inv_bd.empty:
                 st.markdown("**Inventarios en BD:**")
                 st.dataframe(df_inv_bd, use_container_width=True, hide_index=True)
+
+            # ── Re-mapeo de producto_control en registros existentes ──
+            st.markdown("---")
+            st.markdown("**🔧 Re-mapear producto_control en BD**")
+            st.caption("Corrige registros existentes cuyo producto_control no fue mapeado correctamente (ej: cargados con Forma B).")
+            if st.button("▶ Re-mapear inventarios existentes", key="btn_remap_inv"):
+                engine = get_engine()
+                if engine:
+                    try:
+                        df_all = run_query("SELECT id, producto FROM inventarios WHERE producto IS NOT NULL")
+                        if df_all.empty:
+                            st.info("No hay registros en inventarios.")
+                        else:
+                            updates = []
+                            for _, row in df_all.iterrows():
+                                prod = str(row['producto']).strip()
+                                _, ctrl = calcular_total_kg(prod, 1)
+                                updates.append({'id': int(row['id']), 'ctrl': ctrl})
+                            with engine.connect() as conn:
+                                for u in updates:
+                                    conn.execute(
+                                        text("UPDATE inventarios SET producto_control=:c WHERE id=:i"),
+                                        {'c': u['ctrl'], 'i': u['id']}
+                                    )
+                                conn.commit()
+                            st.success(f"✅ {len(updates)} registros actualizados con producto_control mapeado.")
+                    except Exception as e:
+                        st.error(f"Error en re-mapeo: {e}")
 
         with t6c:
             st.markdown("#### Compras No Registradas / Venta Inter-local")
@@ -3659,12 +3688,12 @@ elif modulo.startswith("📊"):
                 def get_inv(periodo, tipo, locales):
                     lf = "AND LOWER(TRIM(local))=ANY(:ls)" if locales else ""
                     q = f"""
-                        SELECT TRIM(local) as local,
+                        SELECT LOWER(TRIM(local)) as local,
                                UPPER(TRIM(producto_control)) as producto_control,
                                SUM(total_kg) as kg
                         FROM inventarios
                         WHERE TRIM(periodo)=:p AND tipo_inventario=:t {lf}
-                        GROUP BY TRIM(local), UPPER(TRIM(producto_control))
+                        GROUP BY LOWER(TRIM(local)), UPPER(TRIM(producto_control))
                     """
                     params = {'p': periodo.strip(), 't': tipo}
                     if locales: params['ls'] = [l.lower().strip() for l in locales]
@@ -4032,13 +4061,20 @@ elif modulo.startswith("📊"):
                         FROM inventarios
                         WHERE TRIM(periodo)=:p
                           AND LOWER(TRIM(local))=:l
+                          AND UPPER(TRIM(producto_control)) IN ('PECHUGA DE POLLO','PLATEADA','COSTILLAS','LOMO DE CENTRO','PERNIL','PANCETA LAMINADA')
                         ORDER BY tipo_inventario, producto_control, producto
                     """
                     df_debug = run_query(q_debug, {'p': periodo_show, 'l': local_show.lower().strip()})
                     if not df_debug.empty:
                         st.dataframe(df_debug, use_container_width=True)
+                        # Mostrar suma por tipo+control
+                        st.markdown("**Suma total_kg por tipo_inventario + producto_control:**")
+                        st.dataframe(
+                            df_debug.groupby(['tipo_inventario','producto_control'])['total_kg'].sum().reset_index(),
+                            use_container_width=True
+                        )
                     else:
-                        st.warning("Sin filas en inventarios para este local/período")
+                        st.warning("Sin filas para esos productos en este local/período")
 
                 # ── SECCIÓN 5: Control de productos críticos ──────
                 st.markdown(f"**5. Control de Productos Críticos**")
@@ -4097,13 +4133,13 @@ elif modulo.startswith("📊"):
                     um_label = 'LT' if cat_nombre == 'BAR' else 'UN' if cat_nombre == 'PAN' else 'KG'
                     ctrl_rows = ''
                     for f in filas_ctrl:
-                        prod, ct, ini, fin_, cp, ru, uc, dk, dp, cd = f
+                        prod, ct, ini_v, fin_, cp, ru, uc, dk, dp, cd = f
                         color_desv = '#e84545' if dp > 0.1 else '#e89c45' if dp > 0.05 else '#4caf7d'
                         ctrl_rows += (
                             f'<tr style="border-bottom:1px solid #1a1a1a">'
                             f'<td style="padding:6px 10px;color:#ccc;font-size:0.75rem">{prod}</td>'
                             f'<td style="padding:6px 10px;text-align:right;color:#888;font-size:0.73rem">{fmt_clp(ct)}</td>'
-                            f'<td style="padding:6px 10px;text-align:right;color:#777;font-size:0.73rem">{fmt_kg(ini)}</td>'
+                            f'<td style="padding:6px 10px;text-align:right;color:#777;font-size:0.73rem">{fmt_kg(ini_v)}</td>'
                             f'<td style="padding:6px 10px;text-align:right;color:#777;font-size:0.73rem">{fmt_kg(fin_)}</td>'
                             f'<td style="padding:6px 10px;text-align:right;color:#aaa;font-size:0.73rem">{fmt_kg(cp)}</td>'
                             f'<td style="padding:6px 10px;text-align:right;color:#aaa;font-size:0.73rem">{fmt_kg(ru)}</td>'
