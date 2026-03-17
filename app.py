@@ -2470,10 +2470,11 @@ if modulo.startswith("📦"):
                                 um       = str(row.get('UND','')).strip()
                                 total_og = float(row.get('TOTAL', 0) or 0)
                                 total_kg = float(row.get('TOTAL 2', total_og) or 0)
+                                _, prod_ctrl_b = calcular_total_kg(prod, total_kg)
                                 registros.append({
                                     'local': local_fila, 'periodo': periodo_inv,
                                     'tipo_inventario': tipo_inv,
-                                    'producto': prod, 'producto_control': prod,
+                                    'producto': prod, 'producto_control': prod_ctrl_b,
                                     'um': um, 'crudo': 0, 'produccion': 0, 'cocido': 0,
                                     'total_original': total_og, 'total_kg': total_kg,
                                     'tipo': '', 'fuente': 'forma_b'
@@ -2703,6 +2704,34 @@ if modulo.startswith("📦"):
             if not df_inv_bd.empty:
                 st.markdown("**Inventarios en BD:**")
                 st.dataframe(df_inv_bd, use_container_width=True, hide_index=True)
+
+            # ── Re-mapeo de producto_control en registros existentes ──
+            st.markdown("---")
+            st.markdown("**🔧 Re-mapear producto_control en BD**")
+            st.caption("Corrige registros existentes cuyo producto_control no fue mapeado correctamente (ej: cargados con Forma B).")
+            if st.button("▶ Re-mapear inventarios existentes", key="btn_remap_inv"):
+                engine = get_engine()
+                if engine:
+                    try:
+                        df_all = run_query("SELECT id, producto FROM inventarios WHERE producto IS NOT NULL")
+                        if df_all.empty:
+                            st.info("No hay registros en inventarios.")
+                        else:
+                            updates = []
+                            for _, row in df_all.iterrows():
+                                prod = str(row['producto']).strip()
+                                _, ctrl = calcular_total_kg(prod, 1)
+                                updates.append({'id': int(row['id']), 'ctrl': ctrl})
+                            with engine.connect() as conn:
+                                for u in updates:
+                                    conn.execute(
+                                        text("UPDATE inventarios SET producto_control=:c WHERE id=:i"),
+                                        {'c': u['ctrl'], 'i': u['id']}
+                                    )
+                                conn.commit()
+                            st.success(f"✅ {len(updates)} registros actualizados con producto_control mapeado.")
+                    except Exception as e:
+                        st.error(f"Error en re-mapeo: {e}")
 
         with t6c:
             st.markdown("#### Compras No Registradas / Venta Inter-local")
@@ -3659,12 +3688,12 @@ elif modulo.startswith("📊"):
                 def get_inv(periodo, tipo, locales):
                     lf = "AND LOWER(TRIM(local))=ANY(:ls)" if locales else ""
                     q = f"""
-                        SELECT LOWER(TRIM(local)) as local,
+                        SELECT TRIM(local) as local,
                                UPPER(TRIM(producto_control)) as producto_control,
                                SUM(total_kg) as kg
                         FROM inventarios
                         WHERE TRIM(periodo)=:p AND tipo_inventario=:t {lf}
-                        GROUP BY LOWER(TRIM(local)), UPPER(TRIM(producto_control))
+                        GROUP BY TRIM(local), UPPER(TRIM(producto_control))
                     """
                     params = {'p': periodo.strip(), 't': tipo}
                     if locales: params['ls'] = [l.lower().strip() for l in locales]
@@ -4027,21 +4056,11 @@ elif modulo.startswith("📊"):
                 # ── SECCIÓN 5: Control de productos críticos ──────
                 st.markdown(f"**5. Control de Productos Críticos**")
 
-                # Lookup inverso: producto_control → todos los nombres que mapean a él
-                # Permite encontrar en inventarios registros con nombre crudo o mapeado
-                _INV_CTRL_MAP = {}
-                for _raw, _v in TABLA_CONV_INV.items():
-                    _ctrl = _v['control'].upper().strip()
-                    _INV_CTRL_MAP.setdefault(_ctrl, set()).add(_raw.upper().strip())
-                    _INV_CTRL_MAP[_ctrl].add(_ctrl)  # coincidencia directa también
-
                 def _getkg(df, prod):
                     try:
                         if df is None or not isinstance(df, pd.DataFrame): return 0.0
                         if df.empty or 'producto_control' not in df.columns: return 0.0
-                        prod_up = prod.upper().strip()
-                        valid = _INV_CTRL_MAP.get(prod_up, {prod_up})
-                        m = df['producto_control'].astype(str).str.upper().str.strip().isin(valid)
+                        m = df['producto_control'].astype(str).str.upper().str.strip() == prod.upper().strip()
                         return float(df.loc[m, 'kg'].sum() or 0)
                     except: return 0.0
 
@@ -4049,9 +4068,7 @@ elif modulo.startswith("📊"):
                     try:
                         if df is None or not isinstance(df, pd.DataFrame): return 0.0
                         if df.empty or 'producto_control' not in df.columns: return 0.0
-                        prod_up = prod.upper().strip()
-                        valid = _INV_CTRL_MAP.get(prod_up, {prod_up})
-                        m = df['producto_control'].astype(str).str.upper().str.strip().isin(valid)
+                        m = df['producto_control'].astype(str).str.upper().str.strip() == prod.upper().strip()
                         col = 'costo' if 'costo' in df.columns else None
                         return float(df.loc[m, col].sum() or 0) if col else 0.0
                     except: return 0.0
