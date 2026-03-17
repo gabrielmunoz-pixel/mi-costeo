@@ -1231,7 +1231,7 @@ with st.sidebar:
     menu_items = {
         "📦 Gestión de Datos": ["Recetario", "Compras", "Ventas", "Equivalencias SKU"],
         "🧮 Explosión MRP":    [],
-        "📊 Informes":         ["Rentabilidad", "Desviación", "Variación Precio Compras"],
+        "📊 Informes":         ["Rentabilidad", "Desviación", "Variación Precio Compras", "Informe de Costos"],
         "🍹 Tendencias Bar":   [],
     }
 
@@ -2228,7 +2228,7 @@ if modulo.startswith("📦"):
     with tab6:
         st.markdown("<div class='info-box'>Carga el <b>Uso de Ingredientes</b> (Toteat) y el <b>Inventario</b> por local (hojas Alimentos y Bar). Puedes cargar un local individual o todos los locales.</div>", unsafe_allow_html=True)
 
-        t6a, t6b = st.tabs(["📊 Uso de Ingredientes", "🏪 Inventario"])
+        t6a, t6b, t6c = st.tabs(["📊 Uso de Ingredientes", "🏪 Inventario", "🔄 No Registrado / Venta Inter."])
 
         with t6a:
             st.markdown("#### Uso de Ingredientes (Toteat)")
@@ -2615,6 +2615,58 @@ if modulo.startswith("📦"):
                 st.markdown("**Inventarios en BD:**")
                 st.dataframe(df_inv_bd, use_container_width=True, hide_index=True)
 
+        with t6c:
+            st.markdown("#### Compras No Registradas / Venta Inter-local")
+            st.markdown("<div class='info-box'>Compras que no pasaron por el facturador ni la BD. Solo se consideran las cantidades con <b>Categoria Control</b> válida para el cálculo del informe de costos. <b>No se guardan en la tabla de compras.</b></div>", unsafe_allow_html=True)
+
+            nr1, nr2 = st.columns([2,3])
+            with nr1:
+                periodo_nr = st.text_input("Período", key="nr_periodo", placeholder="ej: 2-8 Mar 2026")
+            with nr2:
+                f_nr = st.file_uploader("Archivo No Registrado (.xlsx)", type=["xlsx"], key="nr_file")
+
+            if f_nr and periodo_nr:
+                if st.button("💾 Cargar No Registrado", key="btn_nr"):
+                    try:
+                        df_nr = pd.read_excel(f_nr, header=0)
+                        df_nr.columns = df_nr.columns.str.strip()
+                        df_nr['cantidad'] = pd.to_numeric(df_nr['cantidad'], errors='coerce').fillna(0)
+                        df_nr['Categoria Control'] = df_nr['Categoria Control'].fillna('').astype(str).str.strip()
+                        df_nr['Local'] = df_nr['Local'].fillna('').astype(str).str.strip()
+                        df_nr['fecha_dte'] = pd.to_datetime(df_nr['fecha_dte'], errors='coerce').dt.date
+
+                        # Solo filas con Categoria Control válida
+                        df_nr = df_nr[~df_nr['Categoria Control'].isin(['','0','nan','NaN'])]
+                        df_nr['periodo'] = periodo_nr
+
+                        # Normalizar local a title case
+                        df_nr['Local'] = df_nr['Local'].str.title()
+
+                        engine = get_engine()
+                        with engine.connect() as conn:
+                            conn.execute(text("DELETE FROM compras_no_registradas WHERE periodo=:p"),
+                                         {'p': periodo_nr})
+                            conn.commit()
+
+                        cols_bd = ['fecha_dte','Local','producto','desc_producto','cantidad',
+                                   'Categoria Control','Categoria Producto','periodo']
+                        rename_map = {'Local':'local','producto':'nombre_producto',
+                                      'desc_producto':'desc_producto',
+                                      'Categoria Control':'producto_control',
+                                      'Categoria Producto':'categoria_producto'}
+                        df_save = df_nr[[c for c in cols_bd if c in df_nr.columns]].rename(columns=rename_map)
+                        df_save.to_sql('compras_no_registradas', engine, if_exists='append', index=False)
+                        st.success(f"✅ {len(df_save)} registros cargados — {df_save['local'].nunique()} locales · {periodo_nr}")
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+                        st.exception(e)
+
+            # Vista de lo cargado
+            df_nr_bd = run_query("SELECT periodo, local, COUNT(*) as registros, SUM(cantidad) as cant_total FROM compras_no_registradas GROUP BY periodo, local ORDER BY periodo DESC, local")
+            if not df_nr_bd.empty:
+                st.markdown("**No registrados en BD:**")
+                st.dataframe(df_nr_bd, use_container_width=True, hide_index=True)
+
 # ============================================================
 # MÓDULO: EXPLOSIÓN MRP
 # ============================================================
@@ -2677,6 +2729,8 @@ elif modulo.startswith("📊"):
         informe_sel = "Informe 2"
     elif "Variación Precio Compras" in modulo:
         informe_sel = "Informe 3"
+    elif "Informe de Costos" in modulo:
+        informe_sel = "Informe 4"
     else:
         informe_sel = "Informe 1"  # default
 
@@ -2685,6 +2739,7 @@ elif modulo.startswith("📊"):
         "Informe 1": ("💰", "Rentabilidad por Producto"),
         "Informe 2": ("📉", "Desviación Real vs Teórico"),
         "Informe 3": ("🔀", "Variación Precio Compras"),
+        "Informe 4": ("📋", "Informe de Costos"),
     }
     icono, titulo_txt = titulos.get(informe_sel, ("📊", "Informes"))
     st.markdown(f"""
@@ -3313,6 +3368,529 @@ elif modulo.startswith("📊"):
                         st.session_state['pdf_locales_nombre'],
                         mime="application/pdf", key="pdf_locales_dl", use_container_width=True)
 
+
+
+    # ----------------------------------------------------------
+    # INFORME 4 — INFORME DE COSTOS
+    # ----------------------------------------------------------
+    elif "Informe 4" in informe_sel:
+        st.markdown("### 📋 Informe de Costos")
+
+        # ── Controles ────────────────────────────────────────────
+        ic1, ic2, ic3 = st.columns(3)
+        with ic1:
+            periodo_ic = st.text_input("Período", key="ic_periodo", placeholder="ej: 2-8 Mar 2026")
+        with ic2:
+            locales_ic_q = run_query("SELECT DISTINCT local FROM inventarios WHERE local IS NOT NULL ORDER BY 1")
+            locales_ic = ["Todos"] + locales_ic_q['local'].tolist() if not locales_ic_q.empty else ["Todos"]
+            local_ic = st.selectbox("Local", locales_ic, key="ic_local")
+        with ic3:
+            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+            generar_ic = st.button("▶ Generar Informe de Costos", key="btn_ic", use_container_width=True)
+
+        if generar_ic and periodo_ic:
+            with st.spinner("Calculando informe de costos..."):
+                engine = get_engine()
+
+                locales_q = run_query("SELECT DISTINCT local FROM inventarios WHERE local IS NOT NULL ORDER BY 1")
+                todos_locales = locales_q['local'].tolist() if not locales_q.empty else []
+                locales_sel = todos_locales if local_ic == "Todos" else [local_ic]
+
+                # ── Funciones de cálculo ──────────────────────────────
+                def get_inv(periodo, tipo, locales):
+                    lf = "AND local=ANY(:ls)" if locales else ""
+                    q = f"""
+                        SELECT local, producto_control, SUM(total_kg) as kg
+                        FROM inventarios
+                        WHERE periodo=:p AND tipo_inventario=:t {lf}
+                        GROUP BY local, producto_control
+                    """
+                    params = {'p': periodo, 't': tipo}
+                    if locales: params['ls'] = locales
+                    return run_query(q, params)
+
+                def get_uso(periodo, locales):
+                    lf = "AND local=ANY(:ls)" if locales else ""
+                    q = f"""
+                        SELECT local, nombre_ingrediente as producto_control,
+                               SUM(cantidad) as kg, SUM(costo) as costo
+                        FROM uso_ingredientes
+                        WHERE periodo=:p {lf}
+                        GROUP BY local, nombre_ingrediente
+                    """
+                    params = {'p': periodo}
+                    if locales: params['ls'] = locales
+                    return run_query(q, params)
+
+                def get_compras_kg(fecha_i, fecha_f, locales):
+                    """Compras en KG por producto_control usando SKU→nombre mapeado"""
+                    lf = "AND UPPER(c.local)=ANY(:ls)" if locales else ""
+                    q = f"""
+                        SELECT c.local,
+                               UPPER(c.nombre_producto) as producto_control,
+                               SUM(c.cant_conv) as kg,
+                               SUM(c.costo_realfinal) as costo
+                        FROM compras c
+                        WHERE c.fecha_dte::date BETWEEN :i AND :f
+                          AND c.subcat NOT IN ('COLACION','ADMINISTRACION','ART. LIMPIEZA','DESECHABLES')
+                          {lf}
+                        GROUP BY c.local, UPPER(c.nombre_producto)
+                    """
+                    params = {'i': str(fecha_i), 'f': str(fecha_f)}
+                    if locales: params['ls'] = [l.upper() for l in locales]
+                    return run_query(q, params)
+
+                def get_no_registrado(periodo, locales):
+                    """Compras no registradas — solo cantidad, agrupada por local + producto_control"""
+                    lf = "AND LOWER(local)=ANY(:ls)" if locales else ""
+                    q = f"""
+                        SELECT local,
+                               UPPER(producto_control) as producto_control,
+                               SUM(cantidad) as kg
+                        FROM compras_no_registradas
+                        WHERE periodo=:p
+                          AND producto_control IS NOT NULL
+                          AND producto_control != '' {lf}
+                        GROUP BY local, UPPER(producto_control)
+                    """
+                    params = {'p': periodo}
+                    if locales: params['ls'] = [l.lower() for l in locales]
+                    return run_query(q, params)
+
+                def get_ventas_ic(fecha_i, fecha_f, locales):
+                    lf = "AND UPPER(local)=ANY(:ls)" if locales else ""
+                    q = f"""
+                        SELECT local,
+                               SUM(CASE WHEN origen IS NULL OR origen='' THEN monto_venta_real ELSE 0 END) as venta_salon,
+                               SUM(CASE WHEN origen IS NOT NULL AND origen!='' THEN monto_venta_real ELSE 0 END) as venta_delivery,
+                               SUM(monto_venta_real) as venta_total,
+                               SUM(CASE WHEN categoria_menu ILIKE '%cerveza%' OR categoria_menu ILIKE '%bebida%'
+                                        OR categoria_menu ILIKE '%coctele%' OR categoria_menu ILIKE '%vino%'
+                                        OR categoria_menu ILIKE '%pisco%' OR categoria_menu ILIKE '%vodka%'
+                                        OR categoria_menu ILIKE '%whisky%' OR categoria_menu ILIKE '%ron%'
+                                        OR categoria_menu ILIKE '%espumante%' OR categoria_menu ILIKE '%bajativo%'
+                                        OR categoria_menu ILIKE '%jugo%' OR categoria_menu ILIKE '%cafeter%'
+                                        OR categoria_menu ILIKE '%dulce%'
+                                   THEN monto_venta_real ELSE 0 END) as venta_bar
+                        FROM ventas
+                        WHERE fecha_venta BETWEEN :i AND :f {lf}
+                        GROUP BY local
+                    """
+                    params = {'i': str(fecha_i), 'f': str(fecha_f)}
+                    if locales: params['ls'] = [l.upper() for l in locales]
+                    return run_query(q, params)
+
+                def get_compras_cat(fecha_i, fecha_f, locales):
+                    lf = "AND UPPER(local)=ANY(:ls)" if locales else ""
+                    q = f"""
+                        SELECT local, categoria_producto,
+                               SUM(costo_realfinal) as compra_total
+                        FROM compras
+                        WHERE fecha_dte::date BETWEEN :i AND :f {lf}
+                        GROUP BY local, categoria_producto
+                    """
+                    params = {'i': str(fecha_i), 'f': str(fecha_f)}
+                    if locales: params['ls'] = [l.upper() for l in locales]
+                    return run_query(q, params)
+
+                def get_bar_ventas(fecha_i, fecha_f, locales):
+                    lf = "AND UPPER(local)=ANY(:ls)" if locales else ""
+                    q = f"""
+                        SELECT local, categoria_menu as producto,
+                               SUM(monto_venta_real) as venta
+                        FROM ventas
+                        WHERE fecha_venta BETWEEN :i AND :f
+                          AND (categoria_menu ILIKE '%cerveza%' OR categoria_menu ILIKE '%bebida%'
+                               OR categoria_menu ILIKE '%coctel%' OR categoria_menu ILIKE '%vino%'
+                               OR categoria_menu ILIKE '%pisco%' OR categoria_menu ILIKE '%vodka%'
+                               OR categoria_menu ILIKE '%whisky%' OR categoria_menu ILIKE '%ron%'
+                               OR categoria_menu ILIKE '%espumante%' OR categoria_menu ILIKE '%bajativo%'
+                               OR categoria_menu ILIKE '%jugo%' OR categoria_menu ILIKE '%cafeter%'
+                               OR categoria_menu ILIKE '%dulce%') {lf}
+                        GROUP BY local, categoria_menu
+                        ORDER BY local, venta DESC
+                    """
+                    params = {'i': str(fecha_i), 'f': str(fecha_f)}
+                    if locales: params['ls'] = [l.upper() for l in locales]
+                    return run_query(q, params)
+
+                # ── Parsear fechas del período ────────────────────────
+                # Si el período tiene fechas reales usarlas, sino usar rango de inventario
+                from datetime import date, timedelta
+                inv_fechas = run_query(
+                    "SELECT MIN(periodo) as p FROM inventarios WHERE periodo=:p",
+                    {'p': periodo_ic})
+                # Usar compras del período — buscar rango de fechas en BD
+                compras_rango = run_query(
+                    "SELECT MIN(fecha_dte::date) as fi, MAX(fecha_dte::date) as ff FROM compras WHERE fecha_dte IS NOT NULL")
+                if not compras_rango.empty and compras_rango['fi'].iloc[0]:
+                    fecha_ic_i = f_inicio  # usar los filtros globales del módulo
+                    fecha_ic_f = f_fin
+                else:
+                    fecha_ic_i = date.today().replace(day=1)
+                    fecha_ic_f = date.today()
+
+                # Cargar datos
+                df_inv_ini = get_inv(periodo_ic, 'Inicial', locales_sel)
+                df_inv_fin = get_inv(periodo_ic, 'Final',   locales_sel)
+                df_uso_ic  = get_uso(periodo_ic, locales_sel)
+                df_ventas_ic = get_ventas_ic(fecha_ic_i, fecha_ic_f, locales_sel)
+                df_compras_cat = get_compras_cat(fecha_ic_i, fecha_ic_f, locales_sel)
+                df_bar_ven = get_bar_ventas(fecha_ic_i, fecha_ic_f, locales_sel)
+                df_no_reg  = get_no_registrado(periodo_ic, locales_sel)
+
+                # ── Categorías de control ────────────────────────────
+                categorias_control = {
+                    'CARNES ROJAS':       ['POSTA','FILETE','PLATEADA','LOMO LISO','LOMO VETADO','GRASA DE WAGYU'],
+                    'CARNES BLANCAS':     ['PECHUGA DE POLLO','COSTILLAS','CHULETA KASSLER','LOMO DE CENTRO','PERNIL','JAMÓN','TOCINO AHUMADO','PANCETA LAMINADA'],
+                    'VERDURAS':           ['PALTA','TOMATE','LECHUGA'],
+                    'PESCADOS Y MARISCOS':['FILETE SALMON','SALMON SLICE LAMINADO','CAMARON','CAMARON APANADO','ATUN','LOCOS','ERIZOS'],
+                    'OTROS':              ['QUESO RANCO','QUESO CHEDDAR','QUESO PARMESANO','PAPAS FRITAS'],
+                    'PAN':                ['FICA 14 CMS','MOLDE BANQUETE','MOLDE BANQUETE INTEGRAL','PAN FRICA 12 CM','PAN FRICA N8','HOT - DOG 19 CM.'],
+                    'BAR':                ['SCHOP','JUGOS'],
+                }
+
+                def calcular_control_categoria(cat_nombre, productos, local=None):
+                    rows = []
+                    for prod in productos:
+                        def _kg(df, prod, local):
+                            if df is None or df.empty: return 0.0
+                            mask = df['producto_control'].str.upper() == prod.upper()
+                            if local: mask &= (df['local'].str.lower() == local.lower())
+                            return float(df[mask]['kg'].sum() or 0)
+
+                        ini_kg  = _kg(df_inv_ini, prod, local)
+                        fin_kg  = _kg(df_inv_fin, prod, local)
+                        uso_kg  = _kg(df_uso_ic,  prod, local)
+
+                        # Compras KG: buscar en uso o inventario
+                        comp_mask = df_uso_ic['producto_control'].str.upper() == prod.upper() if not df_uso_ic.empty else pd.Series(dtype=bool)
+                        if local and not df_uso_ic.empty:
+                            comp_mask &= df_uso_ic['local'].str.lower() == local.lower()
+                        costo_comp = float(df_uso_ic[comp_mask]['costo'].sum()) if not df_uso_ic.empty and comp_mask.any() else 0
+
+                        comp_kg = ini_kg + (costo_comp / max(costo_comp/max(uso_kg,0.001), 0.001) if uso_kg > 0 else 0)
+                        real_ut = ini_kg - fin_kg + uso_kg  # simplificado sin compras KG exactas
+                        desv_kg = real_ut - uso_kg
+                        desv_pct = desv_kg / uso_kg if uso_kg > 0 else 0
+
+                        if ini_kg == 0 and fin_kg == 0 and uso_kg == 0: continue
+                        rows.append({
+                            'producto': prod,
+                            'compra_total': costo_comp,
+                            'inv_ini': ini_kg,
+                            'inv_fin': fin_kg,
+                            'comp_kg': uso_kg,  # usamos uso como proxy compras
+                            'real_ut': real_ut,
+                            'uso_rec': uso_kg,
+                            'desv_kg': desv_kg,
+                            'desv_pct': desv_pct,
+                            'costo_desv': desv_kg * (costo_comp / max(uso_kg, 0.001)),
+                            'kg_merma': 0,
+                        })
+                    return pd.DataFrame(rows)
+
+                st.session_state['ic_data'] = {
+                    'periodo': periodo_ic,
+                    'locales': locales_sel,
+                    'df_ventas': df_ventas_ic,
+                    'df_compras_cat': df_compras_cat,
+                    'df_bar_ven': df_bar_ven,
+                    'df_inv_ini': df_inv_ini,
+                    'df_inv_fin': df_inv_fin,
+                    'df_uso': df_uso_ic,
+                    'df_no_reg': df_no_reg,
+                    'categorias': categorias_control,
+                    'fecha_i': fecha_ic_i,
+                    'fecha_f': fecha_ic_f,
+                }
+
+            st.success(f"✅ Datos cargados para {len(locales_sel)} local(es) — período {periodo_ic}")
+
+        # ── Mostrar informe si hay datos ─────────────────────────
+        if 'ic_data' in st.session_state:
+            d = st.session_state['ic_data']
+            df_v   = d['df_ventas']
+            df_cc  = d['df_compras_cat']
+            df_bv  = d['df_bar_ven']
+            df_nr  = d.get('df_no_reg', pd.DataFrame())
+            df_ini = d['df_inv_ini']
+            df_fin = d['df_inv_fin']
+            df_uso = d['df_uso']
+            locales_show = d['locales']
+            periodo_show = d['periodo']
+
+            hs = 'padding:8px 12px;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a;background:#111'
+            hs2 = hs + ';color:#4caf7d'
+            hsr = hs + ';color:#e84545'
+
+            def fmt_clp(v):
+                try: return f"${float(v):,.0f}"
+                except: return "—"
+            def fmt_pct(v):
+                try: return f"{float(v)*100:.1f}%"
+                except: return "—"
+            def fmt_kg(v):
+                try: return f"{float(v):.2f}"
+                except: return "—"
+
+            for local_show in locales_show:
+                st.markdown(f"---")
+                st.markdown(f"### 📍 {local_show} — {periodo_show}")
+
+                # ── Filtrar por local ─────────────────────────────
+                def filt(df, col='local'):
+                    if df is None or df.empty: return pd.DataFrame()
+                    return df[df[col].str.lower() == local_show.lower()].copy()
+
+                nr  = filt(df_nr)
+
+                vv  = filt(df_v)
+                cc  = filt(df_cc)
+                bv  = filt(df_bv)
+                ini = filt(df_ini)
+                fin = filt(df_fin)
+                uso = filt(df_uso)
+
+                # ── Métricas principales ──────────────────────────
+                v_salon    = float(vv['venta_salon'].sum())    if not vv.empty else 0
+                v_delivery = float(vv['venta_delivery'].sum()) if not vv.empty else 0
+                v_total    = float(vv['venta_total'].sum())    if not vv.empty else 0
+                v_bar      = float(vv['venta_bar'].sum())      if not vv.empty else 0
+                compra_tot = float(cc['compra_total'].sum())   if not cc.empty else 0
+                pct_compra = compra_tot / v_total if v_total > 0 else 0
+
+                # Compra por categoría
+                cat_map = {'ALIMENTOS': 0, 'VERDURAS': 0, 'BAR': 0, 'ART. LIMPIEZA': 0, 'DESECHABLES': 0}
+                if not cc.empty:
+                    for _, row in cc.iterrows():
+                        cat = str(row.get('categoria_producto','')).strip().upper()
+                        val = float(row.get('compra_total', 0) or 0)
+                        if cat in cat_map: cat_map[cat] += val
+
+                # Uso por categoría de control
+                cat_uso = {}
+                cat_desv = {}
+                cat_labels = {
+                    'CARNES ROJAS': ['POSTA','FILETE','PLATEADA','LOMO LISO','LOMO VETADO','GRASA DE WAGYU'],
+                    'CARNES BLANCAS': ['PECHUGA DE POLLO','COSTILLAS','CHULETA KASSLER','LOMO DE CENTRO','PERNIL','JAMÓN','TOCINO AHUMADO','PANCETA LAMINADA'],
+                    'VERDURAS': ['PALTA','TOMATE','LECHUGA'],
+                    'PESCADOS Y MARISCOS': ['FILETE SALMON','SALMON SLICE LAMINADO','CAMARON','CAMARON APANADO','ATUN','LOCOS','ERIZOS'],
+                    'OTROS': ['QUESO RANCO','QUESO CHEDDAR','QUESO PARMESANO','PAPAS FRITAS'],
+                    'PAN': ['FRICA 14 CMS','MOLDE BANQUETE','MOLDE BANQUETE INTEGRAL','PAN FRICA 12 CM','PAN FRICA N8','HOT - DOG 19 CM.'],
+                }
+                for cat, prods in cat_labels.items():
+                    mask = uso['producto_control'].str.upper().isin([p.upper() for p in prods]) if not uso.empty else pd.Series(dtype=bool)
+                    cat_uso[cat]  = float(uso[mask]['costo'].sum()) if not uso.empty and mask.any() else 0
+                    cat_desv[cat] = 0  # se calculará en el control de productos
+
+                # ── SECCIÓN 1: Análisis de costo ──────────────────
+                c1, c2, c3 = st.columns([1.2, 1.2, 1.6])
+
+                with c1:
+                    st.markdown("**1. Análisis de Costo**")
+                    rows1 = [
+                        ('VENTA SALÓN',    fmt_clp(v_salon),    fmt_pct(v_salon/v_total if v_total else 0)),
+                        ('VENTA DELIVERY', fmt_clp(v_delivery), fmt_pct(v_delivery/v_total if v_total else 0)),
+                        ('VENTA TOTAL',    fmt_clp(v_total),    '100%'),
+                        ('VENTA BAR',      fmt_clp(v_bar),      fmt_pct(v_bar/v_total if v_total else 0)),
+                        ('',              '',                   ''),
+                        ('COMPRA TOTAL',   fmt_clp(compra_tot), fmt_pct(pct_compra)),
+                        ('',              '',                   ''),
+                        ('ALIMENTOS',      fmt_clp(cat_map['ALIMENTOS']), fmt_pct(cat_map['ALIMENTOS']/v_total if v_total else 0)),
+                        ('VERDURAS',       fmt_clp(cat_map['VERDURAS']),  fmt_pct(cat_map['VERDURAS']/v_total if v_total else 0)),
+                        ('BAR',            fmt_clp(cat_map['BAR']),       fmt_pct(cat_map['BAR']/v_total if v_total else 0)),
+                        ('ART. LIMPIEZA',  fmt_clp(cat_map['ART. LIMPIEZA']), fmt_pct(cat_map['ART. LIMPIEZA']/v_total if v_total else 0)),
+                        ('DESECHABLES',    fmt_clp(cat_map['DESECHABLES']), fmt_pct(cat_map['DESECHABLES']/v_total if v_total else 0)),
+                    ]
+                    r1_html = ''.join([
+                        f'<tr style="border-bottom:1px solid #1a1a1a;{"background:#0a1a0a" if r[0]=="VENTA TOTAL" else "background:#111" if r[0]=="COMPRA TOTAL" else ""}">'
+                        f'<td style="padding:6px 10px;color:#888;font-size:0.75rem">{r[0]}</td>'
+                        f'<td style="padding:6px 10px;text-align:right;color:#ccc;font-size:0.78rem">{r[1]}</td>'
+                        f'<td style="padding:6px 10px;text-align:right;color:#666;font-size:0.75rem">{r[2]}</td>'
+                        f'</tr>'
+                        for r in rows1 if r[0]
+                    ])
+                    st.markdown(
+                        f'<div style="border:1px solid #1e1e1e;border-radius:10px;overflow:hidden;background:#0d0d0d">'
+                        f'<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif">'
+                        f'<thead><tr style="background:#111"><th style="{hs};text-align:left">ÍTEM</th>'
+                        f'<th style="{hs};text-align:right">$ CLP</th><th style="{hs};text-align:right">%</th></tr></thead>'
+                        f'<tbody>{r1_html}</tbody></table></div>',
+                        unsafe_allow_html=True)
+
+                with c2:
+                    st.markdown("**2. Vista General Bar**")
+                    if not bv.empty:
+                        bv_s = bv.sort_values('venta', ascending=False).head(14)
+                        r2_html = ''.join([
+                            f'<tr style="border-bottom:1px solid #1a1a1a">'
+                            f'<td style="padding:5px 10px;color:#888;font-size:0.7rem;text-align:right">{i+2}</td>'
+                            f'<td style="padding:5px 10px;color:#ccc;font-size:0.75rem">{r["producto"]}</td>'
+                            f'<td style="padding:5px 10px;text-align:right;color:#d4a853;font-size:0.78rem">{fmt_clp(r["venta"])}</td>'
+                            f'</tr>'
+                            for i, (_, r) in enumerate(bv_s.iterrows())
+                        ])
+                        comp_bar = float(cat_map['BAR'])
+                        pct_bar  = comp_bar / v_bar if v_bar > 0 else 0
+                        r2_html += (
+                            f'<tr style="background:#0d1a0d;border-top:1px solid #2a2a2a">'
+                            f'<td colspan="2" style="padding:6px 10px;color:#4caf7d;font-size:0.75rem;font-weight:600">Total Venta</td>'
+                            f'<td style="padding:6px 10px;text-align:right;color:#4caf7d;font-weight:600;font-size:0.78rem">{fmt_clp(v_bar)}</td></tr>'
+                            f'<tr style="background:#0d1a0d"><td colspan="2" style="padding:4px 10px;color:#888;font-size:0.73rem">Total Compra Bar</td>'
+                            f'<td style="padding:4px 10px;text-align:right;color:#aaa;font-size:0.75rem">{fmt_clp(comp_bar)}</td></tr>'
+                            f'<tr style="background:#0d1a0d"><td colspan="2" style="padding:4px 10px;color:#888;font-size:0.73rem">% Compra</td>'
+                            f'<td style="padding:4px 10px;text-align:right;color:#d4a853;font-size:0.75rem">{fmt_pct(pct_bar)}</td></tr>'
+                        )
+                        st.markdown(
+                            f'<div style="border:1px solid #1e1e1e;border-radius:10px;overflow:hidden;background:#0d0d0d">'
+                            f'<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif">'
+                            f'<thead><tr style="background:#111"><th style="{hs};text-align:right">#</th>'
+                            f'<th style="{hs};text-align:left">PRODUCTO</th><th style="{hs};text-align:right">$ CLP</th></tr></thead>'
+                            f'<tbody>{r2_html}</tbody></table></div>',
+                            unsafe_allow_html=True)
+                    else:
+                        st.caption("Sin datos de ventas bar para el período.")
+
+                with c3:
+                    st.markdown("**3. Resumen General**")
+                    cats_res = list(cat_labels.keys())
+                    total_uso_clp  = sum(cat_uso.values())
+                    r3_html = ''
+                    for cat in cats_res:
+                        ut  = cat_uso.get(cat, 0)
+                        dsv = cat_desv.get(cat, 0)
+                        pct_dsv = dsv / ut if ut > 0 else 0
+                        r3_html += (
+                            f'<tr style="border-bottom:1px solid #1a1a1a">'
+                            f'<td style="padding:5px 10px;color:#ccc;font-size:0.75rem">{cat}</td>'
+                            f'<td style="padding:5px 10px;text-align:right;color:#aaa;font-size:0.75rem">{fmt_clp(ut)}</td>'
+                            f'<td style="padding:5px 10px;text-align:right;color:{"#e84545" if dsv>0 else "#4caf7d"};font-size:0.75rem">{fmt_clp(dsv)}</td>'
+                            f'<td style="padding:5px 10px;text-align:right;color:#888;font-size:0.73rem">{fmt_pct(pct_dsv)}</td>'
+                            f'</tr>'
+                        )
+                    r3_html += (
+                        f'<tr style="background:#111;border-top:1px solid #2a2a2a">'
+                        f'<td style="padding:6px 10px;color:#d4a853;font-weight:600;font-size:0.75rem">DESVIACIÓN TOTAL</td>'
+                        f'<td style="padding:6px 10px;text-align:right;color:#d4a853;font-weight:600">{fmt_clp(total_uso_clp)}</td>'
+                        f'<td style="padding:6px 10px;text-align:right;color:#d4a853;font-weight:600">—</td>'
+                        f'<td style="padding:6px 10px;text-align:right;color:#d4a853;font-weight:600">—</td></tr>'
+                    )
+                    st.markdown(
+                        f'<div style="border:1px solid #1e1e1e;border-radius:10px;overflow:hidden;background:#0d0d0d">'
+                        f'<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif">'
+                        f'<thead><tr style="background:#111">'
+                        f'<th style="{hs};text-align:left">CATEGORÍA</th>'
+                        f'<th style="{hs};text-align:right">UTILIZADO $</th>'
+                        f'<th style="{hs};text-align:right">DESVIACIÓN $</th>'
+                        f'<th style="{hs};text-align:right">DESV %</th></tr></thead>'
+                        f'<tbody>{r3_html}</tbody></table></div>',
+                        unsafe_allow_html=True)
+
+                # ── SECCIÓN 5: Control de productos críticos ──────
+                st.markdown(f"**5. Control de Productos Críticos**")
+
+                for cat_nombre, prods in cat_labels.items():
+                    filas_ctrl = []
+                    for prod in prods:
+                        def _kg2(df, prod):
+                            if df is None or df.empty: return 0.0
+                            m = df['producto_control'].str.upper() == prod.upper()
+                            return float(df[m]['kg'].sum() or 0)
+                        def _costo(df, prod):
+                            if df is None or df.empty: return 0.0
+                            m = df['producto_control'].str.upper() == prod.upper()
+                            return float(df[m]['costo'].sum() or 0) if 'costo' in df.columns else 0.0
+
+                        ini_kg   = _kg2(ini, prod)
+                        fin_kg   = _kg2(fin, prod)
+                        uso_kg   = _kg2(uso, prod)
+                        costo_u  = _costo(uso, prod)
+                        nr_kg    = _kg2(nr, prod)   # no registrado (puede ser + o -)
+                        # Real utilizado = Inv.Ini + Compras + No Registrado - Inv.Fin
+                        # Como no tenemos compras KG exactas, usamos:
+                        # comp_kg (compras) = Real Utilizado = Inv.Ini - Inv.Fin + uso_kg + nr_kg
+                        comp_kg = ini_kg + uso_kg + nr_kg - fin_kg
+                        real_ut = comp_kg
+                        desv_kg = real_ut - uso_kg
+                        desv_pct = desv_kg / uso_kg if uso_kg > 0 else 0
+                        precio_u = costo_u / max(uso_kg, 0.001)
+                        costo_desv = desv_kg * precio_u
+
+                        if ini_kg == 0 and fin_kg == 0 and uso_kg == 0 and costo_u == 0:
+                            continue
+                        filas_ctrl.append((prod, costo_u, ini_kg, fin_kg, comp_kg, real_ut, uso_kg, desv_kg, desv_pct, costo_desv))
+
+                    if not filas_ctrl:
+                        continue
+
+                    um_label = 'LT' if cat_nombre == 'BAR' else 'UN' if cat_nombre == 'PAN' else 'KG'
+                    ctrl_rows = ''
+                    for f in filas_ctrl:
+                        prod, ct, ini, fin_, cp, ru, uc, dk, dp, cd = f
+                        color_desv = '#e84545' if dp > 0.1 else '#e89c45' if dp > 0.05 else '#4caf7d'
+                        ctrl_rows += (
+                            f'<tr style="border-bottom:1px solid #1a1a1a">'
+                            f'<td style="padding:6px 10px;color:#ccc;font-size:0.75rem">{prod}</td>'
+                            f'<td style="padding:6px 10px;text-align:right;color:#888;font-size:0.73rem">{fmt_clp(ct)}</td>'
+                            f'<td style="padding:6px 10px;text-align:right;color:#777;font-size:0.73rem">{fmt_kg(ini)}</td>'
+                            f'<td style="padding:6px 10px;text-align:right;color:#777;font-size:0.73rem">{fmt_kg(fin_)}</td>'
+                            f'<td style="padding:6px 10px;text-align:right;color:#aaa;font-size:0.73rem">{fmt_kg(cp)}</td>'
+                            f'<td style="padding:6px 10px;text-align:right;color:#aaa;font-size:0.73rem">{fmt_kg(ru)}</td>'
+                            f'<td style="padding:6px 10px;text-align:right;color:#888;font-size:0.73rem">{fmt_kg(uc)}</td>'
+                            f'<td style="padding:6px 10px;text-align:right;color:{color_desv};font-size:0.73rem">{fmt_kg(dk)}</td>'
+                            f'<td style="padding:6px 10px;text-align:right;color:{color_desv};font-size:0.73rem">{fmt_pct(dp)}</td>'
+                            f'<td style="padding:6px 10px;text-align:right;color:{"#e84545" if cd>0 else "#4caf7d"};font-size:0.73rem">{fmt_clp(cd)}</td>'
+                            f'<td style="padding:6px 10px;text-align:right;color:#555;font-size:0.73rem">0</td>'
+                            f'</tr>'
+                        )
+                    # Fila total
+                    tot_ct  = sum(f[1] for f in filas_ctrl)
+                    tot_ini = sum(f[2] for f in filas_ctrl)
+                    tot_fin = sum(f[3] for f in filas_ctrl)
+                    tot_cp  = sum(f[4] for f in filas_ctrl)
+                    tot_ru  = sum(f[5] for f in filas_ctrl)
+                    tot_uc  = sum(f[6] for f in filas_ctrl)
+                    tot_dk  = sum(f[7] for f in filas_ctrl)
+                    tot_dp  = tot_dk / tot_uc if tot_uc > 0 else 0
+                    tot_cd  = sum(f[9] for f in filas_ctrl)
+                    ctrl_rows += (
+                        f'<tr style="background:#111;border-top:1px solid #2a2a2a">'
+                        f'<td style="padding:6px 10px;color:#d4a853;font-weight:600;font-size:0.75rem">TOTAL</td>'
+                        f'<td style="padding:6px 10px;text-align:right;color:#d4a853;font-weight:600;font-size:0.73rem">{fmt_clp(tot_ct)}</td>'
+                        f'<td style="padding:6px 10px;text-align:right;color:#888;font-size:0.73rem">{fmt_kg(tot_ini)}</td>'
+                        f'<td style="padding:6px 10px;text-align:right;color:#888;font-size:0.73rem">{fmt_kg(tot_fin)}</td>'
+                        f'<td style="padding:6px 10px;text-align:right;color:#aaa;font-size:0.73rem">{fmt_kg(tot_cp)}</td>'
+                        f'<td style="padding:6px 10px;text-align:right;color:#aaa;font-size:0.73rem">{fmt_kg(tot_ru)}</td>'
+                        f'<td style="padding:6px 10px;text-align:right;color:#888;font-size:0.73rem">{fmt_kg(tot_uc)}</td>'
+                        f'<td style="padding:6px 10px;text-align:right;color:#d4a853;font-weight:600;font-size:0.73rem">{fmt_kg(tot_dk)}</td>'
+                        f'<td style="padding:6px 10px;text-align:right;color:#d4a853;font-weight:600;font-size:0.73rem">{fmt_pct(tot_dp)}</td>'
+                        f'<td style="padding:6px 10px;text-align:right;color:#d4a853;font-weight:600;font-size:0.73rem">{fmt_clp(tot_cd)}</td>'
+                        f'<td style="padding:6px 10px;text-align:right;color:#555;font-size:0.73rem">0</td></tr>'
+                    )
+                    st.markdown(
+                        f'<div style="margin-top:0.8rem;border:1px solid #1e1e1e;border-radius:10px;overflow:hidden;background:#0d0d0d">'
+                        f'<div style="background:#111;padding:8px 12px;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.1em;color:#d4a853;font-weight:600">CONTROL {cat_nombre}</div>'
+                        f'<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif">'
+                        f'<thead><tr style="background:#0d0d0d">'
+                        f'<th style="{hs};text-align:left">PRODUCTO</th>'
+                        f'<th style="{hs};text-align:right">COMPRA $</th>'
+                        f'<th style="{hs};text-align:right">INV.INI {um_label}</th>'
+                        f'<th style="{hs};text-align:right">INV.FIN {um_label}</th>'
+                        f'<th style="{hs};text-align:right">COMPRAS {um_label}</th>'
+                        f'<th style="{hs};text-align:right">REAL UT. {um_label}</th>'
+                        f'<th style="{hs};text-align:right">REC. {um_label}</th>'
+                        f'<th style="{hs2};text-align:right">DESV. {um_label}</th>'
+                        f'<th style="{hs2};text-align:right">DESV %</th>'
+                        f'<th style="{hsr};text-align:right">COSTO DESV.</th>'
+                        f'<th style="{hs};text-align:right">MERMA</th>'
+                        f'</tr></thead><tbody>{ctrl_rows}</tbody></table></div></div>',
+                        unsafe_allow_html=True)
+
+                # ── Botón imprimir ────────────────────────────────
+                st.markdown("---")
+                if st.button("🖨️ Preparar para imprimir", key=f"btn_print_{local_show}"):
+                    st.info("Usa Ctrl+P (o Cmd+P en Mac) para imprimir o guardar como PDF. El informe está optimizado para impresión.")
 
 # ============================================================
 # MÓDULO: TENDENCIAS BAR
