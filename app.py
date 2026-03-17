@@ -2302,21 +2302,33 @@ if modulo.startswith("📦"):
         with t6b:
             st.markdown("#### Inventario por Local")
 
-            ci1, ci2, ci3, ci4 = st.columns(4)
+            ci1, ci2, ci3 = st.columns(3)
             with ci1:
+                tipo_inv = st.selectbox("Tipo", ["Inicial","Final"], key="tipo_inv")
+            with ci2:
+                periodo_inv = st.text_input("Período (ej: 2-8 Mar)", key="periodo_inv", placeholder="2-8 Mar")
+            with ci3:
+                formato_inv = st.radio("Formato", ["Forma A (Alimentos+Bar)", "Forma B (Resumen)"],
+                                       key="formato_inv", help="A: hojas Alimentos y Bar separadas — requiere seleccionar local.\nB: tabla consolidada LOCAL/FACTOR/PRODUCTO/TOTAL 2 — puede traer todos los locales.")
+
+            es_forma_b = "B" in st.session_state.get("formato_inv", "A")
+
+            # Forma A requiere local, Forma B es opcional (puede traer todos)
+            if not es_forma_b:
                 local_inv = st.selectbox("Local", ["Chicureo","La Dehesa","La Reina","Las Condes",
                                                     "Los Trapenses","Macul","Nueva Providencia",
                                                     "Providencia","Quilin","Vitacura"], key="local_inv")
-            with ci2:
-                tipo_inv = st.selectbox("Tipo", ["Inicial","Final"], key="tipo_inv")
-            with ci3:
-                periodo_inv = st.text_input("Período (ej: 2-8 Mar)", key="periodo_inv", placeholder="2-8 Mar")
-            with ci4:
-                formato_inv = st.radio("Formato", ["Forma A (Alimentos+Bar)", "Forma B (Resumen)"],
-                                       key="formato_inv", help="A: hojas Alimentos y Bar separadas. B: tabla consolidada LOCAL/FACTOR/PRODUCTO/TOTAL 2")
+            else:
+                modo_inv_b = st.radio("Locales", ["Todos los locales (columna LOCAL del archivo)", "Local específico"],
+                                      key="modo_inv_b", horizontal=True)
+                local_inv = None
+                if modo_inv_b == "Local específico":
+                    local_inv = st.selectbox("Local", ["Chicureo","La Dehesa","La Reina","Las Condes",
+                                                        "Los Trapenses","Macul","Nueva Providencia",
+                                                        "Providencia","Quilin","Vitacura"], key="local_inv")
 
             f_inv = st.file_uploader(
-                "Archivo Inventario (.xlsx o .csv)" if "B" in st.session_state.get("formato_inv","A") else "Archivo Inventario (.xlsx)",
+                "Archivo Inventario (.xlsx o .csv)",
                 type=["xlsx","csv"], key="inv_file")
 
             if f_inv and periodo_inv:
@@ -2344,19 +2356,20 @@ if modulo.startswith("📦"):
                                         df_b[col].astype(str).str.replace(',','.', regex=False),
                                         errors='coerce').fillna(0)
 
-                            # Filtrar por local si el archivo trae varios
-                            if 'LOCAL' in df_b.columns:
+                            # Filtrar por local si se especificó uno
+                            if local_inv and 'LOCAL' in df_b.columns:
                                 df_b = df_b[df_b['LOCAL'].astype(str).str.strip().str.lower() == local_inv.lower()]
 
                             registros = []
                             for _, row in df_b.iterrows():
                                 prod = str(row.get('PRODUCTO','')).strip()
                                 if not prod or prod == 'nan': continue
+                                local_fila = local_inv or str(row.get('LOCAL', '')).strip()
                                 um       = str(row.get('UND','')).strip()
                                 total_og = float(row.get('TOTAL', 0) or 0)
                                 total_kg = float(row.get('TOTAL 2', total_og) or 0)
                                 registros.append({
-                                    'local': local_inv, 'periodo': periodo_inv,
+                                    'local': local_fila, 'periodo': periodo_inv,
                                     'tipo_inventario': tipo_inv,
                                     'producto': prod, 'producto_control': prod,
                                     'um': um, 'crudo': 0, 'produccion': 0, 'cocido': 0,
@@ -2366,12 +2379,20 @@ if modulo.startswith("📦"):
 
                             df_inv_save = pd.DataFrame(registros)
                             with engine.connect() as conn:
-                                conn.execute(text(
-                                    "DELETE FROM inventarios WHERE local=:l AND periodo=:p AND tipo_inventario=:t"),
-                                    {'l': local_inv, 'p': periodo_inv, 't': tipo_inv})
+                                if local_inv:
+                                    conn.execute(text(
+                                        "DELETE FROM inventarios WHERE local=:l AND periodo=:p AND tipo_inventario=:t"),
+                                        {'l': local_inv, 'p': periodo_inv, 't': tipo_inv})
+                                else:
+                                    # Borrar todos los locales del período
+                                    locales_archivo = df_inv_save['local'].dropna().unique().tolist()
+                                    conn.execute(text(
+                                        "DELETE FROM inventarios WHERE local=ANY(:ls) AND periodo=:p AND tipo_inventario=:t"),
+                                        {'ls': locales_archivo, 'p': periodo_inv, 't': tipo_inv})
                                 conn.commit()
                             df_inv_save.to_sql('inventarios', engine, if_exists='append', index=False)
-                            st.success(f"✅ {len(df_inv_save)} productos cargados (Forma B) — {local_inv} · {tipo_inv} · {periodo_inv}")
+                            n_locales = df_inv_save['local'].nunique()
+                            st.success(f"✅ {len(df_inv_save)} productos cargados (Forma B) — {n_locales} local(es) · {tipo_inv} · {periodo_inv}")
 
                         else:
                         # ══ FORMA A: hojas Alimentos + Bar ══
