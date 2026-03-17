@@ -2059,17 +2059,6 @@ if modulo.startswith("📦"):
                     for k in [k for k in st.session_state if k.startswith('chk_')]:
                         del st.session_state[k]
 
-                # Leer selección del render anterior via session_state
-                sel_indices = [idx for idx in df_tabla.index if st.session_state.get(f'chk_{idx}', False)]
-                sel_rows = df_tabla.loc[sel_indices].reset_index(drop=True) if sel_indices else pd.DataFrame()
-                n_sel = len(sel_rows)
-                ids_sel = []
-                skus_sel = []
-                for _, r in sel_rows.iterrows():
-                    ids_sel += _parse_ids(r['ids'])
-                    skus_sel.append(r['sku'])
-                skus_sel = list(set(skus_sel))
-
                 # Panel de acciones ARRIBA de la tabla
                 if n_sel > 0:
                     st.markdown(f'**⚙️ {n_sel} grupo(s) — {len(ids_sel)} registros**')
@@ -2143,102 +2132,76 @@ if modulo.startswith("📦"):
                 else:
                     st.caption('☝️ Selecciona grupos en la tabla para aplicar acciones.')
 
-                # ── Tabla acordeón: agrupada por SKU ─────────────────────
+                # ── Tabla HTML pura — una fila por grupo MUC ─────────────
+                # Construir HTML completo de una vez (sin elementos Streamlit por fila)
                 hs_a = 'padding:8px 12px;font-size:0.67rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
-                hdrs_a = ['', 'SKU', 'Producto', 'Categoría', 'Proveedor', 'Conv.', 'Formato', 'Neto Fact/u', 'MUC', '# Reg.', 'Dispersión']
+                rows_html = ''
+                opciones_sel = []  # para el multiselect
 
-                # Header fijo
-                st.markdown(
-                    '<div style="overflow-x:auto;border-radius:10px 10px 0 0;border:1px solid #1e1e1e;border-bottom:none;background:#111">'
-                    '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif">'
-                    '<thead><tr>'
-                    + ''.join([f'<th style="{hs_a};text-align:{"center" if i==0 else "left" if i<5 else "right" if i<10 else "center"}">{h}</th>' for i, h in enumerate(hdrs_a)])
-                    + '</tr></thead></table></div>',
-                    unsafe_allow_html=True
+                for idx, r in df_tabla.iterrows():
+                    muc        = float(r.get('muc', 0) or 0)
+                    muc_min    = float(r.get('muc_min', 0) or 0)
+                    muc_max    = float(r.get('muc_max', 0) or 0)
+                    dispersion = float(r.get('dispersion', 1) or 1)
+                    n_reg      = int(r.get('n_registros', 1) or 1)
+                    precio     = float(r.get('precio_factura', 0) or 0)
+                    sku_r      = r.get('sku', '')
+                    nombre_r   = str(r.get('nombre_producto', ''))
+                    es_out     = muc_min > 0 and (abs(muc - muc_min) < 0.0001 or abs(muc - muc_max) < 0.0001)
+                    if dispersion > 8:   dc = '#e84545'; dl = f'🔴 {dispersion:.0f}×'
+                    elif dispersion > 2: dc = '#e89c45'; dl = f'🟡 {dispersion:.1f}×'
+                    else:                dc = '#aaa';    dl = f'⚪ {dispersion:.1f}×'
+                    mc = '#e84545' if es_out else '#aaa'
+                    mw = '700' if es_out else '400'
+                    rows_html += (
+                        f'<tr style="border-bottom:1px solid #1e1e1e">'
+                        f'<td style="padding:9px 12px;color:#666;font-family:monospace;font-size:0.72rem;width:8%">{sku_r}</td>'
+                        f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de;font-size:0.8rem;width:20%">{nombre_r}</td>'
+                        f'<td style="padding:9px 12px;color:#666;font-size:0.75rem;width:9%">{r.get("categoria","")}</td>'
+                        f'<td style="padding:9px 12px;color:#777;font-size:0.75rem;width:13%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{r.get("proveedor","")}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#888;width:6%">{r.get("conversion","")}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#888;width:7%">{r.get("formato","")}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#aaa;width:10%">${precio:,.2f}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:{mc};font-weight:{mw};width:10%">{muc:,.4f}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#666;width:6%">{n_reg}</td>'
+                        f'<td style="padding:9px 12px;text-align:center;color:{dc};font-weight:600;width:8%">{dl}</td>'
+                        f'</tr>'
+                    )
+                    opciones_sel.append(f'{sku_r} | MUC {muc:.4f} | {n_reg} reg. | {dl}')
+
+                tabla_html = (
+                    '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
+                    '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
+                    '<thead><tr style="background:#111">'
+                    + ''.join([f'<th style="{hs_a};text-align:{"left" if i<4 else "right" if i<9 else "center"}">{h}</th>'
+                               for i, h in enumerate(['SKU','Producto','Categoría','Proveedor','Conv.','Formato','Neto Fact/u','MUC','# Reg.','Dispersión'])])
+                    + f'</tr></thead><tbody>{rows_html}</tbody></table></div>'
+                )
+                st.markdown(tabla_html, unsafe_allow_html=True)
+
+                # ── Selector de grupos a trabajar ──────────────────────────
+                st.markdown('<div style="height:8px"></div>', unsafe_allow_html=True)
+                sel_labels = st.multiselect(
+                    '☝️ Selecciona grupos MUC para aplicar acciones',
+                    opciones_sel,
+                    key='audit_multisel',
+                    placeholder='Busca por SKU, producto o MUC...'
                 )
 
-                # Agrupar por SKU
-                skus_en_tabla = df_tabla['sku'].unique().tolist()
+                # Recuperar filas seleccionadas por label
+                sel_rows = pd.DataFrame()
+                if sel_labels:
+                    sel_indices = [opciones_sel.index(l) for l in sel_labels if l in opciones_sel]
+                    sel_rows    = df_tabla.iloc[sel_indices].reset_index(drop=True)
 
-                for sku_g in skus_en_tabla:
-                    filas_g = df_tabla[df_tabla['sku'] == sku_g].reset_index()
-                    r0 = filas_g.iloc[0]
-                    disp_g    = float(r0.get('dispersion', 1) or 1)
-                    n_tot_g   = int(filas_g['n_registros'].sum())
-                    n_grupos_g = len(filas_g)
-                    nombre_g  = str(r0.get('nombre_producto', ''))
-                    cat_g     = str(r0.get('categoria', ''))
-
-                    if disp_g > 8:   sc = '#e84545'; sl = f'🔴 {disp_g:.0f}×'
-                    elif disp_g > 2: sc = '#e89c45'; sl = f'🟡 {disp_g:.1f}×'
-                    else:            sc = '#aaa';    sl = f'⚪ {disp_g:.1f}×'
-
-                    # Estado del acordeón en session_state (expandido por defecto)
-                    acc_key = f'acc_{sku_g}'
-                    if acc_key not in st.session_state:
-                        st.session_state[acc_key] = False
-
-                    # Fila resumen del SKU (clickeable para colapsar/expandir)
-                    arrow = '▾' if st.session_state[acc_key] else '▸'
-                    col_btn, col_hdr = st.columns([0.35, 9.65])
-                    with col_btn:
-                        if st.button(arrow, key=f'btn_{sku_g}',
-                                     help='Expandir/colapsar',
-                                     use_container_width=True):
-                            st.session_state[acc_key] = not st.session_state[acc_key]
-                            st.rerun()
-                    with col_hdr:
-                        st.markdown(
-                            f'<div style="background:#141414;border-bottom:1px solid #2a2a2a;cursor:pointer">'
-                            f'<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem"><tr>'
-                            f'<td style="padding:9px 12px;color:#d4a853;font-family:monospace;font-size:0.75rem;font-weight:700;width:8%">{sku_g}</td>'
-                            f'<td style="padding:9px 12px;font-weight:600;color:#f0ede8;width:20%">{nombre_g[:45]}</td>'
-                            f'<td style="padding:9px 12px;color:#666;width:9%">{cat_g}</td>'
-                            f'<td style="padding:9px 12px;color:#555;width:13%">{n_grupos_g} grupo{"s" if n_grupos_g>1 else ""} MUC</td>'
-                            f'<td colspan="5" style="padding:9px 12px;color:#555;text-align:right;width:35%">{n_tot_g} registros totales</td>'
-                            f'<td style="padding:9px 12px;text-align:center;color:{sc};font-weight:700;width:8%">{sl}</td>'
-                            f'</tr></table></div>',
-                            unsafe_allow_html=True
-                        )
-
-                    # Filas hijas (grupos MUC) — solo si expandido
-                    if st.session_state[acc_key]:
-                        for _, r in filas_g.iterrows():
-                            idx       = r['index']
-                            muc       = float(r.get('muc', 0) or 0)
-                            muc_min   = float(r.get('muc_min', 0) or 0)
-                            muc_max   = float(r.get('muc_max', 0) or 0)
-                            disp      = float(r.get('dispersion', 1) or 1)
-                            n_reg     = int(r.get('n_registros', 1) or 1)
-                            precio    = float(r.get('precio_factura', 0) or 0)
-                            es_out    = muc_min > 0 and (abs(muc - muc_min) < 0.0001 or abs(muc - muc_max) < 0.0001)
-                            if disp > 8:   dc = '#e84545'; dl = f'🔴 {disp:.0f}×'
-                            elif disp > 2: dc = '#e89c45'; dl = f'🟡 {disp:.1f}×'
-                            else:          dc = '#aaa';    dl = f'⚪ {disp:.1f}×'
-                            mc = '#e84545' if es_out else '#aaa'
-                            mw = '700' if es_out else '400'
-                            col_chk, col_row = st.columns([0.3, 9.7])
-                            with col_row:
-                                st.markdown(
-                                    f'<div style="background:#0a0a0a;border-bottom:1px solid #181818;margin-left:4px">'
-                                    f'<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.80rem"><tr>'
-                                    f'<td style="padding:8px 12px;color:#444;font-family:monospace;font-size:0.70rem;width:8%">{r.get("sku","")}</td>'
-                                    f'<td style="padding:8px 12px;color:#c8c4be;width:20%">{r.get("nombre_producto","")}</td>'
-                                    f'<td style="padding:8px 12px;color:#555;width:9%">{r.get("categoria","")}</td>'
-                                    f'<td style="padding:8px 12px;color:#666;width:13%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{r.get("proveedor","")}</td>'
-                                    f'<td style="padding:8px 12px;text-align:right;color:#777;width:6%">{r.get("conversion","")}</td>'
-                                    f'<td style="padding:8px 12px;text-align:right;color:#777;width:7%">{r.get("formato","")}</td>'
-                                    f'<td style="padding:8px 12px;text-align:right;color:#888;width:10%">${precio:,.2f}</td>'
-                                    f'<td style="padding:8px 12px;text-align:right;color:{mc};font-weight:{mw};width:10%">{muc:,.4f}</td>'
-                                    f'<td style="padding:8px 12px;text-align:right;color:#555;width:6%">{n_reg}</td>'
-                                    f'<td style="padding:8px 12px;text-align:center;color:{dc};font-weight:600;width:8%">{dl}</td>'
-                                    f'</tr></table></div>',
-                                    unsafe_allow_html=True
-                                )
-                            with col_chk:
-                                st.checkbox('', key=f'chk_{idx}', label_visibility='hidden')
-
-                st.markdown('<div style="height:8px"></div>', unsafe_allow_html=True)
+                n_sel    = len(sel_rows)
+                ids_sel  = []
+                skus_sel = []
+                if n_sel > 0:
+                    for _, r in sel_rows.iterrows():
+                        ids_sel  += _parse_ids(r['ids'])
+                        skus_sel.append(r['sku'])
+                    skus_sel = list(set(skus_sel))
 # ============================================================
 # MÓDULO: EXPLOSIÓN MRP
 # ============================================================
