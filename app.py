@@ -3710,16 +3710,17 @@ elif modulo.startswith("📊"):
                 _lf_ckr = "AND LOWER(c.local)=ANY(:ls)" if locales_sel else ""
                 _q_ckr = f"""
                     SELECT c.local,
-                           COALESCE(cn.categoria_control, UPPER(c.nombre_producto)) as producto_control,
-                           SUM(c.cant_conv / 1000.0) as kg,
+                           COALESCE(NULLIF(TRIM(cn.categoria_control),''), UPPER(c.nombre_producto)) as producto_control,
+                           SUM(c.cant_conv) as kg,
                            SUM(c.costo_realfinal) as costo
                     FROM compras c
                     LEFT JOIN clas_nomb_prod cn
-                           ON UPPER(c.nombre_producto) = UPPER(cn.nombre_producto)
+                           ON UPPER(TRIM(c.nombre_producto)) = UPPER(TRIM(cn.nombre_producto))
                     WHERE c.fecha_dte::date BETWEEN :i AND :f
                       AND c.categoria_producto IN ('ALIMENTOS','VERDURAS','BAR')
+                      AND c.cant_conv > 0
                       {_lf_ckr}
-                    GROUP BY c.local, COALESCE(cn.categoria_control, UPPER(c.nombre_producto))
+                    GROUP BY c.local, COALESCE(NULLIF(TRIM(cn.categoria_control),''), UPPER(c.nombre_producto))
                 """
                 _p_ckr = {'i': str(fecha_ic_i), 'f': str(fecha_ic_f)}
                 if locales_sel: _p_ckr['ls'] = [l.lower() for l in locales_sel]
@@ -3789,8 +3790,11 @@ elif modulo.startswith("📊"):
 
                 # ── Filtrar por local ─────────────────────────────
                 def filt(df, col='local'):
-                    if df is None or df.empty or col not in df.columns: return pd.DataFrame()
-                    return df[df[col].astype(str).str.lower() == local_show.lower()].copy()
+                    try:
+                        if df is None or not isinstance(df, pd.DataFrame) or df.empty: return pd.DataFrame()
+                        if col not in df.columns: return pd.DataFrame()
+                        return df[df[col].astype(str).str.strip().str.lower() == local_show.strip().lower()].copy()
+                    except: return pd.DataFrame()
 
                 nr   = filt(df_nr)
                 ckr  = filt(df_ckr)
@@ -3940,18 +3944,24 @@ elif modulo.startswith("📊"):
                 # ── SECCIÓN 5: Control de productos críticos ──────
                 st.markdown(f"**5. Control de Productos Críticos**")
 
-                for cat_nombre, prods in cat_labels.items():
-                    def _getkg(df, prod):
-                        if df is None or df.empty or 'producto_control' not in df.columns: return 0.0
-                        m = df['producto_control'].astype(str).str.upper() == prod.upper()
-                        return float(df[m]['kg'].sum() or 0)
-                    def _getcosto(df, prod):
-                        if df is None or df.empty or 'producto_control' not in df.columns: return 0.0
-                        m = df['producto_control'].astype(str).str.upper() == prod.upper()
-                        col = 'costo' if 'costo' in df.columns else None
-                        return float(df[m][col].sum() or 0) if col else 0.0
+                def _getkg(df, prod):
+                    try:
+                        if df is None or not isinstance(df, pd.DataFrame): return 0.0
+                        if df.empty or 'producto_control' not in df.columns: return 0.0
+                        m = df['producto_control'].astype(str).str.upper().str.strip() == prod.upper().strip()
+                        return float(df.loc[m, 'kg'].sum() or 0)
+                    except: return 0.0
 
-                    filas_ctrl = []
+                def _getcosto(df, prod):
+                    try:
+                        if df is None or not isinstance(df, pd.DataFrame): return 0.0
+                        if df.empty or 'producto_control' not in df.columns: return 0.0
+                        m = df['producto_control'].astype(str).str.upper().str.strip() == prod.upper().strip()
+                        col = 'costo' if 'costo' in df.columns else None
+                        return float(df.loc[m, col].sum() or 0) if col else 0.0
+                    except: return 0.0
+
+                for cat_nombre, prods in cat_labels.items():
                     for prod in prods:
                         ini_kg  = _getkg(ini,  prod)   # inventario inicial KG
                         fin_kg  = _getkg(fin,  prod)   # inventario final KG
