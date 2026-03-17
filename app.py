@@ -2067,10 +2067,12 @@ if modulo.startswith("📦"):
                 # Leer selección del multiselect (si ya existe en session_state)
                 _prev_sel = st.session_state.get('audit_multisel', [])
                 if _prev_sel:
-                    _opciones_tmp = [
-                        f'{r["sku"]} | MUC {float(r["muc"]):.4f} | {int(r["n_registros"])} reg. | {"🔴" if float(r["dispersion"])>8 else "🟡" if float(r["dispersion"])>2 else "⚪"} {float(r["dispersion"]):.0f if float(r["dispersion"])>8 else float(r["dispersion"]):.1f}×'
-                        for _, r in df_tabla.iterrows()
-                    ]
+                    def _opt_label(r):
+                        d = float(r["dispersion"])
+                        emoji = "🔴" if d > 8 else "🟡" if d > 2 else "⚪"
+                        df = f"{d:.0f}" if d > 8 else f"{d:.1f}"
+                        return f'{r["sku"]} | MUC {float(r["muc"]):.4f} | {int(r["n_registros"])} reg. | {emoji} {df}×'
+                    _opciones_tmp = [_opt_label(r) for _, r in df_tabla.iterrows()]
                     sel_indices_prev = [i for i, opt in enumerate(_opciones_tmp) if opt in _prev_sel]
                     if sel_indices_prev:
                         sel_rows = df_tabla.iloc[sel_indices_prev].reset_index(drop=True)
