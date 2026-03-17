@@ -2233,15 +2233,22 @@ if modulo.startswith("📦"):
         with t6a:
             st.markdown("#### Uso de Ingredientes (Toteat)")
             st.caption("Archivo con hoja **UsoIngredientes**: columnas Código Ingrediente, Ingrediente, Cantidad, Medida, Costo, Local")
-            f_uso = st.file_uploader("Archivo Uso de Ingredientes (.xlsx)", type=["xlsx"], key="uso_ing")
-            if f_uso:
+
+            u1, u2 = st.columns([2, 3])
+            with u1:
+                periodo_uso = st.text_input("Período", key="periodo_uso", placeholder="ej: 2-8 Mar 2026")
+            with u2:
+                f_uso = st.file_uploader("Archivo Uso de Ingredientes (.xlsx)", type=["xlsx"], key="uso_ing")
+
+            if f_uso and periodo_uso:
+                locales_uso_disponibles = []
+                try:
+                    df_uso_prev = pd.read_excel(f_uso, sheet_name='UsoIngredientes', header=0)
+                    locales_uso_disponibles = sorted(df_uso_prev['Local'].dropna().unique().tolist()) if 'Local' in df_uso_prev.columns else []
+                except: pass
+
                 col_local_uso, _ = st.columns([2,3])
                 with col_local_uso:
-                    locales_uso_disponibles = []
-                    try:
-                        df_uso_prev = pd.read_excel(f_uso, sheet_name='UsoIngredientes', header=0)
-                        locales_uso_disponibles = sorted(df_uso_prev['Local'].dropna().unique().tolist()) if 'Local' in df_uso_prev.columns else []
-                    except: pass
                     modo_uso = st.radio("Modo de carga", ["Todos los locales", "Local específico"], key="modo_uso", horizontal=True)
                     local_uso_sel = None
                     if modo_uso == "Local específico" and locales_uso_disponibles:
@@ -2266,8 +2273,7 @@ if modulo.startswith("📦"):
                         if local_uso_sel:
                             df_uso = df_uso[df_uso['local'] == local_uso_sel]
 
-                        # Agregar periodo (lo guardamos como texto para referencia)
-                        df_uso['periodo'] = f_uso.name.replace('.xlsx','').replace('.csv','')
+                        df_uso['periodo'] = periodo_uso.strip()
 
                         engine = get_engine()
                         with engine.connect() as conn:
