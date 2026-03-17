@@ -1232,6 +1232,7 @@ with st.sidebar:
         "📦 Gestión de Datos": ["Recetario", "Compras", "Ventas", "Equivalencias SKU"],
         "🧮 Explosión MRP":    [],
         "📊 Informes":         ["Rentabilidad", "Desviación", "Variación Precio Compras", "Informe de Costos"],
+        "🔬 Auditor Categorías": [],
         "🍹 Tendencias Bar":   [],
     }
 
@@ -4050,6 +4051,249 @@ elif modulo.startswith("📊"):
                 st.markdown("---")
                 if st.button("🖨️ Preparar para imprimir", key=f"btn_print_{local_show}"):
                     st.info("Usa Ctrl+P (o Cmd+P en Mac) para imprimir o guardar como PDF. El informe está optimizado para impresión.")
+
+# ============================================================
+# MÓDULO: AUDITOR DE CATEGORÍAS
+# ============================================================
+elif modulo.startswith("🔬"):
+    from datetime import date as _date2
+
+    st.markdown("""
+    <div style="margin-bottom:1.5rem">
+        <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#555;margin-bottom:4px">Herramientas</div>
+        <div style="font-family:'DM Serif Display',serif;font-size:2rem;color:#f0ede8;letter-spacing:-0.02em;line-height:1.1">
+            🔬 Auditor de Categorías
+        </div>
+        <div style="width:40px;height:2px;background:#d4a853;margin-top:8px;border-radius:2px"></div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("""<div class='info-box'>
+    Revisa y corrige el mapeo de productos a <b>Categoría Control</b>. 
+    Agrupa por nombre de producto (igual que el auditor MUC). 
+    Filtra por SKU, nombre, categoría o rango de fechas.
+    </div>""", unsafe_allow_html=True)
+
+    # ── Filtros ─────────────────────────────────────────────────
+    fa1, fa2, fa3, fa4 = st.columns([2, 1.2, 1.2, 2])
+    with fa1:
+        busq_ac = st.text_input("🔍 Buscar nombre o SKU", key="ac_busq", placeholder="ej: POSTA, AL-CA-010...")
+    with fa2:
+        fi_ac = st.date_input("Desde", key="ac_fi", value=f_inicio)
+    with fa3:
+        ff_ac = st.date_input("Hasta", key="ac_ff", value=f_fin)
+    with fa4:
+        cats_q = run_query("SELECT DISTINCT categoria_producto FROM compras WHERE categoria_producto IS NOT NULL ORDER BY 1")
+        cats_ac = ["Todas"] + cats_q['categoria_producto'].tolist() if not cats_q.empty else ["Todas"]
+        cat_ac = st.selectbox("Categoría", cats_ac, key="ac_cat")
+
+    fa5, fa6 = st.columns([2, 2])
+    with fa5:
+        solo_sin_ctrl = st.toggle("⚠️ Solo sin Categoría Control", key="ac_solo_sin")
+    with fa6:
+        st.caption("Haz clic en un grupo para editar su Categoría Control")
+
+    if st.button("🔎 Buscar", key="btn_ac_buscar", type="primary"):
+        with st.spinner("Cargando datos..."):
+            # Construir query con filtros
+            where = ["c.fecha_dte::date BETWEEN :fi AND :ff"]
+            params_ac = {'fi': str(fi_ac), 'ff': str(ff_ac)}
+
+            if busq_ac.strip():
+                where.append("(UPPER(c.nombre_producto) LIKE :busq OR UPPER(c.sku) LIKE :busq)")
+                params_ac['busq'] = f'%{busq_ac.strip().upper()}%'
+
+            if cat_ac != "Todas":
+                where.append("c.categoria_producto = :cat")
+                params_ac['cat'] = cat_ac
+
+            where_sql = " AND ".join(where)
+
+            df_ac = run_query(f"""
+                SELECT
+                    c.sku,
+                    c.nombre_producto,
+                    c.categoria_producto,
+                    c.subcat,
+                    cn.categoria_control,
+                    cn.categoria as cat_clasificada,
+                    COUNT(*)           as n_registros,
+                    SUM(c.cant_conv)   as cant_total,
+                    SUM(c.costo_realfinal) as costo_total,
+                    MIN(c.fecha_dte::date) as primera_compra,
+                    MAX(c.fecha_dte::date) as ultima_compra
+                FROM compras c
+                LEFT JOIN clas_nomb_prod cn
+                       ON UPPER(c.nombre_producto) = UPPER(cn.nombre_producto)
+                WHERE {where_sql}
+                GROUP BY c.sku, c.nombre_producto, c.categoria_producto, c.subcat,
+                         cn.categoria_control, cn.categoria
+                ORDER BY c.nombre_producto, c.sku
+            """, params_ac)
+
+            if solo_sin_ctrl:
+                df_ac = df_ac[df_ac['categoria_control'].isna() | (df_ac['categoria_control'] == '')]
+
+            st.session_state['ac_data'] = df_ac
+            st.session_state['ac_params'] = params_ac
+
+    # ── Mostrar resultados ────────────────────────────────────────
+    if 'ac_data' in st.session_state:
+        df_ac = st.session_state['ac_data']
+
+        if df_ac.empty:
+            st.info("No se encontraron productos con los filtros aplicados.")
+        else:
+            # Métricas resumen
+            n_prods   = df_ac['nombre_producto'].nunique()
+            n_skus    = df_ac['sku'].nunique()
+            sin_ctrl  = df_ac['categoria_control'].isna().sum()
+            con_ctrl  = df_ac['categoria_control'].notna().sum()
+
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Productos únicos", f"{n_prods:,}")
+            m2.metric("SKUs únicos", f"{n_skus:,}")
+            m3.metric("✅ Con cat. control", f"{con_ctrl:,}", f"{con_ctrl/len(df_ac)*100:.0f}%")
+            m4.metric("⚠️ Sin cat. control", f"{sin_ctrl:,}", f"-{sin_ctrl/len(df_ac)*100:.0f}%")
+
+            st.markdown("---")
+
+            # Selector de grupos (igual que auditor MUC)
+            opciones_ac = []
+            for _, r in df_ac.iterrows():
+                ctrl  = r.get('categoria_control','') or '⚠️ SIN CONTROL'
+                ctrl  = ctrl if ctrl and str(ctrl) != 'nan' else '⚠️ SIN CONTROL'
+                label = f"{r['sku']} | {r['nombre_producto'][:40]} | Ctrl: {ctrl} | Cat: {r.get('categoria_producto','')}"
+                opciones_ac.append(label)
+
+            sel_ac = st.multiselect(
+                "Selecciona productos para reclasificar",
+                opciones_ac,
+                key="ac_multisel",
+                placeholder="Busca por SKU, nombre o categoría control..."
+            )
+
+            # Panel de edición si hay selección
+            if sel_ac:
+                sel_idx = [opciones_ac.index(l) for l in sel_ac if l in opciones_ac]
+                df_sel  = df_ac.iloc[sel_idx].reset_index(drop=True)
+
+                st.markdown(f"**⚙️ {len(df_sel)} producto(s) seleccionado(s)**")
+
+                ed1, ed2, ed3 = st.columns([2, 2, 1])
+                with ed1:
+                    # Opciones de categoría control
+                    ctrl_opts = ['POSTA','FILETE','PLATEADA','LOMO LISO','LOMO VETADO','GRASA DE WAGYU',
+                                 'PECHUGA DE POLLO','COSTILLAS','CHULETA KASSLER','LOMO DE CENTRO',
+                                 'PERNIL','JAMÓN','TOCINO AHUMADO','PANCETA LAMINADA',
+                                 'PALTA','TOMATE','LECHUGA',
+                                 'FILETE SALMON','SALMON SLICE LAMINADO','CAMARON','CAMARON APANADO',
+                                 'ATUN','LOCOS','ERIZOS',
+                                 'QUESO RANCO','QUESO CHEDDAR','QUESO PARMESANO','PAPAS FRITAS',
+                                 'PAN','SCHOP','JUGOS','ACEITE FREIR','ACEITE MAYONESA',
+                                 'ACEITE DE OLIVA','ACEITE SESAMO','ACETO BALSAMICO','LIMÓN',
+                                 'HIELO','(sin categoría control)']
+                    nueva_ctrl = st.selectbox("Nueva Categoría Control", ctrl_opts, key="ac_nueva_ctrl")
+                with ed2:
+                    cat_opts2 = ['ALIMENTOS','VERDURAS','BAR','ART. LIMPIEZA','DESECHABLES','ADMINISTRACION']
+                    nueva_cat = st.selectbox("Nueva Categoría", cat_opts2, key="ac_nueva_cat")
+                with ed3:
+                    st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                    if st.button("💾 Aplicar", key="btn_ac_apply", use_container_width=True):
+                        try:
+                            engine = get_engine()
+                            ctrl_val = None if nueva_ctrl == '(sin categoría control)' else nueva_ctrl
+
+                            # Actualizar clas_nomb_prod para cada nombre de producto seleccionado
+                            nombres_sel = df_sel['nombre_producto'].unique().tolist()
+                            with engine.connect() as conn:
+                                for nombre in nombres_sel:
+                                    # Verificar si ya existe en la tabla
+                                    existe = pd.read_sql(
+                                        text("SELECT COUNT(*) as n FROM clas_nomb_prod WHERE UPPER(nombre_producto)=UPPER(:n)"),
+                                        conn, params={'n': nombre})
+                                    if existe['n'].iloc[0] > 0:
+                                        conn.execute(text(
+                                            "UPDATE clas_nomb_prod SET categoria_control=:ctrl, categoria=:cat "
+                                            "WHERE UPPER(nombre_producto)=UPPER(:n)"),
+                                            {'ctrl': ctrl_val, 'cat': nueva_cat, 'n': nombre})
+                                    else:
+                                        conn.execute(text(
+                                            "INSERT INTO clas_nomb_prod (nombre_producto, categoria_control, categoria) "
+                                            "VALUES (:n, :ctrl, :cat)"),
+                                            {'n': nombre, 'ctrl': ctrl_val, 'cat': nueva_cat})
+                                conn.commit()
+
+                            st.success(f"✅ {len(nombres_sel)} producto(s) actualizados en clasificación")
+                            # Limpiar cache para que el informe tome los nuevos datos
+                            if 'ic_data' in st.session_state:
+                                del st.session_state['ic_data']
+                            del st.session_state['ac_data']
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error: {e}")
+                            st.exception(e)
+
+            # ── Tabla HTML ───────────────────────────────────────
+            st.markdown("---")
+            hs_ac = 'padding:8px 12px;font-size:0.67rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
+
+            rows_ac = ''
+            for i, (_, r) in enumerate(df_ac.iterrows()):
+                ctrl = r.get('categoria_control','') or ''
+                ctrl = ctrl if ctrl and str(ctrl) != 'nan' else ''
+                tiene_ctrl = bool(ctrl)
+                bg = '#0d0d0d' if i % 2 == 0 else '#111'
+                badge_ctrl = (
+                    f'<span style="background:#1a3a2a;color:#4caf7d;padding:2px 8px;border-radius:10px;font-size:0.72rem;font-weight:600">{ctrl}</span>'
+                    if tiene_ctrl else
+                    '<span style="background:#3a1a1a;color:#e84545;padding:2px 7px;border-radius:10px;font-size:0.71rem">⚠️ sin control</span>'
+                )
+                costo_f = f"${float(r.get('costo_total',0) or 0):,.0f}"
+                cant_f  = f"{float(r.get('cant_total',0) or 0):,.2f}"
+                rows_ac += (
+                    f'<tr style="border-bottom:1px solid #1a1a1a;background:{bg}">'
+                    f'<td style="padding:8px 12px;color:#666;font-family:monospace;font-size:0.72rem">{r.get("sku","")}</td>'
+                    f'<td style="padding:8px 12px;color:#e8e4de;font-size:0.8rem;font-weight:500">{r.get("nombre_producto","")}</td>'
+                    f'<td style="padding:8px 12px;color:#888;font-size:0.75rem">{r.get("categoria_producto","")}</td>'
+                    f'<td style="padding:8px 12px;color:#666;font-size:0.75rem">{r.get("subcat","")}</td>'
+                    f'<td style="padding:8px 12px">{badge_ctrl}</td>'
+                    f'<td style="padding:8px 12px;text-align:right;color:#aaa;font-size:0.75rem">{r.get("n_registros",0):,}</td>'
+                    f'<td style="padding:8px 12px;text-align:right;color:#888;font-size:0.75rem">{cant_f}</td>'
+                    f'<td style="padding:8px 12px;text-align:right;color:#d4a853;font-size:0.75rem">{costo_f}</td>'
+                    f'<td style="padding:8px 12px;text-align:center;color:#555;font-size:0.71rem">{str(r.get("ultima_compra",""))[:10]}</td>'
+                    f'</tr>'
+                )
+
+            tabla_ac = (
+                '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
+                '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
+                '<thead><tr style="background:#111">'
+                f'<th style="{hs_ac};text-align:left">SKU</th>'
+                f'<th style="{hs_ac};text-align:left">Producto</th>'
+                f'<th style="{hs_ac};text-align:left">Categoría</th>'
+                f'<th style="{hs_ac};text-align:left">Subcat</th>'
+                f'<th style="{hs_ac};text-align:left">Cat. Control</th>'
+                f'<th style="{hs_ac};text-align:right"># Reg.</th>'
+                f'<th style="{hs_ac};text-align:right">Cant. Conv.</th>'
+                f'<th style="{hs_ac};text-align:right">Costo Total</th>'
+                f'<th style="{hs_ac};text-align:center">Última Compra</th>'
+                '</tr></thead>'
+                f'<tbody>{rows_ac}</tbody></table></div>'
+            )
+            st.markdown(tabla_ac, unsafe_allow_html=True)
+
+            # Descarga Excel
+            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+            buf_ac = io.BytesIO()
+            cols_xl = ['sku','nombre_producto','categoria_producto','subcat',
+                       'categoria_control','n_registros','cant_total','costo_total',
+                       'primera_compra','ultima_compra']
+            cols_xl = [c for c in cols_xl if c in df_ac.columns]
+            with pd.ExcelWriter(buf_ac, engine='openpyxl') as w:
+                df_ac[cols_xl].to_excel(w, sheet_name='Clasificacion', index=False)
+            st.download_button("📥 Exportar clasificación", buf_ac.getvalue(),
+                               "Auditoria_Categorias.xlsx", use_container_width=False)
 
 # ============================================================
 # MÓDULO: TENDENCIAS BAR
