@@ -2470,11 +2470,10 @@ if modulo.startswith("📦"):
                                 um       = str(row.get('UND','')).strip()
                                 total_og = float(row.get('TOTAL', 0) or 0)
                                 total_kg = float(row.get('TOTAL 2', total_og) or 0)
-                                _, prod_ctrl_b = calcular_total_kg(prod, total_kg)
                                 registros.append({
                                     'local': local_fila, 'periodo': periodo_inv,
                                     'tipo_inventario': tipo_inv,
-                                    'producto': prod, 'producto_control': prod_ctrl_b,
+                                    'producto': prod, 'producto_control': prod,
                                     'um': um, 'crudo': 0, 'produccion': 0, 'cocido': 0,
                                     'total_original': total_og, 'total_kg': total_kg,
                                     'tipo': '', 'fuente': 'forma_b'
@@ -2704,34 +2703,6 @@ if modulo.startswith("📦"):
             if not df_inv_bd.empty:
                 st.markdown("**Inventarios en BD:**")
                 st.dataframe(df_inv_bd, use_container_width=True, hide_index=True)
-
-            # ── Re-mapeo de producto_control en registros existentes ──
-            st.markdown("---")
-            st.markdown("**🔧 Re-mapear producto_control en BD**")
-            st.caption("Corrige registros existentes cuyo producto_control no fue mapeado correctamente (ej: cargados con Forma B).")
-            if st.button("▶ Re-mapear inventarios existentes", key="btn_remap_inv"):
-                engine = get_engine()
-                if engine:
-                    try:
-                        df_all = run_query("SELECT id, producto FROM inventarios WHERE producto IS NOT NULL")
-                        if df_all.empty:
-                            st.info("No hay registros en inventarios.")
-                        else:
-                            updates = []
-                            for _, row in df_all.iterrows():
-                                prod = str(row['producto']).strip()
-                                _, ctrl = calcular_total_kg(prod, 1)
-                                updates.append({'id': int(row['id']), 'ctrl': ctrl})
-                            with engine.connect() as conn:
-                                for u in updates:
-                                    conn.execute(
-                                        text("UPDATE inventarios SET producto_control=:c WHERE id=:i"),
-                                        {'c': u['ctrl'], 'i': u['id']}
-                                    )
-                                conn.commit()
-                            st.success(f"✅ {len(updates)} registros actualizados con producto_control mapeado.")
-                    except Exception as e:
-                        st.error(f"Error en re-mapeo: {e}")
 
         with t6c:
             st.markdown("#### Compras No Registradas / Venta Inter-local")
@@ -4052,6 +4023,23 @@ elif modulo.startswith("📊"):
                         f'<th style="{hs};text-align:right">DESV %</th></tr></thead>'
                         f'<tbody>{r3_html}</tbody></table></div>',
                         unsafe_allow_html=True)
+
+                # ── DEBUG TEMPORAL: ver contenido crudo de inventarios ──
+                with st.expander(f"🔍 DEBUG inventarios — {local_show}", expanded=False):
+                    st.markdown("**`ini` (Inventario Inicial) — filas para este local:**")
+                    if ini is not None and not ini.empty:
+                        st.dataframe(ini, use_container_width=True)
+                    else:
+                        st.warning("ini está VACÍO para este local")
+                    st.markdown("**`fin` (Inventario Final) — filas para este local:**")
+                    if fin is not None and not fin.empty:
+                        st.dataframe(fin, use_container_width=True)
+                    else:
+                        st.warning("fin está VACÍO para este local")
+                    st.markdown("**`df_inv_ini` raw (todos los locales, primeras 30 filas):**")
+                    st.dataframe(df_ini.head(30) if df_ini is not None and not df_ini.empty else pd.DataFrame(), use_container_width=True)
+                    st.markdown(f"**local_show:** `{local_show}` | **locales_show:** `{locales_show}`")
+                    st.markdown(f"**Valores únicos de `local` en df_inv_ini:** `{df_ini['local'].unique().tolist() if df_ini is not None and not df_ini.empty else 'N/A'}`")
 
                 # ── SECCIÓN 5: Control de productos críticos ──────
                 st.markdown(f"**5. Control de Productos Críticos**")
