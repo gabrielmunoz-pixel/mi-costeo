@@ -795,12 +795,26 @@ def _normalizar_columnas(df: pd.DataFrame) -> pd.DataFrame:
         .str.replace(r'[úùü]', 'u', regex=True)
         .str.replace(r'[^a-z0-9_]', '_', regex=True)
     )
+    # Mapear columnas _res del formato nuevo del robot
+    res_map = {
+        'sku':               'sku_res',
+        'subcat':            'subcat_res',
+        'conversion':        'conversion_res',
+        'formato':           'formato_res',
+        'categoria_producto':'categoria_res',
+    }
+    for canonical, src in res_map.items():
+        if src in df.columns and canonical not in df.columns:
+            df = df.rename(columns={src: canonical})
+
     # Alias frecuentes
     aliases = {
         'categoria_producto': ['categoria_producto', 'categoria producto', 'categoria'],
-        'recargo_global':     ['recargo_global', 'recargo global'],
-        'descuento_global':   ['descuento_global', 'descuento global'],
+        'recargo_global':     ['recargo_global', 'recargo global', 'recargo_global'],
+        'descuento_global':   ['descuento_global', 'descuento global', 'descuento_global'],
         'codigo_impuesto':    ['codigo_impuesto', 'codigo impuesto', 'cod_impuesto'],
+        'iva':                ['iva', 'iva_'],
+        'total':              ['total', 'total_'],
     }
     for canonical, variants in aliases.items():
         for v in variants:
