@@ -1292,12 +1292,20 @@ with st.sidebar:
     modulo = st.session_state['modulo']
 
     st.divider()
-    st.markdown("<div style='font-size:0.75rem; color:#666; text-transform:uppercase; letter-spacing:0.08em;'>Filtros globales</div>", unsafe_allow_html=True)
-
-    f_inicio = st.date_input("Desde", value=date(datetime.now().year, datetime.now().month, 1))
-    f_fin    = st.date_input("Hasta", value=date.today())
-    locales  = get_locales()
-    f_local  = st.selectbox("Local", locales)
+    modulo_actual  = st.session_state.get('modulo','')
+    submenu_actual = st.session_state.get('submenu','')
+    # El Informe de Costos tiene sus propios filtros — los globales no aplican
+    es_informe_costos = 'Informe de Costos' in submenu_actual or 'Informe de Costos' in modulo_actual
+    locales = get_locales()
+    if not es_informe_costos:
+        st.markdown("<div style='font-size:0.75rem; color:#666; text-transform:uppercase; letter-spacing:0.08em;'>Filtros globales</div>", unsafe_allow_html=True)
+        f_inicio = st.date_input("Desde", value=date(datetime.now().year, datetime.now().month, 1))
+        f_fin    = st.date_input("Hasta", value=date.today())
+        f_local  = st.selectbox("Local", locales)
+    else:
+        f_inicio = date(datetime.now().year, datetime.now().month, 1)
+        f_fin    = date.today()
+        f_local  = "Todos"
 
 
 
@@ -3553,6 +3561,11 @@ elif modulo.startswith("📊"):
             st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
             generar_ic = st.button("▶ Generar", key="btn_ic", use_container_width=True)
 
+        if not periodo_ic:
+            st.info("Ingresa el período del inventario (ej: 2-8 Mar 2026)")
+        elif not fecha_ic_i or not fecha_ic_f:
+            st.info("Ingresa el rango de fechas para filtrar compras y ventas")
+
         if generar_ic and periodo_ic and fecha_ic_i and fecha_ic_f:
             with st.spinner("Calculando informe de costos..."):
                 engine = get_engine()
@@ -3693,8 +3706,8 @@ elif modulo.startswith("📊"):
                 df_no_reg      = get_no_registrado(periodo_ic, locales_sel)
 
                 # Compras KG por producto_control usando clasificación
-                # Cruzar compras con clas_nomb_prod usando nombre_producto
-                df_compras_kg_raw = run_query(f"""
+                _lf_ckr = "AND LOWER(c.local)=ANY(:ls)" if locales_sel else ""
+                _q_ckr = f"""
                     SELECT c.local,
                            COALESCE(cn.categoria_control, UPPER(c.nombre_producto)) as producto_control,
                            SUM(c.cant_conv / 1000.0) as kg,
@@ -3704,13 +3717,15 @@ elif modulo.startswith("📊"):
                            ON UPPER(c.nombre_producto) = UPPER(cn.nombre_producto)
                     WHERE c.fecha_dte::date BETWEEN :i AND :f
                       AND c.categoria_producto IN ('ALIMENTOS','VERDURAS','BAR')
-                      {"AND LOWER(c.local)=ANY(:ls)" if locales_sel else ""}
+                      {_lf_ckr}
                     GROUP BY c.local, COALESCE(cn.categoria_control, UPPER(c.nombre_producto))
-                """, {'i': str(fecha_ic_i), 'f': str(fecha_ic_f),
-                      **({'ls': [l.lower() for l in locales_sel]} if locales_sel else {})})
+                """
+                _p_ckr = {'i': str(fecha_ic_i), 'f': str(fecha_ic_f)}
+                if locales_sel: _p_ckr['ls'] = [l.lower() for l in locales_sel]
+                df_compras_kg_raw = run_query(_q_ckr, _p_ckr)
 
                 # ── Categorías de control ────────────────────────────
-                cat_labels = {{
+                cat_labels = {
                     'CARNES ROJAS':       ['POSTA','FILETE','PLATEADA','LOMO LISO','LOMO VETADO','GRASA DE WAGYU'],
                     'CARNES BLANCAS':     ['PECHUGA DE POLLO','COSTILLAS','CHULETA KASSLER','LOMO DE CENTRO','PERNIL','JAMÓN','TOCINO AHUMADO','PANCETA LAMINADA'],
                     'VERDURAS':           ['PALTA','TOMATE','LECHUGA'],
@@ -3718,7 +3733,7 @@ elif modulo.startswith("📊"):
                     'OTROS':              ['QUESO RANCO','QUESO CHEDDAR','QUESO PARMESANO','PAPAS FRITAS'],
                     'PAN':                ['FRICA 14 CMS','MOLDE BANQUETE','MOLDE BANQUETE INTEGRAL','PAN FRICA 12 CM','PAN FRICA N8','HOT - DOG 19 CM.'],
                     'BAR':                ['SCHOP','JUGOS'],
-                }}
+                }
 
                 st.session_state['ic_data'] = {
                     'periodo': periodo_ic,
