@@ -3962,6 +3962,7 @@ elif modulo.startswith("📊"):
                     except: return 0.0
 
                 for cat_nombre, prods in cat_labels.items():
+                    filas_ctrl = []
                     for prod in prods:
                         ini_kg  = _getkg(ini,  prod)   # inventario inicial KG
                         fin_kg  = _getkg(fin,  prod)   # inventario final KG
