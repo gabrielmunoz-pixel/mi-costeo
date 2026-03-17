@@ -3659,12 +3659,12 @@ elif modulo.startswith("📊"):
                 def get_inv(periodo, tipo, locales):
                     lf = "AND LOWER(TRIM(local))=ANY(:ls)" if locales else ""
                     q = f"""
-                        SELECT TRIM(local) as local,
+                        SELECT LOWER(TRIM(local)) as local,
                                UPPER(TRIM(producto_control)) as producto_control,
                                SUM(total_kg) as kg
                         FROM inventarios
                         WHERE TRIM(periodo)=:p AND tipo_inventario=:t {lf}
-                        GROUP BY TRIM(local), UPPER(TRIM(producto_control))
+                        GROUP BY LOWER(TRIM(local)), UPPER(TRIM(producto_control))
                     """
                     params = {'p': periodo.strip(), 't': tipo}
                     if locales: params['ls'] = [l.lower().strip() for l in locales]
@@ -4027,11 +4027,21 @@ elif modulo.startswith("📊"):
                 # ── SECCIÓN 5: Control de productos críticos ──────
                 st.markdown(f"**5. Control de Productos Críticos**")
 
+                # Lookup inverso: producto_control → todos los nombres que mapean a él
+                # Permite encontrar en inventarios registros con nombre crudo o mapeado
+                _INV_CTRL_MAP = {}
+                for _raw, _v in TABLA_CONV_INV.items():
+                    _ctrl = _v['control'].upper().strip()
+                    _INV_CTRL_MAP.setdefault(_ctrl, set()).add(_raw.upper().strip())
+                    _INV_CTRL_MAP[_ctrl].add(_ctrl)  # coincidencia directa también
+
                 def _getkg(df, prod):
                     try:
                         if df is None or not isinstance(df, pd.DataFrame): return 0.0
                         if df.empty or 'producto_control' not in df.columns: return 0.0
-                        m = df['producto_control'].astype(str).str.upper().str.strip() == prod.upper().strip()
+                        prod_up = prod.upper().strip()
+                        valid = _INV_CTRL_MAP.get(prod_up, {prod_up})
+                        m = df['producto_control'].astype(str).str.upper().str.strip().isin(valid)
                         return float(df.loc[m, 'kg'].sum() or 0)
                     except: return 0.0
 
@@ -4039,7 +4049,9 @@ elif modulo.startswith("📊"):
                     try:
                         if df is None or not isinstance(df, pd.DataFrame): return 0.0
                         if df.empty or 'producto_control' not in df.columns: return 0.0
-                        m = df['producto_control'].astype(str).str.upper().str.strip() == prod.upper().strip()
+                        prod_up = prod.upper().strip()
+                        valid = _INV_CTRL_MAP.get(prod_up, {prod_up})
+                        m = df['producto_control'].astype(str).str.upper().str.strip().isin(valid)
                         col = 'costo' if 'costo' in df.columns else None
                         return float(df.loc[m, col].sum() or 0) if col else 0.0
                     except: return 0.0
