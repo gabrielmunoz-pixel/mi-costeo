@@ -2308,21 +2308,28 @@ if modulo.startswith("📦"):
             with ci2:
                 periodo_inv = st.text_input("Período (ej: 2-8 Mar)", key="periodo_inv", placeholder="2-8 Mar")
             with ci3:
-                formato_inv = st.radio("Formato", ["Forma A (Alimentos+Bar)", "Forma B (Resumen)"],
-                                       key="formato_inv", help="A: hojas Alimentos y Bar separadas — requiere seleccionar local.\nB: tabla consolidada LOCAL/FACTOR/PRODUCTO/TOTAL 2 — puede traer todos los locales.")
+                formato_inv = st.radio("Formato", [
+                    "Forma A (por local)", 
+                    "Forma B (Resumen KG)",
+                    "Forma C (Consolidado todos los locales)"
+                ], key="formato_inv",
+                help="A: archivo por local con hojas Alimentos+Bar.\nB: tabla LOCAL/FACTOR/PRODUCTO/TOTAL 2.\nC: archivo consolidado con hojas 'Alimentos consolidado' y 'BAR CONSOLIDADO' (todos los locales).")
 
-            es_forma_b = "B" in st.session_state.get("formato_inv", "A")
+            fmt_sel = st.session_state.get("formato_inv", "Forma A")
+            es_forma_a = "A" in fmt_sel
+            es_forma_b = "B" in fmt_sel
+            es_forma_c = "C" in fmt_sel
 
-            # Forma A requiere local, Forma B es opcional (puede traer todos)
-            if not es_forma_b:
+            # Forma A requiere local; B y C pueden ser todos o uno
+            if es_forma_a:
                 local_inv = st.selectbox("Local", ["Chicureo","La Dehesa","La Reina","Las Condes",
                                                     "Los Trapenses","Macul","Nueva Providencia",
                                                     "Providencia","Quilin","Vitacura"], key="local_inv")
             else:
-                modo_inv_b = st.radio("Locales", ["Todos los locales (columna LOCAL del archivo)", "Local específico"],
-                                      key="modo_inv_b", horizontal=True)
+                modo_inv_multi = st.radio("Locales", ["Todos los locales", "Local específico"],
+                                          key="modo_inv_multi", horizontal=True)
                 local_inv = None
-                if modo_inv_b == "Local específico":
+                if modo_inv_multi == "Local específico":
                     local_inv = st.selectbox("Local", ["Chicureo","La Dehesa","La Reina","Las Condes",
                                                         "Los Trapenses","Macul","Nueva Providencia",
                                                         "Providencia","Quilin","Vitacura"], key="local_inv")
@@ -2334,6 +2341,7 @@ if modulo.startswith("📦"):
             if f_inv and periodo_inv:
                 if st.button("💾 Cargar Inventario", key="btn_inv"):
                     fmt = st.session_state.get("formato_inv", "Forma A")
+                    es_forma_c_btn = "C" in fmt
                     try:
                         engine = get_engine()
 
@@ -2393,6 +2401,112 @@ if modulo.startswith("📦"):
                             df_inv_save.to_sql('inventarios', engine, if_exists='append', index=False)
                             n_locales = df_inv_save['local'].nunique()
                             st.success(f"✅ {len(df_inv_save)} productos cargados (Forma B) — {n_locales} local(es) · {tipo_inv} · {periodo_inv}")
+
+                        elif es_forma_c_btn:
+                        # ══ FORMA C: consolidado multi-local (hojas Alimentos consolidado + BAR CONSOLIDADO) ══
+                            conversores_c = {
+                                'CHULETA KASSLER':{'control':'CHULETA KASSLER','porcion':1.0,'cocido':1.0},
+                                'COSTILLAS':{'control':'COSTILLAS','porcion':1.0,'cocido':0.75},
+                                'JAMÓN':{'control':'JAMÓN','porcion':1.0,'cocido':1.0},
+                                'LOMO DE CENTRO':{'control':'LOMO DE CENTRO','porcion':1.0,'cocido':1.0},
+                                'LOMO DE CENTRO(PORCIONADAS)':{'control':'LOMO DE CENTRO','porcion':0.18,'cocido':1.0},
+                                'PANCETA LAMINADA':{'control':'PANCETA LAMINADA','porcion':1.0,'cocido':0.5},
+                                'DESPUNTE PECHUGA DE POLLO':{'control':'PECHUGA DE POLLO','porcion':1.0,'cocido':1.0},
+                                'PECHUGA DE POLLO':{'control':'PECHUGA DE POLLO','porcion':1.0,'cocido':0.8},
+                                'PERNIL':{'control':'PERNIL','porcion':1.0,'cocido':1.0},
+                                'PERNIL(PORCIONADAS)':{'control':'PERNIL','porcion':0.18,'cocido':1.0},
+                                'TOCINO AHUMADO':{'control':'TOCINO AHUMADO','porcion':1.0,'cocido':1.0},
+                                'FILETE':{'control':'FILETE','porcion':1.0,'cocido':1.0},
+                                'PLATEADA':{'control':'PLATEADA','porcion':1.0,'cocido':0.5},
+                                'LOMO LISO':{'control':'LOMO LISO','porcion':1.0,'cocido':1.0},
+                                'LOMO VETADO':{'control':'LOMO VETADO','porcion':1.0,'cocido':1.0},
+                                'POSTA':{'control':'POSTA','porcion':1.0,'cocido':1.0},
+                                'PALTA':{'control':'PALTA','porcion':1.0,'cocido':1.0},
+                                'TOMATE':{'control':'TOMATE','porcion':1.0,'cocido':1.0},
+                                'LECHUGA':{'control':'LECHUGA','porcion':1.0,'cocido':1.0},
+                                'QUESO RANCO':{'control':'QUESO RANCO','porcion':1.0,'cocido':1.0},
+                                'QUESO CHEDDAR':{'control':'QUESO CHEDDAR','porcion':1.0,'cocido':1.0},
+                                'QUESO PARMESANO':{'control':'QUESO PARMESANO','porcion':1.0,'cocido':1.0},
+                                'PAPAS FRITAS':{'control':'PAPAS FRITAS','porcion':1.0,'cocido':1.0},
+                                'FILETE SALMON':{'control':'FILETE SALMON','porcion':1.0,'cocido':1.0},
+                                'ATUN':{'control':'ATUN','porcion':1.0,'cocido':1.0},
+                                'CAMARON':{'control':'CAMARON','porcion':1.0,'cocido':1.0},
+                                'CAMARON APANADO':{'control':'CAMARON APANADO','porcion':1.0,'cocido':1.0},
+                                'SALMON SLICE LAMINADO':{'control':'SALMON SLICE LAMINADO','porcion':1.0,'cocido':1.0},
+                                'LOCOS':{'control':'LOCOS','porcion':1.0,'cocido':1.0},
+                                'ERIZOS':{'control':'ERIZOS','porcion':1.0,'cocido':1.0},
+                                'GRASA DE WAGYU':{'control':'GRASA DE WAGYU','porcion':1.0,'cocido':1.0},
+                            }
+
+                            import io as _io4
+                            raw_c = f_inv.read()
+                            xls_c = pd.ExcelFile(_io4.BytesIO(raw_c))
+
+                            registros = []
+
+                            # Alimentos consolidado
+                            df_ac = pd.read_excel(xls_c, 'Alimentos consolidado', header=0)
+                            if local_inv:
+                                df_ac = df_ac[df_ac['Local'].astype(str).str.strip().str.lower() == local_inv.lower()]
+
+                            for _, row in df_ac.iterrows():
+                                loc  = str(row.get('Local','')).strip()
+                                prod = str(row.get('PRODUCTO','')).strip()
+                                if not prod or prod == 'nan': continue
+                                um     = str(row.get('Unidad de Medida','')).strip()
+                                crudo  = pd.to_numeric(row.get('Crudo',0),     errors='coerce') or 0
+                                prod_  = pd.to_numeric(row.get('Producción',0),errors='coerce') or 0
+                                cocido = pd.to_numeric(row.get('Cocido',0),    errors='coerce') or 0
+                                total  = pd.to_numeric(row.get('Total',0),     errors='coerce') or 0
+                                tipo   = str(row.get('TIPO','')).strip()
+                                # Usar columna 'control' del archivo si existe
+                                prod_ctrl = str(row.get('control', prod)).strip()
+                                if prod_ctrl == 'nan': prod_ctrl = prod
+                                conv   = conversores_c.get(prod, {'control': prod_ctrl, 'porcion':1.0, 'cocido':1.0})
+                                cv     = conv['cocido']
+                                total_kg = crudo + prod_ + (cocido / cv if cv > 0 else cocido)
+                                if um.upper() in ['UN','UND','UNI','UNID']:
+                                    total_kg = total * conv['porcion']
+                                registros.append({
+                                    'local': loc, 'periodo': periodo_inv,
+                                    'tipo_inventario': tipo_inv,
+                                    'producto': prod, 'producto_control': prod_ctrl,
+                                    'um': um, 'crudo': crudo, 'produccion': prod_,
+                                    'cocido': cocido, 'total_original': total,
+                                    'total_kg': total_kg, 'tipo': tipo, 'fuente': 'alimentos_c'
+                                })
+
+                            # BAR CONSOLIDADO
+                            df_bc = pd.read_excel(xls_c, 'BAR CONSOLIDADO', header=0)
+                            if local_inv:
+                                df_bc = df_bc[df_bc['Local'].astype(str).str.strip().str.lower() == local_inv.lower()]
+
+                            for _, row in df_bc.iterrows():
+                                loc  = str(row.get('Local','')).strip()
+                                prod = str(row.get('PRODUCTO','')).strip()
+                                if not prod or prod == 'nan': continue
+                                um    = str(row.get('Unidad de Medida','')).strip()
+                                total = pd.to_numeric(row.get('Total',0), errors='coerce') or 0
+                                tipo  = str(row.get('TIPO','')).strip()
+                                registros.append({
+                                    'local': loc, 'periodo': periodo_inv,
+                                    'tipo_inventario': tipo_inv,
+                                    'producto': prod, 'producto_control': prod,
+                                    'um': um, 'crudo': 0, 'produccion': 0, 'cocido': 0,
+                                    'total_original': total, 'total_kg': total,
+                                    'tipo': tipo, 'fuente': 'bar_c'
+                                })
+
+                            df_inv_save = pd.DataFrame(registros)
+                            locales_c = df_inv_save['local'].dropna().unique().tolist()
+                            with engine.connect() as conn:
+                                conn.execute(text(
+                                    "DELETE FROM inventarios WHERE local=ANY(:ls) AND periodo=:p AND tipo_inventario=:t"),
+                                    {'ls': locales_c, 'p': periodo_inv, 't': tipo_inv})
+                                conn.commit()
+                            df_inv_save.to_sql('inventarios', engine, if_exists='append', index=False)
+                            n_loc = df_inv_save['local'].nunique()
+                            st.success(f"✅ {len(df_inv_save)} registros cargados (Forma C) — {n_loc} locales · {tipo_inv} · {periodo_inv}")
 
                         else:
                         # ══ FORMA A: hojas Alimentos + Bar ══
