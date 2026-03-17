@@ -4024,27 +4024,6 @@ elif modulo.startswith("📊"):
                         f'<tbody>{r3_html}</tbody></table></div>',
                         unsafe_allow_html=True)
 
-                # ── DEBUG TEMPORAL: ver contenido crudo de inventarios ──
-                with st.expander(f"🔍 DEBUG inventarios — {local_show}", expanded=False):
-                    st.markdown("**Valores únicos de `producto_control` en `ini`:**")
-                    if ini is not None and not ini.empty:
-                        for val in ini['producto_control'].tolist():
-                            repr_val = repr(val)
-                            st.code(f"valor: {val!r}  |  bytes: {val.encode('utf-8').hex()}  |  len: {len(val)}")
-                    else:
-                        st.warning("ini está VACÍO")
-
-                    st.markdown("**Valores buscados en cat_labels (CARNES BLANCAS):**")
-                    for p in ['PECHUGA DE POLLO','COSTILLAS','CHULETA KASSLER','LOMO DE CENTRO','PERNIL','JAMÓN','TOCINO AHUMADO','PANCETA LAMINADA']:
-                        st.code(f"valor: {p!r}  |  bytes: {p.encode('utf-8').hex()}  |  len: {len(p)}")
-
-                    st.markdown("**Prueba de _getkg directo para PECHUGA DE POLLO:**")
-                    if ini is not None and not ini.empty and 'producto_control' in ini.columns:
-                        prod_test = 'PECHUGA DE POLLO'
-                        m = ini['producto_control'].astype(str).str.upper().str.strip() == prod_test
-                        st.write(f"Mask result: {m.tolist()}")
-                        st.write(f"Rows matched: {ini[m]}")
-
                 # ── SECCIÓN 5: Control de productos críticos ──────
                 st.markdown(f"**5. Control de Productos Críticos**")
 
@@ -4102,13 +4081,13 @@ elif modulo.startswith("📊"):
                     um_label = 'LT' if cat_nombre == 'BAR' else 'UN' if cat_nombre == 'PAN' else 'KG'
                     ctrl_rows = ''
                     for f in filas_ctrl:
-                        prod, ct, ini, fin_, cp, ru, uc, dk, dp, cd = f
+                        prod, ct, ini_v, fin_, cp, ru, uc, dk, dp, cd = f
                         color_desv = '#e84545' if dp > 0.1 else '#e89c45' if dp > 0.05 else '#4caf7d'
                         ctrl_rows += (
                             f'<tr style="border-bottom:1px solid #1a1a1a">'
                             f'<td style="padding:6px 10px;color:#ccc;font-size:0.75rem">{prod}</td>'
                             f'<td style="padding:6px 10px;text-align:right;color:#888;font-size:0.73rem">{fmt_clp(ct)}</td>'
-                            f'<td style="padding:6px 10px;text-align:right;color:#777;font-size:0.73rem">{fmt_kg(ini)}</td>'
+                            f'<td style="padding:6px 10px;text-align:right;color:#777;font-size:0.73rem">{fmt_kg(ini_v)}</td>'
                             f'<td style="padding:6px 10px;text-align:right;color:#777;font-size:0.73rem">{fmt_kg(fin_)}</td>'
                             f'<td style="padding:6px 10px;text-align:right;color:#aaa;font-size:0.73rem">{fmt_kg(cp)}</td>'
                             f'<td style="padding:6px 10px;text-align:right;color:#aaa;font-size:0.73rem">{fmt_kg(ru)}</td>'
