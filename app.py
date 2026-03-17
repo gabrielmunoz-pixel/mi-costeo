@@ -4024,6 +4024,22 @@ elif modulo.startswith("📊"):
                         f'<tbody>{r3_html}</tbody></table></div>',
                         unsafe_allow_html=True)
 
+                # ── DEBUG TEMPORAL: desglose filas inventario ini/fin ──
+                with st.expander(f"🔍 DEBUG desglose inventario — {local_show}", expanded=False):
+                    q_debug = f"""
+                        SELECT tipo_inventario, producto, producto_control,
+                               total_original, total_kg, crudo, produccion, cocido, fuente
+                        FROM inventarios
+                        WHERE TRIM(periodo)=:p
+                          AND LOWER(TRIM(local))=:l
+                        ORDER BY tipo_inventario, producto_control, producto
+                    """
+                    df_debug = run_query(q_debug, {'p': periodo_show, 'l': local_show.lower().strip()})
+                    if not df_debug.empty:
+                        st.dataframe(df_debug, use_container_width=True)
+                    else:
+                        st.warning("Sin filas en inventarios para este local/período")
+
                 # ── SECCIÓN 5: Control de productos críticos ──────
                 st.markdown(f"**5. Control de Productos Críticos**")
 
@@ -4081,13 +4097,13 @@ elif modulo.startswith("📊"):
                     um_label = 'LT' if cat_nombre == 'BAR' else 'UN' if cat_nombre == 'PAN' else 'KG'
                     ctrl_rows = ''
                     for f in filas_ctrl:
-                        prod, ct, ini_v, fin_, cp, ru, uc, dk, dp, cd = f
+                        prod, ct, ini, fin_, cp, ru, uc, dk, dp, cd = f
                         color_desv = '#e84545' if dp > 0.1 else '#e89c45' if dp > 0.05 else '#4caf7d'
                         ctrl_rows += (
                             f'<tr style="border-bottom:1px solid #1a1a1a">'
                             f'<td style="padding:6px 10px;color:#ccc;font-size:0.75rem">{prod}</td>'
                             f'<td style="padding:6px 10px;text-align:right;color:#888;font-size:0.73rem">{fmt_clp(ct)}</td>'
-                            f'<td style="padding:6px 10px;text-align:right;color:#777;font-size:0.73rem">{fmt_kg(ini_v)}</td>'
+                            f'<td style="padding:6px 10px;text-align:right;color:#777;font-size:0.73rem">{fmt_kg(ini)}</td>'
                             f'<td style="padding:6px 10px;text-align:right;color:#777;font-size:0.73rem">{fmt_kg(fin_)}</td>'
                             f'<td style="padding:6px 10px;text-align:right;color:#aaa;font-size:0.73rem">{fmt_kg(cp)}</td>'
                             f'<td style="padding:6px 10px;text-align:right;color:#aaa;font-size:0.73rem">{fmt_kg(ru)}</td>'
