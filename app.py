@@ -2410,18 +2410,32 @@ if modulo.startswith("📦"):
         with t6b:
             st.markdown("#### Inventario por Local")
 
-            ci1, ci2, ci3 = st.columns(3)
+            ci1, ci2, ci3, ci4 = st.columns(4)
             with ci1:
                 tipo_inv = st.selectbox("Tipo", ["Inicial","Final"], key="tipo_inv")
             with ci2:
-                periodo_inv = st.text_input("Período (ej: 2-8 Mar)", key="periodo_inv", placeholder="2-8 Mar")
+                inv_fecha_i = st.date_input("Inicio semana", key="inv_fecha_i", value=None)
             with ci3:
+                inv_fecha_f = st.date_input("Fin semana", key="inv_fecha_f", value=None)
+            with ci4:
                 formato_inv = st.radio("Formato", [
-                    "Forma A (por local)", 
+                    "Forma A (por local)",
                     "Forma B (Resumen KG)",
                     "Forma C (Consolidado todos los locales)"
                 ], key="formato_inv",
                 help="A: archivo por local con hojas Alimentos+Bar.\nB: tabla LOCAL/FACTOR/PRODUCTO/TOTAL 2.\nC: archivo consolidado con hojas 'Alimentos consolidado' y 'BAR CONSOLIDADO' (todos los locales).")
+
+            # Construir string de periodo desde fechas
+            MESES_ES = {1:'Ene',2:'Feb',3:'Mar',4:'Abr',5:'May',6:'Jun',
+                        7:'Jul',8:'Ago',9:'Sep',10:'Oct',11:'Nov',12:'Dic'}
+            if inv_fecha_i and inv_fecha_f:
+                if inv_fecha_i.month == inv_fecha_f.month:
+                    periodo_inv = f"{inv_fecha_i.day}-{inv_fecha_f.day} {MESES_ES[inv_fecha_i.month]} {inv_fecha_i.year}"
+                else:
+                    periodo_inv = f"{inv_fecha_i.day} {MESES_ES[inv_fecha_i.month]}-{inv_fecha_f.day} {MESES_ES[inv_fecha_f.month]} {inv_fecha_i.year}"
+                st.caption(f"Período: **{periodo_inv}**")
+            else:
+                periodo_inv = None
 
             fmt_sel = st.session_state.get("formato_inv", "Forma A")
             es_forma_a = "A" in fmt_sel
@@ -2446,7 +2460,7 @@ if modulo.startswith("📦"):
                 "Archivo Inventario (.xlsx o .csv)",
                 type=["xlsx","csv"], key="inv_file")
 
-            if f_inv and periodo_inv:
+            if f_inv and periodo_inv and inv_fecha_i and inv_fecha_f:
                 if st.button("💾 Cargar Inventario", key="btn_inv"):
                     fmt = st.session_state.get("formato_inv", "Forma A")
                     es_forma_c_btn = "C" in fmt
@@ -3670,25 +3684,37 @@ elif modulo.startswith("📊"):
         st.markdown("### 📋 Informe de Costos")
 
         # ── Controles ────────────────────────────────────────────
+        MESES_ES_IC = {1:'Ene',2:'Feb',3:'Mar',4:'Abr',5:'May',6:'Jun',
+                       7:'Jul',8:'Ago',9:'Sep',10:'Oct',11:'Nov',12:'Dic'}
         ic1, ic2, ic3, ic4, ic5 = st.columns(5)
         with ic1:
-            periodo_ic = st.text_input("Período inventario", key="ic_periodo", placeholder="ej: 2-8 Mar 2026")
+            ic_fecha_i = st.date_input("Inicio semana", key="ic_fi", value=None)
         with ic2:
-            fecha_ic_i = st.date_input("Fecha inicio compras/ventas", key="ic_fi", value=None)
+            ic_fecha_f = st.date_input("Fin semana", key="ic_ff", value=None)
         with ic3:
-            fecha_ic_f = st.date_input("Fecha fin compras/ventas", key="ic_ff", value=None)
-        with ic4:
             locales_ic_q = run_query("SELECT DISTINCT local FROM inventarios WHERE local IS NOT NULL ORDER BY 1")
             locales_ic = ["Todos"] + locales_ic_q['local'].tolist() if not locales_ic_q.empty else ["Todos"]
             local_ic = st.selectbox("Local", locales_ic, key="ic_local")
-        with ic5:
+        with ic4:
             st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
             generar_ic = st.button("▶ Generar", key="btn_ic", use_container_width=True)
 
-        if not periodo_ic:
-            st.info("Ingresa el período del inventario (ej: 2-8 Mar 2026)")
-        elif not fecha_ic_i or not fecha_ic_f:
-            st.info("Ingresa el rango de fechas para filtrar compras y ventas")
+        # Derivar periodo y fechas desde los date inputs
+        if ic_fecha_i and ic_fecha_f:
+            if ic_fecha_i.month == ic_fecha_f.month:
+                periodo_ic = f"{ic_fecha_i.day}-{ic_fecha_f.day} {MESES_ES_IC[ic_fecha_i.month]} {ic_fecha_i.year}"
+            else:
+                periodo_ic = f"{ic_fecha_i.day} {MESES_ES_IC[ic_fecha_i.month]}-{ic_fecha_f.day} {MESES_ES_IC[ic_fecha_f.month]} {ic_fecha_i.year}"
+            fecha_ic_i = ic_fecha_i
+            fecha_ic_f = ic_fecha_f
+            st.caption(f"Período: **{periodo_ic}** · Compras/ventas: {ic_fecha_i} → {ic_fecha_f}")
+        else:
+            periodo_ic = None
+            fecha_ic_i = None
+            fecha_ic_f = None
+
+        if not ic_fecha_i or not ic_fecha_f:
+            st.info("Selecciona el inicio y fin de la semana del inventario")
 
         if generar_ic and periodo_ic and fecha_ic_i and fecha_ic_f:
             with st.spinner("Calculando informe de costos..."):
