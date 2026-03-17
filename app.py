@@ -172,6 +172,14 @@ TABLA_CONV_INV = {
     'TOMATE':                                                       {'control': 'TOMATE',                   'porcion': 1.0,    'cocido': 1.0},
 }
 
+# Mapeo TIPO de BAR → producto_control del informe
+TIPO_BAR_CONTROL = {
+    'SCHOP':    'SCHOP',
+    'PULPAS':   'JUGOS',
+    # El resto (AGUAS, BEBIDAS, CERVEZAS, ESPUMANTE, VINOS) no son productos de control
+    # pero se guardan con su TIPO como control para trazabilidad
+}
+
 def calcular_total_kg(producto, total, crudo=0, produccion=0, cocido=0, producto_control=None):
     """
     Calcula total_kg usando TABLA_CONV_INV.
@@ -2569,11 +2577,13 @@ if modulo.startswith("📦"):
                                 if not prod or prod == 'nan': continue
                                 um    = str(row.get('Unidad de Medida','')).strip()
                                 total = pd.to_numeric(row.get('Total',0), errors='coerce') or 0
-                                tipo  = str(row.get('TIPO','')).strip()
+                                tipo  = str(row.get('TIPO','')).strip().upper()
+                                # Mapear TIPO → producto_control
+                                ctrl  = TIPO_BAR_CONTROL.get(tipo, tipo)
                                 registros.append({
                                     'local': loc, 'periodo': periodo_inv,
                                     'tipo_inventario': tipo_inv,
-                                    'producto': prod, 'producto_control': prod,
+                                    'producto': prod, 'producto_control': ctrl,
                                     'um': um, 'crudo': 0, 'produccion': 0, 'cocido': 0,
                                     'total_original': total, 'total_kg': total,
                                     'tipo': tipo, 'fuente': 'bar_c'
@@ -2664,11 +2674,12 @@ if modulo.startswith("📦"):
                                 if not prod or prod == 'nan': continue
                                 um    = str(row.get('Unidad de Medida','')).strip()
                                 total = pd.to_numeric(row.get('Total',0), errors='coerce') or 0
-                                tipo  = str(row.get('TIPO','')).strip()
+                                tipo  = str(row.get('TIPO','')).strip().upper()
+                                ctrl  = TIPO_BAR_CONTROL.get(tipo, tipo)
                                 registros.append({
                                     'local': local_inv, 'periodo': periodo_inv,
                                     'tipo_inventario': tipo_inv,
-                                    'producto': prod, 'producto_control': prod,
+                                    'producto': prod, 'producto_control': ctrl,
                                     'um': um, 'crudo': 0, 'produccion': 0, 'cocido': 0,
                                     'total_original': total, 'total_kg': total,
                                     'tipo': tipo, 'fuente': 'bar'
@@ -3646,28 +3657,31 @@ elif modulo.startswith("📊"):
 
                 # ── Funciones de cálculo ──────────────────────────────
                 def get_inv(periodo, tipo, locales):
-                    lf = "AND local=ANY(:ls)" if locales else ""
+                    lf = "AND LOWER(TRIM(local))=ANY(:ls)" if locales else ""
                     q = f"""
-                        SELECT local, producto_control, SUM(total_kg) as kg
+                        SELECT TRIM(local) as local,
+                               UPPER(TRIM(producto_control)) as producto_control,
+                               SUM(total_kg) as kg
                         FROM inventarios
-                        WHERE periodo=:p AND tipo_inventario=:t {lf}
-                        GROUP BY local, producto_control
+                        WHERE TRIM(periodo)=:p AND tipo_inventario=:t {lf}
+                        GROUP BY TRIM(local), UPPER(TRIM(producto_control))
                     """
-                    params = {'p': periodo, 't': tipo}
-                    if locales: params['ls'] = locales
+                    params = {'p': periodo.strip(), 't': tipo}
+                    if locales: params['ls'] = [l.lower().strip() for l in locales]
                     return run_query(q, params)
 
                 def get_uso(periodo, locales):
-                    lf = "AND local=ANY(:ls)" if locales else ""
+                    lf = "AND LOWER(TRIM(local))=ANY(:ls)" if locales else ""
                     q = f"""
-                        SELECT local, nombre_ingrediente as producto_control,
+                        SELECT TRIM(local) as local,
+                               UPPER(TRIM(nombre_ingrediente)) as producto_control,
                                SUM(cantidad) as kg, SUM(costo) as costo
                         FROM uso_ingredientes
-                        WHERE periodo=:p {lf}
-                        GROUP BY local, nombre_ingrediente
+                        WHERE TRIM(periodo)=:p {lf}
+                        GROUP BY TRIM(local), UPPER(TRIM(nombre_ingrediente))
                     """
-                    params = {'p': periodo}
-                    if locales: params['ls'] = locales
+                    params = {'p': periodo.strip()}
+                    if locales: params['ls'] = [l.lower().strip() for l in locales]
                     return run_query(q, params)
 
                 def get_compras_kg(fecha_i, fecha_f, locales):
@@ -3690,16 +3704,16 @@ elif modulo.startswith("📊"):
 
                 def get_no_registrado(periodo, locales):
                     """Compras no registradas — solo cantidad, agrupada por local + producto_control"""
-                    lf = "AND LOWER(local)=ANY(:ls)" if locales else ""
+                    lf = "AND LOWER(TRIM(local))=ANY(:ls)" if locales else ""
                     q = f"""
-                        SELECT local,
-                               UPPER(producto_control) as producto_control,
+                        SELECT TRIM(local) as local,
+                               UPPER(TRIM(producto_control)) as producto_control,
                                SUM(cantidad) as kg
                         FROM compras_no_registradas
-                        WHERE periodo=:p
+                        WHERE TRIM(periodo)=:p
                           AND producto_control IS NOT NULL
-                          AND producto_control != '' {lf}
-                        GROUP BY local, UPPER(producto_control)
+                          AND TRIM(producto_control) != '' {lf}
+                        GROUP BY TRIM(local), UPPER(TRIM(producto_control))
                     """
                     params = {'p': periodo}
                     if locales: params['ls'] = [l.lower() for l in locales]
