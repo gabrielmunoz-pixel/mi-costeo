@@ -1524,6 +1524,7 @@ with st.sidebar:
         "📊 Informes":         ["Rentabilidad", "Desviación", "Variación Precio Compras", "Informe de Costos"],
         "🔬 Auditor Categorías": [],
         "🍹 Tendencias Bar":   [],
+        "🏠 Cuentas Casa":     [],
     }
 
     if 'menu_abierto' not in st.session_state:
@@ -2527,7 +2528,7 @@ if modulo.startswith("📦"):
     with tab6:
         st.markdown("<div class='info-box'>Carga el <b>Uso de Ingredientes</b> (Toteat) y el <b>Inventario</b> por local (hojas Alimentos y Bar). Puedes cargar un local individual o todos los locales.</div>", unsafe_allow_html=True)
 
-        t6a, t6b, t6c = st.tabs(["📊 Uso de Ingredientes", "🏪 Inventario", "🔄 No Registrado / Venta Inter."])
+        t6a, t6b, t6c, t6d = st.tabs(["📊 Uso de Ingredientes", "🏪 Inventario", "🔄 No Registrado / Venta Inter.", "🏠 Cuentas Casa"])
 
         with t6a:
             st.markdown("#### Uso de Ingredientes (Toteat)")
@@ -3193,6 +3194,68 @@ if modulo.startswith("📦"):
         if not df_clas_res.empty:
             st.markdown("**Clasificación actual en BD:**")
             st.dataframe(df_clas_res, use_container_width=True, hide_index=True)
+
+        with t6d:
+            st.markdown("#### Cuentas Casa")
+            st.caption("Carga el informe semanal de Cuentas Casa exportado desde Toteat.")
+
+            cc1, cc2, cc3 = st.columns([2, 2, 3])
+            with cc1:
+                cc_fecha_i = st.date_input("Inicio semana", key="cc_fi", value=None)
+            with cc2:
+                cc_fecha_f = st.date_input("Fin semana", key="cc_ff", value=None)
+            with cc3:
+                f_cc = st.file_uploader("Archivo Cuentas Casa (.csv)", type=["csv"], key="cc_file")
+
+            if cc_fecha_i and cc_fecha_f and f_cc:
+                if st.button("💾 Cargar Cuentas Casa", key="btn_cc"):
+                    try:
+                        # Leer con diferentes encodings
+                        import io as _io_cc
+                        raw_bytes = f_cc.read()
+                        for enc in ['latin-1', 'utf-8', 'cp1252']:
+                            try:
+                                df_cc_raw = pd.read_csv(_io_cc.BytesIO(raw_bytes), encoding=enc, sep=None, engine='python')
+                                break
+                            except: continue
+
+                        df_cc_raw.columns = df_cc_raw.columns.str.strip()
+                        required = ['Fechacierre','Pago','Cuenta_Casa','CATEGORIA','Local']
+                        missing = [c for c in required if c not in df_cc_raw.columns]
+                        if missing:
+                            st.error(f"Columnas faltantes: {missing}")
+                        else:
+                            df_cc_save = df_cc_raw.copy()
+                            df_cc_save['fecha_i'] = str(cc_fecha_i)
+                            df_cc_save['fecha_f'] = str(cc_fecha_f)
+                            # Limpiar columna Pago (quitar comillas)
+                            df_cc_save['Pago'] = df_cc_save['Pago'].astype(str).str.replace('"','').str.strip()
+                            df_cc_save['Cuenta_Casa'] = pd.to_numeric(df_cc_save['Cuenta_Casa'], errors='coerce').fillna(0)
+                            # Normalizar nombres de columna a snake_case
+                            df_cc_save = df_cc_save.rename(columns={
+                                'Fechacierre': 'fechacierre', 'Comanda': 'comanda',
+                                'Caja': 'caja', 'Mesa': 'mesa', 'Pago': 'pago',
+                                'Total': 'total', 'A_Pagar': 'a_pagar', 'Pagos': 'pagos',
+                                'Cuenta_Casa': 'cuenta_casa', 'Comentarios': 'comentarios',
+                                'CATEGORIA': 'categoria', 'Local': 'local'
+                            })
+                            engine = get_engine()
+                            with engine.connect() as conn:
+                                conn.execute(text(
+                                    "DELETE FROM cuentas_casa WHERE fecha_i=:fi AND fecha_f=:ff"),
+                                    {'fi': str(cc_fecha_i), 'ff': str(cc_fecha_f)})
+                                conn.commit()
+                            df_cc_save.to_sql('cuentas_casa', engine, if_exists='append', index=False)
+                            st.success(f"✅ {len(df_cc_save)} registros cargados — {cc_fecha_i} → {cc_fecha_f}")
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+                        st.exception(e)
+
+            # Vista de lo cargado
+            df_cc_bd = run_query("SELECT fecha_i, fecha_f, COUNT(*) as registros, SUM(cuenta_casa) as total FROM cuentas_casa GROUP BY fecha_i, fecha_f ORDER BY fecha_i DESC")
+            if not df_cc_bd.empty:
+                st.markdown("**Cuentas Casa en BD:**")
+                st.dataframe(df_cc_bd, use_container_width=True, hide_index=True)
 
 # ============================================================
 # MÓDULO: EXPLOSIÓN MRP
@@ -5663,3 +5726,282 @@ if modulo.startswith("🍹"):
             st.download_button("📥 Exportar Excel", buf_f.getvalue(), "Bar_Frecuencia.xlsx")
         else:
             st.info("Presiona ▶ Cargar análisis Bar para ejecutar.")
+
+# ============================================================
+# MÓDULO: CUENTAS CASA
+# ============================================================
+elif modulo.startswith("🏠"):
+    st.markdown("""
+    <div style="margin-bottom:1.5rem">
+        <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#555;margin-bottom:4px">Informes</div>
+        <div style="font-family:'DM Serif Display',serif;font-size:2rem;color:#f0ede8;letter-spacing:-0.02em;line-height:1.1">
+            🏠 Cuentas Casa
+        </div>
+    </div>""", unsafe_allow_html=True)
+
+    # ── Controles ──────────────────────────────────────────
+    _MESES_CC = {1:'Ene',2:'Feb',3:'Mar',4:'Abr',5:'May',6:'Jun',
+                 7:'Jul',8:'Ago',9:'Sep',10:'Oct',11:'Nov',12:'Dic'}
+    _MESES_FULL = {1:'ENERO',2:'FEBRERO',3:'MARZO',4:'ABRIL',5:'MAYO',6:'JUNIO',
+                   7:'JULIO',8:'AGOSTO',9:'SEPTIEMBRE',10:'OCTUBRE',11:'NOVIEMBRE',12:'DICIEMBRE'}
+
+    cc_col1, cc_col2, cc_col3 = st.columns([2, 2, 2])
+    with cc_col1:
+        rcc_fi = st.date_input("Inicio período", key="rcc_fi", value=None)
+    with cc_col2:
+        rcc_ff = st.date_input("Fin período",    key="rcc_ff", value=None)
+    with cc_col3:
+        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+        btn_cc_gen = st.button("▶ Generar Informe", key="btn_cc_gen", use_container_width=True)
+
+    if not rcc_fi or not rcc_ff:
+        st.info("Selecciona el rango de fechas del período a reportar.")
+    elif btn_cc_gen:
+        with st.spinner("Calculando..."):
+            # ── Cargar datos de cuentas_casa ──────────────────
+            df_cc_data = run_query(
+                "SELECT * FROM cuentas_casa WHERE fecha_i >= :fi AND fecha_f <= :ff",
+                {'fi': str(rcc_fi), 'ff': str(rcc_ff)}
+            )
+
+            if df_cc_data.empty:
+                st.warning("No hay datos de Cuentas Casa para ese período. Cárgalos primero en Gestión de Datos.")
+            else:
+                # Normalizar
+                df_cc_data['cuenta_casa'] = pd.to_numeric(df_cc_data['cuenta_casa'], errors='coerce').fillna(0)
+                df_cc_data['local']       = df_cc_data['local'].str.strip().str.upper()
+                df_cc_data['categoria']   = df_cc_data['categoria'].str.strip().str.upper()
+                df_cc_data['pago']        = df_cc_data['pago'].astype(str).str.replace('"','').str.strip()
+
+                locales_orden = ['CHICUREO','LA DEHESA','LA REINA','LAS CONDES','LOS TRAPENSES',
+                                 'MACUL','NUEVA PROVIDENCIA','QUILIN','VITACURA','PROVIDENCIA']
+                locales_presentes = [l for l in locales_orden if l in df_cc_data['local'].unique()]
+
+                hs_cc = 'padding:6px 10px;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#aaa;background:#111;border-bottom:1px solid #222'
+                def fclp(v):
+                    try: return f"${int(round(float(v))):,}".replace(',','.')
+                    except: return "—"
+                def fpct(v):
+                    try: return f"{float(v)*100:.1f}%"
+                    except: return "—"
+
+                mes_label = _MESES_FULL.get(rcc_ff.month, '')
+                st.markdown(f"### INFORME CUENTAS CASA — {mes_label} {rcc_ff.year}")
+
+                # ─────────────────────────────────────────────────
+                # PUNTO 1: Distribución por local × categoría
+                # ─────────────────────────────────────────────────
+                st.markdown("---")
+                st.markdown("**1. Distribución Cuentas Casa por Local**")
+
+                cats_p1 = sorted(df_cc_data['categoria'].dropna().unique().tolist())
+                pivot1  = df_cc_data.pivot_table(
+                    index='categoria', columns='local',
+                    values='cuenta_casa', aggfunc='sum', fill_value=0
+                ).reindex(columns=locales_presentes, fill_value=0)
+
+                # Header
+                hdr1 = f'<th style="{hs_cc};text-align:left">CATEGORÍA</th>'
+                for loc in locales_presentes:
+                    hdr1 += f'<th style="{hs_cc};text-align:right">{loc.title()}</th>'
+                hdr1 += f'<th style="{hs_cc};text-align:right;border-left:2px solid #333">TOTAL</th>'
+
+                rows1_html = ''
+                for cat in cats_p1:
+                    if cat not in pivot1.index: continue
+                    row_html = f'<td style="padding:5px 10px;color:#ccc;font-size:0.75rem">{cat.title()}</td>'
+                    for loc in locales_presentes:
+                        v = pivot1.loc[cat, loc] if loc in pivot1.columns else 0
+                        row_html += f'<td style="padding:5px 10px;text-align:right;color:#aaa;font-size:0.73rem">{fclp(v) if v else "—"}</td>'
+                    total_cat = pivot1.loc[cat].sum()
+                    row_html += f'<td style="padding:5px 10px;text-align:right;color:#d4a853;font-size:0.73rem;border-left:2px solid #333;font-weight:600">{fclp(total_cat)}</td>'
+                    rows1_html += f'<tr style="border-bottom:1px solid #1a1a1a">{row_html}</tr>'
+
+                # Total fila
+                tot_html = f'<td style="padding:6px 10px;color:#d4a853;font-size:0.73rem;font-weight:700">TOTAL</td>'
+                for loc in locales_presentes:
+                    tot_loc = df_cc_data[df_cc_data['local']==loc]['cuenta_casa'].sum()
+                    tot_html += f'<td style="padding:6px 10px;text-align:right;color:#d4a853;font-size:0.73rem;font-weight:700">{fclp(tot_loc)}</td>'
+                tot_html += f'<td style="padding:6px 10px;text-align:right;color:#d4a853;font-size:0.73rem;font-weight:700;border-left:2px solid #333">{fclp(df_cc_data["cuenta_casa"].sum())}</td>'
+                rows1_html += f'<tr style="background:#111;border-top:2px solid #333">{tot_html}</tr>'
+
+                # % fila
+                total_global = df_cc_data['cuenta_casa'].sum()
+                pct_html = f'<td style="padding:5px 10px;color:#666;font-size:0.71rem">%</td>'
+                for loc in locales_presentes:
+                    tot_loc = df_cc_data[df_cc_data['local']==loc]['cuenta_casa'].sum()
+                    pct_html += f'<td style="padding:5px 10px;text-align:right;color:#666;font-size:0.71rem">{fpct(tot_loc/total_global if total_global else 0)}</td>'
+                pct_html += f'<td style="padding:5px 10px;text-align:right;color:#666;font-size:0.71rem;border-left:2px solid #333">100%</td>'
+                rows1_html += f'<tr style="background:#0d0d0d">{pct_html}</tr>'
+
+                st.markdown(
+                    f'<div style="overflow:auto;border:1px solid #1e1e1e;border-radius:10px;background:#0d0d0d">'
+                    f'<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif">'
+                    f'<thead><tr>{hdr1}</tr></thead><tbody>{rows1_html}</tbody></table></div>',
+                    unsafe_allow_html=True)
+
+                # ─────────────────────────────────────────────────
+                # PUNTO 2: Distribución por categoría con %
+                # ─────────────────────────────────────────────────
+                st.markdown("---")
+                st.markdown("**2. Distribución Cuentas Casa por Categoría**")
+
+                df_cat = df_cc_data.groupby('categoria')['cuenta_casa'].sum().reset_index()
+                df_cat = df_cat.sort_values('cuenta_casa', ascending=False)
+                total_cat_g = df_cat['cuenta_casa'].sum()
+
+                cat_rows_html = ''
+                for _, row in df_cat.iterrows():
+                    pct_v = row['cuenta_casa'] / total_cat_g if total_cat_g else 0
+                    bar_w = int(pct_v * 100)
+                    cat_rows_html += (
+                        f'<tr style="border-bottom:1px solid #1a1a1a">'
+                        f'<td style="padding:7px 12px;color:#ccc;font-size:0.75rem;width:200px">{row["categoria"].title()}</td>'
+                        f'<td style="padding:7px 12px;text-align:right;color:#d4a853;font-size:0.78rem;font-weight:600;width:120px">{fclp(row["cuenta_casa"])}</td>'
+                        f'<td style="padding:7px 12px;color:#666;font-size:0.72rem;width:60px;text-align:right">{fpct(pct_v)}</td>'
+                        f'<td style="padding:7px 12px"><div style="background:#1a3a2a;border-radius:3px;height:6px;width:100%">'
+                        f'<div style="background:#4caf7d;height:6px;border-radius:3px;width:{bar_w}%"></div></div></td>'
+                        f'</tr>'
+                    )
+                cat_rows_html += (
+                    f'<tr style="background:#111;border-top:2px solid #333">'
+                    f'<td style="padding:7px 12px;color:#d4a853;font-weight:700;font-size:0.75rem">TOTAL GENERAL</td>'
+                    f'<td style="padding:7px 12px;text-align:right;color:#d4a853;font-weight:700;font-size:0.78rem">{fclp(total_cat_g)}</td>'
+                    f'<td colspan="2"></td></tr>'
+                )
+                st.markdown(
+                    f'<div style="border:1px solid #1e1e1e;border-radius:10px;overflow:hidden;background:#0d0d0d">'
+                    f'<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif">'
+                    f'<thead><tr>'
+                    f'<th style="{hs_cc};text-align:left">CATEGORÍA</th>'
+                    f'<th style="{hs_cc};text-align:right">VALOR</th>'
+                    f'<th style="{hs_cc};text-align:right">%</th>'
+                    f'<th style="{hs_cc}"></th>'
+                    f'</tr></thead><tbody>{cat_rows_html}</tbody></table></div>',
+                    unsafe_allow_html=True)
+
+                # ─────────────────────────────────────────────────
+                # PUNTO 3: Principales Consumos (match con ventas)
+                # ─────────────────────────────────────────────────
+                st.markdown("---")
+                st.markdown("**3. Principales Consumos**")
+
+                pagos_ids = df_cc_data['pago'].dropna().unique().tolist()
+                pagos_ids = [p for p in pagos_ids if p and p != 'nan']
+
+                if pagos_ids:
+                    df_ventas_cc = run_query("""
+                        SELECT v.pago, v.categoria_menu, v.valor, v.local,
+                               cc.categoria as categoria_cc
+                        FROM ventas v
+                        INNER JOIN cuentas_casa cc
+                            ON v.pago = cc.pago
+                        WHERE v.pago = ANY(:pagos)
+                          AND v.fecha_venta BETWEEN :fi AND :ff
+                    """, {'pagos': pagos_ids, 'fi': str(rcc_fi), 'ff': str(rcc_ff)})
+
+                    if not df_ventas_cc.empty:
+                        df_ventas_cc['valor'] = pd.to_numeric(df_ventas_cc['valor'], errors='coerce').fillna(0)
+                        df_ventas_cc['categoria_menu'] = df_ventas_cc['categoria_menu'].str.strip().str.title()
+                        df_ventas_cc['categoria_cc']   = df_ventas_cc['categoria_cc'].str.strip().str.upper()
+
+                        cats_cc_u  = sorted(df_ventas_cc['categoria_cc'].dropna().unique().tolist())
+                        cats_menu  = sorted(df_ventas_cc['categoria_menu'].dropna().unique().tolist())
+
+                        pivot3 = df_ventas_cc.pivot_table(
+                            index='categoria_menu', columns='categoria_cc',
+                            values='valor', aggfunc='sum', fill_value=0
+                        ).reindex(columns=cats_cc_u, fill_value=0)
+
+                        hdr3 = f'<th style="{hs_cc};text-align:left">CATEGORÍA MENÚ</th>'
+                        for cat in cats_cc_u:
+                            hdr3 += f'<th style="{hs_cc};text-align:right">{cat.title()}</th>'
+                        hdr3 += f'<th style="{hs_cc};text-align:right;border-left:2px solid #333">TOTAL</th>'
+
+                        rows3_html = ''
+                        for menu_cat in cats_menu:
+                            if menu_cat not in pivot3.index: continue
+                            rh = f'<td style="padding:5px 10px;color:#ccc;font-size:0.75rem">{menu_cat}</td>'
+                            for cat in cats_cc_u:
+                                v3 = pivot3.loc[menu_cat, cat] if cat in pivot3.columns else 0
+                                rh += f'<td style="padding:5px 10px;text-align:right;color:#aaa;font-size:0.73rem">{fclp(v3) if v3 else "—"}</td>'
+                            tot3 = pivot3.loc[menu_cat].sum()
+                            rh += f'<td style="padding:5px 10px;text-align:right;color:#d4a853;font-size:0.73rem;font-weight:600;border-left:2px solid #333">{fclp(tot3)}</td>'
+                            rows3_html += f'<tr style="border-bottom:1px solid #1a1a1a">{rh}</tr>'
+
+                        # Total general
+                        tg3 = f'<td style="padding:6px 10px;color:#d4a853;font-weight:700;font-size:0.73rem">TOTAL GENERAL</td>'
+                        for cat in cats_cc_u:
+                            tv3 = df_ventas_cc[df_ventas_cc['categoria_cc']==cat]['valor'].sum()
+                            tg3 += f'<td style="padding:6px 10px;text-align:right;color:#d4a853;font-weight:700;font-size:0.73rem">{fclp(tv3)}</td>'
+                        tg3 += f'<td style="padding:6px 10px;text-align:right;color:#d4a853;font-weight:700;font-size:0.73rem;border-left:2px solid #333">{fclp(df_ventas_cc["valor"].sum())}</td>'
+                        rows3_html += f'<tr style="background:#111;border-top:2px solid #333">{tg3}</tr>'
+
+                        st.markdown(
+                            f'<div style="overflow:auto;border:1px solid #1e1e1e;border-radius:10px;background:#0d0d0d">'
+                            f'<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif">'
+                            f'<thead><tr>{hdr3}</tr></thead><tbody>{rows3_html}</tbody></table></div>',
+                            unsafe_allow_html=True)
+                    else:
+                        st.warning("No se encontraron matches en ventas para los pagos de este período.")
+                else:
+                    st.warning("No hay IDs de pago en los datos cargados.")
+
+                # ─────────────────────────────────────────────────
+                # PUNTO 4: Histórico mensual por local
+                # ─────────────────────────────────────────────────
+                st.markdown("---")
+                st.markdown("**4. Cuentas Casa — Locales por Mes**")
+
+                df_hist = run_query("""
+                    SELECT local, 
+                           UPPER(TO_CHAR(TO_DATE(fechacierre, 'DD-MM-YYYY'), 'MONTH')) as mes,
+                           EXTRACT(MONTH FROM TO_DATE(fechacierre, 'DD-MM-YYYY')) as mes_num,
+                           EXTRACT(YEAR  FROM TO_DATE(fechacierre, 'DD-MM-YYYY')) as anio,
+                           SUM(cuenta_casa) as total
+                    FROM cuentas_casa
+                    GROUP BY local, mes, mes_num, anio
+                    ORDER BY anio, mes_num, local
+                """)
+
+                if not df_hist.empty:
+                    df_hist['total'] = pd.to_numeric(df_hist['total'], errors='coerce').fillna(0)
+                    df_hist['local'] = df_hist['local'].str.strip().str.upper()
+                    # Columnas de meses únicos ordenadas
+                    meses_ord = df_hist.drop_duplicates(['anio','mes_num','mes']).sort_values(['anio','mes_num'])
+                    meses_cols = [f"{row['mes'].strip()} {int(row['anio'])}" for _, row in meses_ord.iterrows()]
+
+                    pivot4 = df_hist.pivot_table(
+                        index='local',
+                        columns=df_hist.apply(lambda r: f"{r['mes'].strip()} {int(r['anio'])}", axis=1),
+                        values='total', aggfunc='sum', fill_value=0
+                    ).reindex(columns=meses_cols, fill_value=0)
+
+                    hdr4 = f'<th style="{hs_cc};text-align:left">LOCAL</th>'
+                    for m in meses_cols:
+                        hdr4 += f'<th style="{hs_cc};text-align:right">{m}</th>'
+                    hdr4 += f'<th style="{hs_cc};text-align:right;border-left:2px solid #333">TOTAL</th>'
+
+                    rows4_html = ''
+                    for loc in locales_orden:
+                        if loc not in pivot4.index: continue
+                        rh4 = f'<td style="padding:6px 10px;color:#ccc;font-size:0.75rem">{loc.title()}</td>'
+                        for m in meses_cols:
+                            v4 = pivot4.loc[loc, m] if m in pivot4.columns else 0
+                            rh4 += f'<td style="padding:6px 10px;text-align:right;color:#aaa;font-size:0.73rem">{fclp(v4) if v4 else "—"}</td>'
+                        tot4 = pivot4.loc[loc].sum()
+                        rh4 += f'<td style="padding:6px 10px;text-align:right;color:#d4a853;font-size:0.73rem;font-weight:600;border-left:2px solid #333">{fclp(tot4)}</td>'
+                        rows4_html += f'<tr style="border-bottom:1px solid #1a1a1a">{rh4}</tr>'
+
+                    tg4 = f'<td style="padding:6px 10px;color:#d4a853;font-weight:700;font-size:0.73rem">TOTAL GENERAL</td>'
+                    for m in meses_cols:
+                        tv4 = pivot4[m].sum() if m in pivot4.columns else 0
+                        tg4 += f'<td style="padding:6px 10px;text-align:right;color:#d4a853;font-weight:700;font-size:0.73rem">{fclp(tv4)}</td>'
+                    tg4 += f'<td style="padding:6px 10px;text-align:right;color:#d4a853;font-weight:700;font-size:0.73rem;border-left:2px solid #333">{fclp(pivot4.values.sum())}</td>'
+                    rows4_html += f'<tr style="background:#111;border-top:2px solid #333">{tg4}</tr>'
+
+                    st.markdown(
+                        f'<div style="overflow:auto;border:1px solid #1e1e1e;border-radius:10px;background:#0d0d0d">'
+                        f'<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif">'
+                        f'<thead><tr>{hdr4}</tr></thead><tbody>{rows4_html}</tbody></table></div>',
+                        unsafe_allow_html=True)
