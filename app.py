@@ -2455,11 +2455,26 @@ if modulo.startswith("📦"):
             st.markdown("#### Uso de Ingredientes (Toteat)")
             st.caption("Archivo con hoja **UsoIngredientes**: columnas Código Ingrediente, Ingrediente, Cantidad, Medida, Costo, Local")
 
-            u1, u2 = st.columns([2, 3])
+            _MESES_ES_USO = {1:'Ene',2:'Feb',3:'Mar',4:'Abr',5:'May',6:'Jun',
+                             7:'Jul',8:'Ago',9:'Sep',10:'Oct',11:'Nov',12:'Dic'}
+
+            u1, u2, u3 = st.columns([2, 2, 3])
             with u1:
-                periodo_uso = st.text_input("Período", key="periodo_uso", placeholder="ej: 2-8 Mar 2026")
+                uso_fecha_i = st.date_input("Inicio semana", key="uso_fecha_i", value=None)
             with u2:
+                uso_fecha_f = st.date_input("Fin semana", key="uso_fecha_f", value=None)
+            with u3:
                 f_uso = st.file_uploader("Archivo Uso de Ingredientes (.xlsx)", type=["xlsx"], key="uso_ing")
+
+            # Construir período igual que inventario e informe
+            if uso_fecha_i and uso_fecha_f:
+                if uso_fecha_i.month == uso_fecha_f.month:
+                    periodo_uso = f"{uso_fecha_i.day}-{uso_fecha_f.day} {_MESES_ES_USO[uso_fecha_i.month]} {uso_fecha_i.year}"
+                else:
+                    periodo_uso = f"{uso_fecha_i.day} {_MESES_ES_USO[uso_fecha_i.month]}-{uso_fecha_f.day} {_MESES_ES_USO[uso_fecha_f.month]} {uso_fecha_i.year}"
+                st.caption(f"Período: **{periodo_uso}**")
+            else:
+                periodo_uso = None
 
             if f_uso and periodo_uso:
                 locales_uso_disponibles = []
@@ -2494,22 +2509,24 @@ if modulo.startswith("📦"):
                         if local_uso_sel:
                             df_uso = df_uso[df_uso['local'] == local_uso_sel]
 
-                        df_uso['periodo'] = periodo_uso.strip()
+                        df_uso['periodo'] = periodo_uso
 
                         engine = get_engine()
                         with engine.connect() as conn:
                             if local_uso_sel:
-                                conn.execute(text("DELETE FROM uso_ingredientes WHERE local = :l AND periodo = :p"),
-                                             {'l': local_uso_sel, 'p': df_uso['periodo'].iloc[0]})
+                                conn.execute(text(
+                                    "DELETE FROM uso_ingredientes WHERE LOWER(TRIM(local))=:l AND TRIM(periodo)=:p"),
+                                    {'l': local_uso_sel.lower().strip(), 'p': periodo_uso})
                             else:
-                                conn.execute(text("DELETE FROM uso_ingredientes WHERE periodo = :p"),
-                                             {'p': df_uso['periodo'].iloc[0]})
+                                conn.execute(text(
+                                    "DELETE FROM uso_ingredientes WHERE TRIM(periodo)=:p"),
+                                    {'p': periodo_uso})
                             conn.commit()
 
                         cols_bd = ['sku_ingrediente','nombre_ingrediente','cantidad','medida','costo','local','periodo']
                         df_uso[[c for c in cols_bd if c in df_uso.columns]].to_sql(
                             'uso_ingredientes', engine, if_exists='append', index=False)
-                        st.success(f"✅ {len(df_uso):,} registros cargados — {df_uso['local'].nunique()} local(es)")
+                        st.success(f"✅ {len(df_uso):,} registros cargados — período {periodo_uso} — {df_uso['local'].nunique()} local(es)")
                     except Exception as e:
                         st.error(f"Error: {e}")
                         st.exception(e)
@@ -2519,6 +2536,36 @@ if modulo.startswith("📦"):
             if not df_uso_bd.empty:
                 st.markdown("**Uso de ingredientes en BD:**")
                 st.dataframe(df_uso_bd, use_container_width=True, hide_index=True)
+
+                # Migración de registros con formato de período antiguo
+                st.markdown("---")
+                st.markdown("**🔧 Migrar período a formato nuevo**")
+                st.caption("Si hay registros con formato de período antiguo (ej: '2-8 Mar'), asígna el período correcto.")
+                m1, m2, m3 = st.columns([2, 2, 2])
+                with m1:
+                    periodo_viejo = st.text_input("Período actual en BD", key="uso_per_viejo", placeholder="ej: 2-8 Mar")
+                with m2:
+                    mig_fi = st.date_input("Inicio semana correcta", key="uso_mig_fi", value=None)
+                with m3:
+                    mig_ff = st.date_input("Fin semana correcta",   key="uso_mig_ff", value=None)
+                if periodo_viejo and mig_fi and mig_ff:
+                    if mig_fi.month == mig_ff.month:
+                        periodo_nuevo = f"{mig_fi.day}-{mig_ff.day} {_MESES_ES_USO[mig_fi.month]} {mig_fi.year}"
+                    else:
+                        periodo_nuevo = f"{mig_fi.day} {_MESES_ES_USO[mig_fi.month]}-{mig_ff.day} {_MESES_ES_USO[mig_ff.month]} {mig_fi.year}"
+                    st.caption(f"Cambiará: **{periodo_viejo}** → **{periodo_nuevo}**")
+                    if st.button("▶ Migrar período", key="btn_uso_migrar"):
+                        engine = get_engine()
+                        try:
+                            with engine.connect() as conn:
+                                res = conn.execute(text(
+                                    "UPDATE uso_ingredientes SET periodo=:nuevo WHERE TRIM(periodo)=:viejo"),
+                                    {'nuevo': periodo_nuevo, 'viejo': periodo_viejo.strip()})
+                                conn.commit()
+                            st.success(f"✅ {res.rowcount} registros actualizados: '{periodo_viejo}' → '{periodo_nuevo}'")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error: {e}")
 
         with t6b:
             st.markdown("#### Inventario por Local")
@@ -3836,12 +3883,12 @@ elif modulo.startswith("📊"):
                 def get_uso(periodo, locales):
                     lf = "AND LOWER(TRIM(local))=ANY(:ls)" if locales else ""
                     q = f"""
-                        SELECT TRIM(local) as local,
+                        SELECT LOWER(TRIM(local)) as local,
                                UPPER(TRIM(nombre_ingrediente)) as producto_control,
                                SUM(cantidad) as kg, SUM(costo) as costo
                         FROM uso_ingredientes
                         WHERE TRIM(periodo)=:p {lf}
-                        GROUP BY TRIM(local), UPPER(TRIM(nombre_ingrediente))
+                        GROUP BY LOWER(TRIM(local)), UPPER(TRIM(nombre_ingrediente))
                     """
                     params = {'p': periodo.strip()}
                     if locales: params['ls'] = [l.lower().strip() for l in locales]
