@@ -4257,31 +4257,29 @@ elif modulo.startswith("📊"):
                 # ── DEBUG PAN ─────────────────────────────────────
                 with st.expander(f"🔍 Debug PAN compras — {local_show}", expanded=False):
                     q_pan_dbg = """
-                        SELECT c.nombre_producto,
+                        SELECT c.local, c.nombre_producto,
                                c.cantidad, c.conversion, c.cant_conv,
-                               c.costo_realfinal, c.fecha_dte::date as fecha,
-                               cn.categoria_control
+                               c.costo_realfinal, c.fecha_dte::date as fecha, c.folio
                         FROM compras c
-                        LEFT JOIN clas_nomb_prod cn
-                               ON UPPER(TRIM(c.nombre_producto)) = UPPER(TRIM(cn.nombre_producto))
                         WHERE c.fecha_dte::date BETWEEN :i AND :f
-                          AND LOWER(c.local) = :l
                           AND UPPER(c.nombre_producto) IN ('MOLDE BANQUETE','MOLDE BANQUETE INTEGRAL')
-                        ORDER BY c.nombre_producto, c.fecha_dte
+                        ORDER BY c.local, c.nombre_producto, c.fecha_dte
                     """
                     df_pan_dbg = run_query(q_pan_dbg, {
-                        'i': str(d['fecha_i']), 'f': str(d['fecha_f']),
-                        'l': local_show.lower().strip()
+                        'i': str(d['fecha_i']), 'f': str(d['fecha_f'])
                     })
                     if not df_pan_dbg.empty:
-                        st.dataframe(df_pan_dbg, use_container_width=True)
-                        st.markdown("**Suma por producto:**")
+                        st.markdown(f"**Locales únicos en compras de pan:** {sorted(df_pan_dbg['local'].unique().tolist())}")
+                        st.markdown(f"**local_show:** `{local_show}`")
+                        st.markdown("**Suma cant_conv por local y producto:**")
                         st.dataframe(
-                            df_pan_dbg.groupby('nombre_producto')[['cantidad','cant_conv','costo_realfinal']].sum().reset_index(),
+                            df_pan_dbg.groupby(['local','nombre_producto'])['cant_conv'].sum().reset_index(),
                             use_container_width=True
                         )
+                        st.markdown("**Detalle filas:**")
+                        st.dataframe(df_pan_dbg, use_container_width=True)
                     else:
-                        st.warning("Sin filas de MOLDE BANQUETE en este período/local")
+                        st.warning("Sin filas de MOLDE BANQUETE en este período")
 
                 # ── SECCIÓN 5: Control de productos críticos ──────
                 st.markdown(f"**5. Control de Productos Críticos**")
