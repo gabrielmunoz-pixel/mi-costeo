@@ -2508,16 +2508,17 @@ if modulo.startswith("📦"):
                                 })
 
                             df_inv_save = pd.DataFrame(registros)
+                            # Normalizar local a minúscula para consistencia con la BD
+                            df_inv_save['local'] = df_inv_save['local'].astype(str).str.strip().str.lower()
                             with engine.connect() as conn:
                                 if local_inv:
                                     conn.execute(text(
-                                        "DELETE FROM inventarios WHERE local=:l AND periodo=:p AND tipo_inventario=:t"),
-                                        {'l': local_inv, 'p': periodo_inv, 't': tipo_inv})
+                                        "DELETE FROM inventarios WHERE LOWER(TRIM(local))=:l AND TRIM(periodo)=:p AND tipo_inventario=:t"),
+                                        {'l': local_inv.lower().strip(), 'p': periodo_inv, 't': tipo_inv})
                                 else:
-                                    # Borrar todos los locales del período
                                     locales_archivo = df_inv_save['local'].dropna().unique().tolist()
                                     conn.execute(text(
-                                        "DELETE FROM inventarios WHERE local=ANY(:ls) AND periodo=:p AND tipo_inventario=:t"),
+                                        "DELETE FROM inventarios WHERE LOWER(TRIM(local))=ANY(:ls) AND TRIM(periodo)=:p AND tipo_inventario=:t"),
                                         {'ls': locales_archivo, 'p': periodo_inv, 't': tipo_inv})
                                 conn.commit()
                             df_inv_save.to_sql('inventarios', engine, if_exists='append', index=False)
@@ -2618,10 +2619,12 @@ if modulo.startswith("📦"):
                                 })
 
                             df_inv_save = pd.DataFrame(registros)
+                            # Normalizar local a minúscula para consistencia con la BD
+                            df_inv_save['local'] = df_inv_save['local'].astype(str).str.strip().str.lower()
                             locales_c = df_inv_save['local'].dropna().unique().tolist()
                             with engine.connect() as conn:
                                 conn.execute(text(
-                                    "DELETE FROM inventarios WHERE local=ANY(:ls) AND periodo=:p AND tipo_inventario=:t"),
+                                    "DELETE FROM inventarios WHERE LOWER(TRIM(local))=ANY(:ls) AND TRIM(periodo)=:p AND tipo_inventario=:t"),
                                     {'ls': locales_c, 'p': periodo_inv, 't': tipo_inv})
                                 conn.commit()
                             df_inv_save.to_sql('inventarios', engine, if_exists='append', index=False)
@@ -2714,10 +2717,12 @@ if modulo.startswith("📦"):
                                 })
 
                             df_inv_save = pd.DataFrame(registros)
+                            # Normalizar local a minúscula para consistencia con la BD
+                            df_inv_save['local'] = df_inv_save['local'].astype(str).str.strip().str.lower()
                             with engine.connect() as conn:
                                 conn.execute(text(
-                                    "DELETE FROM inventarios WHERE local=:l AND periodo=:p AND tipo_inventario=:t"),
-                                    {'l': local_inv, 'p': periodo_inv, 't': tipo_inv})
+                                    "DELETE FROM inventarios WHERE LOWER(TRIM(local))=:l AND TRIM(periodo)=:p AND tipo_inventario=:t"),
+                                    {'l': local_inv.lower().strip(), 'p': periodo_inv, 't': tipo_inv})
                                 conn.commit()
                             df_inv_save.to_sql('inventarios', engine, if_exists='append', index=False)
                             st.success(f"✅ {len(df_inv_save)} registros cargados (Forma A) — {local_inv} · {tipo_inv} · {periodo_inv}")
