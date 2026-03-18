@@ -4711,14 +4711,15 @@ elif modulo.startswith("📊"):
                     muc      = uso_cost / uso_kg if uso_kg else (comp_cost / comp_kg if comp_kg else 0)
                     desv_cost= desv_kg * muc
 
-                    ws.cell(row=row_xl, column=7).value  = ini_kg       # INV INICIAL KG
-                    ws.cell(row=row_xl, column=8).value  = fin_kg       # INV FINAL KG
-                    ws.cell(row=row_xl, column=10).value = comp_kg      # COMPRAS KG
-                    ws.cell(row=row_xl, column=11).value = real_ut      # REAL UTILIZADOS KG
-                    ws.cell(row=row_xl, column=12).value = uso_kg       # VENTA RECETARIO KG
-                    ws.cell(row=row_xl, column=13).value = desv_kg      # DESV KG
-                    ws.cell(row=row_xl, column=14).value = desv_pct     # DESV %
-                    ws.cell(row=row_xl, column=15).value = desv_cost    # COSTO DESV
+                    ws.cell(row=row_xl, column=6).value  = comp_cost    # COMPRA TOTAL $
+                    ws.cell(row=row_xl, column=7).value  = ini_kg       # INV. INICIAL KG
+                    ws.cell(row=row_xl, column=8).value  = fin_kg       # INV. FINAL KG
+                    ws.cell(row=row_xl, column=9).value  = comp_kg      # COMPRAS KG
+                    ws.cell(row=row_xl, column=10).value = real_ut      # REAL UTILIZADOS KG
+                    ws.cell(row=row_xl, column=11).value = uso_kg       # VENTA RECETARIO KG
+                    ws.cell(row=row_xl, column=12).value = desv_kg      # DESV. KG
+                    ws.cell(row=row_xl, column=13).value = desv_pct     # DESV %
+                    ws.cell(row=row_xl, column=14).value = desv_cost    # COSTO DESV.
 
                 buf = io.BytesIO()
                 wb.save(buf)
