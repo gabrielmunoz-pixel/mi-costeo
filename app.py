@@ -4010,7 +4010,7 @@ elif modulo.startswith("📊"):
                     LEFT JOIN clas_nomb_prod cn
                            ON UPPER(TRIM(c.nombre_producto)) = UPPER(TRIM(cn.nombre_producto))
                     WHERE c.fecha_dte::date BETWEEN :i AND :f
-                      AND c.categoria_producto IN ('ALIMENTOS','VERDURAS','BAR')
+                      AND c.subcat NOT IN ('COLACION','ADMINISTRACION')
                       AND c.cant_conv > 0
                       {_lf_ckr}
                     GROUP BY c.local, COALESCE(NULLIF(TRIM(cn.categoria_control),''), UPPER(c.nombre_producto))
@@ -4023,7 +4023,7 @@ elif modulo.startswith("📊"):
                 cat_labels = {
                     'CARNES ROJAS':       ['POSTA','FILETE','PLATEADA','LOMO LISO','LOMO VETADO','GRASA DE WAGYU'],
                     'CARNES BLANCAS':     ['PECHUGA DE POLLO','COSTILLAS','CHULETA KASSLER','LOMO DE CENTRO','PERNIL','JAMÓN','TOCINO AHUMADO','PANCETA LAMINADA'],
-                    'VERDURAS':           ['PALTA','TOMATE','LECHUGA'],
+                    'VERDURAS':           ['PALTA','TOMATE','LECHUGA','LECHUGA VERDE','MIX DE LECHUGA'],
                     'PESCADOS Y MARISCOS':['FILETE SALMON','SALMON SLICE LAMINADO','CAMARON','CAMARON APANADO','ATUN','LOCOS','ERIZOS'],
                     'OTROS':              ['QUESO RANCO','QUESO CHEDDAR','QUESO PARMESANO','PAPAS FRITAS'],
                     'PAN':                ['FRICA 14 CMS','MOLDE BANQUETE','MOLDE BANQUETE INTEGRAL','PAN FRICA 12 CM','PAN FRICA N8','HOT - DOG 19 CM.'],
@@ -4121,10 +4121,11 @@ elif modulo.startswith("📊"):
                 cat_labels = {
                     'CARNES ROJAS': ['POSTA','FILETE','PLATEADA','LOMO LISO','LOMO VETADO','GRASA DE WAGYU'],
                     'CARNES BLANCAS': ['PECHUGA DE POLLO','COSTILLAS','CHULETA KASSLER','LOMO DE CENTRO','PERNIL','JAMÓN','TOCINO AHUMADO','PANCETA LAMINADA'],
-                    'VERDURAS': ['PALTA','TOMATE','LECHUGA'],
+                    'VERDURAS': ['PALTA','TOMATE','LECHUGA','LECHUGA VERDE','MIX DE LECHUGA'],
                     'PESCADOS Y MARISCOS': ['FILETE SALMON','SALMON SLICE LAMINADO','CAMARON','CAMARON APANADO','ATUN','LOCOS','ERIZOS'],
                     'OTROS': ['QUESO RANCO','QUESO CHEDDAR','QUESO PARMESANO','PAPAS FRITAS'],
                     'PAN': ['FRICA 14 CMS','MOLDE BANQUETE','MOLDE BANQUETE INTEGRAL','PAN FRICA 12 CM','PAN FRICA N8','HOT - DOG 19 CM.'],
+                    'BAR': ['SCHOP','JUGOS'],
                 }
                 for cat, prods in cat_labels.items():
                     mask = uso['producto_control'].str.upper().isin([p.upper() for p in prods]) if not uso.empty else pd.Series(dtype=bool)
