@@ -4377,8 +4377,8 @@ elif modulo.startswith("📊"):
                 filas_cadena = []
                 for loc4 in todos_loc_cadena:
                     loc4_u = loc4.upper().strip()
-                    r_v4  = run_query("SELECT SUM(monto_venta_real) as vt FROM ventas WHERE fecha_venta BETWEEN :i AND :f AND UPPER(local)=:l", {'i': str(fecha_ic_i), 'f': str(fecha_ic_f), 'l': loc4_u})
-                    r_c4  = run_query("SELECT categoria_producto, SUM(costo_realfinal) as ct FROM compras WHERE fecha_dte::date BETWEEN :i AND :f AND UPPER(local)=:l GROUP BY categoria_producto", {'i': str(fecha_ic_i), 'f': str(fecha_ic_f), 'l': loc4_u})
+                    r_v4  = run_query("SELECT SUM(monto_venta_real) as vt FROM ventas WHERE fecha_venta BETWEEN :i AND :f AND UPPER(local)=:l", {'i': str(fecha_acum_i), 'f': str(fecha_acum_f), 'l': loc4_u})
+                    r_c4  = run_query("SELECT categoria_producto, SUM(costo_realfinal) as ct FROM compras WHERE fecha_dte::date BETWEEN :i AND :f AND UPPER(local)=:l GROUP BY categoria_producto", {'i': str(fecha_acum_i), 'f': str(fecha_acum_f), 'l': loc4_u})
                     venta4   = float(r_v4['vt'].iloc[0]) if not r_v4.empty and r_v4['vt'].iloc[0] else 0
                     compra4  = sum(float(r_c4.loc[r_c4['categoria_producto'].str.upper().str.strip()==cat,'ct'].sum()) for cat in cats_compra4) if not r_c4.empty else 0
                     pct4     = compra4 / venta4 if venta4 > 0 else 0
