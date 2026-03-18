@@ -4000,10 +4000,23 @@ elif modulo.startswith("📊"):
                 df_no_reg      = get_no_registrado(periodo_ic, locales_sel)
 
                 # Compras KG por producto_control usando clasificación
+                # Todos los nombres de producto_control conocidos en cat_labels
+                _prods_conocidos = [
+                    'POSTA','FILETE','PLATEADA','LOMO LISO','LOMO VETADO','GRASA DE WAGYU',
+                    'PECHUGA DE POLLO','COSTILLAS','CHULETA KASSLER','LOMO DE CENTRO','PERNIL','JAMÓN','TOCINO AHUMADO','PANCETA LAMINADA',
+                    'PALTA','TOMATE','LECHUGA','LECHUGA VERDE','MIX DE LECHUGA',
+                    'FILETE SALMON','SALMON SLICE LAMINADO','CAMARON','CAMARON APANADO','ATUN','LOCOS','ERIZOS',
+                    'QUESO RANCO','QUESO CHEDDAR','QUESO PARMESANO','PAPAS FRITAS',
+                    'FRICA 14 CMS','MOLDE BANQUETE','MOLDE BANQUETE INTEGRAL','PAN FRICA 12 CM','PAN FRICA N8','HOT - DOG 19 CM.',
+                    'SCHOP','JUGOS',
+                ]
                 _lf_ckr = "AND LOWER(c.local)=ANY(:ls)" if locales_sel else ""
                 _q_ckr = f"""
                     SELECT c.local,
-                           COALESCE(NULLIF(TRIM(cn.categoria_control),''), UPPER(c.nombre_producto)) as producto_control,
+                           CASE
+                             WHEN UPPER(TRIM(c.nombre_producto)) = ANY(:prods) THEN UPPER(TRIM(c.nombre_producto))
+                             ELSE COALESCE(NULLIF(TRIM(cn.categoria_control),''), UPPER(c.nombre_producto))
+                           END as producto_control,
                            SUM(c.cant_conv) as kg,
                            SUM(c.costo_realfinal) as costo
                     FROM compras c
@@ -4013,9 +4026,12 @@ elif modulo.startswith("📊"):
                       AND c.subcat NOT IN ('COLACION','ADMINISTRACION')
                       AND c.cant_conv > 0
                       {_lf_ckr}
-                    GROUP BY c.local, COALESCE(NULLIF(TRIM(cn.categoria_control),''), UPPER(c.nombre_producto))
+                    GROUP BY c.local, CASE
+                             WHEN UPPER(TRIM(c.nombre_producto)) = ANY(:prods) THEN UPPER(TRIM(c.nombre_producto))
+                             ELSE COALESCE(NULLIF(TRIM(cn.categoria_control),''), UPPER(c.nombre_producto))
+                           END
                 """
-                _p_ckr = {'i': str(fecha_ic_i), 'f': str(fecha_ic_f)}
+                _p_ckr = {'i': str(fecha_ic_i), 'f': str(fecha_ic_f), 'prods': _prods_conocidos}
                 if locales_sel: _p_ckr['ls'] = [l.lower() for l in locales_sel]
                 df_compras_kg_raw = run_query(_q_ckr, _p_ckr)
 
@@ -4026,7 +4042,7 @@ elif modulo.startswith("📊"):
                     'VERDURAS':           ['PALTA','TOMATE','LECHUGA','LECHUGA VERDE','MIX DE LECHUGA'],
                     'PESCADOS Y MARISCOS':['FILETE SALMON','SALMON SLICE LAMINADO','CAMARON','CAMARON APANADO','ATUN','LOCOS','ERIZOS'],
                     'OTROS':              ['QUESO RANCO','QUESO CHEDDAR','QUESO PARMESANO','PAPAS FRITAS'],
-                    'PAN':                ['PAN','FRICA 14 CMS','MOLDE BANQUETE','MOLDE BANQUETE INTEGRAL','PAN FRICA 12 CM','PAN FRICA N8','HOT - DOG 19 CM.'],
+                    'PAN':                ['FRICA 14 CMS','MOLDE BANQUETE','MOLDE BANQUETE INTEGRAL','PAN FRICA 12 CM','PAN FRICA N8','HOT - DOG 19 CM.'],
                     'BAR':                ['SCHOP','JUGOS'],
                 }
 
@@ -4124,7 +4140,7 @@ elif modulo.startswith("📊"):
                     'VERDURAS': ['PALTA','TOMATE','LECHUGA','LECHUGA VERDE','MIX DE LECHUGA'],
                     'PESCADOS Y MARISCOS': ['FILETE SALMON','SALMON SLICE LAMINADO','CAMARON','CAMARON APANADO','ATUN','LOCOS','ERIZOS'],
                     'OTROS': ['QUESO RANCO','QUESO CHEDDAR','QUESO PARMESANO','PAPAS FRITAS'],
-                    'PAN': ['PAN','FRICA 14 CMS','MOLDE BANQUETE','MOLDE BANQUETE INTEGRAL','PAN FRICA 12 CM','PAN FRICA N8','HOT - DOG 19 CM.'],
+                    'PAN': ['FRICA 14 CMS','MOLDE BANQUETE','MOLDE BANQUETE INTEGRAL','PAN FRICA 12 CM','PAN FRICA N8','HOT - DOG 19 CM.'],
                     'BAR': ['SCHOP','JUGOS'],
                 }
                 for cat, prods in cat_labels.items():
