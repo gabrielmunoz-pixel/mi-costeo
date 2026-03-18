@@ -4088,13 +4088,19 @@ elif modulo.startswith("📊"):
                 from datetime import date as _date
                 st.session_state['ic_needs_dates'] = True
 
-                # Cargar datos — ventas y compras usan rango de fechas explícito
+                # Fecha acumulada: desde el día 1 del mes hasta fecha_fin (para puntos 1 y 2)
+                from datetime import date as _date
+                fecha_acum_i = _date(fecha_ic_f.year, fecha_ic_f.month, 1)
+                fecha_acum_f = fecha_ic_f
+
+                # Puntos 3/4/5: usan el rango exacto del período (fecha_ic_i → fecha_ic_f)
+                # Puntos 1/2: usan acumulado mensual (fecha_acum_i → fecha_acum_f)
                 df_inv_ini = get_inv(periodo_ic, 'Inicial', locales_sel)
                 df_inv_fin = get_inv(periodo_ic, 'Final',   locales_sel)
                 df_uso_ic  = get_uso(periodo_ic, locales_sel)
-                df_ventas_ic   = get_ventas_ic(fecha_ic_i, fecha_ic_f, locales_sel)
-                df_compras_cat = get_compras_cat(fecha_ic_i, fecha_ic_f, locales_sel)
-                df_bar_ven     = get_bar_ventas(fecha_ic_i, fecha_ic_f, locales_sel)
+                df_ventas_ic   = get_ventas_ic(fecha_acum_i, fecha_acum_f, locales_sel)   # acumulado
+                df_compras_cat = get_compras_cat(fecha_acum_i, fecha_acum_f, locales_sel) # acumulado
+                df_bar_ven     = get_bar_ventas(fecha_acum_i, fecha_acum_f, locales_sel)  # acumulado
                 df_no_reg      = get_no_registrado(periodo_ic, locales_sel)
 
                 # Compras KG por producto_control usando clasificación
@@ -4164,6 +4170,8 @@ elif modulo.startswith("📊"):
                     'cat_labels': cat_labels,
                     'fecha_i': fecha_ic_i,
                     'fecha_f': fecha_ic_f,
+                    'fecha_acum_i': fecha_acum_i,
+                    'fecha_acum_f': fecha_acum_f,
                 }
 
             st.success(f"✅ Datos cargados para {len(locales_sel)} local(es) — período {periodo_ic}")
@@ -4182,6 +4190,9 @@ elif modulo.startswith("📊"):
             df_uso = d['df_uso']
             locales_show = d['locales']
             periodo_show = d['periodo']
+            fecha_acum_i = d.get('fecha_acum_i', d['fecha_i'])
+            fecha_acum_f = d.get('fecha_acum_f', d['fecha_f'])
+            acum_label = f"{fecha_acum_i.strftime('%d.%m')} al {fecha_acum_f.strftime('%d.%m')}"
 
             hs = 'padding:8px 12px;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a;background:#111'
             hs2 = hs + ';color:#4caf7d'
@@ -4256,7 +4267,7 @@ elif modulo.startswith("📊"):
                 c1, c2, c3 = st.columns([1.2, 1.2, 1.6])
 
                 with c1:
-                    st.markdown("**1. Análisis de Costo**")
+                    st.markdown(f"**1. Análisis de Costo** *(acumulado {acum_label})*")
                     cats_compra = ['ALIMENTOS', 'VERDURAS', 'BAR', 'ART. LIMPIEZA', 'DESECHABLES']
                     compra_tot = sum(cat_map.get(c, 0) for c in cats_compra)
                     pct_compra = compra_tot / v_total if v_total > 0 else 0
@@ -4291,7 +4302,7 @@ elif modulo.startswith("📊"):
                         unsafe_allow_html=True)
 
                 with c2:
-                    st.markdown("**2. Vista General Bar**")
+                    st.markdown(f"**2. Vista General Bar** *(acumulado {acum_label})*")
                     if not bv.empty:
                         bv_s = bv.sort_values('venta', ascending=False).head(14)
                         r2_html = ''.join([
@@ -4584,8 +4595,13 @@ elif modulo.startswith("📊"):
                 ws = wb['Nuevo Panel']
 
                 # ── TÍTULO ────────────────────────────────────
-                ws['E3'] = f"INFORME DE COSTOS {local_rpt.upper()}"
-                ws['E6'] = local_rpt.upper()
+                _acum_i_xl = d.get('fecha_acum_i', d['fecha_i'])
+                _acum_f_xl = d.get('fecha_acum_f', d['fecha_f'])
+                _acum_lbl  = f"01.{_acum_f_xl.month:02d} AL {_acum_f_xl.day:02d}.{_acum_f_xl.month:02d}"
+                ws['E3']  = f"INFORME DE COSTOS {local_rpt.upper()}"
+                ws['E6']  = local_rpt.upper()
+                ws['E12'] = f"1.- ANÁLISIS DE COSTO POR LOCAL - {_acum_lbl}"
+                ws['I12'] = f"2.- VISTA GENERAL DETALLE BAR - {_acum_lbl}"
 
                 # ── SECCIÓN 1: Análisis de costo ──────────────
                 # col E=5(producto), F=6($ CLP), G=7(%)
