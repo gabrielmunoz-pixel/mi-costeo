@@ -3884,11 +3884,31 @@ elif modulo.startswith("📊"):
                     lf = "AND LOWER(TRIM(local))=ANY(:ls)" if locales else ""
                     q = f"""
                         SELECT LOWER(TRIM(local)) as local,
-                               UPPER(TRIM(nombre_ingrediente)) as producto_control,
+                               UPPER(TRIM(CASE
+                                 WHEN UPPER(TRIM(nombre_ingrediente)) IN (
+                                   'PULPA DE MANGO','PULPA DE PIÑA','PULPA DE PINA',
+                                   'PULPA DE FRAMBUESA','PULPA DE MARACUYA'
+                                 ) THEN 'JUGOS'
+                                 WHEN UPPER(TRIM(nombre_ingrediente)) IN (
+                                   'KUNSTMAN TOROBAYO 30 L','SCHOP CRISTAL 30L',
+                                   'SCHOP VALDIVIA PALE LAGER 30 LT','ROYAL GUARD KEG 30L'
+                                 ) THEN 'SCHOP'
+                                 ELSE nombre_ingrediente
+                               END)) as producto_control,
                                SUM(cantidad) as kg, SUM(costo) as costo
                         FROM uso_ingredientes
                         WHERE TRIM(periodo)=:p {lf}
-                        GROUP BY LOWER(TRIM(local)), UPPER(TRIM(nombre_ingrediente))
+                        GROUP BY LOWER(TRIM(local)), UPPER(TRIM(CASE
+                                 WHEN UPPER(TRIM(nombre_ingrediente)) IN (
+                                   'PULPA DE MANGO','PULPA DE PIÑA','PULPA DE PINA',
+                                   'PULPA DE FRAMBUESA','PULPA DE MARACUYA'
+                                 ) THEN 'JUGOS'
+                                 WHEN UPPER(TRIM(nombre_ingrediente)) IN (
+                                   'KUNSTMAN TOROBAYO 30 L','SCHOP CRISTAL 30L',
+                                   'SCHOP VALDIVIA PALE LAGER 30 LT','ROYAL GUARD KEG 30L'
+                                 ) THEN 'SCHOP'
+                                 ELSE nombre_ingrediente
+                               END))
                     """
                     params = {'p': periodo.strip()}
                     if locales: params['ls'] = [l.lower().strip() for l in locales]
