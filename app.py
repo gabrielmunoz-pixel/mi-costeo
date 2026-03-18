@@ -4473,36 +4473,32 @@ elif modulo.startswith("📊"):
 
                 # ── Botón imprimir ────────────────────────────────
                 st.markdown("---")
-                if st.button("🖨️ Preparar para imprimir", key=f"btn_print_{local_show}"):
-                    st.info("Usa Ctrl+P (o Cmd+P en Mac) para imprimir o guardar como PDF. El informe está optimizado para impresión.")
 
             # ── SECCIÓN 4: % Compra a nivel cadena ────────────
             st.markdown("---")
             hs4 = "padding:7px 12px;font-size:0.72rem;text-transform:uppercase;letter-spacing:0.1em;color:#aaa;font-weight:600;background:#111;white-space:nowrap"
 
-            # Calcular % compra por local usando los datos ya cargados
             cats_compra4 = ['ALIMENTOS', 'VERDURAS', 'BAR', 'ART. LIMPIEZA', 'DESECHABLES']
             filas_cadena = []
             for loc in locales_show:
-                df_cc_loc  = df_cc[df_cc['local'].str.lower().str.strip() == loc.lower().strip()] if not df_cc.empty and 'local' in df_cc.columns else pd.DataFrame()
-                df_v_loc   = df_v[df_v['local'].str.lower().str.strip()  == loc.lower().strip()] if not df_v.empty  and 'local' in df_v.columns  else pd.DataFrame()
-                venta_loc  = float(df_v_loc['venta'].sum()) if not df_v_loc.empty else 0
-                cat_m_loc  = {}
-                for cat in cats_compra4:
-                    if not df_cc_loc.empty and 'categoria_producto' in df_cc_loc.columns:
-                        cat_m_loc[cat] = float(df_cc_loc[df_cc_loc['categoria_producto'].str.upper().str.strip() == cat]['compra_total'].sum())
-                    else:
-                        cat_m_loc[cat] = 0
-                compra_loc = sum(cat_m_loc.values())
-                pct_loc    = compra_loc / venta_loc if venta_loc > 0 else 0
+                loc_lower = loc.lower().strip()
+                # ventas: local viene en UPPER desde la BD
+                df_v_loc = df_v[df_v['local'].str.upper().str.strip() == loc.upper().strip()] if not df_v.empty and 'local' in df_v.columns else pd.DataFrame()
+                # compras: local viene en lower desde get_compras_cat con UPPER filter
+                df_cc_loc = df_cc[df_cc['local'].str.upper().str.strip() == loc.upper().strip()] if not df_cc.empty and 'local' in df_cc.columns else pd.DataFrame()
+
+                venta_loc = float(df_v_loc['venta_total'].sum()) if not df_v_loc.empty and 'venta_total' in df_v_loc.columns else 0
+                compra_loc = 0
+                if not df_cc_loc.empty and 'categoria_producto' in df_cc_loc.columns:
+                    for cat in cats_compra4:
+                        compra_loc += float(df_cc_loc[df_cc_loc['categoria_producto'].str.upper().str.strip() == cat]['compra_total'].sum())
+                pct_loc = compra_loc / venta_loc if venta_loc > 0 else 0
                 filas_cadena.append({'local': loc.title(), 'compra': compra_loc, 'venta': venta_loc, 'pct': pct_loc})
 
-            # Total general
             total_compra4 = sum(f['compra'] for f in filas_cadena)
             total_venta4  = sum(f['venta']  for f in filas_cadena)
             total_pct4    = total_compra4 / total_venta4 if total_venta4 > 0 else 0
 
-            # Semáforo: verde < 40%, amarillo 40-45%, rojo > 45%
             def _color4(pct):
                 if pct < 0.40:   return '#4caf7d', '#0d2a1a'
                 elif pct < 0.45: return '#e89c45', '#2a1f0d'
@@ -4516,34 +4512,138 @@ elif modulo.startswith("📊"):
                     f'font-weight:700;font-size:0.85rem;color:{fg};white-space:nowrap">'
                     f'{f["pct"]:.1%}</td>'
                 )
-            # Total general
             fg4, bg4 = _color4(total_pct4)
             cols_html += (
                 f'<td style="padding:8px 10px;text-align:center;background:{bg4};'
                 f'font-weight:700;font-size:0.85rem;color:{fg4};border-left:2px solid #333">'
                 f'{total_pct4:.1%}</td>'
             )
-
             header_html = ''.join(
                 f'<th style="{hs4};text-align:center">{f["local"]}</th>'
                 for f in filas_cadena
-            ) + f'<th style="{hs4};text-align:center;border-left:2px solid #333">TOTAL GENERAL</th>'
+            ) + f'<th style="{hs4};text-align:center;border-left:2px solid #333">Total General</th>'
 
-            st.markdown(f"**4. % Compra a Nivel Cadena**")
+            st.markdown("**4. % Compra a Nivel Cadena**")
             st.markdown(
-                f'<div style="border:1px solid #1e1e1e;border-radius:10px;overflow:hidden;background:#0d0d0d;margin-top:0.5rem">'
+                f'<div style="border:1px solid #1e1e1e;border-radius:10px;overflow:auto;background:#0d0d0d;margin-top:0.5rem">'
                 f'<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif">'
                 f'<thead><tr>{header_html}</tr></thead>'
                 f'<tbody><tr>{cols_html}</tr></tbody>'
-                f'</table></div>',
+                f'</table></div>'
+                f'<div style="margin-top:6px;font-size:0.72rem;color:#555">'
+                f'🟢 &lt;40%&nbsp;&nbsp;🟡 40–45%&nbsp;&nbsp;🔴 &gt;45%</div>',
                 unsafe_allow_html=True
             )
-            st.markdown(
-                '<div style="margin-top:6px;font-size:0.72rem;color:#555">'
-                '🟢 &lt;40%&nbsp;&nbsp;🟡 40–45%&nbsp;&nbsp;🔴 &gt;45%'
-                '</div>',
-                unsafe_allow_html=True
-            )
+
+            # ── Botón: Generar PDF / HTML imprimible ──────────
+            st.markdown("---")
+            if st.button("🖨️ Generar informe imprimible", key="btn_print_informe"):
+                # Construir HTML completo con todos los locales
+                html_parts = [f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>Informe de Costos — {d['periodo']}</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@300;400;500;600&display=swap');
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ font-family: 'DM Sans', sans-serif; background: #fff; color: #111; font-size: 8pt; }}
+  @page {{ size: A4 landscape; margin: 10mm; }}
+  h1 {{ font-family: 'DM Serif Display', serif; font-size: 14pt; color: #111; margin-bottom: 4px; }}
+  h2 {{ font-family: 'DM Serif Display', serif; font-size: 10pt; color: #333; margin: 8px 0 4px; }}
+  .local-header {{ background: #111; color: #fff; padding: 6px 10px; border-radius: 6px 6px 0 0; font-size: 9pt; font-weight: 600; letter-spacing: 0.05em; }}
+  .page-break {{ page-break-before: always; padding-top: 6mm; }}
+  table {{ width: 100%; border-collapse: collapse; margin-bottom: 8px; font-size: 7.5pt; }}
+  th {{ background: #1a1a1a; color: #fff; padding: 4px 6px; text-align: right; font-size: 7pt; letter-spacing: 0.05em; }}
+  th:first-child {{ text-align: left; }}
+  td {{ border-bottom: 1px solid #eee; padding: 3px 6px; text-align: right; }}
+  td:first-child {{ text-align: left; }}
+  .row-total {{ background: #f5f5f5; font-weight: 700; }}
+  .sec {{ border: 1px solid #ddd; border-radius: 6px; overflow: hidden; margin-bottom: 8px; }}
+  .grid {{ display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 8px; }}
+  .semaforo-ok   {{ background: #d4edda; color: #1a6b3a; font-weight: 700; padding: 3px 6px; border-radius: 4px; }}
+  .semaforo-warn {{ background: #fff3cd; color: #7a5000; font-weight: 700; padding: 3px 6px; border-radius: 4px; }}
+  .semaforo-bad  {{ background: #f8d7da; color: #7a1a1a; font-weight: 700; padding: 3px 6px; border-radius: 4px; }}
+</style></head><body>"""]
+
+                def fmt_clp_p(v):
+                    try: return f"${int(round(float(v))):,}".replace(',','.')
+                    except: return "—"
+                def fmt_pct_p(v):
+                    try: return f"{float(v):.1%}"
+                    except: return "—"
+                def fmt_kg_p(v):
+                    try: return f"{float(v):,.2f}".replace(',','.')
+                    except: return "—"
+                def sem_cls(pct):
+                    if pct < 0.40: return 'semaforo-ok'
+                    elif pct < 0.45: return 'semaforo-warn'
+                    return 'semaforo-bad'
+
+                for idx, loc in enumerate(locales_show):
+                    pb = '<div class="page-break">' if idx > 0 else '<div>'
+                    html_parts.append(pb)
+                    html_parts.append(f'<div class="local-header">INFORME DE COSTOS — {loc.upper()} — {d["periodo"]}</div>')
+
+                    # Filtrar datos por local
+                    loc_u = loc.upper().strip()
+                    fv  = df_v[df_v['local'].str.upper().str.strip()  == loc_u] if not df_v.empty  else pd.DataFrame()
+                    fcc = df_cc[df_cc['local'].str.upper().str.strip() == loc_u] if not df_cc.empty else pd.DataFrame()
+
+                    v_total   = float(fv['venta_total'].sum())   if not fv.empty else 0
+                    v_salon   = float(fv['venta_salon'].sum())   if not fv.empty else 0
+                    v_delivery= float(fv['venta_delivery'].sum())if not fv.empty else 0
+                    v_bar     = float(fv['venta_bar'].sum())     if not fv.empty else 0
+
+                    cat_m = {}
+                    for cat in ['ALIMENTOS','VERDURAS','BAR','ART. LIMPIEZA','DESECHABLES','ADMINISTRACION']:
+                        cat_m[cat] = float(fcc[fcc['categoria_producto'].str.upper().str.strip()==cat]['compra_total'].sum()) if not fcc.empty else 0
+                    compra_tot = sum(cat_m.get(c,0) for c in ['ALIMENTOS','VERDURAS','BAR','ART. LIMPIEZA','DESECHABLES'])
+                    pct_compra = compra_tot/v_total if v_total else 0
+
+                    # Sección 1
+                    html_parts.append('<div class="grid">')
+                    html_parts.append(f'''<div class="sec"><table>
+<thead><tr><th>ÍTEM</th><th>$ CLP</th><th>%</th></tr></thead><tbody>
+<tr><td>VENTA SALÓN</td><td>{fmt_clp_p(v_salon)}</td><td>{fmt_pct_p(v_salon/v_total if v_total else 0)}</td></tr>
+<tr><td>VENTA DELIVERY</td><td>{fmt_clp_p(v_delivery)}</td><td>{fmt_pct_p(v_delivery/v_total if v_total else 0)}</td></tr>
+<tr class="row-total"><td>VENTA TOTAL</td><td>{fmt_clp_p(v_total)}</td><td>100%</td></tr>
+<tr><td>VENTA BAR</td><td>{fmt_clp_p(v_bar)}</td><td>{fmt_pct_p(v_bar/v_total if v_total else 0)}</td></tr>
+<tr><td colspan="3"></td></tr>
+<tr class="row-total"><td>COMPRA TOTAL</td><td>{fmt_clp_p(compra_tot)}</td><td>{fmt_pct_p(pct_compra)}</td></tr>
+<tr><td>ALIMENTOS</td><td>{fmt_clp_p(cat_m["ALIMENTOS"])}</td><td>{fmt_pct_p(cat_m["ALIMENTOS"]/compra_tot if compra_tot else 0)}</td></tr>
+<tr><td>VERDURAS</td><td>{fmt_clp_p(cat_m["VERDURAS"])}</td><td>{fmt_pct_p(cat_m["VERDURAS"]/compra_tot if compra_tot else 0)}</td></tr>
+<tr><td>BAR</td><td>{fmt_clp_p(cat_m["BAR"])}</td><td>{fmt_pct_p(cat_m["BAR"]/compra_tot if compra_tot else 0)}</td></tr>
+<tr><td>ART. LIMPIEZA</td><td>{fmt_clp_p(cat_m["ART. LIMPIEZA"])}</td><td>{fmt_pct_p(cat_m["ART. LIMPIEZA"]/compra_tot if compra_tot else 0)}</td></tr>
+<tr><td>DESECHABLES</td><td>{fmt_clp_p(cat_m["DESECHABLES"])}</td><td>{fmt_pct_p(cat_m["DESECHABLES"]/compra_tot if compra_tot else 0)}</td></tr>
+</tbody></table></div>''')
+
+                    # Sección cadena (punto 4 inline)
+                    cadena_rows = ''.join(
+                        f'<tr><td>{f["local"]}</td>'
+                        f'<td><span class="{sem_cls(f["pct"])}">{fmt_pct_p(f["pct"])}</span></td></tr>'
+                        for f in filas_cadena
+                    )
+                    cadena_rows += f'<tr class="row-total"><td>TOTAL GENERAL</td><td><span class="{sem_cls(total_pct4)}">{fmt_pct_p(total_pct4)}</span></td></tr>'
+                    html_parts.append(f'''<div class="sec"><table>
+<thead><tr><th>4. % COMPRA CADENA</th><th>%</th></tr></thead>
+<tbody>{cadena_rows}</tbody></table></div>''')
+
+                    html_parts.append('</div>')  # close grid
+                    html_parts.append('</div>')  # close page div
+
+                html_parts.append('</body></html>')
+                html_final = ''.join(html_parts)
+
+                import base64
+                b64 = base64.b64encode(html_final.encode()).decode()
+                href = f'data:text/html;base64,{b64}'
+                st.markdown(
+                    f'<a href="{href}" download="informe_costos_{d["periodo"].replace(" ","_")}.html" '
+                    f'style="display:inline-block;background:#d4a853;color:#0f0f0f;padding:10px 24px;'
+                    f'border-radius:8px;font-weight:700;text-decoration:none;font-family:DM Sans,sans-serif;'
+                    f'font-size:0.9rem;margin-top:8px">⬇ Descargar Informe HTML</a>'
+                    f'<p style="color:#888;font-size:0.78rem;margin-top:6px">'
+                    f'Abre el archivo descargado y usa Ctrl+P para imprimir en A4 horizontal.</p>',
+                    unsafe_allow_html=True
+                )
 
 # ============================================================
 # MÓDULO: AUDITOR DE CATEGORÍAS
