@@ -183,32 +183,18 @@ TIPO_BAR_CONTROL = {
 def calcular_total_kg(producto, total, crudo=0, produccion=0, cocido=0, producto_control=None):
     """
     Calcula total_kg usando TABLA_CONV_INV.
-    Si hay desglose crudo/cocido/produccion:
-        total_kg = crudo + (cocido / factor_cocido) + (produccion × porcion)
-    Si solo hay total (forma_b, porcionadas sin desglose):
-        total_kg = total × porcion
+    Fórmula: total_kg = Total × convertor_porcion
+    Fallback para cocido: crudo + prod*cocido_conv + cocido/cocido_conv
     """
     key = str(producto).strip().upper()
     conv = TABLA_CONV_INV.get(key)
-    crudo      = float(crudo      or 0)
-    produccion = float(produccion or 0)
-    cocido     = float(cocido     or 0)
-    total      = float(total      or 0)
-
     if conv:
-        ctrl          = conv['control']
-        porcion       = conv['porcion']
-        factor_cocido = conv['cocido']
-        hay_desglose  = (crudo + produccion + cocido) > 0
-        if hay_desglose:
-            cocido_eq = (cocido / factor_cocido) if factor_cocido > 0 else cocido
-            prod_eq   = produccion * porcion
-            total_kg  = crudo + cocido_eq + prod_eq
-        else:
-            total_kg  = total * porcion
+        total_kg = float(total or 0) * conv['porcion']
+        ctrl = conv['control']
     else:
-        ctrl     = producto_control or producto
-        total_kg = total
+        # Sin match: asumir porcion=1, intentar con control provisto
+        total_kg = float(total or 0)
+        ctrl = producto_control or producto
     return total_kg, ctrl
 
 
@@ -2410,32 +2396,18 @@ if modulo.startswith("📦"):
         with t6b:
             st.markdown("#### Inventario por Local")
 
-            ci1, ci2, ci3, ci4 = st.columns(4)
+            ci1, ci2, ci3 = st.columns(3)
             with ci1:
                 tipo_inv = st.selectbox("Tipo", ["Inicial","Final"], key="tipo_inv")
             with ci2:
-                inv_fecha_i = st.date_input("Inicio semana", key="inv_fecha_i", value=None)
+                periodo_inv = st.text_input("Período (ej: 2-8 Mar)", key="periodo_inv", placeholder="2-8 Mar")
             with ci3:
-                inv_fecha_f = st.date_input("Fin semana", key="inv_fecha_f", value=None)
-            with ci4:
                 formato_inv = st.radio("Formato", [
-                    "Forma A (por local)",
+                    "Forma A (por local)", 
                     "Forma B (Resumen KG)",
                     "Forma C (Consolidado todos los locales)"
                 ], key="formato_inv",
                 help="A: archivo por local con hojas Alimentos+Bar.\nB: tabla LOCAL/FACTOR/PRODUCTO/TOTAL 2.\nC: archivo consolidado con hojas 'Alimentos consolidado' y 'BAR CONSOLIDADO' (todos los locales).")
-
-            # Construir string de periodo desde fechas
-            MESES_ES = {1:'Ene',2:'Feb',3:'Mar',4:'Abr',5:'May',6:'Jun',
-                        7:'Jul',8:'Ago',9:'Sep',10:'Oct',11:'Nov',12:'Dic'}
-            if inv_fecha_i and inv_fecha_f:
-                if inv_fecha_i.month == inv_fecha_f.month:
-                    periodo_inv = f"{inv_fecha_i.day}-{inv_fecha_f.day} {MESES_ES[inv_fecha_i.month]} {inv_fecha_i.year}"
-                else:
-                    periodo_inv = f"{inv_fecha_i.day} {MESES_ES[inv_fecha_i.month]}-{inv_fecha_f.day} {MESES_ES[inv_fecha_f.month]} {inv_fecha_i.year}"
-                st.caption(f"Período: **{periodo_inv}**")
-            else:
-                periodo_inv = None
 
             fmt_sel = st.session_state.get("formato_inv", "Forma A")
             es_forma_a = "A" in fmt_sel
@@ -2460,7 +2432,7 @@ if modulo.startswith("📦"):
                 "Archivo Inventario (.xlsx o .csv)",
                 type=["xlsx","csv"], key="inv_file")
 
-            if f_inv and periodo_inv and inv_fecha_i and inv_fecha_f:
+            if f_inv and periodo_inv:
                 if st.button("💾 Cargar Inventario", key="btn_inv"):
                     fmt = st.session_state.get("formato_inv", "Forma A")
                     es_forma_c_btn = "C" in fmt
@@ -2498,11 +2470,10 @@ if modulo.startswith("📦"):
                                 um       = str(row.get('UND','')).strip()
                                 total_og = float(row.get('TOTAL', 0) or 0)
                                 total_kg = float(row.get('TOTAL 2', total_og) or 0)
-                                _, prod_ctrl_b = calcular_total_kg(prod, total_kg)
                                 registros.append({
                                     'local': local_fila, 'periodo': periodo_inv,
                                     'tipo_inventario': tipo_inv,
-                                    'producto': prod, 'producto_control': prod_ctrl_b,
+                                    'producto': prod, 'producto_control': prod,
                                     'um': um, 'crudo': 0, 'produccion': 0, 'cocido': 0,
                                     'total_original': total_og, 'total_kg': total_kg,
                                     'tipo': '', 'fuente': 'forma_b'
@@ -2732,34 +2703,6 @@ if modulo.startswith("📦"):
             if not df_inv_bd.empty:
                 st.markdown("**Inventarios en BD:**")
                 st.dataframe(df_inv_bd, use_container_width=True, hide_index=True)
-
-            # ── Re-mapeo de producto_control en registros existentes ──
-            st.markdown("---")
-            st.markdown("**🔧 Re-mapear producto_control en BD**")
-            st.caption("Corrige producto_control de registros existentes sin tocar total_kg.")
-            if st.button("▶ Re-mapear inventarios existentes", key="btn_remap_inv"):
-                engine = get_engine()
-                if engine:
-                    try:
-                        df_all = run_query("SELECT id, producto FROM inventarios WHERE producto IS NOT NULL")
-                        if df_all.empty:
-                            st.info("No hay registros en inventarios.")
-                        else:
-                            updates = []
-                            for _, row in df_all.iterrows():
-                                prod = str(row['producto']).strip()
-                                _, ctrl = calcular_total_kg(prod, 1)
-                                updates.append({'id': int(row['id']), 'ctrl': ctrl})
-                            with engine.connect() as conn:
-                                for u in updates:
-                                    conn.execute(
-                                        text("UPDATE inventarios SET producto_control=:c WHERE id=:i"),
-                                        {'c': u['ctrl'], 'i': u['id']}
-                                    )
-                                conn.commit()
-                            st.success(f"✅ {len(updates)} registros actualizados (producto_control).")
-                    except Exception as e:
-                        st.error(f"Error en re-mapeo: {e}")
 
         with t6c:
             st.markdown("#### Compras No Registradas / Venta Inter-local")
@@ -3684,37 +3627,25 @@ elif modulo.startswith("📊"):
         st.markdown("### 📋 Informe de Costos")
 
         # ── Controles ────────────────────────────────────────────
-        MESES_ES_IC = {1:'Ene',2:'Feb',3:'Mar',4:'Abr',5:'May',6:'Jun',
-                       7:'Jul',8:'Ago',9:'Sep',10:'Oct',11:'Nov',12:'Dic'}
         ic1, ic2, ic3, ic4, ic5 = st.columns(5)
         with ic1:
-            ic_fecha_i = st.date_input("Inicio semana", key="ic_fi", value=None)
+            periodo_ic = st.text_input("Período inventario", key="ic_periodo", placeholder="ej: 2-8 Mar 2026")
         with ic2:
-            ic_fecha_f = st.date_input("Fin semana", key="ic_ff", value=None)
+            fecha_ic_i = st.date_input("Fecha inicio compras/ventas", key="ic_fi", value=None)
         with ic3:
+            fecha_ic_f = st.date_input("Fecha fin compras/ventas", key="ic_ff", value=None)
+        with ic4:
             locales_ic_q = run_query("SELECT DISTINCT local FROM inventarios WHERE local IS NOT NULL ORDER BY 1")
             locales_ic = ["Todos"] + locales_ic_q['local'].tolist() if not locales_ic_q.empty else ["Todos"]
             local_ic = st.selectbox("Local", locales_ic, key="ic_local")
-        with ic4:
+        with ic5:
             st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
             generar_ic = st.button("▶ Generar", key="btn_ic", use_container_width=True)
 
-        # Derivar periodo y fechas desde los date inputs
-        if ic_fecha_i and ic_fecha_f:
-            if ic_fecha_i.month == ic_fecha_f.month:
-                periodo_ic = f"{ic_fecha_i.day}-{ic_fecha_f.day} {MESES_ES_IC[ic_fecha_i.month]} {ic_fecha_i.year}"
-            else:
-                periodo_ic = f"{ic_fecha_i.day} {MESES_ES_IC[ic_fecha_i.month]}-{ic_fecha_f.day} {MESES_ES_IC[ic_fecha_f.month]} {ic_fecha_i.year}"
-            fecha_ic_i = ic_fecha_i
-            fecha_ic_f = ic_fecha_f
-            st.caption(f"Período: **{periodo_ic}** · Compras/ventas: {ic_fecha_i} → {ic_fecha_f}")
-        else:
-            periodo_ic = None
-            fecha_ic_i = None
-            fecha_ic_f = None
-
-        if not ic_fecha_i or not ic_fecha_f:
-            st.info("Selecciona el inicio y fin de la semana del inventario")
+        if not periodo_ic:
+            st.info("Ingresa el período del inventario (ej: 2-8 Mar 2026)")
+        elif not fecha_ic_i or not fecha_ic_f:
+            st.info("Ingresa el rango de fechas para filtrar compras y ventas")
 
         if generar_ic and periodo_ic and fecha_ic_i and fecha_ic_f:
             with st.spinner("Calculando informe de costos..."):
@@ -3728,12 +3659,12 @@ elif modulo.startswith("📊"):
                 def get_inv(periodo, tipo, locales):
                     lf = "AND LOWER(TRIM(local))=ANY(:ls)" if locales else ""
                     q = f"""
-                        SELECT LOWER(TRIM(local)) as local,
+                        SELECT TRIM(local) as local,
                                UPPER(TRIM(producto_control)) as producto_control,
                                SUM(total_kg) as kg
                         FROM inventarios
                         WHERE TRIM(periodo)=:p AND tipo_inventario=:t {lf}
-                        GROUP BY LOWER(TRIM(local)), UPPER(TRIM(producto_control))
+                        GROUP BY TRIM(local), UPPER(TRIM(producto_control))
                     """
                     params = {'p': periodo.strip(), 't': tipo}
                     if locales: params['ls'] = [l.lower().strip() for l in locales]
@@ -4093,6 +4024,24 @@ elif modulo.startswith("📊"):
                         f'<tbody>{r3_html}</tbody></table></div>',
                         unsafe_allow_html=True)
 
+                # ── DEBUG TEMPORAL ──
+                with st.expander(f"🔍 DEBUG POSTA/PECHUGA — {local_show}", expanded=False):
+                    q_dbg = """
+                        SELECT tipo_inventario, producto, producto_control,
+                               crudo, produccion, cocido, total_original, total_kg, fuente
+                        FROM inventarios
+                        WHERE TRIM(periodo)=:p AND LOWER(TRIM(local))=:l
+                          AND UPPER(TRIM(producto_control)) IN ('POSTA','PECHUGA DE POLLO')
+                        ORDER BY tipo_inventario, producto_control, producto
+                    """
+                    df_dbg = run_query(q_dbg, {'p': periodo_show, 'l': local_show.lower().strip()})
+                    if not df_dbg.empty:
+                        st.dataframe(df_dbg, use_container_width=True)
+                        st.markdown("**Suma total_kg por tipo + control:**")
+                        st.dataframe(df_dbg.groupby(['tipo_inventario','producto_control'])['total_kg'].sum().reset_index(), use_container_width=True)
+                    else:
+                        st.warning("Sin filas")
+
                 # ── SECCIÓN 5: Control de productos críticos ──────
                 st.markdown(f"**5. Control de Productos Críticos**")
 
@@ -4150,13 +4099,13 @@ elif modulo.startswith("📊"):
                     um_label = 'LT' if cat_nombre == 'BAR' else 'UN' if cat_nombre == 'PAN' else 'KG'
                     ctrl_rows = ''
                     for f in filas_ctrl:
-                        prod, ct, ini_v, fin_, cp, ru, uc, dk, dp, cd = f
+                        prod, ct, ini, fin_, cp, ru, uc, dk, dp, cd = f
                         color_desv = '#e84545' if dp > 0.1 else '#e89c45' if dp > 0.05 else '#4caf7d'
                         ctrl_rows += (
                             f'<tr style="border-bottom:1px solid #1a1a1a">'
                             f'<td style="padding:6px 10px;color:#ccc;font-size:0.75rem">{prod}</td>'
                             f'<td style="padding:6px 10px;text-align:right;color:#888;font-size:0.73rem">{fmt_clp(ct)}</td>'
-                            f'<td style="padding:6px 10px;text-align:right;color:#777;font-size:0.73rem">{fmt_kg(ini_v)}</td>'
+                            f'<td style="padding:6px 10px;text-align:right;color:#777;font-size:0.73rem">{fmt_kg(ini)}</td>'
                             f'<td style="padding:6px 10px;text-align:right;color:#777;font-size:0.73rem">{fmt_kg(fin_)}</td>'
                             f'<td style="padding:6px 10px;text-align:right;color:#aaa;font-size:0.73rem">{fmt_kg(cp)}</td>'
                             f'<td style="padding:6px 10px;text-align:right;color:#aaa;font-size:0.73rem">{fmt_kg(ru)}</td>'
