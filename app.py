@@ -276,12 +276,12 @@ PROD_CONV_MAP = {
     'QUESO CHEDDAR':                                                ('QUESO CHEDDAR',           'QUESO CHEDDAR'),
     'QUESO PARMESANO':                                              ('QUESO PARMESANO',         'QUESO PARMESANO'),
     'QUESO RANCO':                                                  ('QUESO RANCO',             'QUESO RANCO'),
-    'FRICA 14 CMS':                                                 ('FRICA 14 CMS',            'PAN'),
-    'HOT - DOG 19 CM.':                                             ('HOT - DOG 19 CM.',        'PAN'),
-    'MOLDE BANQUETE':                                               ('MOLDE BANQUETE',          'PAN'),
-    'MOLDE BANQUETE INTEGRAL':                                      ('MOLDE BANQUETE INTEGRAL', 'PAN'),
-    'PAN FRICA 12 CM':                                              ('PAN FRICA 12 CM',         'PAN'),
-    'PAN FRICA N8':                                                 ('PAN FRICA N8',            'PAN'),
+    'FRICA 14 CMS':                                                 ('FRICA 14 CMS',            'FRICA 14 CMS'),
+    'HOT - DOG 19 CM.':                                             ('HOT - DOG 19 CM.',        'HOT - DOG 19 CM.'),
+    'MOLDE BANQUETE':                                               ('MOLDE BANQUETE',          'MOLDE BANQUETE'),
+    'MOLDE BANQUETE INTEGRAL':                                      ('MOLDE BANQUETE INTEGRAL', 'MOLDE BANQUETE INTEGRAL'),
+    'PAN FRICA 12 CM':                                              ('PAN FRICA 12 CM',         'PAN FRICA 12 CM'),
+    'PAN FRICA N8':                                                 ('PAN FRICA N8',            'PAN FRICA N8'),
     'ATUN':                                                         ('ATUN',                    'ATUN'),
     'CAMARON':                                                      ('CAMARON',                 'CAMARON'),
     'CAMARON APANADO':                                              ('CAMARON APANADO',         'CAMARON APANADO'),
@@ -4026,7 +4026,7 @@ elif modulo.startswith("📊"):
                     'VERDURAS':           ['PALTA','TOMATE','LECHUGA','LECHUGA VERDE','MIX DE LECHUGA'],
                     'PESCADOS Y MARISCOS':['FILETE SALMON','SALMON SLICE LAMINADO','CAMARON','CAMARON APANADO','ATUN','LOCOS','ERIZOS'],
                     'OTROS':              ['QUESO RANCO','QUESO CHEDDAR','QUESO PARMESANO','PAPAS FRITAS'],
-                    'PAN':                ['PAN','FRICA 14 CMS','MOLDE BANQUETE','MOLDE BANQUETE INTEGRAL','PAN FRICA 12 CM','PAN FRICA N8','HOT - DOG 19 CM.'],
+                    'PAN':                ['FRICA 14 CMS','MOLDE BANQUETE','MOLDE BANQUETE INTEGRAL','PAN FRICA 12 CM','PAN FRICA N8','HOT - DOG 19 CM.'],
                     'BAR':                ['SCHOP','JUGOS'],
                 }
 
@@ -4124,7 +4124,7 @@ elif modulo.startswith("📊"):
                     'VERDURAS': ['PALTA','TOMATE','LECHUGA','LECHUGA VERDE','MIX DE LECHUGA'],
                     'PESCADOS Y MARISCOS': ['FILETE SALMON','SALMON SLICE LAMINADO','CAMARON','CAMARON APANADO','ATUN','LOCOS','ERIZOS'],
                     'OTROS': ['QUESO RANCO','QUESO CHEDDAR','QUESO PARMESANO','PAPAS FRITAS'],
-                    'PAN': ['PAN','FRICA 14 CMS','MOLDE BANQUETE','MOLDE BANQUETE INTEGRAL','PAN FRICA 12 CM','PAN FRICA N8','HOT - DOG 19 CM.'],
+                    'PAN': ['FRICA 14 CMS','MOLDE BANQUETE','MOLDE BANQUETE INTEGRAL','PAN FRICA 12 CM','PAN FRICA N8','HOT - DOG 19 CM.'],
                     'BAR': ['SCHOP','JUGOS'],
                 }
                 for cat, prods in cat_labels.items():
@@ -4237,6 +4237,32 @@ elif modulo.startswith("📊"):
                         f'<th style="{hs};text-align:right">DESV %</th></tr></thead>'
                         f'<tbody>{r3_html}</tbody></table></div>',
                         unsafe_allow_html=True)
+
+                # ── DEBUG MOLDE BANQUETE ───────────────────────────
+                with st.expander(f"🔍 Debug MOLDE BANQUETE en compras — {local_show}", expanded=False):
+                    q_molde = """
+                        SELECT c.nombre_producto, cn.categoria_control,
+                               SUM(c.cant_conv) as kg, SUM(c.costo_realfinal) as costo
+                        FROM compras c
+                        LEFT JOIN clas_nomb_prod cn
+                               ON UPPER(TRIM(c.nombre_producto)) = UPPER(TRIM(cn.nombre_producto))
+                        WHERE c.fecha_dte::date BETWEEN :i AND :f
+                          AND LOWER(c.local) = :l
+                          AND (UPPER(c.nombre_producto) LIKE '%MOLDE%'
+                            OR UPPER(c.nombre_producto) LIKE '%BANQUETE%'
+                            OR UPPER(cn.categoria_control) LIKE '%MOLDE%'
+                            OR UPPER(cn.categoria_control) LIKE '%BANQUETE%')
+                        GROUP BY c.nombre_producto, cn.categoria_control
+                        ORDER BY c.nombre_producto
+                    """
+                    df_molde = run_query(q_molde, {
+                        'i': str(d['fecha_i']), 'f': str(d['fecha_f']),
+                        'l': local_show.lower().strip()
+                    })
+                    if not df_molde.empty:
+                        st.dataframe(df_molde, use_container_width=True)
+                    else:
+                        st.warning("No se encontraron compras de MOLDE/BANQUETE en este período y local")
 
                 # ── SECCIÓN 5: Control de productos críticos ──────
                 st.markdown(f"**5. Control de Productos Críticos**")
