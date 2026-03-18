@@ -121,7 +121,7 @@ TABLA_CONV_INV = {
     'CHULETA KASSLER':                                              {'control': 'CHULETA KASSLER',          'porcion': 1.0,    'cocido': 1.0},
     'COSTILLAS':                                                    {'control': 'COSTILLAS',                'porcion': 1.0,    'cocido': 0.75},
     'JAMÓN':                                                        {'control': 'JAMÓN',                    'porcion': 1.0,    'cocido': 1.0},
-    'LOMO DE CENTRO':                                               {'control': 'LOMO DE CENTRO',           'porcion': 1.0,    'cocido': 1.0},
+    'LOMO DE CENTRO':                                               {'control': 'LOMO DE CENTRO',           'porcion': 1.0,    'cocido': 0.7},
     'LOMO DE CENTRO(PORCIONADAS)':                                  {'control': 'LOMO DE CENTRO',           'porcion': 0.18,   'cocido': 1.0},
     'PANCETA LAMINADA':                                             {'control': 'PANCETA LAMINADA',         'porcion': 1.0,    'cocido': 0.5},
     'DESPUNTE PECHUGA DE POLLO':                                    {'control': 'PECHUGA DE POLLO',         'porcion': 1.0,    'cocido': 1.0},
@@ -2735,7 +2735,7 @@ if modulo.startswith("📦"):
             # ── Re-mapeo de producto_control (no toca total_kg) ──
             st.markdown("---")
             st.markdown("**🔧 Re-mapear producto_control en BD**")
-            st.caption("Corrige producto_control de registros existentes cargados con Forma B. No modifica total_kg.")
+            st.caption("Corrige producto_control de registros existentes. No modifica total_kg.")
             if st.button("▶ Re-mapear inventarios existentes", key="btn_remap_inv"):
                 engine = get_engine()
                 if engine:
