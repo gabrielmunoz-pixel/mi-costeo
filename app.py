@@ -4358,6 +4358,46 @@ elif modulo.startswith("📊"):
                         f'<tbody>{r3_html}</tbody></table></div>',
                         unsafe_allow_html=True)
 
+                # ── SECCIÓN 4: % Compra a nivel cadena ────────────────
+                st.markdown(f"**4. % Compra a Nivel Cadena**")
+                todos_loc_q4 = run_query("SELECT DISTINCT local FROM inventarios WHERE local IS NOT NULL ORDER BY 1")
+                todos_loc_cadena = todos_loc_q4['local'].tolist() if not todos_loc_q4.empty else locales_show
+                cats_compra4 = ['ALIMENTOS', 'VERDURAS', 'BAR', 'ART. LIMPIEZA', 'DESECHABLES']
+                filas_cadena = []
+                for loc4 in todos_loc_cadena:
+                    loc4_u = loc4.upper().strip()
+                    r_v4  = run_query("SELECT SUM(monto_venta_real) as vt FROM ventas WHERE fecha_venta BETWEEN :i AND :f AND UPPER(local)=:l", {'i': str(fecha_ic_i), 'f': str(fecha_ic_f), 'l': loc4_u})
+                    r_c4  = run_query("SELECT categoria_producto, SUM(costo_realfinal) as ct FROM compras WHERE fecha_dte::date BETWEEN :i AND :f AND UPPER(local)=:l GROUP BY categoria_producto", {'i': str(fecha_ic_i), 'f': str(fecha_ic_f), 'l': loc4_u})
+                    venta4   = float(r_v4['vt'].iloc[0]) if not r_v4.empty and r_v4['vt'].iloc[0] else 0
+                    compra4  = sum(float(r_c4.loc[r_c4['categoria_producto'].str.upper().str.strip()==cat,'ct'].sum()) for cat in cats_compra4) if not r_c4.empty else 0
+                    pct4     = compra4 / venta4 if venta4 > 0 else 0
+                    filas_cadena.append({'local': loc4.title(), 'local_raw': loc4, 'compra': compra4, 'venta': venta4, 'pct': pct4})
+                total_compra4 = sum(f['compra'] for f in filas_cadena)
+                total_venta4  = sum(f['venta']  for f in filas_cadena)
+                total_pct4    = total_compra4 / total_venta4 if total_venta4 > 0 else 0
+
+                def _color4(pct):
+                    if pct < 0.40:   return '#4caf7d', '#0d2a1a'
+                    elif pct < 0.45: return '#e89c45', '#2a1f0d'
+                    else:            return '#e84545', '#2a0d0d'
+
+                hs4 = "padding:7px 12px;font-size:0.72rem;text-transform:uppercase;letter-spacing:0.1em;color:#aaa;font-weight:600;background:#111;white-space:nowrap"
+                cols_html4 = ''.join(
+                    f'<td style="padding:8px 10px;text-align:center;background:{_color4(f["pct"])[1]};font-weight:700;font-size:0.85rem;color:{_color4(f["pct"])[0]};white-space:nowrap">{f["pct"]:.1%}</td>'
+                    for f in filas_cadena
+                )
+                fg4, bg4 = _color4(total_pct4)
+                cols_html4 += f'<td style="padding:8px 10px;text-align:center;background:{bg4};font-weight:700;font-size:0.85rem;color:{fg4};border-left:2px solid #333">{total_pct4:.1%}</td>'
+                header_html4 = ''.join(f'<th style="{hs4};text-align:center">{f["local"]}</th>' for f in filas_cadena)
+                header_html4 += f'<th style="{hs4};text-align:center;border-left:2px solid #333">Total General</th>'
+                st.markdown(
+                    f'<div style="border:1px solid #1e1e1e;border-radius:10px;overflow:auto;background:#0d0d0d;margin-top:0.5rem">'
+                    f'<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif">'
+                    f'<thead><tr>{header_html4}</tr></thead><tbody><tr>{cols_html4}</tr></tbody></table></div>'
+                    f'<div style="margin-top:6px;font-size:0.72rem;color:#555">🟢 &lt;40%&nbsp;&nbsp;🟡 40–45%&nbsp;&nbsp;🔴 &gt;45%</div>',
+                    unsafe_allow_html=True
+                )
+
                 # ── SECCIÓN 5: Control de productos críticos ──────
                 st.markdown(f"**5. Control de Productos Críticos**")
 
@@ -4478,76 +4518,6 @@ elif modulo.startswith("📊"):
                 # ── Botón imprimir ────────────────────────────────
                 st.markdown("---")
 
-            # ── SECCIÓN 4: % Compra a nivel cadena ────────────
-            st.markdown("---")
-            hs4 = "padding:7px 12px;font-size:0.72rem;text-transform:uppercase;letter-spacing:0.1em;color:#aaa;font-weight:600;background:#111;white-space:nowrap"
-
-            # Siempre usar TODOS los locales para la comparativa cadena
-            todos_loc_q = run_query("SELECT DISTINCT local FROM inventarios WHERE local IS NOT NULL ORDER BY 1")
-            todos_loc_cadena = todos_loc_q['local'].tolist() if not todos_loc_q.empty else locales_show
-
-            # Calcular % compra por local re-consultando compras y ventas para todos los locales
-            cats_compra4 = ['ALIMENTOS', 'VERDURAS', 'BAR', 'ART. LIMPIEZA', 'DESECHABLES']
-            filas_cadena = []
-            for loc in todos_loc_cadena:
-                loc_u = loc.upper().strip()
-                df_v_loc  = run_query(
-                    "SELECT SUM(monto_venta_real) as venta_total FROM ventas WHERE fecha_venta BETWEEN :i AND :f AND UPPER(local)=:l",
-                    {'i': str(d['fecha_i']), 'f': str(d['fecha_f']), 'l': loc_u}
-                )
-                df_cc_loc = run_query(
-                    "SELECT categoria_producto, SUM(costo_realfinal) as compra_total FROM compras WHERE fecha_dte::date BETWEEN :i AND :f AND UPPER(local)=:l GROUP BY categoria_producto",
-                    {'i': str(d['fecha_i']), 'f': str(d['fecha_f']), 'l': loc_u}
-                )
-                venta_loc  = float(df_v_loc['venta_total'].iloc[0]) if not df_v_loc.empty and df_v_loc['venta_total'].iloc[0] else 0
-                compra_loc = 0
-                if not df_cc_loc.empty:
-                    for cat in cats_compra4:
-                        mask = df_cc_loc['categoria_producto'].str.upper().str.strip() == cat
-                        compra_loc += float(df_cc_loc.loc[mask, 'compra_total'].sum())
-                pct_loc = compra_loc / venta_loc if venta_loc > 0 else 0
-                filas_cadena.append({'local': loc.title(), 'local_raw': loc, 'compra': compra_loc, 'venta': venta_loc, 'pct': pct_loc})
-
-            total_compra4 = sum(f['compra'] for f in filas_cadena)
-            total_venta4  = sum(f['venta']  for f in filas_cadena)
-            total_pct4    = total_compra4 / total_venta4 if total_venta4 > 0 else 0
-
-            def _color4(pct):
-                if pct < 0.40:   return '#4caf7d', '#0d2a1a'
-                elif pct < 0.45: return '#e89c45', '#2a1f0d'
-                else:            return '#e84545', '#2a0d0d'
-
-            cols_html = ''
-            for f in filas_cadena:
-                fg, bg = _color4(f['pct'])
-                cols_html += (
-                    f'<td style="padding:8px 10px;text-align:center;background:{bg};'
-                    f'font-weight:700;font-size:0.85rem;color:{fg};white-space:nowrap">'
-                    f'{f["pct"]:.1%}</td>'
-                )
-            fg4, bg4 = _color4(total_pct4)
-            cols_html += (
-                f'<td style="padding:8px 10px;text-align:center;background:{bg4};'
-                f'font-weight:700;font-size:0.85rem;color:{fg4};border-left:2px solid #333">'
-                f'{total_pct4:.1%}</td>'
-            )
-            header_html = ''.join(
-                f'<th style="{hs4};text-align:center">{f["local"]}</th>'
-                for f in filas_cadena
-            ) + f'<th style="{hs4};text-align:center;border-left:2px solid #333">Total General</th>'
-
-            st.markdown("**4. % Compra a Nivel Cadena**")
-            st.markdown(
-                f'<div style="border:1px solid #1e1e1e;border-radius:10px;overflow:auto;background:#0d0d0d;margin-top:0.5rem">'
-                f'<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif">'
-                f'<thead><tr>{header_html}</tr></thead>'
-                f'<tbody><tr>{cols_html}</tr></tbody>'
-                f'</table></div>'
-                f'<div style="margin-top:6px;font-size:0.72rem;color:#555">'
-                f'🟢 &lt;40%&nbsp;&nbsp;🟡 40–45%&nbsp;&nbsp;🔴 &gt;45%</div>',
-                unsafe_allow_html=True
-            )
-
             # ── Botón: Generar Excel imprimible ───────────────
             st.markdown("---")
             if st.button("📊 Generar Informe Excel", key="btn_print_informe"):
@@ -4617,89 +4587,138 @@ elif modulo.startswith("📊"):
                 ws['E3'] = f"INFORME DE COSTOS {local_rpt.upper()}"
                 ws['E6'] = local_rpt.upper()
 
-                # ── SECCIÓN 1: Análisis de costo (col E=4, F=5, G=6) ──
-                ws['F15'] = v_salon_r
-                ws['G15'] = v_salon_r / v_total_r if v_total_r else 0
-                ws['F16'] = v_delivery_r
-                ws['G16'] = v_delivery_r / v_total_r if v_total_r else 0
-                ws['F17'] = v_total_r
-                ws['G17'] = 1.0
-                ws['F18'] = v_bar_r
-                ws['G18'] = v_bar_r / v_total_r if v_total_r else 0
-                ws['F22'] = compra_tot_r
-                ws['G22'] = pct_compra_r
-                ws['F24'] = cat_mr['ALIMENTOS']
-                ws['G24'] = cat_mr['ALIMENTOS'] / compra_tot_r if compra_tot_r else 0
-                ws['F25'] = cat_mr['VERDURAS']
-                ws['G25'] = cat_mr['VERDURAS'] / compra_tot_r if compra_tot_r else 0
-                ws['F26'] = cat_mr['BAR']
-                ws['G26'] = cat_mr['BAR'] / compra_tot_r if compra_tot_r else 0
-                ws['F27'] = cat_mr.get('ART. LIMPIEZA', 0)
-                ws['G27'] = cat_mr.get('ART. LIMPIEZA', 0) / compra_tot_r if compra_tot_r else 0
-                ws['F28'] = cat_mr.get('DESECHABLES', 0)
-                ws['G28'] = cat_mr.get('DESECHABLES', 0) / compra_tot_r if compra_tot_r else 0
+                # ── SECCIÓN 1: Análisis de costo ──────────────
+                # col E=5(producto), F=6($ CLP), G=7(%)
+                ws['F15'] = v_salon_r;    ws['G15'] = v_salon_r / v_total_r if v_total_r else 0
+                ws['F16'] = v_delivery_r; ws['G16'] = v_delivery_r / v_total_r if v_total_r else 0
+                ws['F17'] = v_total_r;    ws['G17'] = 1.0
+                ws['F18'] = v_bar_r;      ws['G18'] = v_bar_r / v_total_r if v_total_r else 0
+                # Desviación total (row 20): usar suma desv$ de sección 3
+                # Compra total (row 22)
+                ws['F22'] = compra_tot_r; ws['G22'] = pct_compra_r
+                ws['F24'] = cat_mr['ALIMENTOS'];         ws['G24'] = cat_mr['ALIMENTOS'] / compra_tot_r if compra_tot_r else 0
+                ws['F25'] = cat_mr['VERDURAS'];          ws['G25'] = cat_mr['VERDURAS'] / compra_tot_r if compra_tot_r else 0
+                ws['F26'] = cat_mr['BAR'];               ws['G26'] = cat_mr['BAR'] / compra_tot_r if compra_tot_r else 0
+                ws['F27'] = cat_mr.get('ART. LIMPIEZA',0); ws['G27'] = cat_mr.get('ART. LIMPIEZA',0) / compra_tot_r if compra_tot_r else 0
+                ws['F28'] = cat_mr.get('DESECHABLES',0);  ws['G28'] = cat_mr.get('DESECHABLES',0) / compra_tot_r if compra_tot_r else 0
 
-                # ── SECCIÓN 4: % Compra cadena (fila 37, col E=4 en adelante) ──
-                # Orden del template: VITACURA, LAS CONDES, CHICUREO, LA DEHESA, MACUL, LA REINA, QUILIN, NUEVA PROVIDENCIA, PROVIDENCIA, LOS TRAPENSES, TOTAL GENERAL
+                # ── SECCIÓN 2: BAR — col I=9($ ventas bar) ────
+                # Ventas bar por categoría del df_bv
+                if not df_bv.empty and 'local' in df_bv.columns:
+                    bv_loc = df_bv[df_bv['local'].str.upper().str.strip() == loc_u_rpt]
+                else:
+                    bv_loc = pd.DataFrame()
+                def _bv(cat_name):
+                    if bv_loc.empty or 'producto' not in bv_loc.columns: return 0
+                    m = bv_loc['producto'].str.upper().str.contains(cat_name.upper(), na=False)
+                    return float(bv_loc.loc[m,'venta'].sum()) if m.any() else 0
+                # Bar rows: 15=CERVEZAS,16=BEBIDAS,17=JUGOS,18=DULCE,19=CAFETERIA,20=COCTELES,21=PISCOS,22=VODKA,23=WHISKY,24=RON,25=BAJATIVOS,26=ESPUMANTE,27=VINOS
+                total_venta_bar_r = float(bv_loc['venta'].sum()) if not bv_loc.empty and 'venta' in bv_loc.columns else 0
+                ws['J28'] = total_venta_bar_r
+                ws['J29'] = cat_mr['BAR']
+                ws['J30'] = cat_mr['BAR'] / total_venta_bar_r if total_venta_bar_r else 0
+
+                # ── SECCIÓN 3: RESUMEN — cols L=12(util$), M=13(desv$), N=14(desv%) ──
+                # Calcular por categoría usando ckr + uso
+                def _cat_costo(prods, df_src, col='costo'):
+                    total = 0
+                    for p in prods:
+                        if df_src.empty or 'producto_control' not in df_src.columns: continue
+                        m = df_src['producto_control'].str.upper().str.strip() == p.upper()
+                        total += float(df_src.loc[m, col].sum() if m.any() else 0)
+                    return total
+
+                cat_labels_rpt = d.get('cat_labels', {})
+                cat_uso_r = {}; cat_desv_r = {}
+                for cat, prods in cat_labels_rpt.items():
+                    util_kg  = sum(_kg(uso_rpt, p) for p in prods)
+                    util_cost= sum(_ckg(uso_rpt, p) for p in prods)
+                    rec_kg   = sum(_kg(uso_rpt, p) for p in prods)  # mismo dato
+                    # real utilizado = ini + compras + nr - fin
+                    real_kg  = sum((_kg(ini_rpt,p) + _kg(fckr_rpt,p) + _kg(nr_rpt,p) - _kg(fin_rpt,p)) for p in prods)
+                    desv_kg  = real_kg - util_kg
+                    muc_prom = util_cost / util_kg if util_kg else 0
+                    desv_cost= desv_kg * muc_prom
+                    desv_pct_c = desv_kg / util_kg if util_kg else 0
+                    cat_uso_r[cat]  = (util_cost, desv_cost, desv_pct_c)
+
+                # Orden del template: CARNES ROJAS=row15, CARNES BLANCAS=16, VERDURAS=17, PESCADOS=18, OTROS=19, PAN=20, DESV TOTAL=22
+                cat_row_map = {
+                    'CARNES ROJAS': 15, 'CARNES BLANCAS': 16, 'VERDURAS': 17,
+                    'PESCADOS Y MARISCOS': 18, 'OTROS': 19, 'PAN': 20
+                }
+                total_util = total_desv_cost = 0
+                for cat, row_r in cat_row_map.items():
+                    if cat in cat_uso_r:
+                        util_c, desv_c, desv_p = cat_uso_r[cat]
+                        ws.cell(row=row_r, column=13).value = util_c
+                        ws.cell(row=row_r, column=14).value = desv_c
+                        ws.cell(row=row_r, column=15).value = desv_p
+                        total_util += util_c
+                        total_desv_cost += desv_c
+                ws['M22'] = total_util
+                ws['N22'] = total_desv_cost
+                ws['O22'] = total_desv_cost / total_util if total_util else 0
+                # Desviación total en sección 1
+                ws['F20'] = total_desv_cost
+                ws['G20'] = total_desv_cost / v_total_r if v_total_r else 0
+
+                # ── SECCIÓN 4: % Compra cadena ─────────────────
+                # Orden del template fila 37: VITACURA, LAS CONDES, CHICUREO, LA DEHESA, MACUL, LA REINA, QUILIN, NUEVA PROVIDENCIA, PROVIDENCIA, LOS TRAPENSES, TOTAL GENERAL
                 orden_cadena = ['VITACURA','LAS CONDES','CHICUREO','LA DEHESA','MACUL','LA REINA','QUILIN','NUEVA PROVIDENCIA','PROVIDENCIA','LOS TRAPENSES']
-                col_start = 5  # col E = 5 en openpyxl (1-indexed)
+                col_s4 = 5  # col E
                 for i, loc_name in enumerate(orden_cadena):
                     f_loc = next((f for f in filas_cadena if f['local_raw'].upper().strip() == loc_name), None)
                     pct_val = f_loc['pct'] if f_loc else 0
-                    cell = ws.cell(row=38, column=col_start + i)
-                    cell.value = pct_val
-                    cell.number_format = '0.0%'
-                    cell.fill  = fill_sem(pct_val)
-                    cell.font  = font_sem(pct_val)
-                # Total general
-                cell_tot = ws.cell(row=38, column=col_start + len(orden_cadena))
-                cell_tot.value = total_pct4
-                cell_tot.number_format = '0.0%'
-                cell_tot.fill  = fill_sem(total_pct4)
-                cell_tot.font  = font_sem(total_pct4)
+                    cell = ws.cell(row=38, column=col_s4 + i)
+                    cell.value = pct_val; cell.number_format = '0.0%'
+                    cell.fill = fill_sem(pct_val); cell.font = font_sem(pct_val)
+                cell_tot = ws.cell(row=38, column=col_s4 + len(orden_cadena))
+                cell_tot.value = total_pct4; cell_tot.number_format = '0.0%'
+                cell_tot.fill = fill_sem(total_pct4); cell_tot.font = font_sem(total_pct4)
 
-                # ── SECCIÓN 5: Control productos — mapeo fila/producto ──
-                # Formato row: (excel_row, producto_control)
+                # ── SECCIÓN 5: Control productos ───────────────
+                # Columnas: F=6(nombre), G=7(COMPRA TOTAL$), H=8(INV INI), I=9(INV FIN),
+                #           J=10(COMPRAS KG), K=11(REAL UT), L=12(REC VENTA), M=13(DESV KG),
+                #           N=14(DESV%), O=15(COSTO DESV), P=16(MERMA)
+                # Template header: col5=nombre, col6=COMPRA TOTAL, col7=INV INICIAL, col8=INV FINAL
+                #                  col9=COMPRAS KG, col10=REAL UTIL, col11=VENTA REC,
+                #                  col12=DESV KG, col13=DESV%, col14=COSTO DESV, col15=MERMA
                 sec5_map = [
-                    # CARNES ROJAS
                     (43,'POSTA'),(44,'FILETE'),(45,'GRASA DE WAGYU'),
                     (47,'LOMO LISO'),(48,'PLATEADA'),(49,'LOMO VETADO'),
-                    # CARNES BLANCAS
                     (53,'PECHUGA DE POLLO'),(54,'COSTILLAS'),(55,'CHULETA KASSLER'),
                     (56,'LOMO DE CENTRO'),(57,'PERNIL'),(58,'JAMÓN'),
                     (59,'TOCINO AHUMADO'),(60,'PANCETA LAMINADA'),
-                    # VERDURAS
                     (64,'PALTA'),(65,'TOMATE'),(66,'LECHUGA'),
-                    # PESCADOS
                     (70,'FILETE SALMON'),(71,'SALMON SLICE LAMINADO'),(72,'CAMARON'),
                     (73,'CAMARON APANADO'),(74,'ATUN'),(75,'LOCOS'),(76,'ERIZOS'),
-                    # OTROS
                     (80,'QUESO RANCO'),(81,'QUESO CHEDDAR'),(82,'QUESO PARMESANO'),(83,'PAPAS FRITAS'),
-                    # PAN
                     (87,'MOLDE BANQUETE'),
-                    # BAR
                     (90,'SCHOP'),(91,'JUGOS'),
                 ]
                 for (row_xl, prod) in sec5_map:
-                    ini_kg  = _kg(ini_rpt, prod)
-                    fin_kg  = _kg(fin_rpt, prod)
-                    comp_kg = _kg(fckr_rpt, prod)
-                    comp_costo = _ckg(fckr_rpt, prod)
-                    nr_kg   = _kg(nr_rpt, prod)
-                    uso_kg  = _kg(uso_rpt, prod)
-                    uso_costo = _ckg(uso_rpt, prod)
-                    real_ut = ini_kg + comp_kg + nr_kg - fin_kg
-                    desv_kg = real_ut - uso_kg
+                    ini_kg   = _kg(ini_rpt, prod)
+                    fin_kg   = _kg(fin_rpt, prod)
+                    comp_kg  = _kg(fckr_rpt, prod)
+                    comp_cost= _ckg(fckr_rpt, prod)
+                    nr_kg    = _kg(nr_rpt, prod)
+                    uso_kg   = _kg(uso_rpt, prod)
+                    uso_cost = _ckg(uso_rpt, prod)
+                    real_ut  = ini_kg + comp_kg + nr_kg - fin_kg
+                    desv_kg  = real_ut - uso_kg
                     desv_pct = desv_kg / uso_kg if uso_kg else 0
-                    desv_costo = desv_kg * (uso_costo / uso_kg) if uso_kg else 0
+                    muc      = uso_cost / uso_kg if uso_kg else (comp_cost / comp_kg if comp_kg else 0)
+                    desv_cost= desv_kg * muc
 
-                    ws.cell(row=row_xl, column=6).value  = ini_kg       # INV INICIAL
-                    ws.cell(row=row_xl, column=7).value  = fin_kg       # INV FINAL
-                    ws.cell(row=row_xl, column=9).value  = comp_kg      # COMPRAS KG
-                    ws.cell(row=row_xl, column=10).value = real_ut      # REAL UTILIZADOS
-                    ws.cell(row=row_xl, column=12).value = desv_kg      # DESV KG
-                    ws.cell(row=row_xl, column=13).value = desv_pct     # DESV %
-                    ws.cell(row=row_xl, column=14).value = desv_costo   # COSTO DESV
+                    ws.cell(row=row_xl, column=7).value  = ini_kg       # INV INICIAL KG
+                    ws.cell(row=row_xl, column=8).value  = fin_kg       # INV FINAL KG
+                    ws.cell(row=row_xl, column=10).value = comp_kg      # COMPRAS KG
+                    ws.cell(row=row_xl, column=11).value = real_ut      # REAL UTILIZADOS KG
+                    ws.cell(row=row_xl, column=12).value = uso_kg       # VENTA RECETARIO KG
+                    ws.cell(row=row_xl, column=13).value = desv_kg      # DESV KG
+                    ws.cell(row=row_xl, column=14).value = desv_pct     # DESV %
+                    ws.cell(row=row_xl, column=15).value = desv_cost    # COSTO DESV
 
                 buf = io.BytesIO()
                 wb.save(buf)
