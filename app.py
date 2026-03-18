@@ -4697,6 +4697,22 @@ elif modulo.startswith("📊"):
                     (87,'MOLDE BANQUETE'),
                     (90,'SCHOP'),(91,'JUGOS'),
                 ]
+
+                # Acumuladores por grupo para totales
+                # row46=TOTAL PROT INTEGRABLES(POSTA+FILETE+GRASA), row50=TOTAL CARNES ROJAS(+LOMO LISO+PLATEADA+LOMO VETADO)
+                # row61=TOTAL CARNES BLANCAS, row67=TOTAL VERDURAS, row77=TOTAL PESCADOS, row84=TOTAL OTROS, row92=TOTAL BAR
+                grupos_totales = {
+                    46:  ['POSTA','FILETE','GRASA DE WAGYU'],
+                    50:  ['POSTA','FILETE','GRASA DE WAGYU','LOMO LISO','PLATEADA','LOMO VETADO'],
+                    61:  ['PECHUGA DE POLLO','COSTILLAS','CHULETA KASSLER','LOMO DE CENTRO','PERNIL','JAMÓN','TOCINO AHUMADO','PANCETA LAMINADA'],
+                    67:  ['PALTA','TOMATE','LECHUGA'],
+                    77:  ['FILETE SALMON','SALMON SLICE LAMINADO','CAMARON','CAMARON APANADO','ATUN','LOCOS','ERIZOS'],
+                    84:  ['QUESO RANCO','QUESO CHEDDAR','QUESO PARMESANO','PAPAS FRITAS'],
+                    92:  ['SCHOP','JUGOS'],
+                }
+
+                # Cache de valores calculados por producto
+                cache = {}
                 for (row_xl, prod) in sec5_map:
                     ini_kg   = _kg(ini_rpt, prod)
                     fin_kg   = _kg(fin_rpt, prod)
@@ -4710,16 +4726,41 @@ elif modulo.startswith("📊"):
                     desv_pct = desv_kg / uso_kg if uso_kg else 0
                     muc      = uso_cost / uso_kg if uso_kg else (comp_cost / comp_kg if comp_kg else 0)
                     desv_cost= desv_kg * muc
+                    cache[prod] = dict(ini=ini_kg, fin=fin_kg, comp_kg=comp_kg, comp_cost=comp_cost,
+                                       real=real_ut, uso=uso_kg, uso_cost=uso_cost, desv_kg=desv_kg,
+                                       desv_pct=desv_pct, desv_cost=desv_cost)
 
-                    ws.cell(row=row_xl, column=6).value  = comp_cost    # COMPRA TOTAL $
-                    ws.cell(row=row_xl, column=7).value  = ini_kg       # INV. INICIAL KG
-                    ws.cell(row=row_xl, column=8).value  = fin_kg       # INV. FINAL KG
-                    ws.cell(row=row_xl, column=9).value  = comp_kg      # COMPRAS KG
-                    ws.cell(row=row_xl, column=10).value = real_ut      # REAL UTILIZADOS KG
-                    ws.cell(row=row_xl, column=11).value = uso_kg       # VENTA RECETARIO KG
-                    ws.cell(row=row_xl, column=12).value = desv_kg      # DESV. KG
-                    ws.cell(row=row_xl, column=13).value = desv_pct     # DESV %
-                    ws.cell(row=row_xl, column=14).value = desv_cost    # COSTO DESV.
+                    ws.cell(row=row_xl, column=6).value  = comp_cost
+                    ws.cell(row=row_xl, column=7).value  = ini_kg
+                    ws.cell(row=row_xl, column=8).value  = fin_kg
+                    ws.cell(row=row_xl, column=9).value  = comp_kg
+                    ws.cell(row=row_xl, column=10).value = real_ut
+                    ws.cell(row=row_xl, column=11).value = uso_kg
+                    ws.cell(row=row_xl, column=12).value = desv_kg
+                    ws.cell(row=row_xl, column=13).value = desv_pct
+                    ws.cell(row=row_xl, column=14).value = desv_cost
+
+                # Escribir filas de totales
+                for tot_row, prods in grupos_totales.items():
+                    t_comp_cost = sum(cache.get(p,{}).get('comp_cost',0) for p in prods)
+                    t_ini       = sum(cache.get(p,{}).get('ini',0)       for p in prods)
+                    t_fin       = sum(cache.get(p,{}).get('fin',0)       for p in prods)
+                    t_comp_kg   = sum(cache.get(p,{}).get('comp_kg',0)   for p in prods)
+                    t_real      = sum(cache.get(p,{}).get('real',0)      for p in prods)
+                    t_uso       = sum(cache.get(p,{}).get('uso',0)       for p in prods)
+                    t_desv_kg   = sum(cache.get(p,{}).get('desv_kg',0)   for p in prods)
+                    t_desv_cost = sum(cache.get(p,{}).get('desv_cost',0) for p in prods)
+                    t_desv_pct  = t_desv_kg / t_uso if t_uso else 0
+
+                    ws.cell(row=tot_row, column=6).value  = t_comp_cost
+                    ws.cell(row=tot_row, column=7).value  = t_ini
+                    ws.cell(row=tot_row, column=8).value  = t_fin
+                    ws.cell(row=tot_row, column=9).value  = t_comp_kg
+                    ws.cell(row=tot_row, column=10).value = t_real
+                    ws.cell(row=tot_row, column=11).value = t_uso
+                    ws.cell(row=tot_row, column=12).value = t_desv_kg
+                    ws.cell(row=tot_row, column=13).value = t_desv_pct
+                    ws.cell(row=tot_row, column=14).value = t_desv_cost
 
                 buf = io.BytesIO()
                 wb.save(buf)
