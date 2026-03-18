@@ -2425,7 +2425,6 @@ if modulo.startswith("📦"):
                 ], key="formato_inv",
                 help="A: archivo por local con hojas Alimentos+Bar.\nB: tabla LOCAL/FACTOR/PRODUCTO/TOTAL 2 (ya viene en KG, sin conversión).\nC: archivo consolidado con hojas 'Alimentos consolidado' y 'BAR CONSOLIDADO' (todos los locales).")
 
-            # Construir string de periodo desde fechas
             _MESES_ES = {1:'Ene',2:'Feb',3:'Mar',4:'Abr',5:'May',6:'Jun',
                          7:'Jul',8:'Ago',9:'Sep',10:'Oct',11:'Nov',12:'Dic'}
             if inv_fecha_i and inv_fecha_f:
@@ -2442,7 +2441,6 @@ if modulo.startswith("📦"):
             es_forma_b = "B" in fmt_sel
             es_forma_c = "C" in fmt_sel
 
-            # Forma A requiere local; B y C pueden ser todos o uno
             if es_forma_a:
                 local_inv = st.selectbox("Local", ["Chicureo","La Dehesa","La Reina","Las Condes",
                                                     "Los Trapenses","Macul","Nueva Providencia",
@@ -3700,7 +3698,6 @@ elif modulo.startswith("📊"):
             st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
             generar_ic = st.button("▶ Generar", key="btn_ic", use_container_width=True)
 
-        # Derivar periodo y fechas desde los date inputs
         if ic_fecha_i and ic_fecha_f:
             if ic_fecha_i.month == ic_fecha_f.month:
                 periodo_ic = f"{ic_fecha_i.day}-{ic_fecha_f.day} {_MESES_ES_IC[ic_fecha_i.month]} {ic_fecha_i.year}"
@@ -3996,6 +3993,10 @@ elif modulo.startswith("📊"):
 
                 with c1:
                     st.markdown("**1. Análisis de Costo**")
+                    # COMPRA TOTAL = solo las 5 categorías relevantes (sin ADMINISTRACION)
+                    cats_compra = ['ALIMENTOS', 'VERDURAS', 'BAR', 'ART. LIMPIEZA', 'DESECHABLES']
+                    compra_tot = sum(cat_map.get(c, 0) for c in cats_compra)
+                    pct_compra = compra_tot / v_total if v_total > 0 else 0
                     rows1 = [
                         ('VENTA SALÓN',    fmt_clp(v_salon),    fmt_pct(v_salon/v_total if v_total else 0)),
                         ('VENTA DELIVERY', fmt_clp(v_delivery), fmt_pct(v_delivery/v_total if v_total else 0)),
@@ -4004,11 +4005,11 @@ elif modulo.startswith("📊"):
                         ('',              '',                   ''),
                         ('COMPRA TOTAL',   fmt_clp(compra_tot), fmt_pct(pct_compra)),
                         ('',              '',                   ''),
-                        ('ALIMENTOS',      fmt_clp(cat_map['ALIMENTOS']), fmt_pct(cat_map['ALIMENTOS']/v_total if v_total else 0)),
-                        ('VERDURAS',       fmt_clp(cat_map['VERDURAS']),  fmt_pct(cat_map['VERDURAS']/v_total if v_total else 0)),
-                        ('BAR',            fmt_clp(cat_map['BAR']),       fmt_pct(cat_map['BAR']/v_total if v_total else 0)),
-                        ('ART. LIMPIEZA',  fmt_clp(cat_map['ART. LIMPIEZA']), fmt_pct(cat_map['ART. LIMPIEZA']/v_total if v_total else 0)),
-                        ('DESECHABLES',    fmt_clp(cat_map['DESECHABLES']), fmt_pct(cat_map['DESECHABLES']/v_total if v_total else 0)),
+                        ('ALIMENTOS',      fmt_clp(cat_map['ALIMENTOS']), fmt_pct(cat_map['ALIMENTOS']/compra_tot if compra_tot else 0)),
+                        ('VERDURAS',       fmt_clp(cat_map['VERDURAS']),  fmt_pct(cat_map['VERDURAS']/compra_tot if compra_tot else 0)),
+                        ('BAR',            fmt_clp(cat_map['BAR']),       fmt_pct(cat_map['BAR']/compra_tot if compra_tot else 0)),
+                        ('ART. LIMPIEZA',  fmt_clp(cat_map['ART. LIMPIEZA']), fmt_pct(cat_map['ART. LIMPIEZA']/compra_tot if compra_tot else 0)),
+                        ('DESECHABLES',    fmt_clp(cat_map['DESECHABLES']), fmt_pct(cat_map['DESECHABLES']/compra_tot if compra_tot else 0)),
                     ]
                     r1_html = ''.join([
                         f'<tr style="border-bottom:1px solid #1a1a1a;{"background:#0a1a0a" if r[0]=="VENTA TOTAL" else "background:#111" if r[0]=="COMPRA TOTAL" else ""}">'
