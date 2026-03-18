@@ -2508,15 +2508,13 @@ if modulo.startswith("📦"):
                                 })
 
                             df_inv_save = pd.DataFrame(registros)
-                            # Normalizar local a minúscula para consistencia con la BD
-                            df_inv_save['local'] = df_inv_save['local'].astype(str).str.strip().str.lower()
                             with engine.connect() as conn:
                                 if local_inv:
                                     conn.execute(text(
                                         "DELETE FROM inventarios WHERE LOWER(TRIM(local))=:l AND TRIM(periodo)=:p AND tipo_inventario=:t"),
                                         {'l': local_inv.lower().strip(), 'p': periodo_inv, 't': tipo_inv})
                                 else:
-                                    locales_archivo = df_inv_save['local'].dropna().unique().tolist()
+                                    locales_archivo = [l.lower().strip() for l in df_inv_save['local'].dropna().unique().tolist()]
                                     conn.execute(text(
                                         "DELETE FROM inventarios WHERE LOWER(TRIM(local))=ANY(:ls) AND TRIM(periodo)=:p AND tipo_inventario=:t"),
                                         {'ls': locales_archivo, 'p': periodo_inv, 't': tipo_inv})
@@ -2619,9 +2617,7 @@ if modulo.startswith("📦"):
                                 })
 
                             df_inv_save = pd.DataFrame(registros)
-                            # Normalizar local a minúscula para consistencia con la BD
-                            df_inv_save['local'] = df_inv_save['local'].astype(str).str.strip().str.lower()
-                            locales_c = df_inv_save['local'].dropna().unique().tolist()
+                            locales_c = [l.lower().strip() for l in df_inv_save['local'].dropna().unique().tolist()]
                             with engine.connect() as conn:
                                 conn.execute(text(
                                     "DELETE FROM inventarios WHERE LOWER(TRIM(local))=ANY(:ls) AND TRIM(periodo)=:p AND tipo_inventario=:t"),
@@ -2717,8 +2713,6 @@ if modulo.startswith("📦"):
                                 })
 
                             df_inv_save = pd.DataFrame(registros)
-                            # Normalizar local a minúscula para consistencia con la BD
-                            df_inv_save['local'] = df_inv_save['local'].astype(str).str.strip().str.lower()
                             with engine.connect() as conn:
                                 conn.execute(text(
                                     "DELETE FROM inventarios WHERE LOWER(TRIM(local))=:l AND TRIM(periodo)=:p AND tipo_inventario=:t"),
@@ -3998,7 +3992,6 @@ elif modulo.startswith("📊"):
 
                 with c1:
                     st.markdown("**1. Análisis de Costo**")
-                    # COMPRA TOTAL = solo las 5 categorías relevantes (sin ADMINISTRACION)
                     cats_compra = ['ALIMENTOS', 'VERDURAS', 'BAR', 'ART. LIMPIEZA', 'DESECHABLES']
                     compra_tot = sum(cat_map.get(c, 0) for c in cats_compra)
                     pct_compra = compra_tot / v_total if v_total > 0 else 0
@@ -4099,6 +4092,26 @@ elif modulo.startswith("📊"):
                         f'<th style="{hs};text-align:right">DESV %</th></tr></thead>'
                         f'<tbody>{r3_html}</tbody></table></div>',
                         unsafe_allow_html=True)
+
+                # ── DEBUG: desglose inventario final POSTA ────────
+                with st.expander(f"🔍 Debug Inv. Final POSTA — {local_show}", expanded=False):
+                    q_posta = """
+                        SELECT tipo_inventario, producto, producto_control,
+                               crudo, produccion, cocido, total_original, total_kg, fuente
+                        FROM inventarios
+                        WHERE TRIM(periodo)=:p
+                          AND LOWER(TRIM(local))=:l
+                          AND UPPER(TRIM(producto_control))='POSTA'
+                        ORDER BY tipo_inventario, producto
+                    """
+                    df_posta = run_query(q_posta, {'p': periodo_show, 'l': local_show.lower().strip()})
+                    if not df_posta.empty:
+                        st.dataframe(df_posta, use_container_width=True)
+                        st.markdown("**Suma total_kg por tipo:**")
+                        st.dataframe(df_posta.groupby('tipo_inventario')['total_kg'].sum().reset_index(), use_container_width=True)
+                        st.markdown(f"**`fin_kg` que usará el informe:** `{float(df_posta[df_posta['tipo_inventario']=='Final']['total_kg'].sum()):.4f}`")
+                    else:
+                        st.warning("Sin filas de POSTA para este local/período")
 
                 # ── SECCIÓN 5: Control de productos críticos ──────
                 st.markdown(f"**5. Control de Productos Críticos**")
