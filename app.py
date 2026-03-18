@@ -109,6 +109,80 @@ st.markdown("""
         font-size: 0.88rem;
         color: #aaa;
     }
+
+    /* ── PRINT STYLES ─────────────────────────────────────── */
+    @media print {
+        * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+
+        /* Ocultar todo lo que no es el informe */
+        section[data-testid="stSidebar"],
+        header[data-testid="stHeader"],
+        .stButton, .stDeployButton,
+        footer, [data-testid="stToolbar"],
+        [data-testid="stDecoration"],
+        [data-testid="stStatusWidget"],
+        div[data-testid="stSelectbox"],
+        div[data-testid="stDateInput"],
+        div[data-testid="stRadio"],
+        div[data-testid="stFileUploader"],
+        div[data-testid="stTabs"],
+        .stSpinner, .stAlert,
+        hr { display: none !important; }
+
+        /* Fondo blanco, texto oscuro */
+        html, body, .main, .stApp,
+        [class*="css"], .block-container {
+            background: #ffffff !important;
+            color: #111111 !important;
+        }
+
+        /* Tamaño de página */
+        @page {
+            size: A4 landscape;
+            margin: 12mm 10mm;
+        }
+
+        /* Tablas del informe */
+        table {
+            width: 100% !important;
+            border-collapse: collapse !important;
+            font-size: 7.5pt !important;
+            page-break-inside: avoid;
+        }
+        td, th {
+            border: 1px solid #ccc !important;
+            padding: 3px 5px !important;
+            color: #111 !important;
+        }
+        thead tr { background: #1a1a1a !important; }
+        thead th { color: #fff !important; font-size: 7pt !important; }
+
+        /* Encabezados */
+        h1, h2, h3, strong, b {
+            color: #111 !important;
+            font-size: 9pt !important;
+        }
+
+        /* Contenedores de secciones */
+        div[style*="border-radius"] {
+            border: 1px solid #ddd !important;
+            background: #fff !important;
+            box-shadow: none !important;
+            page-break-inside: avoid;
+        }
+
+        /* Columnas en la misma página */
+        [data-testid="stColumns"] {
+            display: flex !important;
+            flex-direction: row !important;
+        }
+
+        /* Salto de página entre locales */
+        .page-break { page-break-before: always; }
+
+        /* Quitar bordes de streamlit */
+        .block-container { padding: 0 !important; max-width: 100% !important; }
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -4401,6 +4475,75 @@ elif modulo.startswith("📊"):
                 st.markdown("---")
                 if st.button("🖨️ Preparar para imprimir", key=f"btn_print_{local_show}"):
                     st.info("Usa Ctrl+P (o Cmd+P en Mac) para imprimir o guardar como PDF. El informe está optimizado para impresión.")
+
+            # ── SECCIÓN 4: % Compra a nivel cadena ────────────
+            st.markdown("---")
+            hs4 = "padding:7px 12px;font-size:0.72rem;text-transform:uppercase;letter-spacing:0.1em;color:#aaa;font-weight:600;background:#111;white-space:nowrap"
+
+            # Calcular % compra por local usando los datos ya cargados
+            cats_compra4 = ['ALIMENTOS', 'VERDURAS', 'BAR', 'ART. LIMPIEZA', 'DESECHABLES']
+            filas_cadena = []
+            for loc in locales_show:
+                df_cc_loc  = df_cc[df_cc['local'].str.lower().str.strip() == loc.lower().strip()] if not df_cc.empty and 'local' in df_cc.columns else pd.DataFrame()
+                df_v_loc   = df_v[df_v['local'].str.lower().str.strip()  == loc.lower().strip()] if not df_v.empty  and 'local' in df_v.columns  else pd.DataFrame()
+                venta_loc  = float(df_v_loc['venta'].sum()) if not df_v_loc.empty else 0
+                cat_m_loc  = {}
+                for cat in cats_compra4:
+                    if not df_cc_loc.empty and 'categoria_producto' in df_cc_loc.columns:
+                        cat_m_loc[cat] = float(df_cc_loc[df_cc_loc['categoria_producto'].str.upper().str.strip() == cat]['compra_total'].sum())
+                    else:
+                        cat_m_loc[cat] = 0
+                compra_loc = sum(cat_m_loc.values())
+                pct_loc    = compra_loc / venta_loc if venta_loc > 0 else 0
+                filas_cadena.append({'local': loc.title(), 'compra': compra_loc, 'venta': venta_loc, 'pct': pct_loc})
+
+            # Total general
+            total_compra4 = sum(f['compra'] for f in filas_cadena)
+            total_venta4  = sum(f['venta']  for f in filas_cadena)
+            total_pct4    = total_compra4 / total_venta4 if total_venta4 > 0 else 0
+
+            # Semáforo: verde < 40%, amarillo 40-45%, rojo > 45%
+            def _color4(pct):
+                if pct < 0.40:   return '#4caf7d', '#0d2a1a'
+                elif pct < 0.45: return '#e89c45', '#2a1f0d'
+                else:            return '#e84545', '#2a0d0d'
+
+            cols_html = ''
+            for f in filas_cadena:
+                fg, bg = _color4(f['pct'])
+                cols_html += (
+                    f'<td style="padding:8px 10px;text-align:center;background:{bg};'
+                    f'font-weight:700;font-size:0.85rem;color:{fg};white-space:nowrap">'
+                    f'{f["pct"]:.1%}</td>'
+                )
+            # Total general
+            fg4, bg4 = _color4(total_pct4)
+            cols_html += (
+                f'<td style="padding:8px 10px;text-align:center;background:{bg4};'
+                f'font-weight:700;font-size:0.85rem;color:{fg4};border-left:2px solid #333">'
+                f'{total_pct4:.1%}</td>'
+            )
+
+            header_html = ''.join(
+                f'<th style="{hs4};text-align:center">{f["local"]}</th>'
+                for f in filas_cadena
+            ) + f'<th style="{hs4};text-align:center;border-left:2px solid #333">TOTAL GENERAL</th>'
+
+            st.markdown(f"**4. % Compra a Nivel Cadena**")
+            st.markdown(
+                f'<div style="border:1px solid #1e1e1e;border-radius:10px;overflow:hidden;background:#0d0d0d;margin-top:0.5rem">'
+                f'<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif">'
+                f'<thead><tr>{header_html}</tr></thead>'
+                f'<tbody><tr>{cols_html}</tr></tbody>'
+                f'</table></div>',
+                unsafe_allow_html=True
+            )
+            st.markdown(
+                '<div style="margin-top:6px;font-size:0.72rem;color:#555">'
+                '🟢 &lt;40%&nbsp;&nbsp;🟡 40–45%&nbsp;&nbsp;🔴 &gt;45%'
+                '</div>',
+                unsafe_allow_html=True
+            )
 
 # ============================================================
 # MÓDULO: AUDITOR DE CATEGORÍAS
