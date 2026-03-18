@@ -4254,6 +4254,35 @@ elif modulo.startswith("📊"):
                         f'<tbody>{r3_html}</tbody></table></div>',
                         unsafe_allow_html=True)
 
+                # ── DEBUG PAN ─────────────────────────────────────
+                with st.expander(f"🔍 Debug PAN compras — {local_show}", expanded=False):
+                    q_pan_dbg = """
+                        SELECT c.nombre_producto,
+                               c.cantidad, c.conversion, c.cant_conv,
+                               c.costo_realfinal, c.fecha_dte::date as fecha,
+                               cn.categoria_control
+                        FROM compras c
+                        LEFT JOIN clas_nomb_prod cn
+                               ON UPPER(TRIM(c.nombre_producto)) = UPPER(TRIM(cn.nombre_producto))
+                        WHERE c.fecha_dte::date BETWEEN :i AND :f
+                          AND LOWER(c.local) = :l
+                          AND UPPER(c.nombre_producto) IN ('MOLDE BANQUETE','MOLDE BANQUETE INTEGRAL')
+                        ORDER BY c.nombre_producto, c.fecha_dte
+                    """
+                    df_pan_dbg = run_query(q_pan_dbg, {
+                        'i': str(d['fecha_i']), 'f': str(d['fecha_f']),
+                        'l': local_show.lower().strip()
+                    })
+                    if not df_pan_dbg.empty:
+                        st.dataframe(df_pan_dbg, use_container_width=True)
+                        st.markdown("**Suma por producto:**")
+                        st.dataframe(
+                            df_pan_dbg.groupby('nombre_producto')[['cantidad','cant_conv','costo_realfinal']].sum().reset_index(),
+                            use_container_width=True
+                        )
+                    else:
+                        st.warning("Sin filas de MOLDE BANQUETE en este período/local")
+
                 # ── SECCIÓN 5: Control de productos críticos ──────
                 st.markdown(f"**5. Control de Productos Críticos**")
 
