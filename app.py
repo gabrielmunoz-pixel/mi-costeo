@@ -276,12 +276,12 @@ PROD_CONV_MAP = {
     'QUESO CHEDDAR':                                                ('QUESO CHEDDAR',           'QUESO CHEDDAR'),
     'QUESO PARMESANO':                                              ('QUESO PARMESANO',         'QUESO PARMESANO'),
     'QUESO RANCO':                                                  ('QUESO RANCO',             'QUESO RANCO'),
-    'FRICA 14 CMS':                                                 ('FRICA 14 CMS',            'FRICA 14 CMS'),
-    'HOT - DOG 19 CM.':                                             ('HOT - DOG 19 CM.',        'HOT - DOG 19 CM.'),
-    'MOLDE BANQUETE':                                               ('MOLDE BANQUETE',          'MOLDE BANQUETE'),
-    'MOLDE BANQUETE INTEGRAL':                                      ('MOLDE BANQUETE INTEGRAL', 'MOLDE BANQUETE INTEGRAL'),
-    'PAN FRICA 12 CM':                                              ('PAN FRICA 12 CM',         'PAN FRICA 12 CM'),
-    'PAN FRICA N8':                                                 ('PAN FRICA N8',            'PAN FRICA N8'),
+    'FRICA 14 CMS':                                                 ('FRICA 14 CMS',            'PAN'),
+    'HOT - DOG 19 CM.':                                             ('HOT - DOG 19 CM.',        'PAN'),
+    'MOLDE BANQUETE':                                               ('MOLDE BANQUETE',          'PAN'),
+    'MOLDE BANQUETE INTEGRAL':                                      ('MOLDE BANQUETE INTEGRAL', 'PAN'),
+    'PAN FRICA 12 CM':                                              ('PAN FRICA 12 CM',         'PAN'),
+    'PAN FRICA N8':                                                 ('PAN FRICA N8',            'PAN'),
     'ATUN':                                                         ('ATUN',                    'ATUN'),
     'CAMARON':                                                      ('CAMARON',                 'CAMARON'),
     'CAMARON APANADO':                                              ('CAMARON APANADO',         'CAMARON APANADO'),
@@ -4026,7 +4026,7 @@ elif modulo.startswith("📊"):
                     'VERDURAS':           ['PALTA','TOMATE','LECHUGA','LECHUGA VERDE','MIX DE LECHUGA'],
                     'PESCADOS Y MARISCOS':['FILETE SALMON','SALMON SLICE LAMINADO','CAMARON','CAMARON APANADO','ATUN','LOCOS','ERIZOS'],
                     'OTROS':              ['QUESO RANCO','QUESO CHEDDAR','QUESO PARMESANO','PAPAS FRITAS'],
-                    'PAN':                ['FRICA 14 CMS','MOLDE BANQUETE','MOLDE BANQUETE INTEGRAL','PAN FRICA 12 CM','PAN FRICA N8','HOT - DOG 19 CM.'],
+                    'PAN':                ['PAN','FRICA 14 CMS','MOLDE BANQUETE','MOLDE BANQUETE INTEGRAL','PAN FRICA 12 CM','PAN FRICA N8','HOT - DOG 19 CM.'],
                     'BAR':                ['SCHOP','JUGOS'],
                 }
 
@@ -4124,7 +4124,7 @@ elif modulo.startswith("📊"):
                     'VERDURAS': ['PALTA','TOMATE','LECHUGA','LECHUGA VERDE','MIX DE LECHUGA'],
                     'PESCADOS Y MARISCOS': ['FILETE SALMON','SALMON SLICE LAMINADO','CAMARON','CAMARON APANADO','ATUN','LOCOS','ERIZOS'],
                     'OTROS': ['QUESO RANCO','QUESO CHEDDAR','QUESO PARMESANO','PAPAS FRITAS'],
-                    'PAN': ['FRICA 14 CMS','MOLDE BANQUETE','MOLDE BANQUETE INTEGRAL','PAN FRICA 12 CM','PAN FRICA N8','HOT - DOG 19 CM.'],
+                    'PAN': ['PAN','FRICA 14 CMS','MOLDE BANQUETE','MOLDE BANQUETE INTEGRAL','PAN FRICA 12 CM','PAN FRICA N8','HOT - DOG 19 CM.'],
                     'BAR': ['SCHOP','JUGOS'],
                 }
                 for cat, prods in cat_labels.items():
@@ -4237,18 +4237,6 @@ elif modulo.startswith("📊"):
                         f'<th style="{hs};text-align:right">DESV %</th></tr></thead>'
                         f'<tbody>{r3_html}</tbody></table></div>',
                         unsafe_allow_html=True)
-
-                # ── DEBUG PAN ──────────────────────────────────────
-                with st.expander(f"🔍 Debug PAN — {local_show}", expanded=False):
-                    st.markdown("**Filas en `ckr` (compras KG) con producto_control que contiene PAN, FRICA, MOLDE, HOT:**")
-                    if not ckr.empty:
-                        mask_pan = ckr['producto_control'].str.upper().str.contains(
-                            'PAN|FRICA|MOLDE|HOT|BANQUETE', na=False)
-                        st.dataframe(ckr[mask_pan] if mask_pan.any() else ckr.head(20), use_container_width=True)
-                        st.markdown("**Todos los valores únicos de producto_control en ckr:**")
-                        st.write(sorted(ckr['producto_control'].unique().tolist()))
-                    else:
-                        st.warning("ckr está vacío")
 
                 # ── SECCIÓN 5: Control de productos críticos ──────
                 st.markdown(f"**5. Control de Productos Críticos**")
