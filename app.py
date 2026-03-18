@@ -4012,23 +4012,29 @@ elif modulo.startswith("📊"):
                 ]
                 _lf_ckr = "AND LOWER(c.local)=ANY(:ls)" if locales_sel else ""
                 _q_ckr = f"""
-                    SELECT c.local,
+                    WITH cn_dedup AS (
+                        SELECT UPPER(TRIM(nombre_producto)) as nombre_producto,
+                               MIN(TRIM(categoria_control)) as categoria_control
+                        FROM clas_nomb_prod
+                        WHERE categoria_control IS NOT NULL AND TRIM(categoria_control) != ''
+                        GROUP BY UPPER(TRIM(nombre_producto))
+                    )
+                    SELECT LOWER(c.local) as local,
                            CASE
                              WHEN UPPER(TRIM(c.nombre_producto)) = ANY(:prods) THEN UPPER(TRIM(c.nombre_producto))
-                             ELSE COALESCE(NULLIF(TRIM(cn.categoria_control),''), UPPER(c.nombre_producto))
+                             ELSE COALESCE(cn.categoria_control, UPPER(c.nombre_producto))
                            END as producto_control,
                            SUM(c.cant_conv) as kg,
                            SUM(c.costo_realfinal) as costo
                     FROM compras c
-                    LEFT JOIN clas_nomb_prod cn
-                           ON UPPER(TRIM(c.nombre_producto)) = UPPER(TRIM(cn.nombre_producto))
+                    LEFT JOIN cn_dedup cn ON UPPER(TRIM(c.nombre_producto)) = cn.nombre_producto
                     WHERE c.fecha_dte::date BETWEEN :i AND :f
                       AND c.subcat NOT IN ('COLACION','ADMINISTRACION')
                       AND c.cant_conv > 0
                       {_lf_ckr}
-                    GROUP BY c.local, CASE
+                    GROUP BY LOWER(c.local), CASE
                              WHEN UPPER(TRIM(c.nombre_producto)) = ANY(:prods) THEN UPPER(TRIM(c.nombre_producto))
-                             ELSE COALESCE(NULLIF(TRIM(cn.categoria_control),''), UPPER(c.nombre_producto))
+                             ELSE COALESCE(cn.categoria_control, UPPER(c.nombre_producto))
                            END
                 """
                 _p_ckr = {'i': str(fecha_ic_i), 'f': str(fecha_ic_f), 'prods': _prods_conocidos}
@@ -4253,33 +4259,6 @@ elif modulo.startswith("📊"):
                         f'<th style="{hs};text-align:right">DESV %</th></tr></thead>'
                         f'<tbody>{r3_html}</tbody></table></div>',
                         unsafe_allow_html=True)
-
-                # ── DEBUG PAN ─────────────────────────────────────
-                with st.expander(f"🔍 Debug PAN compras — {local_show}", expanded=False):
-                    q_pan_dbg = """
-                        SELECT c.local, c.nombre_producto,
-                               c.cantidad, c.conversion, c.cant_conv,
-                               c.costo_realfinal, c.fecha_dte::date as fecha, c.folio
-                        FROM compras c
-                        WHERE c.fecha_dte::date BETWEEN :i AND :f
-                          AND UPPER(c.nombre_producto) IN ('MOLDE BANQUETE','MOLDE BANQUETE INTEGRAL')
-                        ORDER BY c.local, c.nombre_producto, c.fecha_dte
-                    """
-                    df_pan_dbg = run_query(q_pan_dbg, {
-                        'i': str(d['fecha_i']), 'f': str(d['fecha_f'])
-                    })
-                    if not df_pan_dbg.empty:
-                        st.markdown(f"**Locales únicos en compras de pan:** {sorted(df_pan_dbg['local'].unique().tolist())}")
-                        st.markdown(f"**local_show:** `{local_show}`")
-                        st.markdown("**Suma cant_conv por local y producto:**")
-                        st.dataframe(
-                            df_pan_dbg.groupby(['local','nombre_producto'])['cant_conv'].sum().reset_index(),
-                            use_container_width=True
-                        )
-                        st.markdown("**Detalle filas:**")
-                        st.dataframe(df_pan_dbg, use_container_width=True)
-                    else:
-                        st.warning("Sin filas de MOLDE BANQUETE en este período")
 
                 # ── SECCIÓN 5: Control de productos críticos ──────
                 st.markdown(f"**5. Control de Productos Críticos**")
