@@ -4238,6 +4238,18 @@ elif modulo.startswith("📊"):
                         f'<tbody>{r3_html}</tbody></table></div>',
                         unsafe_allow_html=True)
 
+                # ── DEBUG PAN ──────────────────────────────────────
+                with st.expander(f"🔍 Debug PAN — {local_show}", expanded=False):
+                    st.markdown("**Filas en `ckr` (compras KG) con producto_control que contiene PAN, FRICA, MOLDE, HOT:**")
+                    if not ckr.empty:
+                        mask_pan = ckr['producto_control'].str.upper().str.contains(
+                            'PAN|FRICA|MOLDE|HOT|BANQUETE', na=False)
+                        st.dataframe(ckr[mask_pan] if mask_pan.any() else ckr.head(20), use_container_width=True)
+                        st.markdown("**Todos los valores únicos de producto_control en ckr:**")
+                        st.write(sorted(ckr['producto_control'].unique().tolist()))
+                    else:
+                        st.warning("ckr está vacío")
+
                 # ── SECCIÓN 5: Control de productos críticos ──────
                 st.markdown(f"**5. Control de Productos Críticos**")
 
