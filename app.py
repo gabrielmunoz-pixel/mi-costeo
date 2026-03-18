@@ -180,35 +180,49 @@ TIPO_BAR_CONTROL = {
     # pero se guardan con su TIPO como control para trazabilidad
 }
 
-def calcular_total_kg(producto, total, crudo=0, produccion=0, cocido=0, producto_control=None):
+def calcular_total_kg(producto, total, crudo=0, produccion=0, cocido=0, producto_control=None,
+                      conv_porcion=None, conv_cocido=None):
     """
-    Calcula total_kg usando TABLA_CONV_INV.
-    Si hay desglose crudo/cocido/produccion:
-        total_kg = crudo + (cocido / factor_cocido) + (produccion × porcion)
-    Si solo hay total (forma_b, porcionadas sin desglose):
-        total_kg = total × porcion
+    Calcula total_kg usando la fórmula verificada del archivo INV_AJUSTE.xlsx:
+
+    Si conv_porcion < 1.0  (porcionadas/precocidas almacenadas en unidades):
+        total_kg = (crudo + produccion + cocido) × conv_porcion
+
+    Si conv_porcion == 1.0 (producto en KG):
+        total_kg = (crudo + produccion) + (cocido / conv_cocido)  si cocido > 0
+                 = (crudo + produccion)                            si cocido == 0
+
+    conv_porcion y conv_cocido pueden venir directamente del Excel (Forma C)
+    o se obtienen de TABLA_CONV_INV. Si no hay match, total_kg = total.
     """
     key = str(producto).strip().upper()
     conv = TABLA_CONV_INV.get(key)
+
     crudo      = float(crudo      or 0)
     produccion = float(produccion or 0)
     cocido     = float(cocido     or 0)
     total      = float(total      or 0)
 
-    if conv:
-        ctrl          = conv['control']
-        porcion       = conv['porcion']
-        factor_cocido = conv['cocido']
-        hay_desglose  = (crudo + produccion + cocido) > 0
-        if hay_desglose:
-            cocido_eq = (cocido / factor_cocido) if factor_cocido > 0 else cocido
-            prod_eq   = produccion * porcion
-            total_kg  = crudo + cocido_eq + prod_eq
-        else:
-            total_kg  = total * porcion
+    # Determinar factores: Excel tiene prioridad sobre TABLA_CONV_INV
+    if conv_porcion is not None and conv_cocido is not None:
+        cp   = float(conv_porcion) if float(conv_porcion or 0) > 0 else 1.0
+        cc   = float(conv_cocido)  if float(conv_cocido  or 0) > 0 else 1.0
+        ctrl = conv['control'] if conv else (producto_control or producto)
+    elif conv:
+        cp   = conv['porcion']
+        cc   = conv['cocido']
+        ctrl = conv['control']
     else:
-        ctrl     = producto_control or producto
-        total_kg = total
+        # Sin match: devolver total sin convertir
+        return float(total), producto_control or producto
+
+    if cp < 1.0:
+        # Porcionadas/precocidas en unidades → multiplicar por porcion
+        total_kg = (crudo + produccion + cocido) * cp
+    else:
+        # Producto en KG → cocido necesita dividirse por conv_cocido
+        total_kg = (crudo + produccion) + (cocido / cc if cocido > 0 else 0)
+
     return total_kg, ctrl
 
 
@@ -2580,10 +2594,16 @@ if modulo.startswith("📦"):
                                 cocido = pd.to_numeric(row.get('Cocido',0),    errors='coerce') or 0
                                 total  = pd.to_numeric(row.get('Total',0),     errors='coerce') or 0
                                 tipo   = str(row.get('TIPO','')).strip()
-                                # Usar columna 'control' del archivo si existe
+                                # Leer factores directamente del Excel (columnas J y L)
+                                conv_c = pd.to_numeric(row.get('Convertor Cocido', None),          errors='coerce')
+                                conv_p = pd.to_numeric(row.get('Convertor Porcion a Crudo', None), errors='coerce')
+                                # control del archivo tiene prioridad
                                 prod_ctrl = str(row.get('control', prod)).strip()
                                 if prod_ctrl == 'nan': prod_ctrl = prod
-                                total_kg, prod_ctrl = calcular_total_kg(prod, total, crudo, prod_, cocido, prod_ctrl)
+                                total_kg, prod_ctrl = calcular_total_kg(
+                                    prod, total, crudo, prod_, cocido, prod_ctrl,
+                                    conv_porcion=conv_p, conv_cocido=conv_c
+                                )
                                 registros.append({
                                     'local': loc, 'periodo': periodo_inv,
                                     'tipo_inventario': tipo_inv,
@@ -4109,7 +4129,8 @@ elif modulo.startswith("📊"):
                         st.dataframe(df_posta, use_container_width=True)
                         st.markdown("**Suma total_kg por tipo:**")
                         st.dataframe(df_posta.groupby('tipo_inventario')['total_kg'].sum().reset_index(), use_container_width=True)
-                        st.markdown(f"**`fin_kg` que usará el informe:** `{float(df_posta[df_posta['tipo_inventario']=='Final']['total_kg'].sum()):.4f}`")
+                        fin_sum = float(df_posta[df_posta['tipo_inventario']=='Final']['total_kg'].sum())
+                        st.markdown(f"**`fin_kg` que usará el informe:** `{fin_sum:.4f}`")
                     else:
                         st.warning("Sin filas de POSTA para este local/período")
 
