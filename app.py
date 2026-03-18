@@ -180,49 +180,148 @@ TIPO_BAR_CONTROL = {
     # pero se guardan con su TIPO como control para trazabilidad
 }
 
+# ============================================================
+# TABLA DE CONVERSIÓN — hardcodeada, no cambia
+# conv_cocido: divisor del cocido
+# conv_porcion: multiplicador final
+# Fórmula: total_kg = (crudo + produccion + cocido/conv_cocido) * conv_porcion
+# ============================================================
+CONV_TABLE = {
+    # producto_control           conv_cocido  conv_porcion
+    'CHULETA KASSLER':          (1.0,         1.0),
+    'COSTILLAS':                (0.75,        1.0),
+    'JAMÓN':                    (1.0,         1.0),
+    'LOMO DE CENTRO':           (1.0,         1.0),
+    'LOMO DE CENTRO_PORC':      (1.0,         0.18),   # LOMO DE CENTRO(PORCIONADAS)
+    'PANCETA LAMINADA':         (0.5,         1.0),
+    'PECHUGA DE POLLO':         (0.8,         1.0),
+    'PECHUGA DE POLLO_F90':     (1.0,         0.1125), # FRITAS 90GR
+    'PECHUGA DE POLLO_AVE':     (1.0,         0.25),   # AVE SANDWICH 200GR
+    'PECHUGA DE POLLO_CES':     (1.0,         0.2),    # CESAR 150GR
+    'PECHUGA DE POLLO_PKP':     (1.0,         0.25),   # PANKO PLATO 250GR
+    'PECHUGA DE POLLO_PKE':     (1.0,         0.16),   # PANKO ENSALADA 160GR
+    'PECHUGA DE POLLO_TIM':     (1.0,         0.2),    # TIMBAL 160GR
+    'PERNIL':                   (1.0,         1.0),
+    'PERNIL_PORC':              (1.0,         0.16),   # PERNIL(PORCIONADAS)
+    'TOCINO AHUMADO':           (1.0,         1.0),
+    'FILETE':                   (1.0,         1.0),
+    'GRASA DE WAGYU':           (1.0,         1.0),
+    'LOMO LISO':                (1.0,         1.0),
+    'LOMO VETADO':              (1.0,         1.0),
+    'PLATEADA':                 (0.5,         1.0),
+    'PLATEADA_PORC':            (1.0,         0.315789474), # PLATEADA(PORCIONADAS)
+    'POSTA':                    (1.0,         1.0),
+    'POSTA_ESC':                (1.0,         0.12),   # ESCALOPA
+    'POSTA_HGE':                (1.0,         0.2),    # HAMBURGUESA GRAN EXPERTO
+    'POSTA_HNI':                (1.0,         0.15),   # HAMBURGUESA NIÑO
+    'POSTA_HAM':                (1.0,         0.2),    # HAMBURGUESAS
+    'POSTA_F90':                (1.0,         0.09),   # FRITAS 90GR
+    'PAPAS FRITAS':             (1.0,         1.0),
+    'QUESO CHEDDAR':            (1.0,         1.0),
+    'QUESO PARMESANO':          (1.0,         1.0),
+    'QUESO RANCO':              (1.0,         1.0),
+    'FRICA 14 CMS':             (1.0,         1.0),
+    'HOT - DOG 19 CM.':         (1.0,         1.0),
+    'MOLDE BANQUETE':           (1.0,         1.0),
+    'MOLDE BANQUETE INTEGRAL':  (1.0,         1.0),
+    'PAN FRICA 12 CM':          (1.0,         1.0),
+    'PAN FRICA N8':             (1.0,         1.0),
+    'ATUN':                     (1.0,         1.0),
+    'CAMARON':                  (0.31,        1.0),
+    'CAMARON APANADO':          (1.0,         1.0),
+    'ERIZOS':                   (1.0,         1.0),
+    'FILETE SALMON':            (1.0,         1.0),
+    'LOCOS':                    (1.0,         0.5),
+    'LOCOS_DREN':               (1.0,         1.0),    # LOCOS(DRENADOS)
+    'SALMON SLICE LAMINADO':    (1.0,         1.0),
+    'LECHUGA VERDE':            (1.0,         1.0),
+    'MIX DE LECHUGA':           (1.0,         0.8),
+    'PALTA':                    (1.0,         1.0),
+    'TOMATE':                   (1.0,         1.0),
+}
+
+# Mapa nombre_producto → clave en CONV_TABLE + producto_control
+PROD_CONV_MAP = {
+    'CHULETA KASSLER':                                              ('CHULETA KASSLER',         'CHULETA KASSLER'),
+    'COSTILLAS':                                                    ('COSTILLAS',               'COSTILLAS'),
+    'JAMÓN':                                                        ('JAMÓN',                   'JAMÓN'),
+    'LOMO DE CENTRO':                                               ('LOMO DE CENTRO',          'LOMO DE CENTRO'),
+    'LOMO DE CENTRO(PORCIONADAS)':                                  ('LOMO DE CENTRO_PORC',     'LOMO DE CENTRO'),
+    'PANCETA LAMINADA':                                             ('PANCETA LAMINADA',        'PANCETA LAMINADA'),
+    'DESPUNTE PECHUGA DE POLLO':                                    ('PECHUGA DE POLLO',        'PECHUGA DE POLLO'),
+    'PECHUGA DE POLLO':                                             ('PECHUGA DE POLLO',        'PECHUGA DE POLLO'),
+    'PECHUGA DE POLLO  - FRITAS ESPECIALES ( 90 GR - PRECOCIDO)':  ('PECHUGA DE POLLO_F90',    'PECHUGA DE POLLO'),
+    'PECHUGA DE POLLO - AVE - SANDWICH-  (200 GR - PRECOCIDO)':    ('PECHUGA DE POLLO_AVE',    'PECHUGA DE POLLO'),
+    'PECHUGA DE POLLO - CESAR ( 150 GR - PRECOCIDO)':              ('PECHUGA DE POLLO_CES',    'PECHUGA DE POLLO'),
+    'PECHUGA DE POLLO - PANKO - PLATO (250 GR  - CRUDO)':          ('PECHUGA DE POLLO_PKP',    'PECHUGA DE POLLO'),
+    'PECHUGA DE POLLO - PANKO - ENSALADA - NIÑO (160 GR - CRUDO)': ('PECHUGA DE POLLO_PKE',    'PECHUGA DE POLLO'),
+    'PECHUGA DE POLLO - TIMBAL ( 160 GR - PRECOCIDO)':             ('PECHUGA DE POLLO_TIM',    'PECHUGA DE POLLO'),
+    'PERNIL':                                                       ('PERNIL',                  'PERNIL'),
+    'PERNIL(PORCIONADAS)':                                          ('PERNIL_PORC',             'PERNIL'),
+    'TOCINO AHUMADO':                                               ('TOCINO AHUMADO',          'TOCINO AHUMADO'),
+    'FILETE':                                                       ('FILETE',                  'FILETE'),
+    'GRASA DE WAGYU':                                               ('GRASA DE WAGYU',          'GRASA DE WAGYU'),
+    'LOMO LISO':                                                    ('LOMO LISO',               'LOMO LISO'),
+    'LOMO VETADO':                                                  ('LOMO VETADO',             'LOMO VETADO'),
+    'PLATEADA':                                                     ('PLATEADA',                'PLATEADA'),
+    'PLATEADA(PORCIONADAS)':                                        ('PLATEADA_PORC',           'PLATEADA'),
+    'DESPUNTE CARNE ROJA':                                          ('POSTA',                   'POSTA'),
+    'ESCALOPA':                                                     ('POSTA_ESC',               'POSTA'),
+    'HAMBURGUESA GRAN EXPERTO':                                     ('POSTA_HGE',               'POSTA'),
+    'HAMBURGUESA NIÑO':                                             ('POSTA_HNI',               'POSTA'),
+    'HAMBURGUESAS':                                                 ('POSTA_HAM',               'POSTA'),
+    'POSTA':                                                        ('POSTA',                   'POSTA'),
+    'POSTA - FRITAS ESPECIALES ( 90 GR - CRUDO)':                  ('POSTA_F90',               'POSTA'),
+    'PAPAS FRITAS':                                                 ('PAPAS FRITAS',            'PAPAS FRITAS'),
+    'QUESO CHEDDAR':                                                ('QUESO CHEDDAR',           'QUESO CHEDDAR'),
+    'QUESO PARMESANO':                                              ('QUESO PARMESANO',         'QUESO PARMESANO'),
+    'QUESO RANCO':                                                  ('QUESO RANCO',             'QUESO RANCO'),
+    'FRICA 14 CMS':                                                 ('FRICA 14 CMS',            'FRICA 14 CMS'),
+    'HOT - DOG 19 CM.':                                             ('HOT - DOG 19 CM.',        'HOT - DOG 19 CM.'),
+    'MOLDE BANQUETE':                                               ('MOLDE BANQUETE',          'MOLDE BANQUETE'),
+    'MOLDE BANQUETE INTEGRAL':                                      ('MOLDE BANQUETE INTEGRAL', 'MOLDE BANQUETE INTEGRAL'),
+    'PAN FRICA 12 CM':                                              ('PAN FRICA 12 CM',         'PAN FRICA 12 CM'),
+    'PAN FRICA N8':                                                 ('PAN FRICA N8',            'PAN FRICA N8'),
+    'ATUN':                                                         ('ATUN',                    'ATUN'),
+    'CAMARON':                                                      ('CAMARON',                 'CAMARON'),
+    'CAMARON APANADO':                                              ('CAMARON APANADO',         'CAMARON APANADO'),
+    'ERIZOS':                                                       ('ERIZOS',                  'ERIZOS'),
+    'FILETE SALMON':                                                ('FILETE SALMON',           'FILETE SALMON'),
+    'LOCOS':                                                        ('LOCOS',                   'LOCOS'),
+    'LOCOS(DRENADOS)':                                              ('LOCOS_DREN',              'LOCOS'),
+    'SALMON SLICE LAMINADO':                                        ('SALMON SLICE LAMINADO',   'SALMON SLICE LAMINADO'),
+    'LECHUGA HIDROPONICA':                                          ('LECHUGA VERDE',           'LECHUGA VERDE'),
+    'MIX DE LECHUGA':                                               ('MIX DE LECHUGA',         'MIX DE LECHUGA'),
+    'PALTA':                                                        ('PALTA',                   'PALTA'),
+    'TOMATE':                                                       ('TOMATE',                  'TOMATE'),
+}
+
 def calcular_total_kg(producto, total, crudo=0, produccion=0, cocido=0, producto_control=None,
                       conv_porcion=None, conv_cocido=None):
     """
-    Calcula total_kg usando la fórmula verificada del archivo INV_AJUSTE.xlsx:
-
-    Si conv_porcion < 1.0  (porcionadas/precocidas almacenadas en unidades):
-        total_kg = (crudo + produccion + cocido) × conv_porcion
-
-    Si conv_porcion == 1.0 (producto en KG):
-        total_kg = (crudo + produccion) + (cocido / conv_cocido)  si cocido > 0
-                 = (crudo + produccion)                            si cocido == 0
-
-    conv_porcion y conv_cocido pueden venir directamente del Excel (Forma C)
-    o se obtienen de TABLA_CONV_INV. Si no hay match, total_kg = total.
+    Fórmula: total_kg = (crudo + produccion + cocido/conv_cocido) * conv_porcion
+    Prioridad: PROD_CONV_MAP > parámetros explícitos > fallback total sin convertir
     """
     key = str(producto).strip().upper()
-    conv = TABLA_CONV_INV.get(key)
-
     crudo      = float(crudo      or 0)
     produccion = float(produccion or 0)
     cocido     = float(cocido     or 0)
     total      = float(total      or 0)
 
-    # Determinar factores: Excel tiene prioridad sobre TABLA_CONV_INV
-    if conv_porcion is not None and conv_cocido is not None:
-        cp   = float(conv_porcion) if float(conv_porcion or 0) > 0 else 1.0
+    entry = PROD_CONV_MAP.get(key)
+    if entry:
+        conv_key, ctrl = entry
+        cc, cp = CONV_TABLE[conv_key]
+    elif conv_porcion is not None and conv_cocido is not None:
         cc   = float(conv_cocido)  if float(conv_cocido  or 0) > 0 else 1.0
-        ctrl = conv['control'] if conv else (producto_control or producto)
-    elif conv:
-        cp   = conv['porcion']
-        cc   = conv['cocido']
-        ctrl = conv['control']
+        cp   = float(conv_porcion) if float(conv_porcion or 0) > 0 else 1.0
+        ctrl = producto_control or producto
     else:
         # Sin match: devolver total sin convertir
-        return float(total), producto_control or producto
+        return total, producto_control or producto
 
-    if cp < 1.0:
-        # Porcionadas/precocidas en unidades → multiplicar por porcion
-        total_kg = (crudo + produccion + cocido) * cp
-    else:
-        # Producto en KG → cocido necesita dividirse por conv_cocido
-        total_kg = (crudo + produccion) + (cocido / cc if cocido > 0 else 0)
-
+    cc = cc if cc > 0 else 1.0
+    total_kg = (crudo + produccion + (cocido / cc)) * cp
     return total_kg, ctrl
 
 
@@ -2510,7 +2609,6 @@ if modulo.startswith("📦"):
                                 um       = str(row.get('UND','')).strip()
                                 total_og = float(row.get('TOTAL', 0) or 0)
                                 total_kg = float(row.get('TOTAL 2', total_og) or 0)
-                                # Forma B ya viene en KG — solo mapeamos producto_control, sin conversión
                                 _, prod_ctrl_b = calcular_total_kg(prod, 1)
                                 registros.append({
                                     'local': local_fila, 'periodo': periodo_inv,
@@ -2538,49 +2636,32 @@ if modulo.startswith("📦"):
                             st.success(f"✅ {len(df_inv_save)} productos cargados (Forma B) — {n_locales} local(es) · {tipo_inv} · {periodo_inv}")
 
                         elif es_forma_c_btn:
-                        # ══ FORMA C: consolidado multi-local (hojas Alimentos consolidado + BAR CONSOLIDADO) ══
-                            conversores_c = {
-                                'CHULETA KASSLER':{'control':'CHULETA KASSLER','porcion':1.0,'cocido':1.0},
-                                'COSTILLAS':{'control':'COSTILLAS','porcion':1.0,'cocido':0.75},
-                                'JAMÓN':{'control':'JAMÓN','porcion':1.0,'cocido':1.0},
-                                'LOMO DE CENTRO':{'control':'LOMO DE CENTRO','porcion':1.0,'cocido':1.0},
-                                'LOMO DE CENTRO(PORCIONADAS)':{'control':'LOMO DE CENTRO','porcion':0.18,'cocido':1.0},
-                                'PANCETA LAMINADA':{'control':'PANCETA LAMINADA','porcion':1.0,'cocido':0.5},
-                                'DESPUNTE PECHUGA DE POLLO':{'control':'PECHUGA DE POLLO','porcion':1.0,'cocido':1.0},
-                                'PECHUGA DE POLLO':{'control':'PECHUGA DE POLLO','porcion':1.0,'cocido':0.8},
-                                'PERNIL':{'control':'PERNIL','porcion':1.0,'cocido':1.0},
-                                'PERNIL(PORCIONADAS)':{'control':'PERNIL','porcion':0.18,'cocido':1.0},
-                                'TOCINO AHUMADO':{'control':'TOCINO AHUMADO','porcion':1.0,'cocido':1.0},
-                                'FILETE':{'control':'FILETE','porcion':1.0,'cocido':1.0},
-                                'PLATEADA':{'control':'PLATEADA','porcion':1.0,'cocido':0.5},
-                                'LOMO LISO':{'control':'LOMO LISO','porcion':1.0,'cocido':1.0},
-                                'LOMO VETADO':{'control':'LOMO VETADO','porcion':1.0,'cocido':1.0},
-                                'POSTA':{'control':'POSTA','porcion':1.0,'cocido':1.0},
-                                'PALTA':{'control':'PALTA','porcion':1.0,'cocido':1.0},
-                                'TOMATE':{'control':'TOMATE','porcion':1.0,'cocido':1.0},
-                                'LECHUGA':{'control':'LECHUGA','porcion':1.0,'cocido':1.0},
-                                'QUESO RANCO':{'control':'QUESO RANCO','porcion':1.0,'cocido':1.0},
-                                'QUESO CHEDDAR':{'control':'QUESO CHEDDAR','porcion':1.0,'cocido':1.0},
-                                'QUESO PARMESANO':{'control':'QUESO PARMESANO','porcion':1.0,'cocido':1.0},
-                                'PAPAS FRITAS':{'control':'PAPAS FRITAS','porcion':1.0,'cocido':1.0},
-                                'FILETE SALMON':{'control':'FILETE SALMON','porcion':1.0,'cocido':1.0},
-                                'ATUN':{'control':'ATUN','porcion':1.0,'cocido':1.0},
-                                'CAMARON':{'control':'CAMARON','porcion':1.0,'cocido':1.0},
-                                'CAMARON APANADO':{'control':'CAMARON APANADO','porcion':1.0,'cocido':1.0},
-                                'SALMON SLICE LAMINADO':{'control':'SALMON SLICE LAMINADO','porcion':1.0,'cocido':1.0},
-                                'LOCOS':{'control':'LOCOS','porcion':1.0,'cocido':1.0},
-                                'ERIZOS':{'control':'ERIZOS','porcion':1.0,'cocido':1.0},
-                                'GRASA DE WAGYU':{'control':'GRASA DE WAGYU','porcion':1.0,'cocido':1.0},
-                            }
-
+                        # ══ FORMA C: consolidado multi-local ══
                             import io as _io4
                             raw_c = f_inv.read()
                             xls_c = pd.ExcelFile(_io4.BytesIO(raw_c))
 
+                            # Nombres de hoja tolerantes a variaciones
+                            def _find_sheet(names, candidates):
+                                nl = [n.strip().lower() for n in names]
+                                for c in candidates:
+                                    if c.lower() in nl:
+                                        return names[[n.strip().lower() for n in names].index(c.lower())]
+                                return None
+
+                            sheet_ali = _find_sheet(xls_c.sheet_names,
+                                ['alimentos consolidado', 'alimentos_consolidado', 'alimentos'])
+                            sheet_bar = _find_sheet(xls_c.sheet_names,
+                                ['bar consolidado', 'bar_consolidado', 'bar'])
+
+                            if not sheet_ali:
+                                st.error(f"No se encontró hoja de Alimentos. Hojas disponibles: {xls_c.sheet_names}")
+                                st.stop()
+
                             registros = []
 
-                            # Alimentos consolidado
-                            df_ac = pd.read_excel(xls_c, 'Alimentos consolidado', header=0)
+                            # ── Alimentos consolidado ──────────────────────
+                            df_ac = pd.read_excel(xls_c, sheet_ali, header=0)
                             if local_inv:
                                 df_ac = df_ac[df_ac['Local'].astype(str).str.strip().str.lower() == local_inv.lower()]
 
@@ -2589,20 +2670,17 @@ if modulo.startswith("📦"):
                                 prod = str(row.get('PRODUCTO','')).strip()
                                 if not prod or prod == 'nan': continue
                                 um     = str(row.get('Unidad de Medida','')).strip()
-                                crudo  = pd.to_numeric(row.get('Crudo',0),     errors='coerce') or 0
-                                prod_  = pd.to_numeric(row.get('Producción',0),errors='coerce') or 0
-                                cocido = pd.to_numeric(row.get('Cocido',0),    errors='coerce') or 0
-                                total  = pd.to_numeric(row.get('Total',0),     errors='coerce') or 0
-                                tipo   = str(row.get('TIPO','')).strip()
-                                # Leer factores directamente del Excel (columnas J y L)
-                                conv_c = pd.to_numeric(row.get('Convertor Cocido', None),          errors='coerce')
-                                conv_p = pd.to_numeric(row.get('Convertor Porcion a Crudo', None), errors='coerce')
-                                # control del archivo tiene prioridad
-                                prod_ctrl = str(row.get('control', prod)).strip()
-                                if prod_ctrl == 'nan': prod_ctrl = prod
+                                crudo  = pd.to_numeric(row.get('Crudo',    0), errors='coerce') or 0
+                                prod_  = pd.to_numeric(row.get('Producción',0), errors='coerce') or 0
+                                cocido = pd.to_numeric(row.get('Cocido',   0), errors='coerce') or 0
+                                total  = pd.to_numeric(row.get('Total',    0), errors='coerce') or 0
+                                tipo   = str(row.get('TIPO','') or '').strip()
+                                # control del archivo tiene prioridad para el mapeo
+                                prod_ctrl_hint = str(row.get('control', '') or '').strip()
+                                if prod_ctrl_hint == 'nan': prod_ctrl_hint = ''
                                 total_kg, prod_ctrl = calcular_total_kg(
-                                    prod, total, crudo, prod_, cocido, prod_ctrl,
-                                    conv_porcion=conv_p, conv_cocido=conv_c
+                                    prod, total, crudo, prod_, cocido,
+                                    producto_control=prod_ctrl_hint or None
                                 )
                                 registros.append({
                                     'local': loc, 'periodo': periodo_inv,
@@ -2613,28 +2691,28 @@ if modulo.startswith("📦"):
                                     'total_kg': total_kg, 'tipo': tipo, 'fuente': 'alimentos_c'
                                 })
 
-                            # BAR CONSOLIDADO
-                            df_bc = pd.read_excel(xls_c, 'BAR CONSOLIDADO', header=0)
-                            if local_inv:
-                                df_bc = df_bc[df_bc['Local'].astype(str).str.strip().str.lower() == local_inv.lower()]
+                            # ── BAR CONSOLIDADO ────────────────────────────
+                            if sheet_bar:
+                                df_bc = pd.read_excel(xls_c, sheet_bar, header=0)
+                                if local_inv:
+                                    df_bc = df_bc[df_bc['Local'].astype(str).str.strip().str.lower() == local_inv.lower()]
 
-                            for _, row in df_bc.iterrows():
-                                loc  = str(row.get('Local','')).strip()
-                                prod = str(row.get('PRODUCTO','')).strip()
-                                if not prod or prod == 'nan': continue
-                                um    = str(row.get('Unidad de Medida','')).strip()
-                                total = pd.to_numeric(row.get('Total',0), errors='coerce') or 0
-                                tipo  = str(row.get('TIPO','')).strip().upper()
-                                # Mapear TIPO → producto_control
-                                ctrl  = TIPO_BAR_CONTROL.get(tipo, tipo)
-                                registros.append({
-                                    'local': loc, 'periodo': periodo_inv,
-                                    'tipo_inventario': tipo_inv,
-                                    'producto': prod, 'producto_control': ctrl,
-                                    'um': um, 'crudo': 0, 'produccion': 0, 'cocido': 0,
-                                    'total_original': total, 'total_kg': total,
-                                    'tipo': tipo, 'fuente': 'bar_c'
-                                })
+                                for _, row in df_bc.iterrows():
+                                    loc  = str(row.get('Local','')).strip()
+                                    prod = str(row.get('PRODUCTO','')).strip()
+                                    if not prod or prod == 'nan': continue
+                                    um    = str(row.get('Unidad de Medida','')).strip()
+                                    total = pd.to_numeric(row.get('Total',0), errors='coerce') or 0
+                                    tipo  = str(row.get('TIPO','') or '').strip().upper()
+                                    ctrl  = TIPO_BAR_CONTROL.get(tipo, tipo)
+                                    registros.append({
+                                        'local': loc, 'periodo': periodo_inv,
+                                        'tipo_inventario': tipo_inv,
+                                        'producto': prod, 'producto_control': ctrl,
+                                        'um': um, 'crudo': 0, 'produccion': 0, 'cocido': 0,
+                                        'total_original': total, 'total_kg': total,
+                                        'tipo': tipo, 'fuente': 'bar_c'
+                                    })
 
                             df_inv_save = pd.DataFrame(registros)
                             locales_c = [l.lower().strip() for l in df_inv_save['local'].dropna().unique().tolist()]
@@ -2751,7 +2829,6 @@ if modulo.startswith("📦"):
                 st.markdown("**Inventarios en BD:**")
                 st.dataframe(df_inv_bd, use_container_width=True, hide_index=True)
 
-            # ── Re-mapeo de producto_control (no toca total_kg) ──
             st.markdown("---")
             st.markdown("**🔧 Re-mapear producto_control en BD**")
             st.caption("Corrige producto_control de registros existentes. No modifica total_kg.")
@@ -4112,27 +4189,6 @@ elif modulo.startswith("📊"):
                         f'<th style="{hs};text-align:right">DESV %</th></tr></thead>'
                         f'<tbody>{r3_html}</tbody></table></div>',
                         unsafe_allow_html=True)
-
-                # ── DEBUG: desglose inventario final POSTA ────────
-                with st.expander(f"🔍 Debug Inv. Final POSTA — {local_show}", expanded=False):
-                    q_posta = """
-                        SELECT tipo_inventario, producto, producto_control,
-                               crudo, produccion, cocido, total_original, total_kg, fuente
-                        FROM inventarios
-                        WHERE TRIM(periodo)=:p
-                          AND LOWER(TRIM(local))=:l
-                          AND UPPER(TRIM(producto_control))='POSTA'
-                        ORDER BY tipo_inventario, producto
-                    """
-                    df_posta = run_query(q_posta, {'p': periodo_show, 'l': local_show.lower().strip()})
-                    if not df_posta.empty:
-                        st.dataframe(df_posta, use_container_width=True)
-                        st.markdown("**Suma total_kg por tipo:**")
-                        st.dataframe(df_posta.groupby('tipo_inventario')['total_kg'].sum().reset_index(), use_container_width=True)
-                        fin_sum = float(df_posta[df_posta['tipo_inventario']=='Final']['total_kg'].sum())
-                        st.markdown(f"**`fin_kg` que usará el informe:** `{fin_sum:.4f}`")
-                    else:
-                        st.warning("Sin filas de POSTA para este local/período")
 
                 # ── SECCIÓN 5: Control de productos críticos ──────
                 st.markdown(f"**5. Control de Productos Críticos**")
