@@ -1350,6 +1350,30 @@ def save_ventas(df_raw):
         'Nombre garzon apertura': 'garzon', 'Nombre garzón apertura': 'garzon',
         'Folio': 'folio', 'Forma de Pago': 'forma_pago',
         'Nombre Lista Precio': 'lista_precio',
+        # Columnas nuevas
+        'Numero de clientes': 'num_clientes',
+        'Número de clientes': 'num_clientes',
+        'Capacidad de la mesa': 'capacidad_mesa',
+        'Impuestos totales': 'impuestos_totales',
+        'Pago total': 'pago_total',
+        'Pagos': 'pago',
+        'ID Caja': 'id_caja',
+        'Nombre de la caja': 'nombre_caja',
+        'Total con propina': 'total_con_propina',
+        'ID de Pago': 'id_pago',
+        'Valor de boleta': 'valor_boleta',
+        'Tipo de documento': 'tipo_documento',
+        'Descuentos': 'descuentos',
+        'Total a pagar': 'total_a_pagar',
+        'Propina': 'propina',
+        'Pagado': 'pagado',
+        'Cambio': 'cambio',
+        'Diferencia a favor': 'diferencia_favor',
+        'Formas de pago': 'formas_pago',
+        'Valor': 'valor',
+        'Precio Lista': 'precio_lista',
+        'Precio Turno': 'precio_turno',
+        'Productos': 'productos',
         # Compatibilidad formato anterior
         'fecha_pura': 'fecha_pedido', 'cat_menu': 'categoria_menu',
         'id_producto': 'sku_producto', 'cantidad': 'cantidad_vendida',
@@ -1388,7 +1412,12 @@ def save_ventas(df_raw):
                'ac_excepcion','jerarquia_excepcion','es_opcion',
                'local','mesa','sector','origen','garzon',
                'folio','forma_pago','lista_precio',
-               'fecha_pedido','fecha_creacion','fecha_cierre']
+               'fecha_pedido','fecha_creacion','fecha_cierre',
+               'num_clientes','capacidad_mesa','impuestos_totales','pago_total','pago',
+               'id_caja','nombre_caja','total_con_propina','id_pago','valor_boleta',
+               'tipo_documento','descuentos','total_a_pagar','propina','pagado','cambio',
+               'diferencia_favor','formas_pago','valor','precio_lista','precio_turno',
+               'productos']
     cols_ok = [c for c in cols_bd if c in df.columns]
     df_save = df[cols_ok].copy()
 
@@ -1441,6 +1470,19 @@ def save_ventas_chunk(df_raw, engine, skip_delete=False):
         'Nombre garzon apertura': 'garzon', 'Nombre garzón apertura': 'garzon',
         'Folio': 'folio', 'Forma de Pago': 'forma_pago',
         'Nombre Lista Precio': 'lista_precio',
+        'Numero de clientes': 'num_clientes', 'Número de clientes': 'num_clientes',
+        'Capacidad de la mesa': 'capacidad_mesa',
+        'Impuestos totales': 'impuestos_totales',
+        'Pago total': 'pago_total', 'Pagos': 'pago',
+        'ID Caja': 'id_caja', 'Nombre de la caja': 'nombre_caja',
+        'Total con propina': 'total_con_propina', 'ID de Pago': 'id_pago',
+        'Valor de boleta': 'valor_boleta', 'Tipo de documento': 'tipo_documento',
+        'Descuentos': 'descuentos',
+        'Total a pagar': 'total_a_pagar', 'Propina': 'propina',
+        'Pagado': 'pagado', 'Cambio': 'cambio', 'Diferencia a favor': 'diferencia_favor',
+        'Formas de pago': 'formas_pago', 'Valor': 'valor',
+        'Precio Lista': 'precio_lista', 'Precio Turno': 'precio_turno',
+        'Productos': 'productos',
     }
     df = df.rename(columns={k: v for k, v in mapeo.items() if k in df.columns})
 
@@ -1473,7 +1515,12 @@ def save_ventas_chunk(df_raw, engine, skip_delete=False):
                'ac_excepcion','jerarquia_excepcion','es_opcion',
                'local','mesa','sector','origen','garzon',
                'folio','forma_pago','lista_precio',
-               'fecha_pedido','fecha_creacion','fecha_cierre']
+               'fecha_pedido','fecha_creacion','fecha_cierre',
+               'num_clientes','capacidad_mesa','impuestos_totales','pago_total','pago',
+               'id_caja','nombre_caja','total_con_propina','id_pago','valor_boleta',
+               'tipo_documento','descuentos','total_a_pagar','propina','pagado','cambio',
+               'diferencia_favor','formas_pago','valor','precio_lista','precio_turno',
+               'productos']
     cols_ok = [c for c in cols_bd if c in df.columns]
     df[cols_ok].to_sql('ventas', engine, if_exists='append', index=False, method='multi')
 
@@ -5891,12 +5938,13 @@ elif modulo.startswith("🏠"):
 
                 if pagos_ids:
                     df_ventas_cc = run_query("""
-                        SELECT v.pago, v.categoria_menu, v.valor, v.local,
+                        SELECT v.id_pago, v.categoria_menu, v.valor, v.local,
                                cc.categoria as categoria_cc
                         FROM ventas v
                         INNER JOIN cuentas_casa cc
-                            ON v.pago = cc.pago
-                        WHERE v.pago = ANY(:pagos)
+                            ON v.id_pago = cc.pago
+                        WHERE v.id_pago = ANY(:pagos)
+                          AND v.forma_pago = 'Cuenta casa'
                           AND v.fecha_venta BETWEEN :fi AND :ff
                     """, {'pagos': pagos_ids, 'fi': str(rcc_fi), 'ff': str(rcc_ff)})
 
