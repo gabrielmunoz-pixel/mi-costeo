@@ -2037,9 +2037,20 @@ if modulo.startswith("📦"):
                 import io as _io2
                 raw = f_ven.read()
                 sep = ';' if b';' in raw[:500] else ','
-                with st.spinner("Cargando..."):
-                    df_ven = pd.read_csv(_io2.BytesIO(raw), sep=sep, dtype=str)
-                    save_ventas(df_ven)
+                with st.spinner("Cargando ventas..."):
+                    try:
+                        engine = get_engine()
+                        # Chunk grande — 3 bloques máx para archivo de 110MB
+                        chunks = list(pd.read_csv(_io2.BytesIO(raw), sep=sep, dtype=str, chunksize=200_000))
+                        for i, chunk in enumerate(chunks):
+                            if i == 0:
+                                save_ventas(chunk)          # hace el DELETE + insert
+                            else:
+                                save_ventas_chunk(chunk, engine, skip_delete=True)  # solo insert
+                        st.success(f"✅ Ventas cargadas en {len(chunks)} bloque(s).")
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+                        st.exception(e)
 
     with tab4:
         st.markdown("<div class='info-box'>Mapea SKUs de compras sin código de venta hacia SKUs equivalentes que sí tienen receta.<br>Ejemplo: Erdinger Trigo (BA-CA-078) → Erdinger Weissbier (BA-CA-066)</div>", unsafe_allow_html=True)
