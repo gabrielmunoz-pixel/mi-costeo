@@ -730,39 +730,37 @@ def informe_rentabilidad(fecha_i, fecha_f, local):
     return df.sort_values('venta', ascending=False)
 
 
+
+# Mapeo BA jerarquía → grupo visual
+BA_GRUPOS = {
+    'Pan':            ['BA.010','BA.011'],
+    'Proteína':       ['BA.020','BA.250','BA.260'],
+    'Agregados':      ['BA.030','BA.270','BA.280'],
+    'Modificación':   ['BA.040','BA.330','BA.340','BA.350','BA.360','BA.370',
+                       'BA.380','BA.390','BA.400','BA.410','BA.420','BA.430',
+                       'BA.440','BA.450','BA.460','BA.470','BA.480','BA.490'],
+    'Punto Cocción':  ['BA.050'],
+    'Bebida':         ['BA.060','BA.070','BA.150','BA.210'],
+    'Acompañamiento': ['BA.100','BA.110','BA.120','BA.170','BA.180','BA.220'],
+    'Extras':         ['BA.080','BA.090','BA.290','BA.300','BA.310'],
+    'Postre':         ['BA.140','BA.230','BA.240','BA.320'],
+    'Cubiertos':      ['BA.200'],
+}
+# Invertir para lookup rápido: BA.010 → 'Pan'
+BA_A_GRUPO = {ba: grupo for grupo, bas in BA_GRUPOS.items() for ba in bas}
+
+
 def get_opciones_producto(fecha_i, fecha_f, local, ab_categoria_padre):
     """
-    Distribución de opciones seleccionadas para un plato en el período.
-    Join por id_orden + ab_categoria (padre e hijo comparten el mismo AB).
+    Distribución de opciones para un plato, agrupadas por jerarquía BA.
+    Retorna dict: { grupo: DataFrame(sku, nombre, cant, pct) }
     """
     filtro_local = "AND UPPER(p.local) = UPPER(:l)" if local != "Todos" else ""
     params = {'i': str(fecha_i), 'f': str(fecha_f), 'ab': ab_categoria_padre}
     if local != "Todos":
         params['l'] = local
     q = f"""
-        SELECT o.sku_producto, o.nombre_producto,
-               SUM(o.cantidad_vendida) as cant,
-               ROUND(CAST(SUM(o.cantidad_vendida) * 100.0 /
-                     NULLIF(SUM(SUM(o.cantidad_vendida)) OVER (), 0) AS numeric), 1) as pct
-        FROM ventas p
-        JOIN ventas o
-          ON p.id_orden     = o.id_orden
-         AND p.ab_categoria = o.ab_categoria
-         AND o.es_opcion    = true
-         AND p.es_opcion    = false
-        WHERE p.fecha_venta BETWEEN :i AND :f
-          AND p.ab_categoria = :ab
-          {filtro_local}
-        GROUP BY o.sku_producto, o.nombre_producto
-        ORDER BY cant DESC
-    """
-    return run_query(q, params)
-
-
-def get_opciones_por_local(fecha_i, fecha_f, ab_categoria_padre):
-    """Distribución de opciones por local para un plato dado."""
-    q = """
-        SELECT p.local, o.nombre_producto,
+        SELECT o.sku_producto, o.nombre_producto, o.ba_opcion,
                SUM(o.cantidad_vendida) as cant
         FROM ventas p
         JOIN ventas o
@@ -772,10 +770,63 @@ def get_opciones_por_local(fecha_i, fecha_f, ab_categoria_padre):
          AND p.es_opcion    = false
         WHERE p.fecha_venta BETWEEN :i AND :f
           AND p.ab_categoria = :ab
-        GROUP BY p.local, o.nombre_producto
-        ORDER BY p.local, cant DESC
+          {filtro_local}
+        GROUP BY o.sku_producto, o.nombre_producto, o.ba_opcion
+        ORDER BY o.ba_opcion, cant DESC
     """
-    return run_query(q, {'i': str(fecha_i), 'f': str(fecha_f), 'ab': ab_categoria_padre})
+    df = run_query(q, params)
+    if df.empty:
+        return {}
+
+    df['cant'] = pd.to_numeric(df['cant'], errors='coerce').fillna(0)
+
+    # Agrupar por grupo BA
+    resultado = {}
+    for _, row in df.iterrows():
+        ba  = str(row['ba_opcion'] or '').strip()
+        grp = BA_A_GRUPO.get(ba, 'Otros')
+        if grp not in resultado:
+            resultado[grp] = []
+        resultado[grp].append(row)
+
+    # Convertir a DataFrame por grupo y calcular %
+    grupos_df = {}
+    for grp, rows in resultado.items():
+        df_g = pd.DataFrame(rows)
+        total_g = df_g['cant'].sum()
+        df_g['pct'] = (df_g['cant'] / total_g * 100).round(1) if total_g > 0 else 0
+        grupos_df[grp] = df_g.sort_values('cant', ascending=False)
+
+    # Ordenar grupos según BA_GRUPOS
+    orden = list(BA_GRUPOS.keys()) + ['Otros']
+    return {g: grupos_df[g] for g in orden if g in grupos_df}
+
+
+def get_opciones_por_local(fecha_i, fecha_f, ab_categoria_padre):
+    """Distribución de opciones por local para un plato dado, agrupadas por BA."""
+    q = """
+        SELECT p.local, o.nombre_producto, o.ba_opcion,
+               SUM(o.cantidad_vendida) as cant
+        FROM ventas p
+        JOIN ventas o
+          ON p.id_orden     = o.id_orden
+         AND p.ab_categoria = o.ab_categoria
+         AND o.es_opcion    = true
+         AND p.es_opcion    = false
+        WHERE p.fecha_venta BETWEEN :i AND :f
+          AND p.ab_categoria = :ab
+        GROUP BY p.local, o.nombre_producto, o.ba_opcion
+        ORDER BY p.local, o.ba_opcion, cant DESC
+    """
+    df = run_query(q, {'i': str(fecha_i), 'f': str(fecha_f), 'ab': ab_categoria_padre})
+    if df.empty:
+        return {}
+
+    df['cant'] = pd.to_numeric(df['cant'], errors='coerce').fillna(0)
+    df['grupo'] = df['ba_opcion'].apply(lambda x: BA_A_GRUPO.get(str(x or '').strip(), 'Otros'))
+    return df
+
+
 
 
 # ============================================================
@@ -3569,23 +3620,32 @@ elif modulo.startswith("📊"):
 
                     if tiene_opciones:
                         with st.expander(f"  ↳ Opciones de {r.get('nombre_producto','')}"):
-                            df_op = get_opciones_producto(fi_, ff_, local_, ab)
-                            if not df_op.empty:
-                                op_html = '<div style="background:#0d0d0d;padding:8px 12px;border-radius:8px">'
-                                for _, op in df_op.iterrows():
-                                    bar_w = int(float(op['pct'] or 0))
-                                    op_html += (
-                                        f'<div style="display:flex;align-items:center;gap:12px;padding:4px 0">'
-                                        f'<span style="color:#666;font-size:0.72rem;font-family:monospace;width:80px">{op["sku_producto"]}</span>'
-                                        f'<span style="color:#ccc;font-size:0.78rem;width:200px">{op["nombre_producto"]}</span>'
-                                        f'<span style="color:#d4a853;font-size:0.78rem;font-weight:600;width:50px">{int(op["cant"])}</span>'
-                                        f'<div style="flex:1;background:#1a1a1a;border-radius:3px;height:6px">'
-                                        f'<div style="background:#d4a853;height:6px;border-radius:3px;width:{bar_w}%"></div></div>'
-                                        f'<span style="color:#888;font-size:0.75rem;width:45px;text-align:right">{op["pct"]}%</span>'
-                                        f'</div>'
+                            grupos = get_opciones_producto(fi_, ff_, local_, ab)
+                            if grupos:
+                                for grp_nombre, df_g in grupos.items():
+                                    total_grp = df_g['cant'].sum()
+                                    st.markdown(
+                                        f'<div style="font-size:0.7rem;text-transform:uppercase;'
+                                        f'letter-spacing:0.1em;color:#666;margin:8px 0 4px;'
+                                        f'border-bottom:1px solid #222;padding-bottom:3px">'
+                                        f'{grp_nombre} — {int(total_grp):,} uds</div>',
+                                        unsafe_allow_html=True
                                     )
-                                op_html += '</div>'
-                                st.markdown(op_html, unsafe_allow_html=True)
+                                    op_html = '<div style="background:#0d0d0d;padding:4px 12px 8px;border-radius:6px">'
+                                    for _, op in df_g.iterrows():
+                                        bar_w = int(float(op['pct'] or 0))
+                                        op_html += (
+                                            f'<div style="display:flex;align-items:center;gap:10px;padding:3px 0">'
+                                            f'<span style="color:#555;font-size:0.7rem;font-family:monospace;width:75px">{op["sku_producto"]}</span>'
+                                            f'<span style="color:#ccc;font-size:0.78rem;flex:1">{op["nombre_producto"]}</span>'
+                                            f'<span style="color:#d4a853;font-weight:600;font-size:0.78rem;width:55px;text-align:right">{int(op["cant"]):,}</span>'
+                                            f'<div style="width:100px;background:#1a1a1a;border-radius:3px;height:5px">'
+                                            f'<div style="background:#d4a853;height:5px;border-radius:3px;width:{bar_w}%"></div></div>'
+                                            f'<span style="color:#666;font-size:0.73rem;width:40px;text-align:right">{op["pct"]}%</span>'
+                                            f'</div>'
+                                        )
+                                    op_html += '</div>'
+                                    st.markdown(op_html, unsafe_allow_html=True)
                             else:
                                 st.caption("Sin datos de opciones para este período.")
 
@@ -3705,11 +3765,28 @@ elif modulo.startswith("📊"):
                             st.markdown("**Distribución de opciones por local:**")
                             df_op_loc = get_opciones_por_local(fi_, ff_, ab)
                             if not df_op_loc.empty:
-                                pivot = df_op_loc.pivot_table(
-                                    index='local', columns='nombre_producto',
-                                    values='cant', aggfunc='sum', fill_value=0
-                                )
-                                st.dataframe(pivot, use_container_width=True)
+                                locales_op = sorted(df_op_loc['local'].unique().tolist())
+                                grupos_u = [g for g in list(BA_GRUPOS.keys())+['Otros'] if g in df_op_loc['grupo'].unique()]
+                                for grp in grupos_u:
+                                    df_grp = df_op_loc[df_op_loc['grupo']==grp]
+                                    st.markdown(
+                                        f'<div style="font-size:0.7rem;text-transform:uppercase;'
+                                        f'letter-spacing:0.1em;color:#666;margin:8px 0 4px;'
+                                        f'border-bottom:1px solid #222;padding-bottom:3px">{grp}</div>',
+                                        unsafe_allow_html=True
+                                    )
+                                    pivot = df_grp.pivot_table(
+                                        index='nombre_producto', columns='local',
+                                        values='cant', aggfunc='sum', fill_value=0
+                                    )
+                                    # Reorder columns to known locales order
+                                    cols_ord = [l for l in ['CHICUREO','LA DEHESA','LA REINA','LAS CONDES',
+                                                             'LOS TRAPENSES','MACUL','NUEVA PROVIDENCIA',
+                                                             'PROVIDENCIA','QUILIN','VITACURA'] if l in pivot.columns]
+                                    pivot = pivot.reindex(columns=cols_ord, fill_value=0)
+                                    pivot['TOTAL'] = pivot.sum(axis=1)
+                                    pivot = pivot.sort_values('TOTAL', ascending=False)
+                                    st.dataframe(pivot.astype(int), use_container_width=True)
 
             # Descarga
             buf2 = io.BytesIO()
