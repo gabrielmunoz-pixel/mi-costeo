@@ -742,8 +742,8 @@ def get_opciones_producto(fecha_i, fecha_f, local, ab_categoria_padre):
     q = f"""
         SELECT o.sku_producto, o.nombre_producto,
                SUM(o.cantidad_vendida) as cant,
-               ROUND(SUM(o.cantidad_vendida) * 100.0 /
-                     NULLIF(SUM(SUM(o.cantidad_vendida)) OVER (), 0), 1) as pct
+               ROUND(CAST(SUM(o.cantidad_vendida) * 100.0 /
+                     NULLIF(SUM(SUM(o.cantidad_vendida)) OVER (), 0) AS numeric), 1) as pct
         FROM ventas p
         JOIN ventas o
           ON p.id_orden     = o.id_orden
