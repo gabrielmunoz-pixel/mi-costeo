@@ -685,11 +685,13 @@ def informe_rentabilidad(fecha_i, fecha_f, local):
 
     q_v = f"""
         SELECT sku_producto, nombre_producto, categoria_menu,
+               MAX(ab_categoria) as ab_categoria,
                SUM(cantidad_vendida) as cant,
                SUM(monto_venta_real) as venta
         FROM ventas
         WHERE fecha_venta BETWEEN :i AND :f
-        {filtro_local_r}
+          AND es_opcion = false
+          {filtro_local_r}
         GROUP BY 1, 2, 3
     """
 
@@ -726,6 +728,54 @@ def informe_rentabilidad(fecha_i, fecha_f, local):
     df['margen_pct']   = df['margen_periodo']
 
     return df.sort_values('venta', ascending=False)
+
+
+def get_opciones_producto(fecha_i, fecha_f, local, ab_categoria_padre):
+    """
+    Distribución de opciones seleccionadas para un plato en el período.
+    Join por id_orden + ab_categoria (padre e hijo comparten el mismo AB).
+    """
+    filtro_local = "AND UPPER(p.local) = UPPER(:l)" if local != "Todos" else ""
+    params = {'i': str(fecha_i), 'f': str(fecha_f), 'ab': ab_categoria_padre}
+    if local != "Todos":
+        params['l'] = local
+    q = f"""
+        SELECT o.sku_producto, o.nombre_producto,
+               SUM(o.cantidad_vendida) as cant,
+               ROUND(SUM(o.cantidad_vendida) * 100.0 /
+                     NULLIF(SUM(SUM(o.cantidad_vendida)) OVER (), 0), 1) as pct
+        FROM ventas p
+        JOIN ventas o
+          ON p.id_orden     = o.id_orden
+         AND p.ab_categoria = o.ab_categoria
+         AND o.es_opcion    = true
+         AND p.es_opcion    = false
+        WHERE p.fecha_venta BETWEEN :i AND :f
+          AND p.ab_categoria = :ab
+          {filtro_local}
+        GROUP BY o.sku_producto, o.nombre_producto
+        ORDER BY cant DESC
+    """
+    return run_query(q, params)
+
+
+def get_opciones_por_local(fecha_i, fecha_f, ab_categoria_padre):
+    """Distribución de opciones por local para un plato dado."""
+    q = """
+        SELECT p.local, o.nombre_producto,
+               SUM(o.cantidad_vendida) as cant
+        FROM ventas p
+        JOIN ventas o
+          ON p.id_orden     = o.id_orden
+         AND p.ab_categoria = o.ab_categoria
+         AND o.es_opcion    = true
+         AND p.es_opcion    = false
+        WHERE p.fecha_venta BETWEEN :i AND :f
+          AND p.ab_categoria = :ab
+        GROUP BY p.local, o.nombre_producto
+        ORDER BY p.local, cant DESC
+    """
+    return run_query(q, {'i': str(fecha_i), 'f': str(fecha_f), 'ab': ab_categoria_padre})
 
 
 # ============================================================
@@ -3421,113 +3471,131 @@ elif modulo.startswith("📊"):
         st.markdown("### 💰 Rentabilidad por Producto / Categoría")
         st.markdown(f"<div class='info-box'>Período: <b>{f_inicio}</b> → <b>{f_fin}</b> · Local: <b>{f_local}</b><br><b>Rent. Teórica</b>: último precio de compra por SKU · <b>Rent. Período</b>: MUC ponderado del período (fallback: última compra).</div>", unsafe_allow_html=True)
 
+        # Vista: Interempresa o Por Local
+        vista = st.radio("Vista", ["🌐 Interempresa", "📍 Por Local"], horizontal=True, key="rent_vista")
+
         if st.button("▶ Generar Informe 1"):
             with st.spinner("Calculando rentabilidad..."):
                 df_inf1 = informe_rentabilidad(f_inicio, f_fin, f_local)
 
+                # Detectar qué AB tienen opciones en el período
+                _lf_op = "AND UPPER(local) = UPPER(:l)" if f_local != "Todos" else ""
+                _p_op  = {'i': str(f_inicio), 'f': str(f_fin)}
+                if f_local != "Todos": _p_op['l'] = f_local
+                df_ab_con_opciones = run_query(f"""
+                    SELECT DISTINCT ab_categoria
+                    FROM ventas
+                    WHERE fecha_venta BETWEEN :i AND :f
+                      AND es_opcion = true
+                      {_lf_op}
+                """, _p_op)
+                abs_con_opciones = set(df_ab_con_opciones['ab_categoria'].tolist()) if not df_ab_con_opciones.empty else set()
+
             if not df_inf1.empty:
-                venta_total = df_inf1['venta'].sum()
-                costo_total = df_inf1['costo_total'].sum()
-                rent_total  = df_inf1['rentabilidad'].sum()
-                margen_gral = (rent_total / venta_total * 100) if venta_total > 0 else 0
+                st.session_state['inf1_data']        = df_inf1
+                st.session_state['inf1_abs_opciones'] = abs_con_opciones
+                st.session_state['inf1_fi']           = f_inicio
+                st.session_state['inf1_ff']           = f_fin
+                st.session_state['inf1_local']        = f_local
 
-                venta_total      = df_inf1['venta'].sum()
-                costo_teo_total  = df_inf1['costo_total_teorico'].sum()
-                costo_per_total  = df_inf1['costo_total_periodo'].sum()
-                rent_teo_total   = df_inf1['rentabilidad_teorica'].sum()
-                rent_per_total   = df_inf1['rentabilidad_periodo'].sum()
-                margen_teo       = (rent_teo_total / venta_total * 100) if venta_total > 0 else 0
-                margen_per       = (rent_per_total / venta_total * 100) if venta_total > 0 else 0
+        if 'inf1_data' in st.session_state:
+            df_inf1         = st.session_state['inf1_data']
+            abs_con_opciones= st.session_state['inf1_abs_opciones']
+            fi_             = st.session_state['inf1_fi']
+            ff_             = st.session_state['inf1_ff']
+            local_          = st.session_state['inf1_local']
 
-                m1, m2, m3, m4, m5, m6 = st.columns(6)
-                m1.metric("💰 Venta Total",          f"${venta_total:,.0f}")
-                m2.metric("📦 Costo Teórico",         f"${costo_teo_total:,.0f}")
-                m3.metric("📦 Costo Período",         f"${costo_per_total:,.0f}")
-                m4.metric("📈 Rent. Teórica",         f"${rent_teo_total:,.0f}")
-                m5.metric("📈 Rent. Período",         f"${rent_per_total:,.0f}")
-                m6.metric("🎯 Margen Período",        f"{margen_per:.1f}%", delta=f"{margen_per-margen_teo:+.1f}% vs teórico")
+            venta_total      = df_inf1['venta'].sum()
+            costo_teo_total  = df_inf1['costo_total_teorico'].sum()
+            costo_per_total  = df_inf1['costo_total_periodo'].sum()
+            rent_teo_total   = df_inf1['rentabilidad_teorica'].sum()
+            rent_per_total   = df_inf1['rentabilidad_periodo'].sum()
+            margen_teo       = (rent_teo_total / venta_total * 100) if venta_total > 0 else 0
+            margen_per       = (rent_per_total / venta_total * 100) if venta_total > 0 else 0
 
-                st.markdown("<br>", unsafe_allow_html=True)
+            m1, m2, m3, m4, m5, m6 = st.columns(6)
+            m1.metric("💰 Venta Total",   f"${venta_total:,.0f}")
+            m2.metric("📦 Costo Teórico", f"${costo_teo_total:,.0f}")
+            m3.metric("📦 Costo Período", f"${costo_per_total:,.0f}")
+            m4.metric("📈 Rent. Teórica", f"${rent_teo_total:,.0f}")
+            m5.metric("📈 Rent. Período", f"${rent_per_total:,.0f}")
+            m6.metric("🎯 Margen Período", f"{margen_per:.1f}%", delta=f"{margen_per-margen_teo:+.1f}% vs teórico")
 
-                # --- Helpers badge ---
-                def badge_margen(val):
-                    if pd.isna(val): return '<span style="color:#555">—</span>'
-                    if val >= 60:
-                        return f'<span style="background:#1a3a2a;color:#4caf7d;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:.1f}%</span>'
-                    elif val >= 40:
-                        return f'<span style="background:#3a2a1a;color:#e89c45;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:.1f}%</span>'
-                    return f'<span style="background:#3a1a1a;color:#e84545;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:.1f}%</span>'
+            st.markdown("<br>", unsafe_allow_html=True)
 
-                def fmt_rent(val):
-                    if val >= 0:
-                        return f'<span style="color:#4caf7d;font-weight:600">${val:,.0f}</span>'
-                    return f'<span style="color:#e84545;font-weight:600">${val:,.0f}</span>'
+            def badge_margen(val):
+                if pd.isna(val): return '<span style="color:#555">—</span>'
+                if val >= 60:   return f'<span style="background:#1a3a2a;color:#4caf7d;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:.1f}%</span>'
+                elif val >= 40: return f'<span style="background:#3a2a1a;color:#e89c45;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:.1f}%</span>'
+                return f'<span style="background:#3a1a1a;color:#e84545;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:.1f}%</span>'
 
-                # --- Tabla detalle por producto ---
-                rows_html = ''
-                cols_show = ['sku_producto', 'categoria_menu', 'nombre_producto', 'cant',
-                             'venta',
-                             'costo_total_teorico', 'rentabilidad_teorica', 'margen_teorico',
-                             'costo_total_periodo', 'rentabilidad_periodo', 'margen_periodo']
+            def fmt_rent(val):
+                if val >= 0: return f'<span style="color:#4caf7d;font-weight:600">${val:,.0f}</span>'
+                return f'<span style="color:#e84545;font-weight:600">${val:,.0f}</span>'
+
+            hs  = 'padding:10px 12px;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
+            hs2 = hs + ';background:#0d1a0d'
+            hs3 = hs + ';background:#0a0a1a'
+
+            # ── VISTA INTEREMPRESA ─────────────────────────────
+            if "Interempresa" in vista:
+                st.markdown("#### Detalle por Producto")
+
                 for _, r in df_inf1.iterrows():
+                    ab   = r.get('ab_categoria', '')
+                    tiene_opciones = ab and ab in abs_con_opciones
                     mg_teo = r.get('margen_teorico', 0)
                     mg_per = r.get('margen_periodo', 0)
                     bg = '#121e14' if mg_per >= 60 else '#1e1a12' if mg_per >= 40 else '#1e1212'
-                    rows_html += (
-                        f'<tr style="border-bottom:1px solid #1e1e1e;background:{bg}">'
-                        f'<td style="padding:9px 12px;color:#666;font-size:0.74rem;font-family:monospace">{r.get("sku_producto","")}</td>'
-                        f'<td style="padding:9px 12px;color:#555;font-size:0.78rem">{r.get("categoria_menu","")}</td>'
-                        f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de">{r.get("nombre_producto","")}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:#aaa">{r.get("cant",0):,.0f}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:#ccc">${r.get("venta",0):,.0f}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:#666">${r.get("costo_total_teorico",0):,.0f}</td>'
-                        f'<td style="padding:9px 12px;text-align:right">{fmt_rent(r.get("rentabilidad_teorica",0))}</td>'
-                        f'<td style="padding:9px 12px;text-align:center">{badge_margen(mg_teo)}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:#777">${r.get("costo_total_periodo",0):,.0f}</td>'
-                        f'<td style="padding:9px 12px;text-align:right">{fmt_rent(r.get("rentabilidad_periodo",0))}</td>'
-                        f'<td style="padding:9px 12px;text-align:center">{badge_margen(mg_per)}</td>'
-                        f'</tr>'
+
+                    row_html = (
+                        f'<div style="display:grid;grid-template-columns:90px 140px 1fr 80px 100px 90px 100px 80px 90px 100px 80px;'
+                        f'gap:0;background:{bg};border-bottom:1px solid #1e1e1e;padding:6px 0;align-items:center">'
+                        f'<span style="padding:0 12px;color:#666;font-size:0.74rem;font-family:monospace">{r.get("sku_producto","")}</span>'
+                        f'<span style="padding:0 8px;color:#555;font-size:0.74rem">{r.get("categoria_menu","")}</span>'
+                        f'<span style="padding:0 8px;font-weight:500;color:#e8e4de;font-size:0.82rem">'
+                        f'{r.get("nombre_producto","")} {"🔽" if tiene_opciones else ""}</span>'
+                        f'<span style="text-align:right;padding:0 12px;color:#aaa">{r.get("cant",0):,.0f}</span>'
+                        f'<span style="text-align:right;padding:0 12px;color:#ccc">${r.get("venta",0):,.0f}</span>'
+                        f'<span style="text-align:right;padding:0 12px;color:#666">${r.get("costo_total_teorico",0):,.0f}</span>'
+                        f'<span style="text-align:right;padding:0 12px">{fmt_rent(r.get("rentabilidad_teorica",0))}</span>'
+                        f'<span style="text-align:center;padding:0 8px">{badge_margen(mg_teo)}</span>'
+                        f'<span style="text-align:right;padding:0 12px;color:#777">${r.get("costo_total_periodo",0):,.0f}</span>'
+                        f'<span style="text-align:right;padding:0 12px">{fmt_rent(r.get("rentabilidad_periodo",0))}</span>'
+                        f'<span style="text-align:center;padding:0 8px">{badge_margen(mg_per)}</span>'
+                        f'</div>'
                     )
+                    st.markdown(row_html, unsafe_allow_html=True)
 
-                hs  = 'padding:10px 12px;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
-                hs2 = hs + ';background:#0d1a0d'  # header teórico
-                hs3 = hs + ';background:#0a0a1a'  # header período
-                tabla_html = (
-                    '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
-                    '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
-                    '<thead>'
-                    '<tr style="background:#111">'
-                    f'<th colspan="5" style="{hs};text-align:left;border-right:1px solid #2a2a2a"></th>'
-                    f'<th colspan="3" style="{hs2};text-align:center;border-right:1px solid #2a2a2a;color:#4caf7d">RENTABILIDAD TEÓRICA</th>'
-                    f'<th colspan="3" style="{hs3};text-align:center;color:#d4a853">RENTABILIDAD PERÍODO</th>'
-                    f'</tr>'
-                    '<tr style="background:#111">'
-                    f'<th style="{hs};text-align:left">SKU</th>'
-                    f'<th style="{hs};text-align:left">Categoría</th>'
-                    f'<th style="{hs};text-align:left">Producto</th>'
-                    f'<th style="{hs};text-align:right">Cant.</th>'
-                    f'<th style="{hs};text-align:right;border-right:1px solid #2a2a2a">Venta</th>'
-                    f'<th style="{hs2};text-align:right">Costo</th>'
-                    f'<th style="{hs2};text-align:right">Rent.</th>'
-                    f'<th style="{hs2};text-align:center;border-right:1px solid #2a2a2a">Margen</th>'
-                    f'<th style="{hs3};text-align:right">Costo</th>'
-                    f'<th style="{hs3};text-align:right">Rent.</th>'
-                    f'<th style="{hs3};text-align:center">Margen</th>'
-                    f'</tr></thead><tbody>{rows_html}</tbody></table></div>'
-                )
-                st.markdown("#### Detalle por Producto")
-                st.markdown(tabla_html, unsafe_allow_html=True)
+                    if tiene_opciones:
+                        with st.expander(f"  ↳ Opciones de {r.get('nombre_producto','')}"):
+                            df_op = get_opciones_producto(fi_, ff_, local_, ab)
+                            if not df_op.empty:
+                                op_html = '<div style="background:#0d0d0d;padding:8px 12px;border-radius:8px">'
+                                for _, op in df_op.iterrows():
+                                    bar_w = int(float(op['pct'] or 0))
+                                    op_html += (
+                                        f'<div style="display:flex;align-items:center;gap:12px;padding:4px 0">'
+                                        f'<span style="color:#666;font-size:0.72rem;font-family:monospace;width:80px">{op["sku_producto"]}</span>'
+                                        f'<span style="color:#ccc;font-size:0.78rem;width:200px">{op["nombre_producto"]}</span>'
+                                        f'<span style="color:#d4a853;font-size:0.78rem;font-weight:600;width:50px">{int(op["cant"])}</span>'
+                                        f'<div style="flex:1;background:#1a1a1a;border-radius:3px;height:6px">'
+                                        f'<div style="background:#d4a853;height:6px;border-radius:3px;width:{bar_w}%"></div></div>'
+                                        f'<span style="color:#888;font-size:0.75rem;width:45px;text-align:right">{op["pct"]}%</span>'
+                                        f'</div>'
+                                    )
+                                op_html += '</div>'
+                                st.markdown(op_html, unsafe_allow_html=True)
+                            else:
+                                st.caption("Sin datos de opciones para este período.")
 
-                # --- Resumen por Categoría ---
+                # Resumen por Categoría
                 st.markdown("---")
                 st.markdown("#### Resumen por Categoría")
                 cat = df_inf1.groupby('categoria_menu').agg(
-                    venta=('venta','sum'),
-                    costo_teo=('costo_total_teorico','sum'),
-                    rent_teo=('rentabilidad_teorica','sum'),
-                    costo_per=('costo_total_periodo','sum'),
-                    rent_per=('rentabilidad_periodo','sum'),
-                    productos=('sku_producto','count')
+                    venta=('venta','sum'), costo_teo=('costo_total_teorico','sum'),
+                    rent_teo=('rentabilidad_teorica','sum'), costo_per=('costo_total_periodo','sum'),
+                    rent_per=('rentabilidad_periodo','sum'), productos=('sku_producto','count')
                 ).reset_index()
                 cat['margen_teo'] = cat.apply(lambda r: r['rent_teo']/r['venta']*100 if r['venta']>0 else 0, axis=1).round(1)
                 cat['margen_per'] = cat.apply(lambda r: r['rent_per']/r['venta']*100 if r['venta']>0 else 0, axis=1).round(1)
@@ -3548,19 +3616,16 @@ elif modulo.startswith("📊"):
                         f'<td style="padding:9px 12px;text-align:center">{badge_margen(r["margen_per"])}</td>'
                         f'</tr>'
                     )
-
                 cat_html = (
                     '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
                     '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
-                    '<thead>'
-                    '<tr style="background:#111">'
+                    '<thead><tr style="background:#111">'
                     f'<th colspan="3" style="{hs};text-align:left;border-right:1px solid #2a2a2a"></th>'
                     f'<th colspan="3" style="{hs2};text-align:center;border-right:1px solid #2a2a2a;color:#4caf7d">TEÓRICA</th>'
                     f'<th colspan="3" style="{hs3};text-align:center;color:#d4a853">PERÍODO</th>'
-                    '</tr>'
-                    '<tr style="background:#111">'
+                    '</tr><tr style="background:#111">'
                     f'<th style="{hs};text-align:left">Categoría</th>'
-                    f'<th style="{hs};text-align:right">Productos</th>'
+                    f'<th style="{hs};text-align:right">Prods</th>'
                     f'<th style="{hs};text-align:right;border-right:1px solid #2a2a2a">Venta</th>'
                     f'<th style="{hs2};text-align:right">Costo</th>'
                     f'<th style="{hs2};text-align:right">Rent.</th>'
@@ -3572,16 +3637,89 @@ elif modulo.startswith("📊"):
                 )
                 st.markdown(cat_html, unsafe_allow_html=True)
 
-                # Descarga
-                buf2 = io.BytesIO()
-                with pd.ExcelWriter(buf2, engine='openpyxl') as w:
-                    cols_excel = ['sku_producto','categoria_menu','nombre_producto','cant','venta',
-                                     'costo_total_teorico','rentabilidad_teorica','margen_teorico',
-                                     'costo_total_periodo','rentabilidad_periodo','margen_periodo']
-                    cols_excel = [c for c in cols_excel if c in df_inf1.columns]
-                    df_inf1[cols_excel].to_excel(w, sheet_name='Rentabilidad', index=False)
-                    cat.to_excel(w, sheet_name='Por Categoria', index=False)
-                st.download_button("📥 Descargar Informe 1", buf2.getvalue(), "Informe1_Rentabilidad.xlsx")
+            # ── VISTA POR LOCAL ────────────────────────────────
+            else:
+                st.markdown("#### Detalle por Producto — Por Local")
+
+                # Obtener locales disponibles en el período
+                locales_q = run_query(
+                    "SELECT DISTINCT local FROM ventas WHERE fecha_venta BETWEEN :i AND :f AND es_opcion=false ORDER BY 1",
+                    {'i': str(fi_), 'f': str(ff_)}
+                )
+                locales_disp = locales_q['local'].tolist() if not locales_q.empty else []
+
+                for _, r in df_inf1.iterrows():
+                    ab = r.get('ab_categoria', '')
+                    tiene_opciones = ab and ab in abs_con_opciones
+                    mg_per = r.get('margen_periodo', 0)
+                    bg = '#121e14' if mg_per >= 60 else '#1e1a12' if mg_per >= 40 else '#1e1212'
+
+                    # Fila resumen del producto
+                    row_html = (
+                        f'<div style="background:{bg};border-bottom:1px solid #1e1e1e;padding:7px 12px;'
+                        f'display:flex;align-items:center;gap:12px">'
+                        f'<span style="color:#666;font-size:0.74rem;font-family:monospace;width:80px">{r.get("sku_producto","")}</span>'
+                        f'<span style="color:#555;font-size:0.74rem;width:130px">{r.get("categoria_menu","")}</span>'
+                        f'<span style="font-weight:500;color:#e8e4de;flex:1">{r.get("nombre_producto","")} {"🔽" if tiene_opciones else ""}</span>'
+                        f'<span style="color:#aaa;font-size:0.78rem">{r.get("cant",0):,.0f} uds</span>'
+                        f'<span style="color:#ccc;font-size:0.78rem">${r.get("venta",0):,.0f}</span>'
+                        f'{badge_margen(mg_per)}'
+                        f'</div>'
+                    )
+                    st.markdown(row_html, unsafe_allow_html=True)
+
+                    with st.expander(f"  ↳ Detalle por local — {r.get('nombre_producto','')}"):
+                        # Ventas por local de este producto
+                        df_loc_prod = run_query("""
+                            SELECT local,
+                                   SUM(cantidad_vendida) as cant,
+                                   SUM(monto_venta_real) as venta
+                            FROM ventas
+                            WHERE fecha_venta BETWEEN :i AND :f
+                              AND sku_producto = :sku
+                              AND es_opcion = false
+                            GROUP BY local ORDER BY cant DESC
+                        """, {'i': str(fi_), 'f': str(ff_), 'sku': r['sku_producto']})
+
+                        if not df_loc_prod.empty:
+                            total_cant = df_loc_prod['cant'].sum()
+                            loc_html = '<div style="background:#0d0d0d;padding:8px 12px;border-radius:8px">'
+                            for _, lrow in df_loc_prod.iterrows():
+                                pct_loc = lrow['cant'] / total_cant * 100 if total_cant else 0
+                                bar_w   = int(pct_loc)
+                                loc_html += (
+                                    f'<div style="display:flex;align-items:center;gap:12px;padding:4px 0">'
+                                    f'<span style="color:#888;font-size:0.78rem;width:160px">{lrow["local"]}</span>'
+                                    f'<span style="color:#d4a853;font-weight:600;width:60px">{int(lrow["cant"])}</span>'
+                                    f'<span style="color:#666;font-size:0.75rem;width:90px">${lrow["venta"]:,.0f}</span>'
+                                    f'<div style="flex:1;background:#1a1a1a;border-radius:3px;height:6px">'
+                                    f'<div style="background:#4caf7d;height:6px;border-radius:3px;width:{bar_w}%"></div></div>'
+                                    f'<span style="color:#888;font-size:0.75rem;width:40px;text-align:right">{pct_loc:.1f}%</span>'
+                                    f'</div>'
+                                )
+                            loc_html += '</div>'
+                            st.markdown(loc_html, unsafe_allow_html=True)
+
+                        # Opciones por local si aplica
+                        if tiene_opciones:
+                            st.markdown("**Distribución de opciones por local:**")
+                            df_op_loc = get_opciones_por_local(fi_, ff_, ab)
+                            if not df_op_loc.empty:
+                                pivot = df_op_loc.pivot_table(
+                                    index='local', columns='nombre_producto',
+                                    values='cant', aggfunc='sum', fill_value=0
+                                )
+                                st.dataframe(pivot, use_container_width=True)
+
+            # Descarga
+            buf2 = io.BytesIO()
+            with pd.ExcelWriter(buf2, engine='openpyxl') as w:
+                cols_excel = ['sku_producto','categoria_menu','nombre_producto','cant','venta',
+                              'costo_total_teorico','rentabilidad_teorica','margen_teorico',
+                              'costo_total_periodo','rentabilidad_periodo','margen_periodo']
+                cols_excel = [c for c in cols_excel if c in df_inf1.columns]
+                df_inf1[cols_excel].to_excel(w, sheet_name='Rentabilidad', index=False)
+            st.download_button("📥 Descargar Informe 1", buf2.getvalue(), "Informe1_Rentabilidad.xlsx")
 
     # ----------------------------------------------------------
     # INFORME 2
