@@ -2730,7 +2730,7 @@ if modulo.startswith("📦"):
             if es_forma_a:
                 local_inv = st.selectbox("Local", ["Chicureo","La Dehesa","La Reina","Las Condes",
                                                     "Los Trapenses","Macul","Nueva Providencia",
-                                                    "Providencia","Quilin","Vitacura"], key="local_inv")
+                                                    "Providencia","Quilin","Vitacura"], key="local_inv_a")
             else:
                 modo_inv_multi = st.radio("Locales", ["Todos los locales", "Local específico"],
                                           key="modo_inv_multi", horizontal=True)
@@ -2738,7 +2738,7 @@ if modulo.startswith("📦"):
                 if modo_inv_multi == "Local específico":
                     local_inv = st.selectbox("Local", ["Chicureo","La Dehesa","La Reina","Las Condes",
                                                         "Los Trapenses","Macul","Nueva Providencia",
-                                                        "Providencia","Quilin","Vitacura"], key="local_inv")
+                                                        "Providencia","Quilin","Vitacura"], key="local_inv_b")
 
             f_inv = st.file_uploader(
                 "Archivo Inventario (.xlsx o .csv)",
