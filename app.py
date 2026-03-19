@@ -19,6 +19,175 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# ============================================================
+# SISTEMA DE LOGIN Y GESTIÓN DE USUARIOS
+# ============================================================
+import hashlib as _hashlib
+
+def _hash_pw(pw):
+    return _hashlib.sha256(pw.encode()).hexdigest()
+
+ADMIN_USER = "Adminae"
+ADMIN_HASH = _hash_pw("AE321123.")
+
+_TODOS_MODULOS = [
+    "📦 Gestión de Datos",
+    "📊 Informes",
+    "👥 Gestión de Usuarios",
+]
+
+def _get_users():
+    try:
+        df = run_query("SELECT * FROM app_usuarios ORDER BY username")
+        return df
+    except:
+        return pd.DataFrame(columns=["username","password_hash","permisos"])
+
+def _ensure_users_table():
+    engine = get_engine()
+    if engine is None: return
+    with engine.connect() as conn:
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS app_usuarios (
+                id SERIAL PRIMARY KEY,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                permisos TEXT DEFAULT ''
+            )
+        """))
+        conn.commit()
+
+def _check_login(username, password):
+    if username == ADMIN_USER and _hash_pw(password) == ADMIN_HASH:
+        return "admin"
+    try:
+        df = run_query("SELECT password_hash, permisos FROM app_usuarios WHERE username=:u", {"u": username})
+        if not df.empty and df["password_hash"].iloc[0] == _hash_pw(password):
+            return df["permisos"].iloc[0]
+    except:
+        pass
+    return None
+
+def _render_login():
+    st.markdown("""
+    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;
+                min-height:60vh;gap:0.5rem">
+        <div style="font-family:'DM Serif Display',serif;font-size:2.5rem;color:#d4a853;
+                    letter-spacing:-0.02em;margin-bottom:1rem">🍽️ MRP Gastro</div>
+        <div style="font-size:0.8rem;color:#666;text-transform:uppercase;letter-spacing:0.1em;
+                    margin-bottom:2rem">Sistema de Costeos</div>
+    </div>
+    """, unsafe_allow_html=True)
+    col = st.columns([1,2,1])[1]
+    with col:
+        st.markdown("#### Iniciar Sesión")
+        username = st.text_input("Usuario", key="login_user")
+        password = st.text_input("Contraseña", type="password", key="login_pw")
+        if st.button("Ingresar", use_container_width=True, type="primary"):
+            result = _check_login(username, password)
+            if result is not None:
+                st.session_state["logged_in"] = True
+                st.session_state["current_user"] = username
+                st.session_state["user_role"] = "admin" if username == ADMIN_USER else "user"
+                st.session_state["user_permisos"] = result if result != "admin" else "admin"
+                st.rerun()
+            else:
+                st.error("Usuario o contraseña incorrectos.")
+
+def _user_puede(modulo_key):
+    """Verifica si el usuario actual tiene permiso para el módulo."""
+    if st.session_state.get("user_role") == "admin":
+        return True
+    permisos = st.session_state.get("user_permisos", "")
+    return modulo_key in permisos
+
+def _render_gestion_usuarios():
+    st.markdown("""
+    <div style="margin-bottom:1.5rem">
+        <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#555;margin-bottom:4px">Admin</div>
+        <div style="font-family:'DM Serif Display',serif;font-size:2rem;color:#f0ede8;letter-spacing:-0.02em">
+            👥 Gestión de Usuarios
+        </div>
+    </div>""", unsafe_allow_html=True)
+
+    _ensure_users_table()
+    gu_tab1, gu_tab2 = st.tabs(["👤 Usuarios", "➕ Crear Usuario"])
+
+    with gu_tab1:
+        df_users = _get_users()
+        if df_users.empty:
+            st.info("No hay usuarios registrados.")
+        else:
+            for _, row in df_users.iterrows():
+                with st.expander(f"👤 {row['username']}"):
+                    permisos_act = row['permisos'] if row['permisos'] else ""
+                    opciones_mod = ["📦 Gestión de Datos", "📊 Informes"]
+                    sel = st.multiselect(
+                        "Módulos habilitados",
+                        opciones_mod,
+                        default=[m for m in opciones_mod if m in permisos_act],
+                        key=f"perm_{row['username']}"
+                    )
+                    nuevos_permisos = ",".join(sel)
+
+                    col_a, col_b, col_c = st.columns(3)
+                    with col_a:
+                        nueva_pw = st.text_input("Nueva contraseña (opcional)", type="password",
+                                                  key=f"pw_{row['username']}", placeholder="Dejar vacío = sin cambio")
+                    with col_b:
+                        if st.button("💾 Guardar", key=f"save_{row['username']}"):
+                            try:
+                                engine = get_engine()
+                                with engine.connect() as conn:
+                                    if nueva_pw.strip():
+                                        conn.execute(text(
+                                            "UPDATE app_usuarios SET permisos=:p, password_hash=:h WHERE username=:u"),
+                                            {"p": nuevos_permisos, "h": _hash_pw(nueva_pw), "u": row["username"]})
+                                    else:
+                                        conn.execute(text(
+                                            "UPDATE app_usuarios SET permisos=:p WHERE username=:u"),
+                                            {"p": nuevos_permisos, "u": row["username"]})
+                                    conn.commit()
+                                st.success("✅ Guardado")
+                            except Exception as e:
+                                st.error(f"Error: {e}")
+                    with col_c:
+                        if st.button("🗑️ Eliminar", key=f"del_{row['username']}"):
+                            try:
+                                engine = get_engine()
+                                with engine.connect() as conn:
+                                    conn.execute(text("DELETE FROM app_usuarios WHERE username=:u"),
+                                                 {"u": row["username"]})
+                                    conn.commit()
+                                st.success("Eliminado")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Error: {e}")
+
+    with gu_tab2:
+        st.markdown("#### Nuevo Usuario")
+        nu_user = st.text_input("Usuario", key="nu_user")
+        nu_pw   = st.text_input("Contraseña", type="password", key="nu_pw")
+        opciones_mod2 = ["📦 Gestión de Datos", "📊 Informes"]
+        nu_perm = st.multiselect("Módulos habilitados", opciones_mod2, key="nu_perm")
+        if st.button("➕ Crear Usuario", key="btn_crear_user"):
+            if not nu_user.strip() or not nu_pw.strip():
+                st.warning("Completa usuario y contraseña.")
+            else:
+                try:
+                    engine = get_engine()
+                    with engine.connect() as conn:
+                        conn.execute(text(
+                            "INSERT INTO app_usuarios (username, password_hash, permisos) VALUES (:u,:h,:p)"),
+                            {"u": nu_user.strip(), "h": _hash_pw(nu_pw), "p": ",".join(nu_perm)})
+                        conn.commit()
+                    st.success(f"✅ Usuario {nu_user} creado.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {e}")
+
+
+
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@300;400;500;600&display=swap');
@@ -547,38 +716,37 @@ def process_bom(df_v, df_d, df_p):
 # ============================================================
 def calcular_costo_platos(engine, fecha_i, fecha_f, local):
     """
-    Devuelve DataFrame con costo teórico por código de venta (plato).
-    Precio unitario = monto_real / cant_conv (último registro por SKU).
-    Aplica factor_um para convertir unidades del recetario a unidades de compra.
+    Costo teórico por plato usando MUC correcto:
+    MUC = costo_realfinal / (cant_conv * formato)
+    Incluye opciones ponderadas por su frecuencia real de venta.
     """
-    # Precio unitario real = monto_real / cant_conv (último registro por SKU)
+    # MUC correcto: considera formato
     precio_sql = """
         SELECT DISTINCT ON (sku) sku,
-               monto_real / NULLIF(cant_conv, 0) as precio_unitario
+               costo_realfinal / NULLIF(cant_conv * NULLIF(formato,0), 0) as precio_unitario
         FROM compras
-        WHERE cant_conv > 0
+        WHERE cant_conv > 0 AND costo_realfinal > 0 AND formato > 0
         ORDER BY sku, fecha_dte DESC
     """
     df_precio = run_query(precio_sql)
     if df_precio.empty:
         return pd.DataFrame()
 
-    # Factor conversión unidades: G/CC/ML → /1000, resto → 1
     def factor_um(um):
         if pd.isna(um): return 1
         um = str(um).strip().upper()
         if um in ['G', 'CC', 'ML']: return 1/1000
         return 1
 
-    # Recetario completo
     df_rec = run_query("SELECT * FROM recetas")
     if df_rec.empty:
         return pd.DataFrame()
 
+    # NO filtrar por es_opcion — se costean todos los ingredientes
     df_dir  = df_rec[df_rec['es_procesado'] == False].copy()
     df_proc = df_rec[df_rec['es_procesado'] == True].copy()
 
-    # ---- DIRECTOS: cant_real × factor_um × precio_unitario ----
+    # ---- DIRECTOS ----
     dir_m = pd.merge(df_dir, df_precio, left_on='sku_ingrediente', right_on='sku', how='left')
     dir_m['cant_real']      = pd.to_numeric(dir_m['cant_real'], errors='coerce').fillna(0)
     dir_m['precio_unitario']= pd.to_numeric(dir_m['precio_unitario'], errors='coerce').fillna(0)
@@ -586,7 +754,7 @@ def calcular_costo_platos(engine, fecha_i, fecha_f, local):
     dir_m['costo_parcial']  = dir_m['cant_real'] * dir_m['factor'] * dir_m['precio_unitario']
     costo_dir = dir_m.groupby('codigo_venta')['costo_parcial'].sum().reset_index()
 
-    # ---- PROCESADOS: cant_efic × factor_um × precio_unitario ----
+    # ---- PROCESADOS ----
     proc_m = pd.merge(df_proc, df_precio, left_on='sku_ingrediente', right_on='sku', how='left')
     proc_m['cant_efic']      = pd.to_numeric(proc_m['cant_efic'], errors='coerce').fillna(0)
     proc_m['precio_unitario']= pd.to_numeric(proc_m['precio_unitario'], errors='coerce').fillna(0)
@@ -594,12 +762,88 @@ def calcular_costo_platos(engine, fecha_i, fecha_f, local):
     proc_m['costo_parcial']  = proc_m['cant_efic'] * proc_m['factor'] * proc_m['precio_unitario']
     costo_proc = proc_m.groupby('codigo_venta')['costo_parcial'].sum().reset_index()
 
-    # ---- Combinar ----
     costo_total  = pd.concat([costo_dir, costo_proc], ignore_index=True)
     costo_platos = costo_total.groupby('codigo_venta')['costo_parcial'].sum().reset_index()
-    costo_platos.columns = ['sku_producto', 'costo_unitario_teorico']
-
+    costo_platos.columns = ['sku_producto', 'cmv_base']
     return costo_platos
+
+
+def calcular_cmv_con_opciones(fecha_i, fecha_f, local):
+    """
+    CMV real = costo ingredientes base + costo opciones ponderado por frecuencia real.
+    Para cada plato con opciones, suma el costo de las opciones según cuántas se vendieron.
+    """
+    filtro_local = "AND UPPER(p.local) = UPPER(:l)" if local != "Todos" else ""
+    params_loc = {'i': str(fecha_i), 'f': str(fecha_f)}
+    if local != "Todos": params_loc['l'] = local
+
+    # Costo base por plato
+    engine = get_engine()
+    costo_base = calcular_costo_platos(engine, fecha_i, fecha_f, local)
+    if costo_base.empty:
+        return pd.DataFrame()
+
+    # Obtener precio unitario (MUC) por SKU
+    df_precio = run_query("""
+        SELECT DISTINCT ON (sku) sku,
+               costo_realfinal / NULLIF(cant_conv * NULLIF(formato,0), 0) as precio_unitario
+        FROM compras
+        WHERE cant_conv > 0 AND costo_realfinal > 0 AND formato > 0
+        ORDER BY sku, fecha_dte DESC
+    """)
+    if df_precio.empty:
+        return costo_base.rename(columns={'cmv_base': 'cmv_unitario'})
+
+    def factor_um(um):
+        if pd.isna(um): return 1
+        return 1/1000 if str(um).strip().upper() in ['G','CC','ML'] else 1
+
+    df_rec = run_query("SELECT * FROM recetas")
+
+    # Opciones vendidas: agrupa por sku_padre (ab_categoria match) y opción
+    q_opciones = f"""
+        SELECT p.sku_producto as sku_padre,
+               o.sku_producto as sku_opcion,
+               SUM(o.cantidad_vendida) as cant_opcion,
+               COUNT(DISTINCT p.id_orden) as n_pedidos_padre
+        FROM ventas p
+        JOIN ventas o
+          ON p.id_orden = o.id_orden
+         AND p.ab_categoria = o.ab_categoria
+         AND o.es_opcion = true
+         AND p.es_opcion = false
+        WHERE p.fecha_venta BETWEEN :i AND :f
+          {filtro_local}
+        GROUP BY p.sku_producto, o.sku_producto
+    """
+    df_op_ventas = run_query(q_opciones, params_loc)
+
+    if df_op_ventas.empty:
+        return costo_base.rename(columns={'cmv_base': 'cmv_unitario'})
+
+    # Para cada opción vendida, calcular su costo de receta
+    df_op_ventas['cant_opcion']       = pd.to_numeric(df_op_ventas['cant_opcion'], errors='coerce').fillna(0)
+    df_op_ventas['n_pedidos_padre']   = pd.to_numeric(df_op_ventas['n_pedidos_padre'], errors='coerce').fillna(1)
+    df_op_ventas['frec_por_pedido']   = df_op_ventas['cant_opcion'] / df_op_ventas['n_pedidos_padre'].clip(lower=1)
+
+    # Costo de receta de cada SKU opción
+    costo_opciones_skus = calcular_costo_platos(engine, fecha_i, fecha_f, local)
+    costo_opciones_skus = costo_opciones_skus.rename(columns={'sku_producto':'sku_opcion','cmv_base':'costo_opcion'})
+
+    df_op_ventas = pd.merge(df_op_ventas, costo_opciones_skus, on='sku_opcion', how='left')
+    df_op_ventas['costo_opcion'] = pd.to_numeric(df_op_ventas['costo_opcion'], errors='coerce').fillna(0)
+    df_op_ventas['cmv_opcion_pond'] = df_op_ventas['frec_por_pedido'] * df_op_ventas['costo_opcion']
+
+    costo_opciones_por_padre = df_op_ventas.groupby('sku_padre')['cmv_opcion_pond'].sum().reset_index()
+    costo_opciones_por_padre.columns = ['sku_producto', 'cmv_opciones']
+
+    result = pd.merge(costo_base, costo_opciones_por_padre, on='sku_producto', how='left')
+    result['cmv_opciones'] = result['cmv_opciones'].fillna(0)
+    result['cmv_unitario'] = result['cmv_base'] + result['cmv_opciones']
+    return result[['sku_producto','cmv_unitario','cmv_base','cmv_opciones']]
+
+
+
 
 
 # ============================================================
@@ -694,38 +938,57 @@ def informe_rentabilidad(fecha_i, fecha_f, local):
           {filtro_local_r}
         GROUP BY 1, 2, 3
     """
-
     df_v = run_query(q_v, params)
     if df_v.empty:
         st.warning("No hay ventas para el período/local seleccionado.")
         return pd.DataFrame()
 
-    costo_teorico = calcular_costo_platos(engine, fecha_i, fecha_f, local)
-    costo_periodo = calcular_costo_platos_periodo(engine, fecha_i, fecha_f)
+    df_v['cant']  = pd.to_numeric(df_v['cant'],  errors='coerce').fillna(0)
+    df_v['venta'] = pd.to_numeric(df_v['venta'], errors='coerce').fillna(0)
 
-    df = pd.merge(df_v, costo_teorico, on='sku_producto', how='left')
-    df = pd.merge(df,   costo_periodo, on='sku_producto', how='left')
+    # CMV con opciones ponderadas (nuevo método)
+    df_cmv = calcular_cmv_con_opciones(fecha_i, fecha_f, local)
 
-    df['costo_unitario_teorico'] = pd.to_numeric(df.get('costo_unitario_teorico'), errors='coerce').fillna(0)
-    df['costo_unitario_periodo'] = pd.to_numeric(df.get('costo_unitario_periodo'), errors='coerce').fillna(0)
-    df['venta']                  = pd.to_numeric(df['venta'], errors='coerce').fillna(0)
+    df = pd.merge(df_v, df_cmv, on='sku_producto', how='left')
+    df['cmv_unitario'] = pd.to_numeric(df.get('cmv_unitario'), errors='coerce').fillna(0)
+    df['cmv_base']     = pd.to_numeric(df.get('cmv_base'),     errors='coerce').fillna(0)
+    df['cmv_opciones'] = pd.to_numeric(df.get('cmv_opciones'), errors='coerce').fillna(0)
 
-    # Rentabilidad teórica (último precio)
-    df['costo_total_teorico']  = df['cant'] * df['costo_unitario_teorico']
-    df['rentabilidad_teorica'] = df['venta'] - df['costo_total_teorico']
-    df['margen_teorico']       = df.apply(
-        lambda x: (x['rentabilidad_teorica'] / x['venta'] * 100) if x['venta'] > 0 else 0, axis=1)
+    # Indicadores por producto
+    df['cmv_total']    = df['cant'] * df['cmv_unitario']
+    df['cmv_pct']      = df.apply(lambda r: r['cmv_total']/r['venta']*100 if r['venta']>0 else 0, axis=1)
+    df['mc_unitario']  = df['venta']/df['cant'].clip(lower=1) - df['cmv_unitario']
+    df['mc_total']     = df['venta'] - df['cmv_total']
+    df['margen_pct']   = df.apply(lambda r: r['mc_total']/r['venta']*100 if r['venta']>0 else 0, axis=1)
 
-    # Rentabilidad período (MUC ponderado + fallback)
-    df['costo_total_periodo']  = df['cant'] * df['costo_unitario_periodo']
-    df['rentabilidad_periodo'] = df['venta'] - df['costo_total_periodo']
-    df['margen_periodo']       = df.apply(
-        lambda x: (x['rentabilidad_periodo'] / x['venta'] * 100) if x['venta'] > 0 else 0, axis=1)
+    # Popularidad por categoría
+    total_cant_cat = df.groupby('categoria_menu')['cant'].transform('sum')
+    n_items_cat    = df.groupby('categoria_menu')['sku_producto'].transform('count')
+    df['mix_pct']      = df['cant'] / total_cant_cat.clip(lower=1) * 100
+    df['umbral_pct']   = 100 / n_items_cat * 70  # 70% del reparto uniforme
 
-    # Mantener compatibilidad con código existente
-    df['costo_total']  = df['costo_total_periodo']
-    df['rentabilidad'] = df['rentabilidad_periodo']
-    df['margen_pct']   = df['margen_periodo']
+    # Cuadrante BCG gastronómico por categoría
+    mc_prom_cat = df.groupby('categoria_menu')['mc_unitario'].transform('mean')
+    def cuadrante(r):
+        alta_pop  = r['mix_pct'] >= r['umbral_pct']
+        alto_mc   = r['mc_unitario'] >= mc_prom_cat[r.name]
+        if alta_pop and alto_mc:   return "⭐ Estrella"
+        if not alta_pop and alto_mc: return "❓ Interrogante"
+        if alta_pop and not alto_mc: return "🐄 Vaca"
+        return "🐶 Perro"
+    df['cuadrante'] = df.apply(cuadrante, axis=1)
+
+    # Compatibilidad con código existente
+    df['costo_unitario_teorico'] = df['cmv_unitario']
+    df['costo_unitario_periodo'] = df['cmv_unitario']
+    df['costo_total_teorico']    = df['cmv_total']
+    df['costo_total_periodo']    = df['cmv_total']
+    df['rentabilidad_teorica']   = df['mc_total']
+    df['rentabilidad_periodo']   = df['mc_total']
+    df['margen_teorico']         = df['margen_pct']
+    df['margen_periodo']         = df['margen_pct']
+    df['costo_total']            = df['cmv_total']
+    df['rentabilidad']           = df['mc_total']
 
     return df.sort_values('venta', ascending=False)
 
@@ -1665,6 +1928,11 @@ init_exclusiones()
 # ============================================================
 # SIDEBAR
 # ============================================================
+# ── LOGIN GATE ────────────────────────────────────────────────
+if not st.session_state.get("logged_in"):
+    _render_login()
+    st.stop()
+
 with st.sidebar:
     st.markdown("""
     <div style='padding: 1rem 0 0.5rem 0;'>
@@ -1677,22 +1945,29 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
+    # Usuario + logout
+    _uname = st.session_state.get("current_user","")
+    _role  = st.session_state.get("user_role","")
+    st.markdown(f"<div style='font-size:0.72rem;color:#888;margin-bottom:4px'>👤 {_uname} {'(Admin)' if _role=='admin' else ''}</div>", unsafe_allow_html=True)
+    if st.button("🚪 Cerrar sesión", use_container_width=True):
+        for k in ["logged_in","current_user","user_role","user_permisos","modulo"]:
+            st.session_state.pop(k, None)
+        st.rerun()
+
     st.divider()
 
-    # Menú en cascada elegante
-    menu_items = {
-        "📦 Gestión de Datos": ["Recetario", "Compras", "Ventas", "Equivalencias SKU"],
-        "🧮 Explosión MRP":    [],
-        "📊 Informes":         ["Rentabilidad", "Desviación", "Variación Precio Compras", "Informe de Costos"],
-        "🔬 Auditor Categorías": [],
-        "🍹 Tendencias Bar":   [],
-        "🏠 Cuentas Casa":     [],
-    }
+    # Nuevo menú — plano, sin desplegables
+    _is_admin = st.session_state.get("user_role") == "admin"
+    menu_items = {}
+    if _is_admin:
+        menu_items["📦 Gestión de Datos"] = []
+    if _user_puede("📊 Informes"):
+        menu_items["📊 Informes"] = ["Rentabilidad", "Desviación", "Variación Precio Compras", "Informe de Costos", "Auditor Categorías", "Tendencias Bar", "Cuentas Casa"]
+    if _is_admin:
+        menu_items["👥 Gestión de Usuarios"] = []
 
-    if 'menu_abierto' not in st.session_state:
-        st.session_state['menu_abierto'] = None
     if 'modulo' not in st.session_state:
-        st.session_state['modulo'] = "📦 Gestión de Datos"
+        st.session_state['modulo'] = list(menu_items.keys())[0] if menu_items else "📦 Gestión de Datos"
 
     # CSS menú
     st.markdown("""
@@ -1720,28 +1995,20 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
     for item, subitems in menu_items.items():
-        es_activo = st.session_state['modulo'].startswith(item[:3])
+        es_activo = st.session_state['modulo'] == item or st.session_state['modulo'].startswith(item + " —")
         label = f"**{item}**" if es_activo else item
-
         if st.sidebar.button(label, key=f"menu_{item}", use_container_width=True):
-            if st.session_state['menu_abierto'] == item and not subitems:
-                pass
-            elif st.session_state['menu_abierto'] == item:
-                st.session_state['menu_abierto'] = None
-            else:
-                st.session_state['menu_abierto'] = item
             st.session_state['modulo'] = item
 
-        # Subitems
-        if subitems and st.session_state['menu_abierto'] == item:
+        # Subitems (solo para Informes)
+        if subitems and es_activo:
             for sub in subitems:
-                sub_key = f"{item} — {sub}"
-                es_sub  = st.session_state['modulo'] == sub_key
-                prefix  = "▸ " if es_sub else "  · "
+                sub_key   = f"{item} — {sub}"
+                es_sub    = st.session_state['modulo'] == sub_key
+                prefix    = "▸ " if es_sub else "  · "
                 sub_label = f"**{prefix}{sub}**" if es_sub else f"{prefix}{sub}"
                 if st.sidebar.button(sub_label, key=f"sub_{sub_key}", use_container_width=True):
                     st.session_state['modulo'] = sub_key
-                    st.session_state['menu_abierto'] = item
 
     modulo = st.session_state['modulo']
 
@@ -1976,7 +2243,7 @@ if modulo.startswith("📦"):
     </div>
     """, unsafe_allow_html=True)
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📖 Recetario", "🛒 Compras", "📈 Ventas", "🔀 Equivalencias SKU", "🔍 Auditoría Compras", "📦 Inventario / Uso", "🗂️ Clasificación"])
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(["📖 Recetario", "🛒 Compras", "📈 Ventas", "🔀 Equivalencias SKU", "🔍 Auditoría Compras", "📦 Inventario / Uso", "🗂️ Clasificación", "🧮 Explosión MRP"])
 
     with tab1:
         st.markdown("<div class='info-box'>Carga las hojas <b>Directos</b> y <b>Procesados</b> de tu recetario. Esto reemplaza el recetario actual.</div>", unsafe_allow_html=True)
@@ -3430,8 +3697,32 @@ if modulo.startswith("📦"):
                 st.markdown("**Cuentas Casa en BD:**")
                 st.dataframe(df_cc_bd, use_container_width=True, hide_index=True)
 
+    with tab8:
+        st.markdown("<div class='info-box'>Sube el Excel con las hojas <b>Ventas</b>, <b>Directos</b> y <b>Procesados</b>. La lógica de cálculo es la versión validada.</div>", unsafe_allow_html=True)
+        file_mrp = st.file_uploader("Archivo Excel MRP (.xlsx)", type="xlsx", key="mrp_file")
+        if file_mrp:
+            try:
+                xls = pd.ExcelFile(file_mrp)
+                res = process_bom(
+                    pd.read_excel(xls, 'Ventas'),
+                    pd.read_excel(xls, 'Directos'),
+                    pd.read_excel(xls, 'Procesados')
+                )
+                col_a, col_b, col_c = st.columns(3)
+                col_a.metric("Insumos únicos", len(res))
+                col_b.metric("Registros explotados", len(res))
+                st.markdown("#### 📋 Resultado de la explosión")
+                st.dataframe(res.style.format({"Total Kg/L/Un": "{:,.3f}"}), use_container_width=True, hide_index=True)
+                buf = io.BytesIO()
+                with pd.ExcelWriter(buf, engine='openpyxl') as w:
+                    res.to_excel(w, index=False)
+                st.download_button("📥 Descargar MRP (.xlsx)", buf.getvalue(), "MRP_Explosion.xlsx",
+                                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            except Exception as e:
+                st.error(f"Error al procesar: {e}")
+
 # ============================================================
-# MÓDULO: EXPLOSIÓN MRP
+# MÓDULO: EXPLOSIÓN MRP (eliminado — ahora en pestaña de Gestión de Datos)
 # ============================================================
 elif modulo.startswith("🧮"):
     st.markdown(f"""
@@ -3488,12 +3779,18 @@ elif modulo.startswith("📊"):
     # Derivar informe activo desde subitem del menú
     if "Rentabilidad" in modulo:
         informe_sel = "Informe 1"
-    elif "Desviación" in modulo:
+    elif "Desviación" in modulo or "Desviacion" in modulo:
         informe_sel = "Informe 2"
-    elif "Variación Precio Compras" in modulo:
+    elif "Variación" in modulo or "Variacion" in modulo:
         informe_sel = "Informe 3"
     elif "Informe de Costos" in modulo:
         informe_sel = "Informe 4"
+    elif "Auditor" in modulo:
+        informe_sel = "Auditor"
+    elif "Tendencias" in modulo or "Bar" in modulo:
+        informe_sel = "Bar"
+    elif "Cuentas Casa" in modulo:
+        informe_sel = "CuentasCasa"
     else:
         informe_sel = "Informe 1"  # default
 
@@ -3556,21 +3853,17 @@ elif modulo.startswith("📊"):
             ff_             = st.session_state['inf1_ff']
             local_          = st.session_state['inf1_local']
 
-            venta_total      = df_inf1['venta'].sum()
-            costo_teo_total  = df_inf1['costo_total_teorico'].sum()
-            costo_per_total  = df_inf1['costo_total_periodo'].sum()
-            rent_teo_total   = df_inf1['rentabilidad_teorica'].sum()
-            rent_per_total   = df_inf1['rentabilidad_periodo'].sum()
-            margen_teo       = (rent_teo_total / venta_total * 100) if venta_total > 0 else 0
-            margen_per       = (rent_per_total / venta_total * 100) if venta_total > 0 else 0
+            venta_total  = df_inf1['venta'].sum()
+            cmv_total    = df_inf1['cmv_total'].sum() if 'cmv_total' in df_inf1.columns else df_inf1['costo_total_teorico'].sum()
+            mc_total     = df_inf1['mc_total'].sum()  if 'mc_total'  in df_inf1.columns else (venta_total - cmv_total)
+            margen_gral  = mc_total / venta_total * 100 if venta_total > 0 else 0
+            cmv_pct_gral = cmv_total / venta_total * 100 if venta_total > 0 else 0
 
-            m1, m2, m3, m4, m5, m6 = st.columns(6)
-            m1.metric("💰 Venta Total",   f"${venta_total:,.0f}")
-            m2.metric("📦 Costo Teórico", f"${costo_teo_total:,.0f}")
-            m3.metric("📦 Costo Período", f"${costo_per_total:,.0f}")
-            m4.metric("📈 Rent. Teórica", f"${rent_teo_total:,.0f}")
-            m5.metric("📈 Rent. Período", f"${rent_per_total:,.0f}")
-            m6.metric("🎯 Margen Período", f"{margen_per:.1f}%", delta=f"{margen_per-margen_teo:+.1f}% vs teórico")
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("💰 Venta Total",    f"${venta_total:,.0f}")
+            m2.metric("📦 CMV Total",      f"${cmv_total:,.0f}", delta=f"{cmv_pct_gral:.1f}% venta")
+            m3.metric("📈 MC Total",       f"${mc_total:,.0f}")
+            m4.metric("🎯 Margen",         f"{margen_gral:.1f}%")
 
             st.markdown("<br>", unsafe_allow_html=True)
 
@@ -3580,27 +3873,60 @@ elif modulo.startswith("📊"):
                 elif val >= 40: return f'<span style="background:#3a2a1a;color:#e89c45;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:.1f}%</span>'
                 return f'<span style="background:#3a1a1a;color:#e84545;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:.1f}%</span>'
 
-            def fmt_rent(val):
+            def badge_cuadrante(val):
+                colors = {"⭐ Estrella":"#d4a853","❓ Interrogante":"#4caf7d","🐄 Vaca":"#5b8dd9","🐶 Perro":"#888"}
+                c = colors.get(val,"#666")
+                return f'<span style="background:#1a1a1a;color:{c};padding:2px 8px;border-radius:12px;font-size:0.75rem;font-weight:600;border:1px solid {c}44">{val}</span>'
+
+            def fmt_mc(val):
                 if val >= 0: return f'<span style="color:#4caf7d;font-weight:600">${val:,.0f}</span>'
                 return f'<span style="color:#e84545;font-weight:600">${val:,.0f}</span>'
 
             hs  = 'padding:10px 12px;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
-            hs2 = hs + ';background:#0d1a0d'
-            hs3 = hs + ';background:#0a0a1a'
 
             # ── VISTA INTEREMPRESA ─────────────────────────────
             if "Interempresa" in vista:
-                st.markdown("#### Detalle por Producto")
+                # Gráfico de cuadrantes por categoría seleccionada
+                cats_disponibles = sorted(df_inf1['categoria_menu'].dropna().unique().tolist())
+                cat_sel = st.selectbox("Categoría para gráfico BCG", ["Todas"] + cats_disponibles, key="bcg_cat")
+                df_bcg = df_inf1 if cat_sel == "Todas" else df_inf1[df_inf1['categoria_menu'] == cat_sel]
+
+                if not df_bcg.empty and 'mc_unitario' in df_bcg.columns:
+                    import plotly.express as px
+                    mc_prom = df_bcg['mc_unitario'].mean()
+                    mix_umbral = df_bcg['umbral_pct'].mean() if 'umbral_pct' in df_bcg.columns else 0
+                    color_map = {"⭐ Estrella":"#d4a853","❓ Interrogante":"#4caf7d","🐄 Vaca":"#5b8dd9","🐶 Perro":"#888888"}
+                    fig = px.scatter(
+                        df_bcg, x='cant', y='mc_unitario',
+                        color='cuadrante' if 'cuadrante' in df_bcg.columns else None,
+                        hover_name='nombre_producto',
+                        hover_data={'cant': True, 'mc_unitario': ':.0f', 'mix_pct': ':.1f', 'cmv_pct': ':.1f'},
+                        color_discrete_map=color_map,
+                        labels={'cant':'Unidades vendidas (Q)','mc_unitario':'MC Unitario ($)','cuadrante':'Cuadrante'},
+                        title=f"Mapa BCG — {cat_sel}"
+                    )
+                    fig.add_hline(y=mc_prom, line_dash="dash", line_color="#555", annotation_text="MC promedio")
+                    if mix_umbral > 0:
+                        q_corte = df_bcg['cant'].sum() * mix_umbral / 100
+                        fig.add_vline(x=q_corte, line_dash="dash", line_color="#555", annotation_text="Umbral pop.")
+                    fig.update_layout(
+                        plot_bgcolor='#0d0d0d', paper_bgcolor='#0d0d0d',
+                        font_color='#ccc', height=420,
+                        xaxis=dict(gridcolor='#1a1a1a'), yaxis=dict(gridcolor='#1a1a1a')
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+                st.markdown("#### Detalle por Producto</s>")
 
                 for _, r in df_inf1.iterrows():
                     ab   = r.get('ab_categoria', '')
                     tiene_opciones = ab and ab in abs_con_opciones
-                    mg_teo = r.get('margen_teorico', 0)
-                    mg_per = r.get('margen_periodo', 0)
+                    mg_per = r.get('margen_pct', r.get('margen_periodo', 0))
+
                     bg = '#121e14' if mg_per >= 60 else '#1e1a12' if mg_per >= 40 else '#1e1212'
 
                     row_html = (
-                        f'<div style="display:grid;grid-template-columns:90px 140px 1fr 80px 100px 90px 100px 80px 90px 100px 80px;'
+                        f'<div style="display:grid;grid-template-columns:90px 140px 1fr 80px 100px 90px 100px 80px 80px;'
                         f'gap:0;background:{bg};border-bottom:1px solid #1e1e1e;padding:6px 0;align-items:center">'
                         f'<span style="padding:0 12px;color:#666;font-size:0.74rem;font-family:monospace">{r.get("sku_producto","")}</span>'
                         f'<span style="padding:0 8px;color:#555;font-size:0.74rem">{r.get("categoria_menu","")}</span>'
@@ -3608,12 +3934,10 @@ elif modulo.startswith("📊"):
                         f'{r.get("nombre_producto","")} {"🔽" if tiene_opciones else ""}</span>'
                         f'<span style="text-align:right;padding:0 12px;color:#aaa">{r.get("cant",0):,.0f}</span>'
                         f'<span style="text-align:right;padding:0 12px;color:#ccc">${r.get("venta",0):,.0f}</span>'
-                        f'<span style="text-align:right;padding:0 12px;color:#666">${r.get("costo_total_teorico",0):,.0f}</span>'
-                        f'<span style="text-align:right;padding:0 12px">{fmt_rent(r.get("rentabilidad_teorica",0))}</span>'
-                        f'<span style="text-align:center;padding:0 8px">{badge_margen(mg_teo)}</span>'
-                        f'<span style="text-align:right;padding:0 12px;color:#777">${r.get("costo_total_periodo",0):,.0f}</span>'
-                        f'<span style="text-align:right;padding:0 12px">{fmt_rent(r.get("rentabilidad_periodo",0))}</span>'
+                        f'<span style="text-align:right;padding:0 12px;color:#666">${r.get("cmv_unitario",0):,.0f}</span>'
+                        f'<span style="text-align:right;padding:0 12px">{fmt_mc(r.get("mc_total",0))}</span>'
                         f'<span style="text-align:center;padding:0 8px">{badge_margen(mg_per)}</span>'
+                        f'<span style="text-align:center;padding:0 8px">{badge_cuadrante(r.get("cuadrante",""))}</span>'
                         f'</div>'
                     )
                     st.markdown(row_html, unsafe_allow_html=True)
@@ -3653,13 +3977,14 @@ elif modulo.startswith("📊"):
                 st.markdown("---")
                 st.markdown("#### Resumen por Categoría")
                 cat = df_inf1.groupby('categoria_menu').agg(
-                    venta=('venta','sum'), costo_teo=('costo_total_teorico','sum'),
-                    rent_teo=('rentabilidad_teorica','sum'), costo_per=('costo_total_periodo','sum'),
-                    rent_per=('rentabilidad_periodo','sum'), productos=('sku_producto','count')
+                    venta=('venta','sum'),
+                    cmv=('cmv_total','sum') if 'cmv_total' in df_inf1.columns else ('costo_total_teorico','sum'),
+                    mc=('mc_total','sum') if 'mc_total' in df_inf1.columns else ('rentabilidad_periodo','sum'),
+                    productos=('sku_producto','count')
                 ).reset_index()
-                cat['margen_teo'] = cat.apply(lambda r: r['rent_teo']/r['venta']*100 if r['venta']>0 else 0, axis=1).round(1)
-                cat['margen_per'] = cat.apply(lambda r: r['rent_per']/r['venta']*100 if r['venta']>0 else 0, axis=1).round(1)
-                cat = cat.sort_values('rent_per', ascending=False)
+                cat['margen_pct'] = cat.apply(lambda r: r['mc']/r['venta']*100 if r['venta']>0 else 0, axis=1).round(1)
+                cat['cmv_pct']    = cat.apply(lambda r: r['cmv']/r['venta']*100 if r['venta']>0 else 0, axis=1).round(1)
+                cat = cat.sort_values('mc', ascending=False)
 
                 cat_rows = ''
                 for _, r in cat.iterrows():
@@ -3668,31 +3993,23 @@ elif modulo.startswith("📊"):
                         f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de">{r["categoria_menu"]}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#aaa">{r["productos"]:,.0f}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#ccc">${r["venta"]:,.0f}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:#666">${r["costo_teo"]:,.0f}</td>'
-                        f'<td style="padding:9px 12px;text-align:right">{fmt_rent(r["rent_teo"])}</td>'
-                        f'<td style="padding:9px 12px;text-align:center;border-right:1px solid #2a2a2a">{badge_margen(r["margen_teo"])}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:#777">${r["costo_per"]:,.0f}</td>'
-                        f'<td style="padding:9px 12px;text-align:right">{fmt_rent(r["rent_per"])}</td>'
-                        f'<td style="padding:9px 12px;text-align:center">{badge_margen(r["margen_per"])}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#666">${r["cmv"]:,.0f}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#888">{r["cmv_pct"]:.1f}%</td>'
+                        f'<td style="padding:9px 12px;text-align:right">{fmt_mc(r["mc"])}</td>'
+                        f'<td style="padding:9px 12px;text-align:center">{badge_margen(r["margen_pct"])}</td>'
                         f'</tr>'
                     )
                 cat_html = (
                     '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
                     '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
                     '<thead><tr style="background:#111">'
-                    f'<th colspan="3" style="{hs};text-align:left;border-right:1px solid #2a2a2a"></th>'
-                    f'<th colspan="3" style="{hs2};text-align:center;border-right:1px solid #2a2a2a;color:#4caf7d">TEÓRICA</th>'
-                    f'<th colspan="3" style="{hs3};text-align:center;color:#d4a853">PERÍODO</th>'
-                    '</tr><tr style="background:#111">'
                     f'<th style="{hs};text-align:left">Categoría</th>'
                     f'<th style="{hs};text-align:right">Prods</th>'
-                    f'<th style="{hs};text-align:right;border-right:1px solid #2a2a2a">Venta</th>'
-                    f'<th style="{hs2};text-align:right">Costo</th>'
-                    f'<th style="{hs2};text-align:right">Rent.</th>'
-                    f'<th style="{hs2};text-align:center;border-right:1px solid #2a2a2a">Margen</th>'
-                    f'<th style="{hs3};text-align:right">Costo</th>'
-                    f'<th style="{hs3};text-align:right">Rent.</th>'
-                    f'<th style="{hs3};text-align:center">Margen</th>'
+                    f'<th style="{hs};text-align:right">Venta</th>'
+                    f'<th style="{hs};text-align:right">CMV</th>'
+                    f'<th style="{hs};text-align:right">CMV%</th>'
+                    f'<th style="{hs};text-align:right">MC</th>'
+                    f'<th style="{hs};text-align:center">Margen</th>'
                     f'</tr></thead><tbody>{cat_rows}</tbody></table></div>'
                 )
                 st.markdown(cat_html, unsafe_allow_html=True)
@@ -3792,8 +4109,8 @@ elif modulo.startswith("📊"):
             buf2 = io.BytesIO()
             with pd.ExcelWriter(buf2, engine='openpyxl') as w:
                 cols_excel = ['sku_producto','categoria_menu','nombre_producto','cant','venta',
-                              'costo_total_teorico','rentabilidad_teorica','margen_teorico',
-                              'costo_total_periodo','rentabilidad_periodo','margen_periodo']
+                              'cmv_unitario','cmv_base','cmv_opciones','cmv_total','cmv_pct',
+                              'mc_unitario','mc_total','margen_pct','mix_pct','umbral_pct','cuadrante']
                 cols_excel = [c for c in cols_excel if c in df_inf1.columns]
                 df_inf1[cols_excel].to_excel(w, sheet_name='Rentabilidad', index=False)
             st.download_button("📥 Descargar Informe 1", buf2.getvalue(), "Informe1_Rentabilidad.xlsx")
@@ -5146,7 +5463,7 @@ elif modulo.startswith("📊"):
 # ============================================================
 # MÓDULO: AUDITOR DE CATEGORÍAS
 # ============================================================
-elif modulo.startswith("🔬"):
+elif informe_sel == "Auditor":
     from datetime import date as _date2
 
     st.markdown("""
@@ -5392,7 +5709,7 @@ elif modulo.startswith("🔬"):
 # ============================================================
 # MÓDULO: TENDENCIAS BAR
 # ============================================================
-if modulo.startswith("🍹"):
+elif informe_sel == "Bar":
     st.markdown("""
     <div style="margin-bottom:1.5rem">
         <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#555;margin-bottom:4px">Módulo</div>
@@ -6017,7 +6334,7 @@ if modulo.startswith("🍹"):
 # ============================================================
 # MÓDULO: CUENTAS CASA
 # ============================================================
-elif modulo.startswith("🏠"):
+elif informe_sel == "CuentasCasa":
     st.markdown("""
     <div style="margin-bottom:1.5rem">
         <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#555;margin-bottom:4px">Informes</div>
