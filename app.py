@@ -1396,9 +1396,16 @@ def save_ventas(df_raw):
     if 'precio_pagar' in df.columns and 'monto_venta_real' not in df.columns:
         df['monto_venta_real'] = pd.to_numeric(df['precio_pagar'], errors='coerce').fillna(0)
 
-    for col in ['cantidad_vendida','monto_venta_real','precio_base','costo_receta','descuento','impuesto']:
+    for col in ['cantidad_vendida','monto_venta_real','precio_base','costo_receta','descuento','impuesto',
+                'pago_total','valor_boleta','total_a_pagar','propina','pagado','cambio',
+                'diferencia_favor','valor','precio_lista','precio_turno','impuestos_totales','descuentos']:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+    # Integer columns — vienen como '1.0', convertir a Int64 nullable
+    for col in ['num_clientes','capacidad_mesa','id_caja']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').round(0).astype('Int64')
 
     if 'ba_opcion' in df.columns:
         df['es_opcion'] = df['ba_opcion'].notna() & (df['ba_opcion'].astype(str).str.strip() != '')
@@ -1499,9 +1506,16 @@ def save_ventas_chunk(df_raw, engine, skip_delete=False):
     if 'precio_pagar' in df.columns and 'monto_venta_real' not in df.columns:
         df['monto_venta_real'] = pd.to_numeric(df['precio_pagar'], errors='coerce').fillna(0)
 
-    for col in ['cantidad_vendida','monto_venta_real','precio_base','costo_receta','descuento','impuesto']:
+    for col in ['cantidad_vendida','monto_venta_real','precio_base','costo_receta','descuento','impuesto',
+                'pago_total','valor_boleta','total_a_pagar','propina','pagado','cambio',
+                'diferencia_favor','valor','precio_lista','precio_turno','impuestos_totales','descuentos']:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+    # Integer columns — vienen como '1.0', convertir a Int64 nullable
+    for col in ['num_clientes','capacidad_mesa','id_caja']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').round(0).astype('Int64')
 
     if 'ba_opcion' in df.columns:
         df['es_opcion'] = df['ba_opcion'].notna() & (df['ba_opcion'].astype(str).str.strip() != '')
