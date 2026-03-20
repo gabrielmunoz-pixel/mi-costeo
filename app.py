@@ -4250,6 +4250,8 @@ elif modulo.startswith("📊"):
                         """)
                         st.caption(f"Total filas en recetas para AE06: {len(df_rec_ae06)}")
                         st.caption(f"Filas distintas por sku_ingrediente: {df_rec_ae06['sku_ingrediente'].nunique() if not df_rec_ae06.empty else 0}")
+                        if not df_rec_ae06.empty:
+                            st.caption(f"Valores únicos de es_opcion en recetas AE06: {df_rec_ae06['es_opcion'].unique().tolist()} | dtype: {df_rec_ae06['es_opcion'].dtype}")
                         if not df_rec_ae06.empty and not df_muc_raw.empty:
                             df_raw_calc = pd.merge(df_rec_ae06, df_muc_raw[['sku','muc','cant_conv','formato','costo_realfinal']],
                                                    left_on='sku_ingrediente', right_on='sku', how='left')
@@ -4263,17 +4265,40 @@ elif modulo.startswith("📊"):
                             st.info(f"Suma costo_parcial AE06: ${df_raw_calc['costo_parcial'].sum():,.2f} | Filas totales: {len(df_raw_calc)}")
 
                         # 5) Cálculo manual de cmv_opciones paso a paso
-                        st.markdown("**5️⃣ Cálculo manual cmv_opciones:**")
-                        if not df_op_raw.empty and not _cb_dbg.empty:
-                            _cb_op = _cb_dbg.rename(columns={'sku_producto':'sku_opcion','cmv_base':'costo_receta_opcion'})
-                            _op_calc = pd.merge(df_op_raw, _cb_op, on='sku_opcion', how='left')
+                        st.markdown("**5️⃣ Cálculo manual cmv_opciones (usando cant_norm):**")
+                        if not df_op_raw.empty:
+                            # Costo unitario de cada opción desde recetas (es_opcion != 0)
+                            _df_precio_dbg = run_query("""
+                                SELECT DISTINCT ON (sku) sku,
+                                       costo_realfinal / NULLIF(cant_conv * NULLIF(formato,0), 0) AS muc
+                                FROM compras WHERE cant_conv>0 AND costo_realfinal>0 AND formato>0
+                                ORDER BY sku, fecha_dte DESC
+                            """)
+                            _df_rec_op_dbg = run_query("SELECT * FROM recetas")
+                            _costo_op = pd.DataFrame(columns=['sku_opcion','costo_receta_opcion'])
+                            if not _df_rec_op_dbg.empty and not _df_precio_dbg.empty:
+                                _rec_op = _df_rec_op_dbg[
+                                    (_df_rec_op_dbg['es_procesado']==False) &
+                                    (pd.to_numeric(_df_rec_op_dbg['es_opcion'],errors='coerce').fillna(0)!=0)
+                                ].copy()
+                                _rec_op['cant_real'] = pd.to_numeric(_rec_op['cant_real'],errors='coerce').fillna(0)
+                                _rec_op = pd.merge(_rec_op, _df_precio_dbg, left_on='sku_ingrediente', right_on='sku', how='left')
+                                _rec_op['muc'] = pd.to_numeric(_rec_op['muc'],errors='coerce').fillna(0)
+                                _rec_op['costo_parcial'] = _rec_op['cant_real'] * _rec_op['muc']
+                                _costo_op = _rec_op.groupby('codigo_venta')['costo_parcial'].sum().reset_index()
+                                _costo_op.columns = ['sku_opcion','costo_receta_opcion']
+
+                            _op_calc = pd.merge(
+                                df_op_raw[['sku_opcion','nombre_opcion','ba_opcion','cant_raw','cant_norm']],
+                                _costo_op, on='sku_opcion', how='left'
+                            )
                             _op_calc['costo_receta_opcion'] = _op_calc['costo_receta_opcion'].fillna(0)
-                            _op_calc['cant_opcion'] = pd.to_numeric(_op_calc['cant_opcion'], errors='coerce').fillna(0)
-                            _op_calc['aporte_total'] = _op_calc['cant_opcion'] * _op_calc['costo_receta_opcion']
+                            _op_calc['cant_norm'] = pd.to_numeric(_op_calc['cant_norm'],errors='coerce').fillna(0)
+                            _op_calc['aporte_acum'] = _op_calc['cant_norm'] * _op_calc['costo_receta_opcion']
                             cant_p = float(df_cp['cant_padre'].iloc[0]) if not df_cp.empty else 1
-                            _op_calc['aporte_unitario'] = _op_calc['aporte_total'] / max(cant_p, 1)
-                            st.dataframe(_op_calc[['sku_opcion','nombre_opcion','cant_opcion',
-                                                    'costo_receta_opcion','aporte_total','aporte_unitario']]
+                            _op_calc['aporte_unitario'] = _op_calc['aporte_acum'] / max(cant_p, 1)
+                            st.dataframe(_op_calc[['sku_opcion','nombre_opcion','cant_raw','cant_norm',
+                                                    'costo_receta_opcion','aporte_acum','aporte_unitario']]
                                          .reset_index(drop=True), use_container_width=True)
                             total_cmv_op = _op_calc['aporte_unitario'].sum()
                             cb_ae06 = float(_cb_dbg[_cb_dbg['sku_producto']=='AE06']['cmv_base'].iloc[0]) if 'AE06' in _cb_dbg['sku_producto'].values else 0
