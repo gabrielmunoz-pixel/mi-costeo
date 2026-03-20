@@ -798,6 +798,7 @@ def calcular_costo_platos(engine, fecha_i, fecha_f, local):
     import streamlit as _st
     _ae = costo_total[costo_total['codigo_venta'] == 'AE06']
     _st.warning(f"DEBUG calcular_costo_platos: AE06 tiene {len(_ae)} filas en costo_total, suma={_ae['costo_parcial'].sum():,.2f}")
+    _st.dataframe(_ae)
 
     return costo_platos
 
