@@ -760,8 +760,28 @@ def calcular_costo_platos(engine, fecha_i, fecha_f, local):
     ).fillna(0)
     proc_ingredientes['costo_parcial'] = proc_ingredientes['cant_efic'] * proc_ingredientes['precio_unitario']
 
-    # costo unitario de cada PRO- (agrupado por codigo_venta del PRO-)
-    costo_pro = proc_ingredientes.groupby('codigo_venta')['costo_parcial'].sum().reset_index()
+    # Costo total del lote por PRO-
+    costo_lote = proc_ingredientes.groupby('codigo_venta')['costo_parcial'].sum().reset_index()
+    costo_lote.columns = ['codigo_venta', 'costo_lote']
+
+    # Tamaño del lote = SUM(cant_real) cuando porcion=0, o 1 cuando porcion=1
+    porcion_por_pro = df_proc.groupby('codigo_venta')['porcion'].first().reset_index()
+    cant_lote = proc_ingredientes.groupby('codigo_venta')['cant_real'].sum().reset_index()
+    cant_lote.columns = ['codigo_venta', 'cant_lote']
+
+    costo_pro_df = pd.merge(costo_lote, porcion_por_pro, on='codigo_venta', how='left')
+    costo_pro_df = pd.merge(costo_pro_df, cant_lote, on='codigo_venta', how='left')
+    costo_pro_df['porcion'] = pd.to_numeric(costo_pro_df['porcion'], errors='coerce').fillna(0)
+    costo_pro_df['cant_lote'] = pd.to_numeric(costo_pro_df['cant_lote'], errors='coerce').fillna(1)
+
+    # Si porcion=1: costo unitario = costo_lote (ya es por unidad)
+    # Si porcion=0: costo unitario por g/ml = costo_lote / cant_lote
+    costo_pro_df['costo_unitario_pro'] = costo_pro_df.apply(
+        lambda r: r['costo_lote'] if r['porcion'] == 1 else r['costo_lote'] / r['cant_lote'].clip(lower=1),
+        axis=1
+    )
+
+    costo_pro = costo_pro_df[['codigo_venta', 'costo_unitario_pro']].copy()
     costo_pro.columns = ['sku_ingrediente_pro', 'costo_unitario_pro']
 
     # ── DIRECTOS: ingredientes simples del plato de venta ────────────────────
@@ -984,7 +1004,21 @@ def calcular_costo_platos_periodo(engine, fecha_i, fecha_f):
         proc_ingredientes['precio_unitario'], errors='coerce'
     ).fillna(0)
     proc_ingredientes['costo_parcial'] = proc_ingredientes['cant_efic'] * proc_ingredientes['precio_unitario']
-    costo_pro = proc_ingredientes.groupby('codigo_venta')['costo_parcial'].sum().reset_index()
+
+    costo_lote2 = proc_ingredientes.groupby('codigo_venta')['costo_parcial'].sum().reset_index()
+    costo_lote2.columns = ['codigo_venta', 'costo_lote']
+    porcion_por_pro2 = df_proc.groupby('codigo_venta')['porcion'].first().reset_index()
+    cant_lote2 = proc_ingredientes.groupby('codigo_venta')['cant_real'].sum().reset_index()
+    cant_lote2.columns = ['codigo_venta', 'cant_lote']
+    costo_pro_df2 = pd.merge(costo_lote2, porcion_por_pro2, on='codigo_venta', how='left')
+    costo_pro_df2 = pd.merge(costo_pro_df2, cant_lote2, on='codigo_venta', how='left')
+    costo_pro_df2['porcion'] = pd.to_numeric(costo_pro_df2['porcion'], errors='coerce').fillna(0)
+    costo_pro_df2['cant_lote'] = pd.to_numeric(costo_pro_df2['cant_lote'], errors='coerce').fillna(1)
+    costo_pro_df2['costo_unitario_pro'] = costo_pro_df2.apply(
+        lambda r: r['costo_lote'] if r['porcion'] == 1 else r['costo_lote'] / r['cant_lote'].clip(lower=1),
+        axis=1
+    )
+    costo_pro = costo_pro_df2[['codigo_venta', 'costo_unitario_pro']].copy()
     costo_pro.columns = ['sku_ingrediente_pro', 'costo_unitario_pro']
 
     # ── DIRECTOS ─────────────────────────────────────────────────────────────
