@@ -4,7 +4,6 @@ import numpy as np
 import io
 from sqlalchemy import create_engine, text
 from datetime import datetime, date
-import plotly.express as px
 
 
 # Template Excel embebido
@@ -3841,6 +3840,89 @@ elif modulo.startswith("📊"):
                 abs_con_opciones = set(df_ab_con_opciones['ab_categoria'].tolist()) if not df_ab_con_opciones.empty else set()
 
             if not df_inf1.empty:
+                # ── DEBUG COSTEO ──────────────────────────────────────────
+                productos_debug = ["CRUDO ALEMAN EXPERTO", "SANDWICH ITALIANO"]
+                df_debug = df_inf1[
+                    df_inf1['nombre_producto'].str.upper().str.contains(
+                        '|'.join(productos_debug), na=False
+                    )
+                ]
+                if not df_debug.empty:
+                    with st.expander("🔍 DEBUG — Costeo Crudo Alemán Experto / Sandwich Italiano", expanded=True):
+                        engine_dbg = get_engine()
+
+                        # Recetas de estos SKUs
+                        skus_dbg = df_debug['sku_producto'].tolist()
+                        skus_ph  = ','.join([f"'{s}'" for s in skus_dbg])
+                        df_rec_dbg = run_query(f"""
+                            SELECT r.codigo_venta, r.nombre_producto, r.sku_ingrediente,
+                                   r.nombre_ingrediente, r.cant_real, r.cant_efic,
+                                   r.um_salida, r.es_procesado
+                            FROM recetas r
+                            WHERE r.codigo_venta IN ({skus_ph})
+                            ORDER BY r.codigo_venta, r.es_procesado, r.nombre_ingrediente
+                        """)
+
+                        # MUC por SKU de ingrediente
+                        df_muc_dbg = run_query("""
+                            SELECT DISTINCT ON (sku) sku,
+                                   costo_realfinal / NULLIF(cant_conv * NULLIF(formato,0), 0) as muc_ultimo,
+                                   fecha_dte, nombre_producto as nombre_comp
+                            FROM compras
+                            WHERE cant_conv > 0 AND costo_realfinal > 0 AND formato > 0
+                            ORDER BY sku, fecha_dte DESC
+                        """)
+
+                        st.markdown("**📋 Ventas del período:**")
+                        cols_v = ['sku_producto','nombre_producto','cant','venta','cmv_unitario','cmv_base','cmv_opciones','mc_total','margen_pct']
+                        cols_v_ok = [c for c in cols_v if c in df_debug.columns]
+                        st.dataframe(df_debug[cols_v_ok].reset_index(drop=True), use_container_width=True)
+
+                        if not df_rec_dbg.empty:
+                            st.markdown("**🧾 Ingredientes en receta:**")
+                            if not df_muc_dbg.empty:
+                                df_rec_dbg = pd.merge(
+                                    df_rec_dbg, df_muc_dbg[['sku','muc_ultimo','fecha_dte','nombre_comp']],
+                                    left_on='sku_ingrediente', right_on='sku', how='left'
+                                )
+                                df_rec_dbg['factor_um'] = df_rec_dbg['um_salida'].apply(
+                                    lambda u: 1/1000 if str(u).strip().upper() in ['G','CC','ML'] else 1
+                                )
+                                df_rec_dbg['costo_dir']  = df_rec_dbg.apply(
+                                    lambda r: r['cant_real'] * r['factor_um'] * (r['muc_ultimo'] or 0)
+                                    if not r['es_procesado'] else 0, axis=1
+                                )
+                                df_rec_dbg['costo_proc'] = df_rec_dbg.apply(
+                                    lambda r: r['cant_efic'] * r['factor_um'] * (r['muc_ultimo'] or 0)
+                                    if r['es_procesado'] else 0, axis=1
+                                )
+                                df_rec_dbg['costo_parcial'] = df_rec_dbg['costo_dir'] + df_rec_dbg['costo_proc']
+
+                                st.dataframe(
+                                    df_rec_dbg[[
+                                        'codigo_venta','nombre_ingrediente','sku_ingrediente',
+                                        'cant_real','cant_efic','um_salida','factor_um',
+                                        'muc_ultimo','fecha_dte','es_procesado','costo_parcial'
+                                    ]].reset_index(drop=True),
+                                    use_container_width=True
+                                )
+
+                                resumen_dbg = df_rec_dbg.groupby('codigo_venta')['costo_parcial'].sum().reset_index()
+                                resumen_dbg.columns = ['sku_producto','costo_receta_calculado']
+                                resumen_dbg = pd.merge(resumen_dbg, df_debug[['sku_producto','nombre_producto','cmv_unitario']], on='sku_producto', how='left')
+                                st.markdown("**🔢 Resumen CMV calculado vs almacenado:**")
+                                st.dataframe(resumen_dbg.reset_index(drop=True), use_container_width=True)
+
+                                ing_sin_muc = df_rec_dbg[df_rec_dbg['muc_ultimo'].isna()][['nombre_ingrediente','sku_ingrediente']].drop_duplicates()
+                                if not ing_sin_muc.empty:
+                                    st.warning(f"⚠️ Ingredientes SIN precio en compras (MUC = NULL): {ing_sin_muc['nombre_ingrediente'].tolist()}")
+                            else:
+                                st.dataframe(df_rec_dbg.reset_index(drop=True), use_container_width=True)
+                                st.warning("⚠️ No se encontraron compras con MUC para calcular costos.")
+                        else:
+                            st.warning(f"⚠️ No se encontraron recetas para los SKUs: {skus_dbg}. Verifica que estén cargados en la tabla `recetas`.")
+                # ── FIN DEBUG ─────────────────────────────────────────────
+
                 st.session_state['inf1_data']        = df_inf1
                 st.session_state['inf1_abs_opciones'] = abs_con_opciones
                 st.session_state['inf1_fi']           = f_inicio
@@ -3887,37 +3969,7 @@ elif modulo.startswith("📊"):
 
             # ── VISTA INTEREMPRESA ─────────────────────────────
             if "Interempresa" in vista:
-                # Gráfico de cuadrantes por categoría seleccionada
-                cats_disponibles = sorted(df_inf1['categoria_menu'].dropna().unique().tolist())
-                cat_sel = st.selectbox("Categoría para gráfico BCG", ["Todas"] + cats_disponibles, key="bcg_cat")
-                df_bcg = df_inf1 if cat_sel == "Todas" else df_inf1[df_inf1['categoria_menu'] == cat_sel]
-
-                if not df_bcg.empty and 'mc_unitario' in df_bcg.columns:
-                    import plotly.express as px
-                    mc_prom = df_bcg['mc_unitario'].mean()
-                    mix_umbral = df_bcg['umbral_pct'].mean() if 'umbral_pct' in df_bcg.columns else 0
-                    color_map = {"⭐ Estrella":"#d4a853","❓ Interrogante":"#4caf7d","🐄 Vaca":"#5b8dd9","🐶 Perro":"#888888"}
-                    fig = px.scatter(
-                        df_bcg, x='cant', y='mc_unitario',
-                        color='cuadrante' if 'cuadrante' in df_bcg.columns else None,
-                        hover_name='nombre_producto',
-                        hover_data={'cant': True, 'mc_unitario': ':.0f', 'mix_pct': ':.1f', 'cmv_pct': ':.1f'},
-                        color_discrete_map=color_map,
-                        labels={'cant':'Unidades vendidas (Q)','mc_unitario':'MC Unitario ($)','cuadrante':'Cuadrante'},
-                        title=f"Mapa BCG — {cat_sel}"
-                    )
-                    fig.add_hline(y=mc_prom, line_dash="dash", line_color="#555", annotation_text="MC promedio")
-                    if mix_umbral > 0:
-                        q_corte = df_bcg['cant'].sum() * mix_umbral / 100
-                        fig.add_vline(x=q_corte, line_dash="dash", line_color="#555", annotation_text="Umbral pop.")
-                    fig.update_layout(
-                        plot_bgcolor='#0d0d0d', paper_bgcolor='#0d0d0d',
-                        font_color='#ccc', height=420,
-                        xaxis=dict(gridcolor='#1a1a1a'), yaxis=dict(gridcolor='#1a1a1a')
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-
-                st.markdown("#### Detalle por Producto</s>")
+                st.markdown("#### Detalle por Producto")
 
                 for _, r in df_inf1.iterrows():
                     ab   = r.get('ab_categoria', '')
