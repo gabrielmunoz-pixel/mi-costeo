@@ -6,3 +6,4 @@ sqlalchemy
 psycopg2-binary
 reportlab>=4.0.0
 pypdf>=4.0.0
+plotly>=5.0.0,<7.0.0
