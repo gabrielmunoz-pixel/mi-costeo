@@ -890,7 +890,7 @@ def calcular_cmv_con_opciones(fecha_i, fecha_f, local):
     # ── Costo unitario de cada SKU opción desde recetas (es_opcion != 0) ──────
     # Costo de cada SKU opción — usar costo_base que ya tiene el costo correcto
     # de todos los platos incluyendo CHUX-021, PANX-001, etc.
-    costo_op_sku = costo_base.rename(columns={
+    costo_op_sku = costo_base.copy().rename(columns={
         'sku_producto':  'sku_opcion',
         'cmv_base':      'costo_receta_opcion'
     })
