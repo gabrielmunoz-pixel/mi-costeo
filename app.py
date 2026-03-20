@@ -834,7 +834,10 @@ def calcular_cmv_con_opciones(fecha_i, fecha_f, local):
 
     df_cant_padre['cant_padre'] = pd.to_numeric(df_cant_padre['cant_padre'], errors='coerce').fillna(1)
 
-    # ── Opciones vendidas: cant total por (sku_padre, sku_opcion) ─────────────
+    # ── Opciones costeables: SOLO Pan y Proteína ─────────────────────────────
+    # Bebida, Agregados, Postre, Cubiertos, etc. son productos independientes
+    # con precio propio y NO se suman al CMV del plato padre.
+    ba_costeables_sql = "', '".join(BA_COSTEABLES)
     q_opciones = f"""
         SELECT
             p.sku_producto          AS sku_padre,
@@ -847,6 +850,7 @@ def calcular_cmv_con_opciones(fecha_i, fecha_f, local):
          AND o.es_opcion    = true
          AND p.es_opcion    = false
         WHERE p.fecha_venta BETWEEN :i AND :f
+          AND o.ba_opcion IN ('{ba_costeables_sql}')
           {filtro_local}
         GROUP BY p.sku_producto, o.sku_producto
     """
@@ -1051,6 +1055,17 @@ def informe_rentabilidad(fecha_i, fecha_f, local):
     return df.sort_values('venta', ascending=False)
 
 
+
+# BA jerarquías que forman parte del costo del plato (Pan + Proteína).
+# Bebida, Agregados, Postre, Cubiertos, Acompañamiento, etc. son productos
+# independientes con precio propio → NO se suman al CMV del plato padre.
+BA_COSTEABLES = {
+    'BA.010',  # Opcion Pan Clasicos
+    'BA.011',  # Opcion Pan de la casa
+    'BA.020',  # Opcion Proteinas
+    'BA.250',  # Opción Proteínas Clásicos
+    'BA.260',  # Opcion Sándwich Italiano (proteína específica)
+}
 
 # Mapeo BA jerarquía → grupo visual
 BA_GRUPOS = {
@@ -3931,7 +3946,8 @@ elif modulo.startswith("📊"):
                         st.markdown("**1️⃣ Cantidad vendida del padre (AE06):**")
                         st.dataframe(df_cp, use_container_width=True)
 
-                        # 2) Opciones linkadas al AE06 con cant y monto_venta_real de la opción
+                        # 2) Opciones linkadas al AE06 — SOLO Pan y Proteína (BA costeables)
+                        _ba_sql = "', '".join(BA_COSTEABLES)
                         df_op_raw = run_query(f"""
                             SELECT
                                 o.sku_producto    AS sku_opcion,
@@ -3947,11 +3963,12 @@ elif modulo.startswith("📊"):
                              AND p.es_opcion    = false
                             WHERE p.fecha_venta BETWEEN :i AND :f
                               AND p.sku_producto = 'AE06'
+                              AND o.ba_opcion IN ('{_ba_sql}')
                               {_filtro}
                             GROUP BY o.sku_producto, o.nombre_producto, o.ba_opcion
                             ORDER BY cant_opcion DESC
                         """, _params)
-                        st.markdown("**2️⃣ Opciones vendidas con AE06:**")
+                        st.markdown("**2️⃣ Opciones costeables (Pan + Proteína) vendidas con AE06:**")
                         st.dataframe(df_op_raw, use_container_width=True)
 
                         # 3) costo_base de cada opción según calcular_costo_platos
