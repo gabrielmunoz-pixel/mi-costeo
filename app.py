@@ -746,7 +746,7 @@ def calcular_costo_platos(engine, fecha_i, fecha_f, local):
     if df_rec.empty:
         return pd.DataFrame()
 
-    df_dir  = df_rec[(df_rec['es_procesado'] == False) & (pd.to_numeric(df_rec['es_opcion'], errors='coerce').fillna(0) == 0)].copy()
+    _es_op = pd.to_numeric(df_rec["es_opcion"], errors="coerce"); df_dir  = df_rec[(df_rec["es_procesado"] == False) & (_es_op.isna() | (_es_op == 0))].copy()
     df_proc = df_rec[df_rec['es_procesado'] == True].copy()
     # Los PRO- tienen sus propios ingredientes directos en la tabla recetas
     # con es_procesado=True. Usamos cant_efic × MUC para cada ingrediente del PRO-.
@@ -976,7 +976,7 @@ def calcular_costo_platos_periodo(engine, fecha_i, fecha_f):
         return pd.DataFrame()
 
     df_dir  = df_rec[(df_rec['es_procesado'] == False) & (pd.to_numeric(df_rec['es_opcion'], errors='coerce').fillna(0) == 0)].copy()
-    df_proc = df_rec[df_rec['es_procesado'] == True].copy()
+    _es_op2 = pd.to_numeric(df_rec["es_opcion"], errors="coerce"); df_dir  = df_rec[(df_rec["es_procesado"] == False) & (_es_op2.isna() | (_es_op2 == 0))].copy()
     proc_ingredientes = df_proc.copy()
     proc_ingredientes['cant_efic'] = pd.to_numeric(proc_ingredientes['cant_efic'], errors='coerce').fillna(0)
     proc_ingredientes = pd.merge(
@@ -4232,6 +4232,20 @@ elif modulo.startswith("📊"):
                             _cb_dbg[_cb_dbg['sku_producto'].isin(skus_interes)].reset_index(drop=True),
                             use_container_width=True
                         )
+
+                        # 4c) TEST FILTRO PYTHON — ver qué queda de AE06 después del filtro es_opcion
+                        st.markdown("**4c️⃣ TEST filtro Python es_opcion sobre recetas AE06:**")
+                        _df_rec_test = run_query("SELECT * FROM recetas WHERE codigo_venta = 'AE06'")
+                        st.caption(f"Columnas: {_df_rec_test.columns.tolist()}")
+                        st.caption(f"'es_opcion' en columnas: {'es_opcion' in _df_rec_test.columns}")
+                        if 'es_opcion' in _df_rec_test.columns:
+                            _es_num = pd.to_numeric(_df_rec_test['es_opcion'], errors='coerce')
+                            _mask = _es_num.isna() | (_es_num == 0)
+                            st.caption(f"Valores es_opcion raw: {_df_rec_test['es_opcion'].tolist()}")
+                            st.caption(f"Valores es_opcion numérico: {_es_num.tolist()}")
+                            st.caption(f"Mask (incluir): {_mask.tolist()}")
+                            st.caption(f"Ingredientes INCLUIDOS tras filtro: {_df_rec_test[_mask]['nombre_ingrediente'].tolist()}")
+                            st.caption(f"Ingredientes EXCLUIDOS: {_df_rec_test[~_mask]['nombre_ingrediente'].tolist()}")
 
                         # 4b) RAW: recetas de AE06 con MUC — para ver cant_real exacta
                         st.markdown("**4b️⃣ RAW recetas AE06 × MUC (cálculo a mano):**")
