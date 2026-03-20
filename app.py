@@ -4363,6 +4363,50 @@ elif modulo.startswith("📊"):
                             total_cmv_op = _op_calc['aporte_unitario'].sum()
                             cb_ae06 = float(_cb_dbg[_cb_dbg['sku_producto']=='AE06']['cmv_base'].iloc[0]) if 'AE06' in _cb_dbg['sku_producto'].values else 0
                             st.info(f"cmv_base AE06: ${cb_ae06:,.0f} | cmv_opciones: ${total_cmv_op:,.0f} | cmv_unitario total: ${cb_ae06+total_cmv_op:,.0f} | cant_padre: {cant_p:,.0f}")
+
+                        # 6) Query de producción real con TODOS los padres (no solo AE06)
+                        st.markdown("**6️⃣ Query PRODUCCIÓN — cant_opcion_total con todos los padres:**")
+                        _ba_sql2 = "', '".join(BA_COSTEABLES)
+                        _fv2 = "AND UPPER(local) = UPPER(:l)" if f_local != "Todos" else ""
+                        df_prod_check = run_query(f"""
+                            WITH padres AS (
+                                SELECT id_orden, ab_categoria, sku_producto AS sku_padre,
+                                       SUM(cantidad_vendida) AS cant_padre
+                                FROM ventas
+                                WHERE fecha_venta BETWEEN :i AND :f
+                                  AND es_opcion = false
+                                  AND ab_categoria IS NOT NULL
+                                  {_fv2}
+                                GROUP BY id_orden, ab_categoria, sku_producto
+                            ),
+                            total_por_ab_orden AS (
+                                SELECT id_orden, ab_categoria, SUM(cant_padre) AS total_padres
+                                FROM padres GROUP BY id_orden, ab_categoria
+                            ),
+                            opciones AS (
+                                SELECT id_orden, ab_categoria, sku_producto AS sku_opcion,
+                                       SUM(cantidad_vendida) AS cant_opcion
+                                FROM ventas
+                                WHERE fecha_venta BETWEEN :i AND :f
+                                  AND es_opcion = true
+                                  AND ba_opcion IN ('{_ba_sql2}')
+                                  {_fv2}
+                                GROUP BY id_orden, ab_categoria, sku_producto
+                            )
+                            SELECT
+                                p.sku_padre,
+                                o.sku_opcion,
+                                SUM(o.cant_opcion::float * p.cant_padre::float / NULLIF(t.total_padres,0)) AS cant_opcion_total
+                            FROM padres p
+                            JOIN total_por_ab_orden t ON t.id_orden=p.id_orden AND t.ab_categoria=p.ab_categoria
+                            JOIN opciones o            ON o.id_orden=p.id_orden AND o.ab_categoria=p.ab_categoria
+                            WHERE p.sku_padre = 'AE06'
+                            GROUP BY p.sku_padre, o.sku_opcion
+                            ORDER BY cant_opcion_total DESC
+                        """, _params)
+                        if not df_prod_check.empty:
+                            st.dataframe(df_prod_check, use_container_width=True)
+                            st.info(f"Total cant_opcion_total AE06: {df_prod_check['cant_opcion_total'].sum():,.1f} | esperado ~{float(df_cp['cant_padre'].iloc[0]) if not df_cp.empty else 'N/A'} por tipo")
                 # ── FIN DEBUG ─────────────────────────────────────────────
 
                 st.session_state['inf1_data']        = df_inf1
