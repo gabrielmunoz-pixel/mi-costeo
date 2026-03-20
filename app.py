@@ -910,7 +910,8 @@ def calcular_cmv_con_opciones(fecha_i, fecha_f, local):
         df_opciones_rec['precio_unitario'] = pd.to_numeric(
             df_opciones_rec['precio_unitario'], errors='coerce').fillna(0)
         df_opciones_rec['costo_parcial'] = df_opciones_rec['cant_real'] * df_opciones_rec['precio_unitario']
-        costo_op_sku = df_opciones_rec.groupby('codigo_venta')['costo_parcial'].sum().reset_index()
+        # Agrupar por sku_ingrediente — ese es el SKU que aparece en ventas como sku_opcion
+        costo_op_sku = df_opciones_rec.groupby('sku_ingrediente')['costo_parcial'].sum().reset_index()
         costo_op_sku.columns = ['sku_opcion', 'costo_receta_opcion']
 
     # cant_opcion_norm ya viene normalizada por unidades del padre en cada pedido.
@@ -2645,14 +2646,6 @@ if modulo.startswith("📦"):
                                    'productos']
                         cols_ok2 = [c for c in cols_bd if c in df_proc.columns]
                         df_save2 = df_proc[cols_ok2].copy()
-
-                        # Deduplicar: misma orden + producto + fecha_pedido + local = fila duplicada
-                        dedup_cols = [c for c in ['id_orden','sku_producto','fecha_pedido','local','ba_opcion'] if c in df_save2.columns]
-                        n_antes = len(df_save2)
-                        df_save2 = df_save2.drop_duplicates(subset=dedup_cols)
-                        n_dupes = n_antes - len(df_save2)
-                        if n_dupes > 0:
-                            st.warning(f"⚠️ Se eliminaron {n_dupes:,} filas duplicadas del archivo antes de cargar.")
 
                         # DELETE por período y locales del archivo
                         fechas2   = pd.to_datetime(df_save2['fecha_venta'].astype(str), errors='coerce').dropna()
