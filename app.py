@@ -1011,15 +1011,17 @@ def informe_rentabilidad(fecha_i, fecha_f, local):
         params["l"] = local
 
     q_v = f"""
-        SELECT sku_producto, nombre_producto, categoria_menu,
-               MAX(ab_categoria) as ab_categoria,
+        SELECT sku_producto,
+               MAX(nombre_producto)  as nombre_producto,
+               MAX(categoria_menu)   as categoria_menu,
+               MAX(ab_categoria)     as ab_categoria,
                SUM(cantidad_vendida) as cant,
                SUM(monto_venta_real) as venta
         FROM ventas
         WHERE fecha_venta BETWEEN :i AND :f
           AND es_opcion = false
           {filtro_local_r}
-        GROUP BY 1, 2, 3
+        GROUP BY sku_producto
     """
     df_v = run_query(q_v, params)
     if df_v.empty:
@@ -1885,6 +1887,16 @@ def save_ventas(df_raw):
                'productos']
     cols_ok = [c for c in cols_bd if c in df.columns]
     df_save = df[cols_ok].copy()
+
+    # ── Normalización de nombres de local ────────────────────────────────────
+    LOCAL_ALIAS = {
+        'pedro de valdivia': 'Providencia',
+        'providencia':       'Providencia',
+    }
+    if 'local' in df_save.columns:
+        df_save['local'] = df_save['local'].apply(
+            lambda x: LOCAL_ALIAS.get(str(x).strip().lower(), str(x).strip()) if pd.notna(x) else x
+        )
 
     try:
         fechas    = pd.to_datetime(df_save['fecha_venta'].astype(str), errors='coerce').dropna()
