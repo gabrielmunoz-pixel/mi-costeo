@@ -2525,20 +2525,147 @@ if modulo.startswith("📦"):
                 import io as _io2
                 raw = f_ven.read()
                 sep = ';' if b';' in raw[:500] else ','
-                with st.spinner("Cargando ventas..."):
+                with st.spinner("Leyendo archivo..."):
                     try:
                         engine = get_engine()
-                        # Chunk grande — 3 bloques máx para archivo de 110MB
-                        chunks = list(pd.read_csv(_io2.BytesIO(raw), sep=sep, dtype=str, chunksize=200_000))
-                        for i, chunk in enumerate(chunks):
-                            if i == 0:
-                                save_ventas(chunk)          # hace el DELETE + insert
-                            else:
-                                save_ventas_chunk(chunk, engine, skip_delete=True)  # solo insert
-                        st.success(f"✅ Ventas cargadas en {len(chunks)} bloque(s).")
+                        # Leer todo el CSV de una vez — más estable que chunks de pandas
+                        df_full = pd.read_csv(_io2.BytesIO(raw), sep=sep, dtype=str)
+                        st.caption(f"Filas leídas: {len(df_full):,}")
+
+                        # Procesar (normalizar fechas, columnas, local alias, etc.)
+                        # reutilizamos la lógica de save_ventas pero separamos el insert
+                        df_proc = df_full.copy()
+                        df_proc.columns = df_proc.columns.str.strip()
+
+                        mapeo = {
+                            'ID de orden': 'id_orden', 'ID Producto': 'sku_producto',
+                            'Nombre': 'nombre_producto', 'Cantidad': 'cantidad_vendida',
+                            'Precio a Pagar': 'precio_pagar', 'Precio Base': 'precio_base',
+                            'Costo': 'costo_receta', 'Descuento': 'descuento', 'Impuesto': 'impuesto',
+                            'AB.': 'ab_categoria',
+                            'Categorias de Productos/Platos': 'categoria_menu',
+                            'Categorías de Productos/Platos': 'categoria_menu',
+                            'BA.': 'ba_opcion', 'Jerarquia de Extras': 'jerarquia_extras',
+                            'Jerarquía de Extras': 'jerarquia_extras',
+                            'AC.': 'ac_excepcion', 'Jerarquia de Excp.': 'jerarquia_excepcion',
+                            'Jerarquía de Excp.': 'jerarquia_excepcion',
+                            'Local': 'local', 'fechahora_pedido': 'fecha_pedido',
+                            'fechahora_creacion': 'fecha_creacion', 'fechahora_cierre': 'fecha_cierre',
+                            'Nombre de mesa': 'mesa', 'Sector': 'sector', 'Origen': 'origen',
+                            'Nombre garzon apertura': 'garzon', 'Nombre garzón apertura': 'garzon',
+                            'Folio': 'folio', 'Forma de Pago': 'forma_pago',
+                            'Nombre Lista Precio': 'lista_precio',
+                            'Numero de clientes': 'num_clientes', 'Número de clientes': 'num_clientes',
+                            'Capacidad de la mesa': 'capacidad_mesa',
+                            'Impuestos totales': 'impuestos_totales', 'Pago total': 'pago_total',
+                            'Pagos': 'pago', 'ID Caja': 'id_caja', 'Nombre de la caja': 'nombre_caja',
+                            'Total con propina': 'total_con_propina', 'ID de Pago': 'id_pago',
+                            'Valor de boleta': 'valor_boleta', 'Tipo de documento': 'tipo_documento',
+                            'Descuentos': 'descuentos', 'Total a pagar': 'total_a_pagar',
+                            'Propina': 'propina', 'Pagado': 'pagado', 'Cambio': 'cambio',
+                            'Diferencia a favor': 'diferencia_favor', 'Formas de pago': 'formas_pago',
+                            'Valor': 'valor', 'Precio Lista': 'precio_lista',
+                            'Precio Turno': 'precio_turno', 'Productos': 'productos',
+                        }
+                        df_proc = df_proc.rename(columns={k: v for k, v in mapeo.items() if k in df_proc.columns})
+
+                        fecha_col = next((c for c in ['fecha_pedido','fecha_creacion'] if c in df_proc.columns), None)
+                        if fecha_col:
+                            df_proc['fecha_venta'] = pd.to_datetime(
+                                df_proc[fecha_col].astype(str).str[:10], errors='coerce').dt.date
+                        df_proc = df_proc.dropna(subset=['fecha_venta','sku_producto'])
+                        df_proc = df_proc[df_proc['sku_producto'].astype(str).str.strip() != '']
+
+                        if 'precio_pagar' in df_proc.columns and 'monto_venta_real' not in df_proc.columns:
+                            df_proc['monto_venta_real'] = pd.to_numeric(df_proc['precio_pagar'], errors='coerce').fillna(0)
+
+                        for col in ['cantidad_vendida','monto_venta_real','precio_base','costo_receta',
+                                    'descuento','impuesto','pago_total','valor_boleta','total_a_pagar',
+                                    'propina','pagado','cambio','diferencia_favor','valor',
+                                    'precio_lista','precio_turno','impuestos_totales','descuentos']:
+                            if col in df_proc.columns:
+                                df_proc[col] = pd.to_numeric(df_proc[col], errors='coerce').fillna(0)
+
+                        for col in ['num_clientes','capacidad_mesa','id_caja']:
+                            if col in df_proc.columns:
+                                df_proc[col] = pd.to_numeric(df_proc[col], errors='coerce').round(0).astype('Int64')
+
+                        if 'ba_opcion' in df_proc.columns:
+                            df_proc['es_opcion'] = df_proc['ba_opcion'].notna() & \
+                                                   (df_proc['ba_opcion'].astype(str).str.strip() != '')
+                        else:
+                            df_proc['es_opcion'] = False
+
+                        # Normalización de local
+                        LOCAL_ALIAS_V = {
+                            'pedro de valdivia': 'Providencia',
+                            'providencia':       'Providencia',
+                        }
+                        if 'local' in df_proc.columns:
+                            df_proc['local'] = df_proc['local'].apply(
+                                lambda x: LOCAL_ALIAS_V.get(str(x).strip().lower(), str(x).strip())
+                                if pd.notna(x) else x
+                            )
+
+                        cols_bd = ['fecha_venta','id_orden','sku_producto','nombre_producto',
+                                   'cantidad_vendida','monto_venta_real','precio_base',
+                                   'costo_receta','descuento','impuesto',
+                                   'ab_categoria','categoria_menu','ba_opcion','jerarquia_extras',
+                                   'ac_excepcion','jerarquia_excepcion','es_opcion',
+                                   'local','mesa','sector','origen','garzon',
+                                   'folio','forma_pago','lista_precio',
+                                   'fecha_pedido','fecha_creacion','fecha_cierre',
+                                   'num_clientes','capacidad_mesa','impuestos_totales','pago_total','pago',
+                                   'id_caja','nombre_caja','total_con_propina','id_pago','valor_boleta',
+                                   'tipo_documento','descuentos','total_a_pagar','propina','pagado','cambio',
+                                   'diferencia_favor','formas_pago','valor','precio_lista','precio_turno',
+                                   'productos']
+                        cols_ok2 = [c for c in cols_bd if c in df_proc.columns]
+                        df_save2 = df_proc[cols_ok2].copy()
+
+                        # DELETE por período y locales del archivo
+                        fechas2   = pd.to_datetime(df_save2['fecha_venta'].astype(str), errors='coerce').dropna()
+                        fecha_min2 = fechas2.min().date().replace(day=1)
+                        fecha_max2 = (fechas2.max().to_period('M').to_timestamp('M')).date()
+                        locales2   = df_save2['local'].dropna().unique().tolist()
+
                     except Exception as e:
-                        st.error(f"Error: {e}")
+                        st.error(f"Error al procesar archivo: {e}")
                         st.exception(e)
+                        st.stop()
+
+                # INSERT con barra de progreso — fuera del spinner para que sea visible
+                try:
+                    with engine.connect() as conn:
+                        if locales2:
+                            conn.execute(text(
+                                "DELETE FROM ventas WHERE fecha_venta BETWEEN :fi AND :ff AND local = ANY(:locales)"),
+                                {'fi': fecha_min2, 'ff': fecha_max2, 'locales': locales2})
+                        else:
+                            conn.execute(text(
+                                "DELETE FROM ventas WHERE fecha_venta BETWEEN :fi AND :ff"),
+                                {'fi': fecha_min2, 'ff': fecha_max2})
+                        conn.commit()
+
+                    total_filas = len(df_save2)
+                    CHUNK_SQL   = 5_000
+                    n_chunks    = (total_filas // CHUNK_SQL) + 1
+                    prog        = st.progress(0, text="Insertando registros...")
+
+                    for i in range(n_chunks):
+                        chunk_df = df_save2.iloc[i*CHUNK_SQL:(i+1)*CHUNK_SQL]
+                        if chunk_df.empty:
+                            break
+                        chunk_df.to_sql('ventas', engine, if_exists='append',
+                                        index=False, method='multi', chunksize=500)
+                        pct = min(int((i+1)/n_chunks*100), 100)
+                        prog.progress(pct, text=f"Insertando... {min((i+1)*CHUNK_SQL, total_filas):,} / {total_filas:,} filas")
+
+                    prog.progress(100, text="✅ Completado")
+                    st.success(f"✅ {total_filas:,} registros guardados ({fecha_min2} → {fecha_max2}) · {len(locales2)} locales: {', '.join(sorted(locales2))}")
+                except Exception as e:
+                    st.error(f"Error al insertar en BD: {e}")
+                    st.exception(e)
 
     with tab4:
         st.markdown("<div class='info-box'>Mapea SKUs de compras sin código de venta hacia SKUs equivalentes que sí tienen receta.<br>Ejemplo: Erdinger Trigo (BA-CA-078) → Erdinger Weissbier (BA-CA-066)</div>", unsafe_allow_html=True)
