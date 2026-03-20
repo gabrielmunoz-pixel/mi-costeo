@@ -3998,6 +3998,33 @@ elif modulo.startswith("📊"):
                             use_container_width=True
                         )
 
+                        # 4b) RAW: recetas de AE06 con MUC — para ver cant_real exacta
+                        st.markdown("**4b️⃣ RAW recetas AE06 × MUC (cálculo a mano):**")
+                        df_muc_raw = run_query("""
+                            SELECT DISTINCT ON (sku) sku,
+                                   costo_realfinal / NULLIF(cant_conv * NULLIF(formato,0), 0) as muc,
+                                   cant_conv, formato, costo_realfinal
+                            FROM compras
+                            WHERE cant_conv > 0 AND costo_realfinal > 0 AND formato > 0
+                            ORDER BY sku, fecha_dte DESC
+                        """)
+                        df_rec_ae06 = run_query("""
+                            SELECT codigo_venta, sku_ingrediente, nombre_ingrediente,
+                                   cant_real, cant_efic, um_salida, es_procesado
+                            FROM recetas WHERE codigo_venta = 'AE06'
+                        """)
+                        if not df_rec_ae06.empty and not df_muc_raw.empty:
+                            df_raw_calc = pd.merge(df_rec_ae06, df_muc_raw[['sku','muc','cant_conv','formato','costo_realfinal']],
+                                                   left_on='sku_ingrediente', right_on='sku', how='left')
+                            df_raw_calc['cant_real'] = pd.to_numeric(df_raw_calc['cant_real'], errors='coerce').fillna(0)
+                            df_raw_calc['muc'] = pd.to_numeric(df_raw_calc['muc'], errors='coerce').fillna(0)
+                            df_raw_calc['costo_parcial'] = df_raw_calc['cant_real'] * df_raw_calc['muc']
+                            st.dataframe(df_raw_calc[['nombre_ingrediente','sku_ingrediente','cant_real',
+                                                       'um_salida','muc','cant_conv','formato',
+                                                       'costo_realfinal','costo_parcial']].reset_index(drop=True),
+                                         use_container_width=True)
+                            st.info(f"Suma costo_parcial AE06: ${df_raw_calc['costo_parcial'].sum():,.2f}")
+
                         # 5) Cálculo manual de cmv_opciones paso a paso
                         st.markdown("**5️⃣ Cálculo manual cmv_opciones:**")
                         if not df_op_raw.empty and not _cb_dbg.empty:
