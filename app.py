@@ -843,21 +843,19 @@ def calcular_cmv_con_opciones(fecha_i, fecha_f, local):
     filtro_v = filtro_local.replace("AND UPPER(p.local)", "AND UPPER(local)")
 
     q_opciones = f"""
-        WITH padres AS (
-            -- Un registro por (id_orden, sku_padre) con cuántas unidades se vendieron
-            SELECT id_orden, ab_categoria, sku_producto AS sku_padre,
-                   SUM(cantidad_vendida) AS cant_padre_orden
+        WITH ordenes_con_padre AS (
+            -- Todas las ordenes que tienen al menos un plato padre
+            SELECT DISTINCT id_orden, ab_categoria, sku_producto AS sku_padre
             FROM ventas
             WHERE fecha_venta BETWEEN :i AND :f
               AND es_opcion = false
               AND ab_categoria IS NOT NULL
               {filtro_v}
-            GROUP BY id_orden, ab_categoria, sku_producto
         ),
-        opciones AS (
-            -- Opciones costeables por (id_orden, ab_categoria, sku_opcion)
+        opciones_por_orden AS (
+            -- Para cada (id_orden, ab_categoria), cuántas unidades de cada opción costeable
             SELECT id_orden, ab_categoria, sku_producto AS sku_opcion,
-                   SUM(cantidad_vendida) AS cant_opcion_orden
+                   SUM(cantidad_vendida) AS cant_opcion
             FROM ventas
             WHERE fecha_venta BETWEEN :i AND :f
               AND es_opcion = true
@@ -865,28 +863,40 @@ def calcular_cmv_con_opciones(fecha_i, fecha_f, local):
               {filtro_v}
             GROUP BY id_orden, ab_categoria, sku_producto
         ),
-        -- Cant total de padres por (id_orden, ab_categoria) para normalizar
-        total_padres_por_orden AS (
+        padres_por_orden AS (
+            -- Cuántas unidades de cada padre en cada orden
+            SELECT id_orden, ab_categoria, sku_producto AS sku_padre,
+                   SUM(cantidad_vendida) AS cant_padre
+            FROM ventas
+            WHERE fecha_venta BETWEEN :i AND :f
+              AND es_opcion = false
+              AND ab_categoria IS NOT NULL
+              {filtro_v}
+            GROUP BY id_orden, ab_categoria, sku_producto
+        ),
+        total_padres_por_ab_orden AS (
+            -- Total de platos padres en cada (orden, ab_categoria) — para distribuir opciones
             SELECT id_orden, ab_categoria,
-                   SUM(cant_padre_orden) AS total_padre_orden
-            FROM padres
+                   SUM(cant_padre) AS total_padres
+            FROM padres_por_orden
             GROUP BY id_orden, ab_categoria
         )
         SELECT
             p.sku_padre,
             o.sku_opcion,
-            -- Fracción de la opción atribuible a este sku_padre específico:
-            -- cant_opcion × (cant_este_padre / total_padres_en_ab) / cant_este_padre
-            -- = cant_opcion / total_padres_en_ab
+            -- Opciones atribuibles a este padre en esta orden:
+            -- cada padre recibe (cant_padre / total_padres) × cant_opciones
+            -- Sumado sobre todas las ordenes y dividido al final por cant_padre_total
             SUM(
-                o.cant_opcion_orden::float
-                / NULLIF(tp.total_padre_orden, 0)
-            ) AS cant_opcion_norm
-        FROM padres p
-        JOIN opciones o
-          ON p.id_orden     = o.id_orden
-         AND p.ab_categoria = o.ab_categoria
-        JOIN total_padres_por_orden tp
+                o.cant_opcion::float
+                * p.cant_padre::float
+                / NULLIF(tp.total_padres, 0)
+            ) AS cant_opcion_atribuida
+        FROM padres_por_orden p
+        JOIN opciones_por_orden o
+          ON o.id_orden     = p.id_orden
+         AND o.ab_categoria = p.ab_categoria
+        JOIN total_padres_por_ab_orden tp
           ON tp.id_orden     = p.id_orden
          AND tp.ab_categoria = p.ab_categoria
         GROUP BY p.sku_padre, o.sku_opcion
@@ -899,7 +909,7 @@ def calcular_cmv_con_opciones(fecha_i, fecha_f, local):
         result['cmv_unitario'] = result['cmv_base']
         return result[['sku_producto', 'cmv_unitario', 'cmv_base', 'cmv_opciones']]
 
-    df_op['cant_opcion_norm'] = pd.to_numeric(df_op['cant_opcion_norm'], errors='coerce').fillna(0)
+    df_op['cant_opcion_atribuida'] = pd.to_numeric(df_op['cant_opcion_atribuida'], errors='coerce').fillna(0)
 
     # ── Costo unitario de cada SKU opción desde recetas (es_opcion != 0) ──────
     df_precio_op = run_query("""
@@ -932,7 +942,7 @@ def calcular_cmv_con_opciones(fecha_i, fecha_f, local):
     # Dividimos por cant_padre (total vendido) → cmv_opciones unitario.
     df_op = pd.merge(df_op, costo_op_sku, on='sku_opcion', how='left')
     df_op['costo_receta_opcion'] = pd.to_numeric(df_op['costo_receta_opcion'], errors='coerce').fillna(0)
-    df_op['costo_opcion_acum'] = df_op['cant_opcion_norm'] * df_op['costo_receta_opcion']
+    df_op['costo_opcion_acum'] = df_op['cant_opcion_atribuida'] * df_op['costo_receta_opcion']
 
     agg = df_op.groupby('sku_padre')['costo_opcion_acum'].sum().reset_index()
     agg.columns = ['sku_producto', 'costo_opciones_acum']
@@ -4179,13 +4189,13 @@ elif modulo.startswith("📊"):
                         st.markdown("**1️⃣ Cantidad vendida del padre (AE06):**")
                         st.dataframe(df_cp, use_container_width=True)
 
-                        # 2) Query EXACTA usada en calcular_cmv_con_opciones
+                        # 2) Query por orden — misma lógica que calcular_cmv_con_opciones
                         _ba_sql = "', '".join(BA_COSTEABLES)
                         _f_local_dbg = "AND UPPER(local) = UPPER(:l)" if f_local != "Todos" else ""
                         df_op_raw = run_query(f"""
-                            WITH padres AS (
+                            WITH padres_por_orden AS (
                                 SELECT id_orden, ab_categoria, sku_producto AS sku_padre,
-                                       SUM(cantidad_vendida) AS cant_padre_orden
+                                       SUM(cantidad_vendida) AS cant_padre
                                 FROM ventas
                                 WHERE fecha_venta BETWEEN :i AND :f
                                   AND es_opcion = false
@@ -4194,10 +4204,10 @@ elif modulo.startswith("📊"):
                                   {_f_local_dbg}
                                 GROUP BY id_orden, ab_categoria, sku_producto
                             ),
-                            opciones AS (
+                            opciones_por_orden AS (
                                 SELECT id_orden, ab_categoria, sku_producto AS sku_opcion,
                                        nombre_producto AS nombre_opcion, ba_opcion,
-                                       SUM(cantidad_vendida) AS cant_opcion_orden
+                                       SUM(cantidad_vendida) AS cant_opcion
                                 FROM ventas
                                 WHERE fecha_venta BETWEEN :i AND :f
                                   AND es_opcion = true
@@ -4205,26 +4215,25 @@ elif modulo.startswith("📊"):
                                   {_f_local_dbg}
                                 GROUP BY id_orden, ab_categoria, sku_producto, nombre_producto, ba_opcion
                             ),
-                            total_padres_por_orden AS (
-                                SELECT id_orden, ab_categoria,
-                                       SUM(cant_padre_orden) AS total_padre_orden
-                                FROM padres GROUP BY id_orden, ab_categoria
+                            total_padres_por_ab_orden AS (
+                                SELECT id_orden, ab_categoria, SUM(cant_padre) AS total_padres
+                                FROM padres_por_orden GROUP BY id_orden, ab_categoria
                             )
                             SELECT
                                 o.sku_opcion, o.nombre_opcion, o.ba_opcion,
-                                SUM(o.cant_opcion_orden)   AS cant_raw,
-                                SUM(tp.total_padre_orden)  AS cant_padre_raw,
-                                SUM(o.cant_opcion_orden::float / NULLIF(tp.total_padre_orden,0)) AS cant_norm
-                            FROM padres p
-                            JOIN opciones o  ON p.id_orden=o.id_orden AND p.ab_categoria=o.ab_categoria
-                            JOIN total_padres_por_orden tp ON tp.id_orden=p.id_orden AND tp.ab_categoria=p.ab_categoria
+                                SUM(o.cant_opcion) AS cant_raw,
+                                SUM(o.cant_opcion::float * p.cant_padre::float / NULLIF(tp.total_padres,0)) AS cant_atribuida
+                            FROM padres_por_orden p
+                            JOIN opciones_por_orden o ON o.id_orden=p.id_orden AND o.ab_categoria=p.ab_categoria
+                            JOIN total_padres_por_ab_orden tp ON tp.id_orden=p.id_orden AND tp.ab_categoria=p.ab_categoria
                             GROUP BY o.sku_opcion, o.nombre_opcion, o.ba_opcion
                             ORDER BY cant_raw DESC
                         """, _params)
-                        st.markdown("**2️⃣ Query EXACTA de opciones (cant_raw vs cant_norm):**")
+                        st.markdown("**2️⃣ Opciones atribuidas a AE06 (por orden):**")
                         st.dataframe(df_op_raw, use_container_width=True)
                         if not df_op_raw.empty:
-                            st.info(f"Total cant_raw: {df_op_raw['cant_raw'].sum():,.0f} | Total cant_norm: {df_op_raw['cant_norm'].sum():,.1f} | cant_padre esperado: 2,820")
+                            col_sum = 'cant_atribuida' if 'cant_atribuida' in df_op_raw.columns else 'cant_raw'
+                            st.info(f"cant_raw: {df_op_raw['cant_raw'].sum():,.0f} | cant_atribuida: {df_op_raw[col_sum].sum():,.1f} | esperado ~2,820 por tipo")
 
                         # 3) costo_base de cada opción según calcular_costo_platos
                         if not df_op_raw.empty:
@@ -4356,11 +4365,12 @@ elif modulo.startswith("📊"):
                                 _costo_op.columns = ['sku_opcion','costo_receta_opcion']
 
                             _op_calc = pd.merge(
-                                df_op_raw[['sku_opcion','nombre_opcion','ba_opcion','cant_raw','cant_norm']],
+                                df_op_raw[['sku_opcion','nombre_opcion','ba_opcion','cant_raw'] + (['cant_atribuida'] if 'cant_atribuida' in df_op_raw.columns else ['cant_raw'])],
                                 _costo_op, on='sku_opcion', how='left'
                             )
                             _op_calc['costo_receta_opcion'] = _op_calc['costo_receta_opcion'].fillna(0)
-                            _op_calc['cant_norm'] = pd.to_numeric(_op_calc['cant_norm'],errors='coerce').fillna(0)
+                            _cant_col = 'cant_atribuida' if 'cant_atribuida' in _op_calc.columns else 'cant_raw'
+                            _op_calc['cant_norm'] = pd.to_numeric(_op_calc[_cant_col], errors='coerce').fillna(0)
                             _op_calc['aporte_acum'] = _op_calc['cant_norm'] * _op_calc['costo_receta_opcion']
                             cant_p = float(df_cp['cant_padre'].iloc[0]) if not df_cp.empty else 1
                             _op_calc['aporte_unitario'] = _op_calc['aporte_acum'] / max(cant_p, 1)
