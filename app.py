@@ -746,10 +746,8 @@ def calcular_costo_platos(engine, fecha_i, fecha_f, local):
     if df_rec.empty:
         return pd.DataFrame()
 
-    df_dir  = df_rec[df_rec['es_procesado'] == False].copy()
+    df_dir  = df_rec[(df_rec['es_procesado'] == False) & (pd.to_numeric(df_rec['es_opcion'], errors='coerce').fillna(0) == 0)].copy()
     df_proc = df_rec[df_rec['es_procesado'] == True].copy()
-
-    # ── PROCESADOS: calcular costo unitario de cada sub-plato (PRO-) ──────────
     # Los PRO- tienen sus propios ingredientes directos en la tabla recetas
     # con es_procesado=True. Usamos cant_efic × MUC para cada ingrediente del PRO-.
     proc_ingredientes = df_proc.copy()
@@ -864,11 +862,36 @@ def calcular_cmv_con_opciones(fecha_i, fecha_f, local):
 
     df_op['cant_opcion'] = pd.to_numeric(df_op['cant_opcion'], errors='coerce').fillna(0)
 
-    # Costo unitario de receta de cada SKU opción
-    costo_op_sku = costo_base.rename(columns={
-        'sku_producto': 'sku_opcion',
-        'cmv_base':     'costo_receta_opcion'
-    })
+    # ── Costo unitario de cada SKU opción (proteína/pan) ─────────────────────
+    # Las opciones están en recetas con es_opcion != 0.
+    # Su costo = cant_real × MUC del sku_ingrediente.
+    df_precio_op = run_query("""
+        SELECT DISTINCT ON (sku) sku,
+               costo_realfinal / NULLIF(cant_conv * NULLIF(formato,0), 0) AS precio_unitario
+        FROM compras
+        WHERE cant_conv > 0 AND costo_realfinal > 0 AND formato > 0
+        ORDER BY sku, fecha_dte DESC
+    """)
+
+    df_rec_op = run_query("SELECT * FROM recetas")
+    costo_op_sku = pd.DataFrame(columns=['sku_opcion','costo_receta_opcion'])
+
+    if not df_rec_op.empty and not df_precio_op.empty:
+        # Solo filas marcadas como opción (es_opcion != 0, es_procesado = False)
+        df_opciones_rec = df_rec_op[
+            (df_rec_op['es_procesado'] == False) &
+            (pd.to_numeric(df_rec_op['es_opcion'], errors='coerce').fillna(0) != 0)
+        ].copy()
+        df_opciones_rec['cant_real'] = pd.to_numeric(df_opciones_rec['cant_real'], errors='coerce').fillna(0)
+        df_opciones_rec = pd.merge(df_opciones_rec, df_precio_op,
+                                   left_on='sku_ingrediente', right_on='sku', how='left')
+        df_opciones_rec['precio_unitario'] = pd.to_numeric(
+            df_opciones_rec['precio_unitario'], errors='coerce').fillna(0)
+        df_opciones_rec['costo_parcial'] = df_opciones_rec['cant_real'] * df_opciones_rec['precio_unitario']
+        # El codigo_venta de las opciones en recetas ES el sku_opcion que aparece en ventas
+        costo_op_sku = df_opciones_rec.groupby('codigo_venta')['costo_parcial'].sum().reset_index()
+        costo_op_sku.columns = ['sku_opcion', 'costo_receta_opcion']
+
     df_op = pd.merge(df_op, costo_op_sku, on='sku_opcion', how='left')
     df_op['costo_receta_opcion'] = pd.to_numeric(df_op['costo_receta_opcion'], errors='coerce').fillna(0)
 
@@ -933,10 +956,8 @@ def calcular_costo_platos_periodo(engine, fecha_i, fecha_f):
     if df_rec.empty:
         return pd.DataFrame()
 
-    df_dir  = df_rec[df_rec['es_procesado'] == False].copy()
+    df_dir  = df_rec[(df_rec['es_procesado'] == False) & (pd.to_numeric(df_rec['es_opcion'], errors='coerce').fillna(0) == 0)].copy()
     df_proc = df_rec[df_rec['es_procesado'] == True].copy()
-
-    # ── PROCESADOS: costo unitario de cada PRO- ──────────────────────────────
     proc_ingredientes = df_proc.copy()
     proc_ingredientes['cant_efic'] = pd.to_numeric(proc_ingredientes['cant_efic'], errors='coerce').fillna(0)
     proc_ingredientes = pd.merge(
@@ -4013,6 +4034,8 @@ elif modulo.startswith("📊"):
                                    cant_real, cant_efic, um_salida, es_procesado
                             FROM recetas WHERE codigo_venta = 'AE06'
                         """)
+                        st.caption(f"Total filas en recetas para AE06: {len(df_rec_ae06)}")
+                        st.caption(f"Filas distintas por sku_ingrediente: {df_rec_ae06['sku_ingrediente'].nunique() if not df_rec_ae06.empty else 0}")
                         if not df_rec_ae06.empty and not df_muc_raw.empty:
                             df_raw_calc = pd.merge(df_rec_ae06, df_muc_raw[['sku','muc','cant_conv','formato','costo_realfinal']],
                                                    left_on='sku_ingrediente', right_on='sku', how='left')
@@ -4023,7 +4046,7 @@ elif modulo.startswith("📊"):
                                                        'um_salida','muc','cant_conv','formato',
                                                        'costo_realfinal','costo_parcial']].reset_index(drop=True),
                                          use_container_width=True)
-                            st.info(f"Suma costo_parcial AE06: ${df_raw_calc['costo_parcial'].sum():,.2f}")
+                            st.info(f"Suma costo_parcial AE06: ${df_raw_calc['costo_parcial'].sum():,.2f} | Filas totales: {len(df_raw_calc)}")
 
                         # 5) Cálculo manual de cmv_opciones paso a paso
                         st.markdown("**5️⃣ Cálculo manual cmv_opciones:**")
