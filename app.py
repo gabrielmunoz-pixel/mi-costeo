@@ -2670,6 +2670,14 @@ if modulo.startswith("📦"):
                         cols_ok2 = [c for c in cols_bd if c in df_proc.columns]
                         df_save2 = df_proc[cols_ok2].copy()
 
+                        # Deduplicar: misma orden + producto + fecha_pedido + local = fila duplicada
+                        dedup_cols = [c for c in ['id_orden','sku_producto','fecha_pedido','local','ba_opcion'] if c in df_save2.columns]
+                        n_antes = len(df_save2)
+                        df_save2 = df_save2.drop_duplicates(subset=dedup_cols)
+                        n_dupes = n_antes - len(df_save2)
+                        if n_dupes > 0:
+                            st.warning(f"⚠️ Se eliminaron {n_dupes:,} filas duplicadas del archivo antes de cargar.")
+
                         # DELETE por período y locales del archivo
                         fechas2   = pd.to_datetime(df_save2['fecha_venta'].astype(str), errors='coerce').dropna()
                         fecha_min2 = fechas2.min().date().replace(day=1)
