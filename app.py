@@ -1291,18 +1291,10 @@ def informe_desviacion(fecha_i, fecha_f, local):
     df_dir  = df_rec[df_rec['es_procesado'] == False].copy()
     df_proc = df_rec[df_rec['es_procesado'] == True].copy()
 
-    # Factor de conversión según um_salida: G/CC/ML → /1000, UN/KG/LT → 1
-    def factor_um(um):
-        if pd.isna(um): return 1
-        um = str(um).strip().upper()
-        if um in ['G', 'CC', 'ML']: return 1/1000
-        return 1
-
     # ---- DIRECTOS que no son PRO- ----
     dir_no_pro = df_dir[~df_dir['sku_ingrediente'].str.startswith('PRO-', na=False)].copy()
-    dir_no_pro['factor_um'] = dir_no_pro['um_salida'].apply(factor_um)
     merge_dir = pd.merge(df_v, dir_no_pro, left_on='sku_producto', right_on='codigo_venta', how='inner')
-    merge_dir['consumo_parcial'] = merge_dir['cant_vendida'] * merge_dir['cant_real'] * merge_dir['factor_um']
+    merge_dir['consumo_parcial'] = merge_dir['cant_vendida'] * merge_dir['cant_real']
     dir_out = merge_dir[['sku_ingrediente', 'nombre_ingrediente', 'consumo_parcial']]
 
 
@@ -1350,16 +1342,15 @@ def informe_desviacion(fecha_i, fecha_f, local):
             if rend_total == 0:
                 rend_total = 1
 
-            um_plato = factor_um(plato_row['um_salida'] if 'um_salida' in plato_row.index else '')
-            cant_plato_conv = cant_plato * um_plato
+            um_plato = 1
+            cant_plato_conv = cant_plato
 
             for _, base in base_rows.iterrows():
                 cant_base = pd.to_numeric(base['cant_real'], errors='coerce') or 0
-                um_base   = factor_um(base['um_salida'] if pd.notna(base.get('um_salida')) else '')
                 if porcion == 1:
-                    consumo = ventas * cant_plato_conv * cant_base * um_base
+                    consumo = ventas * cant_plato_conv * cant_base
                 else:
-                    consumo = ventas * (cant_plato_conv / rend_total) * cant_base * um_base
+                    consumo = ventas * (cant_plato_conv / rend_total) * cant_base
                 rows.append({
                     'sku_ingrediente':    base['sku_ingrediente'],
                     'nombre_ingrediente': base['nombre_ingrediente'],
@@ -4195,7 +4186,7 @@ elif modulo.startswith("📊"):
                     bg = '#121e14' if mg_per >= 60 else '#1e1a12' if mg_per >= 40 else '#1e1212'
 
                     row_html = (
-                        f'<div style="display:grid;grid-template-columns:90px 140px 1fr 80px 100px 90px 100px 80px 80px;'
+                        f'<div style="display:grid;grid-template-columns:90px 140px 1fr 80px 100px 90px 100px 80px;'
                         f'gap:0;background:{bg};border-bottom:1px solid #1e1e1e;padding:6px 0;align-items:center">'
                         f'<span style="padding:0 12px;color:#666;font-size:0.74rem;font-family:monospace">{r.get("sku_producto","")}</span>'
                         f'<span style="padding:0 8px;color:#555;font-size:0.74rem">{r.get("categoria_menu","")}</span>'
@@ -4206,7 +4197,6 @@ elif modulo.startswith("📊"):
                         f'<span style="text-align:right;padding:0 12px;color:#666">${r.get("cmv_unitario",0):,.0f}</span>'
                         f'<span style="text-align:right;padding:0 12px">{fmt_mc(r.get("mc_total",0))}</span>'
                         f'<span style="text-align:center;padding:0 8px">{badge_margen(mg_per)}</span>'
-                        f'<span style="text-align:center;padding:0 8px">{badge_cuadrante(r.get("cuadrante",""))}</span>'
                         f'</div>'
                     )
                     st.markdown(row_html, unsafe_allow_html=True)
