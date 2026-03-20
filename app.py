@@ -3966,9 +3966,53 @@ elif modulo.startswith("📊"):
 
                                 resumen_dbg = df_rec_dbg.groupby('codigo_venta')['costo_parcial'].sum().reset_index()
                                 resumen_dbg.columns = ['sku_producto','costo_receta_calculado']
-                                resumen_dbg = pd.merge(resumen_dbg, df_debug[['sku_producto','nombre_producto','cmv_unitario']], on='sku_producto', how='left')
+                                resumen_dbg = pd.merge(resumen_dbg, df_debug[['sku_producto','nombre_producto','cmv_unitario','cmv_base','cmv_opciones']], on='sku_producto', how='left')
                                 st.markdown("**🔢 Resumen CMV calculado vs almacenado:**")
                                 st.dataframe(resumen_dbg.reset_index(drop=True), use_container_width=True)
+
+                                # ── DEBUG OPCIONES: mostrar desglose de cmv_opciones ──
+                                st.markdown("**🔀 Desglose de opciones (cmv_opciones):**")
+                                filtro_dbg = "AND UPPER(p.local) = UPPER(:l)" if f_local != "Todos" else ""
+                                params_dbg = {'i': str(fi_ if 'fi_' in dir() else f_inicio),
+                                              'f': str(ff_ if 'ff_' in dir() else f_fin)}
+                                if f_local != "Todos": params_dbg['l'] = f_local
+                                skus_dbg_ph = ','.join([f"'{s}'" for s in skus_dbg])
+                                df_op_dbg = run_query(f"""
+                                    SELECT
+                                        p.sku_producto          AS sku_padre,
+                                        p.nombre_producto       AS nombre_padre,
+                                        o.sku_producto          AS sku_opcion,
+                                        o.nombre_producto       AS nombre_opcion,
+                                        SUM(o.cantidad_vendida) AS cant_opcion
+                                    FROM ventas p
+                                    JOIN ventas o
+                                      ON p.id_orden     = o.id_orden
+                                     AND p.ab_categoria = o.ab_categoria
+                                     AND o.es_opcion    = true
+                                     AND p.es_opcion    = false
+                                    WHERE p.fecha_venta BETWEEN :i AND :f
+                                      AND p.sku_producto IN ({skus_dbg_ph})
+                                      {filtro_dbg}
+                                    GROUP BY p.sku_producto, p.nombre_producto, o.sku_producto, o.nombre_producto
+                                    ORDER BY p.sku_producto, cant_opcion DESC
+                                """, params_dbg)
+                                df_cant_p_dbg = run_query(f"""
+                                    SELECT sku_producto, SUM(cantidad_vendida) AS cant_padre
+                                    FROM ventas
+                                    WHERE fecha_venta BETWEEN :i AND :f
+                                      AND es_opcion = false
+                                      AND sku_producto IN ({skus_dbg_ph})
+                                      {filtro_dbg}
+                                    GROUP BY sku_producto
+                                """, params_dbg)
+                                if not df_op_dbg.empty:
+                                    # Agregar costo_base de cada opción
+                                    costo_base_dbg = run_query("SELECT * FROM recetas WHERE es_procesado=false")
+                                    st.caption(f"cant_padre por SKU: {df_cant_p_dbg.to_dict('records') if not df_cant_p_dbg.empty else 'vacío'}")
+                                    st.dataframe(df_op_dbg.reset_index(drop=True), use_container_width=True)
+                                else:
+                                    st.info("Sin opciones en el período para estos SKUs.")
+                                # ── FIN DEBUG OPCIONES ──
 
                                 ing_sin_muc = df_rec_dbg[df_rec_dbg['muc_ultimo'].isna()][['nombre_ingrediente','sku_ingrediente']].drop_duplicates()
                                 if not ing_sin_muc.empty:
