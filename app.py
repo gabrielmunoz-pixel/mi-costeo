@@ -799,6 +799,11 @@ def calcular_costo_platos(engine, fecha_i, fecha_f, local):
     _ae = costo_total[costo_total['codigo_venta'] == 'AE06']
     _st.warning(f"DEBUG calcular_costo_platos: AE06 tiene {len(_ae)} filas en costo_total, suma={_ae['costo_parcial'].sum():,.2f}")
     _st.dataframe(_ae)
+    # Debug PRO-05
+    _pro5 = proc_ingredientes[proc_ingredientes['codigo_venta'] == 'PRO-05']
+    if not _pro5.empty:
+        _st.warning(f"DEBUG PRO-05 costo_unitario_pro: {costo_pro[costo_pro['sku_ingrediente_pro']=='PRO-05']['costo_unitario_pro'].values}")
+        _st.dataframe(_pro5[['codigo_venta','sku_ingrediente','cant_efic','precio_unitario','costo_parcial']])
 
     return costo_platos
 
