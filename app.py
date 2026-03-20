@@ -777,7 +777,7 @@ def calcular_costo_platos(engine, fecha_i, fecha_f, local):
     # Si porcion=1: costo unitario = costo_lote (ya es por unidad)
     # Si porcion=0: costo unitario por g/ml = costo_lote / cant_lote
     costo_pro_df['costo_unitario_pro'] = costo_pro_df.apply(
-        lambda r: r['costo_lote'] if r['porcion'] == 1 else r['costo_lote'] / r['cant_lote'].clip(lower=1),
+        lambda r: r['costo_lote'] if r['porcion'] == 1 else r['costo_lote'] / max(r['cant_lote'], 1),
         axis=1
     )
 
@@ -1015,7 +1015,7 @@ def calcular_costo_platos_periodo(engine, fecha_i, fecha_f):
     costo_pro_df2['porcion'] = pd.to_numeric(costo_pro_df2['porcion'], errors='coerce').fillna(0)
     costo_pro_df2['cant_lote'] = pd.to_numeric(costo_pro_df2['cant_lote'], errors='coerce').fillna(1)
     costo_pro_df2['costo_unitario_pro'] = costo_pro_df2.apply(
-        lambda r: r['costo_lote'] if r['porcion'] == 1 else r['costo_lote'] / r['cant_lote'].clip(lower=1),
+        lambda r: r['costo_lote'] if r['porcion'] == 1 else r['costo_lote'] / max(r['cant_lote'], 1),
         axis=1
     )
     costo_pro = costo_pro_df2[['codigo_venta', 'costo_unitario_pro']].copy()
