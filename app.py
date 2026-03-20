@@ -3898,130 +3898,105 @@ elif modulo.startswith("📊"):
                 abs_con_opciones = set(df_ab_con_opciones['ab_categoria'].tolist()) if not df_ab_con_opciones.empty else set()
 
             if not df_inf1.empty:
-                # ── DEBUG COSTEO ──────────────────────────────────────────
-                productos_debug = ["CRUDO ALEMAN EXPERTO", "SANDWICH ITALIANO"]
-                df_debug = df_inf1[
-                    df_inf1['nombre_producto'].str.upper().str.contains(
-                        '|'.join(productos_debug), na=False
-                    )
-                ]
+                # ── DEBUG COSTEO — Solo Sandwich Italiano (AE06) ─────────────
+                df_debug = df_inf1[df_inf1['sku_producto'] == 'AE06']
                 if not df_debug.empty:
-                    with st.expander("🔍 DEBUG — Costeo Crudo Alemán Experto / Sandwich Italiano", expanded=True):
-                        engine_dbg = get_engine()
+                    with st.expander("🔍 DEBUG — Sandwich Italiano (AE06)", expanded=True):
 
-                        # Recetas de estos SKUs
-                        skus_dbg = df_debug['sku_producto'].tolist()
-                        skus_ph  = ','.join([f"'{s}'" for s in skus_dbg])
-                        df_rec_dbg = run_query(f"""
-                            SELECT r.codigo_venta, r.sku_ingrediente,
-                                   r.nombre_ingrediente, r.cant_real, r.cant_efic,
-                                   r.um_salida, r.es_procesado
-                            FROM recetas r
-                            WHERE r.codigo_venta IN ({skus_ph})
-                            ORDER BY r.codigo_venta, r.es_procesado, r.nombre_ingrediente
-                        """)
+                        st.markdown("**📋 Resultado final del informe:**")
+                        cols_v = ['sku_producto','nombre_producto','cant','venta',
+                                  'cmv_unitario','cmv_base','cmv_opciones','mc_total','margen_pct']
+                        st.dataframe(df_debug[[c for c in cols_v if c in df_debug.columns]]
+                                     .reset_index(drop=True), use_container_width=True)
 
-                        # MUC por SKU de ingrediente
-                        df_muc_dbg = run_query("""
-                            SELECT DISTINCT ON (sku) sku,
-                                   costo_realfinal / NULLIF(cant_conv * NULLIF(formato,0), 0) as muc_ultimo,
-                                   fecha_dte, nombre_producto as nombre_comp
-                            FROM compras
-                            WHERE cant_conv > 0 AND costo_realfinal > 0 AND formato > 0
-                            ORDER BY sku, fecha_dte DESC
-                        """)
+                        # Params de fecha/local
+                        _fi  = str(f_inicio)
+                        _ff  = str(f_fin)
+                        _params = {'i': _fi, 'f': _ff}
+                        _filtro = ""
+                        if f_local != "Todos":
+                            _filtro = "AND UPPER(p.local) = UPPER(:l)"
+                            _params['l'] = f_local
 
-                        st.markdown("**📋 Ventas del período:**")
-                        cols_v = ['sku_producto','nombre_producto','cant','venta','cmv_unitario','cmv_base','cmv_opciones','mc_total','margen_pct']
-                        cols_v_ok = [c for c in cols_v if c in df_debug.columns]
-                        st.dataframe(df_debug[cols_v_ok].reset_index(drop=True), use_container_width=True)
+                        # 1) cant_padre directo
+                        df_cp = run_query(f"""
+                            SELECT sku_producto, SUM(cantidad_vendida) AS cant_padre
+                            FROM ventas
+                            WHERE fecha_venta BETWEEN :i AND :f
+                              AND es_opcion = false
+                              AND sku_producto = 'AE06'
+                              {"AND UPPER(local) = UPPER(:l)" if f_local != "Todos" else ""}
+                            GROUP BY sku_producto
+                        """, _params)
+                        st.markdown("**1️⃣ Cantidad vendida del padre (AE06):**")
+                        st.dataframe(df_cp, use_container_width=True)
 
-                        if not df_rec_dbg.empty:
-                            st.markdown("**🧾 Ingredientes en receta:**")
-                            if not df_muc_dbg.empty:
-                                df_rec_dbg = pd.merge(
-                                    df_rec_dbg, df_muc_dbg[['sku','muc_ultimo','fecha_dte','nombre_comp']],
-                                    left_on='sku_ingrediente', right_on='sku', how='left'
-                                )
-                                df_rec_dbg['costo_dir']  = df_rec_dbg.apply(
-                                    lambda r: r['cant_real'] * (r['muc_ultimo'] or 0)
-                                    if (not r['es_procesado'] and not str(r['sku_ingrediente']).startswith('PRO-')) else 0, axis=1
-                                )
-                                # Procesados: el debug muestra cant_efic × MUC del ingrediente del PRO-
-                                # (representación simplificada; el costo real se calcula en calcular_costo_platos)
-                                df_rec_dbg['costo_proc'] = df_rec_dbg.apply(
-                                    lambda r: r['cant_efic'] * (r['muc_ultimo'] or 0)
-                                    if r['es_procesado'] else 0, axis=1
-                                )
-                                df_rec_dbg['costo_parcial'] = df_rec_dbg['costo_dir'] + df_rec_dbg['costo_proc']
+                        # 2) Opciones linkadas al AE06 con cant y monto_venta_real de la opción
+                        df_op_raw = run_query(f"""
+                            SELECT
+                                o.sku_producto    AS sku_opcion,
+                                o.nombre_producto AS nombre_opcion,
+                                o.ba_opcion,
+                                SUM(o.cantidad_vendida)   AS cant_opcion,
+                                SUM(o.monto_venta_real)   AS venta_opcion
+                            FROM ventas p
+                            JOIN ventas o
+                              ON p.id_orden     = o.id_orden
+                             AND p.ab_categoria = o.ab_categoria
+                             AND o.es_opcion    = true
+                             AND p.es_opcion    = false
+                            WHERE p.fecha_venta BETWEEN :i AND :f
+                              AND p.sku_producto = 'AE06'
+                              {_filtro}
+                            GROUP BY o.sku_producto, o.nombre_producto, o.ba_opcion
+                            ORDER BY cant_opcion DESC
+                        """, _params)
+                        st.markdown("**2️⃣ Opciones vendidas con AE06:**")
+                        st.dataframe(df_op_raw, use_container_width=True)
 
-                                st.dataframe(
-                                    df_rec_dbg[[
-                                        'codigo_venta','nombre_ingrediente','sku_ingrediente',
-                                        'cant_real','cant_efic','um_salida',
-                                        'muc_ultimo','fecha_dte','es_procesado','costo_parcial'
-                                    ]].reset_index(drop=True),
-                                    use_container_width=True
-                                )
-
-                                resumen_dbg = df_rec_dbg.groupby('codigo_venta')['costo_parcial'].sum().reset_index()
-                                resumen_dbg.columns = ['sku_producto','costo_receta_calculado']
-                                resumen_dbg = pd.merge(resumen_dbg, df_debug[['sku_producto','nombre_producto','cmv_unitario','cmv_base','cmv_opciones']], on='sku_producto', how='left')
-                                st.markdown("**🔢 Resumen CMV calculado vs almacenado:**")
-                                st.dataframe(resumen_dbg.reset_index(drop=True), use_container_width=True)
-
-                                # ── DEBUG OPCIONES: mostrar desglose de cmv_opciones ──
-                                st.markdown("**🔀 Desglose de opciones (cmv_opciones):**")
-                                filtro_dbg = "AND UPPER(p.local) = UPPER(:l)" if f_local != "Todos" else ""
-                                params_dbg = {'i': str(fi_ if 'fi_' in dir() else f_inicio),
-                                              'f': str(ff_ if 'ff_' in dir() else f_fin)}
-                                if f_local != "Todos": params_dbg['l'] = f_local
-                                skus_dbg_ph = ','.join([f"'{s}'" for s in skus_dbg])
-                                df_op_dbg = run_query(f"""
-                                    SELECT
-                                        p.sku_producto          AS sku_padre,
-                                        p.nombre_producto       AS nombre_padre,
-                                        o.sku_producto          AS sku_opcion,
-                                        o.nombre_producto       AS nombre_opcion,
-                                        SUM(o.cantidad_vendida) AS cant_opcion
-                                    FROM ventas p
-                                    JOIN ventas o
-                                      ON p.id_orden     = o.id_orden
-                                     AND p.ab_categoria = o.ab_categoria
-                                     AND o.es_opcion    = true
-                                     AND p.es_opcion    = false
-                                    WHERE p.fecha_venta BETWEEN :i AND :f
-                                      AND p.sku_producto IN ({skus_dbg_ph})
-                                      {filtro_dbg}
-                                    GROUP BY p.sku_producto, p.nombre_producto, o.sku_producto, o.nombre_producto
-                                    ORDER BY p.sku_producto, cant_opcion DESC
-                                """, params_dbg)
-                                df_cant_p_dbg = run_query(f"""
-                                    SELECT sku_producto, SUM(cantidad_vendida) AS cant_padre
-                                    FROM ventas
-                                    WHERE fecha_venta BETWEEN :i AND :f
-                                      AND es_opcion = false
-                                      AND sku_producto IN ({skus_dbg_ph})
-                                      {filtro_dbg}
-                                    GROUP BY sku_producto
-                                """, params_dbg)
-                                if not df_op_dbg.empty:
-                                    # Agregar costo_base de cada opción
-                                    costo_base_dbg = run_query("SELECT * FROM recetas WHERE es_procesado=false")
-                                    st.caption(f"cant_padre por SKU: {df_cant_p_dbg.to_dict('records') if not df_cant_p_dbg.empty else 'vacío'}")
-                                    st.dataframe(df_op_dbg.reset_index(drop=True), use_container_width=True)
-                                else:
-                                    st.info("Sin opciones en el período para estos SKUs.")
-                                # ── FIN DEBUG OPCIONES ──
-
-                                ing_sin_muc = df_rec_dbg[df_rec_dbg['muc_ultimo'].isna()][['nombre_ingrediente','sku_ingrediente']].drop_duplicates()
-                                if not ing_sin_muc.empty:
-                                    st.warning(f"⚠️ Ingredientes SIN precio en compras (MUC = NULL): {ing_sin_muc['nombre_ingrediente'].tolist()}")
+                        # 3) costo_base de cada opción según calcular_costo_platos
+                        if not df_op_raw.empty:
+                            skus_op = df_op_raw['sku_opcion'].tolist()
+                            skus_op_ph = ','.join([f"'{s}'" for s in skus_op])
+                            df_rec_op = run_query(f"""
+                                SELECT r.codigo_venta, r.nombre_ingrediente,
+                                       r.sku_ingrediente, r.cant_real, r.cant_efic,
+                                       r.um_salida, r.es_procesado
+                                FROM recetas r
+                                WHERE r.codigo_venta IN ({skus_op_ph})
+                            """)
+                            st.markdown("**3️⃣ Recetas de las opciones (¿tienen receta propia?):**")
+                            if df_rec_op.empty:
+                                st.warning("⚠️ Las opciones NO tienen receta en la tabla `recetas`. costo_receta_opcion = 0 para todas.")
                             else:
-                                st.dataframe(df_rec_dbg.reset_index(drop=True), use_container_width=True)
-                                st.warning("⚠️ No se encontraron compras con MUC para calcular costos.")
-                        else:
-                            st.warning(f"⚠️ No se encontraron recetas para los SKUs: {skus_dbg}. Verifica que estén cargados en la tabla `recetas`.")
+                                st.dataframe(df_rec_op, use_container_width=True)
+
+                        # 4) costo_base que devuelve calcular_costo_platos para AE06 y sus opciones
+                        _engine_dbg = get_engine()
+                        _cb_dbg = calcular_costo_platos(_engine_dbg, f_inicio, f_fin, f_local)
+                        skus_interes = ['AE06'] + (skus_op if not df_op_raw.empty else [])
+                        st.markdown("**4️⃣ cmv_base calculado por calcular_costo_platos para AE06 y opciones:**")
+                        st.dataframe(
+                            _cb_dbg[_cb_dbg['sku_producto'].isin(skus_interes)].reset_index(drop=True),
+                            use_container_width=True
+                        )
+
+                        # 5) Cálculo manual de cmv_opciones paso a paso
+                        st.markdown("**5️⃣ Cálculo manual cmv_opciones:**")
+                        if not df_op_raw.empty and not _cb_dbg.empty:
+                            _cb_op = _cb_dbg.rename(columns={'sku_producto':'sku_opcion','cmv_base':'costo_receta_opcion'})
+                            _op_calc = pd.merge(df_op_raw, _cb_op, on='sku_opcion', how='left')
+                            _op_calc['costo_receta_opcion'] = _op_calc['costo_receta_opcion'].fillna(0)
+                            _op_calc['cant_opcion'] = pd.to_numeric(_op_calc['cant_opcion'], errors='coerce').fillna(0)
+                            _op_calc['aporte_total'] = _op_calc['cant_opcion'] * _op_calc['costo_receta_opcion']
+                            cant_p = float(df_cp['cant_padre'].iloc[0]) if not df_cp.empty else 1
+                            _op_calc['aporte_unitario'] = _op_calc['aporte_total'] / max(cant_p, 1)
+                            st.dataframe(_op_calc[['sku_opcion','nombre_opcion','cant_opcion',
+                                                    'costo_receta_opcion','aporte_total','aporte_unitario']]
+                                         .reset_index(drop=True), use_container_width=True)
+                            total_cmv_op = _op_calc['aporte_unitario'].sum()
+                            cb_ae06 = float(_cb_dbg[_cb_dbg['sku_producto']=='AE06']['cmv_base'].iloc[0]) if 'AE06' in _cb_dbg['sku_producto'].values else 0
+                            st.info(f"cmv_base AE06: ${cb_ae06:,.0f} | cmv_opciones: ${total_cmv_op:,.0f} | cmv_unitario total: ${cb_ae06+total_cmv_op:,.0f} | cant_padre: {cant_p:,.0f}")
                 # ── FIN DEBUG ─────────────────────────────────────────────
 
                 st.session_state['inf1_data']        = df_inf1
