@@ -4249,9 +4249,11 @@ elif modulo.startswith("📊"):
                             FROM recetas WHERE codigo_venta = 'AE06'
                         """)
                         st.caption(f"Total filas en recetas para AE06: {len(df_rec_ae06)}")
-                        st.caption(f"Filas distintas por sku_ingrediente: {df_rec_ae06['sku_ingrediente'].nunique() if not df_rec_ae06.empty else 0}")
-                        if not df_rec_ae06.empty:
-                            st.caption(f"Valores únicos de es_opcion en recetas AE06: {df_rec_ae06['es_opcion'].unique().tolist()} | dtype: {df_rec_ae06['es_opcion'].dtype}")
+                        st.caption(f"Columnas en recetas: {df_rec_ae06.columns.tolist()}")
+                        if not df_rec_ae06.empty and 'es_opcion' in df_rec_ae06.columns:
+                            st.caption(f"Valores únicos de es_opcion: {df_rec_ae06['es_opcion'].unique().tolist()} | dtype: {df_rec_ae06['es_opcion'].dtype}")
+                        elif not df_rec_ae06.empty:
+                            st.warning("⚠️ La columna es_opcion NO existe en la tabla recetas en BD.")
                         if not df_rec_ae06.empty and not df_muc_raw.empty:
                             df_raw_calc = pd.merge(df_rec_ae06, df_muc_raw[['sku','muc','cant_conv','formato','costo_realfinal']],
                                                    left_on='sku_ingrediente', right_on='sku', how='left')
