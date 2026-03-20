@@ -1114,27 +1114,53 @@ BA_GRUPOS = {
 BA_A_GRUPO = {ba: grupo for grupo, bas in BA_GRUPOS.items() for ba in bas}
 
 
-def get_opciones_producto(fecha_i, fecha_f, local, ab_categoria_padre):
+def get_opciones_producto(fecha_i, fecha_f, local, ab_categoria_padre, sku_padre=None):
     """
     Distribución de opciones para un plato, agrupadas por jerarquía BA.
-    Retorna dict: { grupo: DataFrame(sku, nombre, cant, pct) }
+    Usa lógica proporcional: cada plato recibe cant_opcion × (cant_padre / total_padres_ab)
+    para separar correctamente las opciones cuando hay múltiples platos con el mismo ab_categoria.
     """
-    filtro_local = "AND UPPER(p.local) = UPPER(:l)" if local != "Todos" else ""
+    filtro_local = "AND UPPER(local) = UPPER(:l)" if local != "Todos" else ""
     params = {'i': str(fecha_i), 'f': str(fecha_f), 'ab': ab_categoria_padre}
     if local != "Todos":
         params['l'] = local
+
+    filtro_sku = "AND p.sku_producto = :sku" if sku_padre else ""
+    if sku_padre:
+        params['sku'] = sku_padre
+
     q = f"""
-        SELECT o.sku_producto, o.nombre_producto, o.ba_opcion,
-               SUM(o.cantidad_vendida) as cant
-        FROM ventas p
-        JOIN ventas o
-          ON p.id_orden     = o.id_orden
-         AND p.ab_categoria = o.ab_categoria
-         AND o.es_opcion    = true
-         AND p.es_opcion    = false
-        WHERE p.fecha_venta BETWEEN :i AND :f
-          AND p.ab_categoria = :ab
-          {filtro_local}
+        WITH padres AS (
+            SELECT id_orden, ab_categoria, sku_producto AS sku_padre,
+                   SUM(cantidad_vendida) AS cant_padre
+            FROM ventas
+            WHERE fecha_venta BETWEEN :i AND :f
+              AND es_opcion = false
+              AND ab_categoria = :ab
+              {filtro_local}
+            GROUP BY id_orden, ab_categoria, sku_producto
+        ),
+        total_por_ab_orden AS (
+            SELECT id_orden, ab_categoria, SUM(cant_padre) AS total_padres
+            FROM padres GROUP BY id_orden, ab_categoria
+        ),
+        opciones AS (
+            SELECT id_orden, ab_categoria, sku_producto, nombre_producto, ba_opcion,
+                   SUM(cantidad_vendida) AS cant_opcion
+            FROM ventas
+            WHERE fecha_venta BETWEEN :i AND :f
+              AND es_opcion = true
+              AND ab_categoria = :ab
+              {filtro_local}
+            GROUP BY id_orden, ab_categoria, sku_producto, nombre_producto, ba_opcion
+        )
+        SELECT
+            o.sku_producto, o.nombre_producto, o.ba_opcion,
+            SUM(o.cant_opcion::float * p.cant_padre::float / NULLIF(t.total_padres, 0)) AS cant
+        FROM padres p
+        JOIN total_por_ab_orden t ON t.id_orden = p.id_orden AND t.ab_categoria = p.ab_categoria
+        JOIN opciones o            ON o.id_orden = p.id_orden AND o.ab_categoria = p.ab_categoria
+        {("WHERE p.sku_padre = :sku" if sku_padre else "")}
         GROUP BY o.sku_producto, o.nombre_producto, o.ba_opcion
         ORDER BY o.ba_opcion, cant DESC
     """
@@ -4457,7 +4483,7 @@ elif modulo.startswith("📊"):
 
                     if tiene_opciones:
                         with st.expander(f"  ↳ Opciones de {r.get('nombre_producto','')}"):
-                            grupos = get_opciones_producto(fi_, ff_, local_, ab)
+                            grupos = get_opciones_producto(fi_, ff_, local_, ab, sku_padre=r.get('sku_producto'))
                             if grupos:
                                 for grp_nombre, df_g in grupos.items():
                                     total_grp = df_g['cant'].sum()
