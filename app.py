@@ -4161,30 +4161,50 @@ elif modulo.startswith("📊"):
                         st.markdown("**1️⃣ Cantidad vendida del padre (AE06):**")
                         st.dataframe(df_cp, use_container_width=True)
 
-                        # 2) Opciones linkadas al AE06 — SOLO Pan y Proteína (BA costeables)
+                        # 2) Query EXACTA usada en calcular_cmv_con_opciones
                         _ba_sql = "', '".join(BA_COSTEABLES)
+                        _f_local_dbg = "AND UPPER(local) = UPPER(:l)" if f_local != "Todos" else ""
                         df_op_raw = run_query(f"""
+                            WITH padres AS (
+                                SELECT id_orden, ab_categoria, sku_producto AS sku_padre,
+                                       SUM(cantidad_vendida) AS cant_padre_orden
+                                FROM ventas
+                                WHERE fecha_venta BETWEEN :i AND :f
+                                  AND es_opcion = false
+                                  AND ab_categoria IS NOT NULL
+                                  AND sku_producto = 'AE06'
+                                  {_f_local_dbg}
+                                GROUP BY id_orden, ab_categoria, sku_producto
+                            ),
+                            opciones AS (
+                                SELECT id_orden, ab_categoria, sku_producto AS sku_opcion,
+                                       nombre_producto AS nombre_opcion, ba_opcion,
+                                       SUM(cantidad_vendida) AS cant_opcion_orden
+                                FROM ventas
+                                WHERE fecha_venta BETWEEN :i AND :f
+                                  AND es_opcion = true
+                                  AND ba_opcion IN ('{_ba_sql}')
+                                  {_f_local_dbg}
+                                GROUP BY id_orden, ab_categoria, sku_producto, nombre_producto, ba_opcion
+                            )
                             SELECT
-                                o.sku_producto    AS sku_opcion,
-                                o.nombre_producto AS nombre_opcion,
+                                o.sku_opcion,
+                                o.nombre_opcion,
                                 o.ba_opcion,
-                                SUM(o.cantidad_vendida)   AS cant_opcion,
-                                SUM(o.monto_venta_real)   AS venta_opcion
-                            FROM ventas p
-                            JOIN ventas o
+                                SUM(o.cant_opcion_orden) AS cant_raw,
+                                SUM(p.cant_padre_orden)  AS cant_padre_raw,
+                                SUM(o.cant_opcion_orden::float / NULLIF(p.cant_padre_orden,0)) AS cant_norm
+                            FROM padres p
+                            JOIN opciones o
                               ON p.id_orden     = o.id_orden
                              AND p.ab_categoria = o.ab_categoria
-                             AND o.es_opcion    = true
-                             AND p.es_opcion    = false
-                            WHERE p.fecha_venta BETWEEN :i AND :f
-                              AND p.sku_producto = 'AE06'
-                              AND o.ba_opcion IN ('{_ba_sql}')
-                              {_filtro}
-                            GROUP BY o.sku_producto, o.nombre_producto, o.ba_opcion
-                            ORDER BY cant_opcion DESC
+                            GROUP BY o.sku_opcion, o.nombre_opcion, o.ba_opcion
+                            ORDER BY cant_raw DESC
                         """, _params)
-                        st.markdown("**2️⃣ Opciones costeables (Pan + Proteína) vendidas con AE06:**")
+                        st.markdown("**2️⃣ Query EXACTA de opciones (cant_raw vs cant_norm):**")
                         st.dataframe(df_op_raw, use_container_width=True)
+                        if not df_op_raw.empty:
+                            st.info(f"Total cant_raw: {df_op_raw['cant_raw'].sum():,.0f} | Total cant_norm: {df_op_raw['cant_norm'].sum():,.1f} | cant_padre esperado: 2,820")
 
                         # 3) costo_base de cada opción según calcular_costo_platos
                         if not df_op_raw.empty:
