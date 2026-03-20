@@ -888,31 +888,12 @@ def calcular_cmv_con_opciones(fecha_i, fecha_f, local):
     df_op['cant_opcion_total'] = pd.to_numeric(df_op['cant_opcion_total'], errors='coerce').fillna(0)
 
     # ── Costo unitario de cada SKU opción desde recetas (es_opcion != 0) ──────
-    df_precio_op = run_query("""
-        SELECT DISTINCT ON (sku) sku,
-               costo_realfinal / NULLIF(cant_conv * NULLIF(formato,0), 0) AS precio_unitario
-        FROM compras
-        WHERE cant_conv > 0 AND costo_realfinal > 0 AND formato > 0
-        ORDER BY sku, fecha_dte DESC
-    """)
-
-    df_rec_op = run_query("SELECT * FROM recetas")
-    costo_op_sku = pd.DataFrame(columns=['sku_opcion','costo_receta_opcion'])
-
-    if not df_rec_op.empty and not df_precio_op.empty:
-        df_opciones_rec = df_rec_op[
-            (df_rec_op['es_procesado'] == False) &
-            (pd.to_numeric(df_rec_op['es_opcion'], errors='coerce').fillna(0) != 0)
-        ].copy()
-        df_opciones_rec['cant_real'] = pd.to_numeric(df_opciones_rec['cant_real'], errors='coerce').fillna(0)
-        df_opciones_rec = pd.merge(df_opciones_rec, df_precio_op,
-                                   left_on='sku_ingrediente', right_on='sku', how='left')
-        df_opciones_rec['precio_unitario'] = pd.to_numeric(
-            df_opciones_rec['precio_unitario'], errors='coerce').fillna(0)
-        df_opciones_rec['costo_parcial'] = df_opciones_rec['cant_real'] * df_opciones_rec['precio_unitario']
-        # Agrupar por codigo_venta — CHUX-021, PANX-001 etc. tienen su propia receta
-        costo_op_sku = df_opciones_rec.groupby('codigo_venta')['costo_parcial'].sum().reset_index()
-        costo_op_sku.columns = ['sku_opcion', 'costo_receta_opcion']
+    # Costo de cada SKU opción — usar costo_base que ya tiene el costo correcto
+    # de todos los platos incluyendo CHUX-021, PANX-001, etc.
+    costo_op_sku = costo_base.rename(columns={
+        'sku_producto':  'sku_opcion',
+        'cmv_base':      'costo_receta_opcion'
+    })
 
     # cant_opcion_norm ya viene normalizada por unidades del padre en cada pedido.
     # Multiplicamos por costo unitario y sumamos por padre → cmv_opciones total acumulado.
