@@ -4247,6 +4247,19 @@ elif modulo.startswith("📊"):
                             st.caption(f"Ingredientes INCLUIDOS tras filtro: {_df_rec_test[_mask]['nombre_ingrediente'].tolist()}")
                             st.caption(f"Ingredientes EXCLUIDOS: {_df_rec_test[~_mask]['nombre_ingrediente'].tolist()}")
 
+                        # 4d) CONTAR filas en recetas completa — buscar duplicados
+                        st.markdown("**4d️⃣ Duplicados en recetas (¿cuántas filas por codigo_venta?):**")
+                        _df_dup = run_query("""
+                            SELECT codigo_venta, COUNT(*) as filas,
+                                   COUNT(DISTINCT sku_ingrediente) as ingredientes_unicos
+                            FROM recetas
+                            WHERE codigo_venta IN ('AE06','AE05','PAC-001')
+                            GROUP BY codigo_venta ORDER BY filas DESC
+                        """)
+                        st.dataframe(_df_dup, use_container_width=True)
+                        _total_recetas = run_query("SELECT COUNT(*) as total FROM recetas")
+                        st.caption(f"Total filas en tabla recetas: {_total_recetas['total'].iloc[0] if not _total_recetas.empty else 'N/A'}")
+
                         # 4b) RAW: recetas de AE06 con MUC — para ver cant_real exacta
                         st.markdown("**4b️⃣ RAW recetas AE06 × MUC (cálculo a mano):**")
                         df_muc_raw = run_query("""
