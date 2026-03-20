@@ -770,77 +770,81 @@ def calcular_costo_platos(engine, fecha_i, fecha_f, local):
 
 def calcular_cmv_con_opciones(fecha_i, fecha_f, local):
     """
-    CMV real = costo ingredientes base + costo opciones ponderado por frecuencia real.
-    Para cada plato con opciones, suma el costo de las opciones según cuántas se vendieron.
+    CMV unitario por plato = costo_base + cmv_opciones_unitario
+
+    cmv_opciones_unitario = SUM(cant_opcion_i × costo_receta_opcion_i) / cant_padre
+
+    Lógica:
+    - Para cada plato padre (sku_producto, es_opcion=false) se buscan todas las
+      opciones que se vendieron junto a él en el mismo id_orden + ab_categoria.
+    - Se calcula: SUM(cant_opcion × costo_unitario_receta_opcion) para todas las
+      opciones del padre en el período → total_costo_opciones_acumulado.
+    - Se divide por la cantidad total de veces que se vendió el padre → CMV
+      unitario de opciones por plato.
+    - Esto es equivalente al método ponderado por participación (A = B).
     """
     filtro_local = "AND UPPER(p.local) = UPPER(:l)" if local != "Todos" else ""
     params_loc = {'i': str(fecha_i), 'f': str(fecha_f)}
     if local != "Todos": params_loc['l'] = local
 
-    # Costo base por plato
     engine = get_engine()
+
+    # Costo base por plato (una sola llamada, se reutiliza abajo)
     costo_base = calcular_costo_platos(engine, fecha_i, fecha_f, local)
     if costo_base.empty:
         return pd.DataFrame()
 
-    # Obtener precio unitario (MUC) por SKU
-    df_precio = run_query("""
-        SELECT DISTINCT ON (sku) sku,
-               costo_realfinal / NULLIF(cant_conv * NULLIF(formato,0), 0) as precio_unitario
-        FROM compras
-        WHERE cant_conv > 0 AND costo_realfinal > 0 AND formato > 0
-        ORDER BY sku, fecha_dte DESC
-    """)
-    if df_precio.empty:
-        return costo_base.rename(columns={'cmv_base': 'cmv_unitario'})
-
-    def factor_um(um):
-        if pd.isna(um): return 1
-        return 1/1000 if str(um).strip().upper() in ['G','CC','ML'] else 1
-
-    df_rec = run_query("SELECT * FROM recetas")
-
-    # Opciones vendidas: agrupa por sku_padre (ab_categoria match) y opción
+    # Opciones vendidas: cant por (sku_padre, sku_opcion) + cant total del padre
     q_opciones = f"""
-        SELECT p.sku_producto as sku_padre,
-               o.sku_producto as sku_opcion,
-               SUM(o.cantidad_vendida) as cant_opcion,
-               COUNT(DISTINCT p.id_orden) as n_pedidos_padre
+        SELECT
+            p.sku_producto                    AS sku_padre,
+            o.sku_producto                    AS sku_opcion,
+            SUM(o.cantidad_vendida)           AS cant_opcion,
+            SUM(p.cantidad_vendida)           AS cant_padre
         FROM ventas p
         JOIN ventas o
-          ON p.id_orden = o.id_orden
+          ON p.id_orden     = o.id_orden
          AND p.ab_categoria = o.ab_categoria
-         AND o.es_opcion = true
-         AND p.es_opcion = false
+         AND o.es_opcion    = true
+         AND p.es_opcion    = false
         WHERE p.fecha_venta BETWEEN :i AND :f
           {filtro_local}
         GROUP BY p.sku_producto, o.sku_producto
     """
-    df_op_ventas = run_query(q_opciones, params_loc)
+    df_op = run_query(q_opciones, params_loc)
 
-    if df_op_ventas.empty:
-        return costo_base.rename(columns={'cmv_base': 'cmv_unitario'})
+    if df_op.empty:
+        result = costo_base.copy()
+        result['cmv_opciones'] = 0.0
+        result['cmv_unitario'] = result['cmv_base']
+        return result[['sku_producto', 'cmv_unitario', 'cmv_base', 'cmv_opciones']]
 
-    # Para cada opción vendida, calcular su costo de receta
-    df_op_ventas['cant_opcion']       = pd.to_numeric(df_op_ventas['cant_opcion'], errors='coerce').fillna(0)
-    df_op_ventas['n_pedidos_padre']   = pd.to_numeric(df_op_ventas['n_pedidos_padre'], errors='coerce').fillna(1)
-    df_op_ventas['frec_por_pedido']   = df_op_ventas['cant_opcion'] / df_op_ventas['n_pedidos_padre'].clip(lower=1)
+    df_op['cant_opcion'] = pd.to_numeric(df_op['cant_opcion'], errors='coerce').fillna(0)
+    df_op['cant_padre']  = pd.to_numeric(df_op['cant_padre'],  errors='coerce').fillna(1)
 
-    # Costo de receta de cada SKU opción
-    costo_opciones_skus = calcular_costo_platos(engine, fecha_i, fecha_f, local)
-    costo_opciones_skus = costo_opciones_skus.rename(columns={'sku_producto':'sku_opcion','cmv_base':'costo_opcion'})
+    # Costo unitario de receta de cada SKU opción (reutiliza costo_base ya calculado)
+    costo_op_sku = costo_base.rename(columns={'sku_producto': 'sku_opcion', 'cmv_base': 'costo_receta_opcion'})
 
-    df_op_ventas = pd.merge(df_op_ventas, costo_opciones_skus, on='sku_opcion', how='left')
-    df_op_ventas['costo_opcion'] = pd.to_numeric(df_op_ventas['costo_opcion'], errors='coerce').fillna(0)
-    df_op_ventas['cmv_opcion_pond'] = df_op_ventas['frec_por_pedido'] * df_op_ventas['costo_opcion']
+    df_op = pd.merge(df_op, costo_op_sku, on='sku_opcion', how='left')
+    df_op['costo_receta_opcion'] = pd.to_numeric(df_op['costo_receta_opcion'], errors='coerce').fillna(0)
 
-    costo_opciones_por_padre = df_op_ventas.groupby('sku_padre')['cmv_opcion_pond'].sum().reset_index()
-    costo_opciones_por_padre.columns = ['sku_producto', 'cmv_opciones']
+    # Aporte total de cada opción al padre: cant_opcion × costo_receta_opcion
+    df_op['costo_opcion_total'] = df_op['cant_opcion'] * df_op['costo_receta_opcion']
 
-    result = pd.merge(costo_base, costo_opciones_por_padre, on='sku_producto', how='left')
+    # Agrupar por padre: suma de costos de todas las opciones + cant_padre (constante por grupo)
+    agg = df_op.groupby('sku_padre').agg(
+        costo_opciones_acum=('costo_opcion_total', 'sum'),
+        cant_padre=('cant_padre', 'first')   # misma cantidad en todas las filas del padre
+    ).reset_index()
+    agg.columns = ['sku_producto', 'costo_opciones_acum', 'cant_padre']
+
+    # CMV unitario de opciones = costo acumulado / cantidad vendida del padre
+    agg['cmv_opciones'] = agg['costo_opciones_acum'] / agg['cant_padre'].clip(lower=1)
+
+    result = pd.merge(costo_base, agg[['sku_producto', 'cmv_opciones']], on='sku_producto', how='left')
     result['cmv_opciones'] = result['cmv_opciones'].fillna(0)
     result['cmv_unitario'] = result['cmv_base'] + result['cmv_opciones']
-    return result[['sku_producto','cmv_unitario','cmv_base','cmv_opciones']]
+    return result[['sku_producto', 'cmv_unitario', 'cmv_base', 'cmv_opciones']]
 
 
 
@@ -3855,7 +3859,7 @@ elif modulo.startswith("📊"):
                         skus_dbg = df_debug['sku_producto'].tolist()
                         skus_ph  = ','.join([f"'{s}'" for s in skus_dbg])
                         df_rec_dbg = run_query(f"""
-                            SELECT r.codigo_venta, r.nombre_producto, r.sku_ingrediente,
+                            SELECT r.codigo_venta, r.sku_ingrediente,
                                    r.nombre_ingrediente, r.cant_real, r.cant_efic,
                                    r.um_salida, r.es_procesado
                             FROM recetas r
