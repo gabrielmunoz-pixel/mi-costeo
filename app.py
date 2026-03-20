@@ -3954,6 +3954,42 @@ elif modulo.startswith("📊"):
                             _filtro = "AND UPPER(p.local) = UPPER(:l)"
                             _params['l'] = f_local
 
+                        # 0) DIAGNÓSTICO CANTIDAD — desglose completo de AE06 en ventas
+                        st.markdown("**0️⃣ DIAGNÓSTICO CANTIDAD — todas las filas AE06 en ventas BD:**")
+                        _p0 = {'i': _fi, 'f': _ff}
+                        if f_local != "Todos": _p0['l'] = f_local
+                        _f0 = "AND UPPER(local) = UPPER(:l)" if f_local != "Todos" else ""
+                        df_diag_cant = run_query(f"""
+                            SELECT
+                                fecha_venta,
+                                local,
+                                es_opcion,
+                                COUNT(*)                    AS filas,
+                                SUM(cantidad_vendida)       AS cant_total,
+                                SUM(monto_venta_real)       AS venta_total
+                            FROM ventas
+                            WHERE sku_producto = 'AE06'
+                              AND fecha_venta BETWEEN :i AND :f
+                              {_f0}
+                            GROUP BY fecha_venta, local, es_opcion
+                            ORDER BY fecha_venta, local
+                        """, _p0)
+                        st.dataframe(df_diag_cant, use_container_width=True)
+                        df_diag_tot = run_query(f"""
+                            SELECT
+                                es_opcion,
+                                SUM(cantidad_vendida) AS cant_total,
+                                SUM(monto_venta_real) AS venta_total,
+                                COUNT(*)              AS filas
+                            FROM ventas
+                            WHERE sku_producto = 'AE06'
+                              AND fecha_venta BETWEEN :i AND :f
+                              {_f0}
+                            GROUP BY es_opcion
+                        """, _p0)
+                        st.caption("Totales por es_opcion:")
+                        st.dataframe(df_diag_tot, use_container_width=True)
+
                         # 1) cant_padre directo
                         df_cp = run_query(f"""
                             SELECT sku_producto, SUM(cantidad_vendida) AS cant_padre
