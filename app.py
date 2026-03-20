@@ -4125,6 +4125,27 @@ elif modulo.startswith("📊"):
                         st.dataframe(_cb[_cb['sku_producto'].isin(_skus)].reset_index(drop=True),
                                      use_container_width=True)
 
+                        # 2b) Desglose ingrediente × MUC para AE06
+                        st.markdown("**2b️⃣ Ingredientes × MUC para AE06 (paso a paso):**")
+                        _df_rec_ae06 = run_query("SELECT * FROM recetas WHERE codigo_venta='AE06'")
+                        _df_muc = run_query("""
+                            SELECT DISTINCT ON (sku) sku,
+                                   costo_realfinal / NULLIF(cant_conv * NULLIF(formato,0),0) AS muc,
+                                   cant_conv, formato, costo_realfinal
+                            FROM compras WHERE cant_conv>0 AND costo_realfinal>0 AND formato>0
+                            ORDER BY sku, fecha_dte DESC
+                        """)
+                        if not _df_rec_ae06.empty and not _df_muc.empty:
+                            _es = pd.to_numeric(_df_rec_ae06['es_opcion'], errors='coerce')
+                            _fijos = _df_rec_ae06[_es.isna() | (_es == 0)].copy()
+                            st.caption(f"Filas fijas AE06 (es_opcion=null/0): {len(_fijos)} → {_fijos['nombre_ingrediente'].tolist()}")
+                            _fijos = pd.merge(_fijos, _df_muc[['sku','muc','cant_conv','formato']], left_on='sku_ingrediente', right_on='sku', how='left')
+                            _fijos['cant_real'] = pd.to_numeric(_fijos['cant_real'], errors='coerce').fillna(0)
+                            _fijos['muc'] = pd.to_numeric(_fijos['muc'], errors='coerce').fillna(0)
+                            _fijos['costo_parcial'] = _fijos['cant_real'] * _fijos['muc']
+                            st.dataframe(_fijos[['nombre_ingrediente','sku_ingrediente','cant_real','muc','costo_parcial']].reset_index(drop=True), use_container_width=True)
+                            st.info(f"Suma costo_parcial fijos AE06: ${_fijos['costo_parcial'].sum():,.2f} — este DEBE ser cmv_base")
+
                         st.markdown("**3️⃣ cant_opcion_total (query producción):**")
                         _ba = "', '".join(BA_COSTEABLES)
                         df_op_check = run_query(f"""
