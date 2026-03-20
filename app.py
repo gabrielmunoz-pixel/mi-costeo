@@ -840,37 +840,55 @@ def calcular_cmv_con_opciones(fecha_i, fecha_f, local):
     # Si hay 2 unidades del MISMO plato (mismo sku_padre), la cantidad de
     # opciones se divide por la cantidad del padre en ese pedido.
     ba_costeables_sql = "', '".join(BA_COSTEABLES)
+    filtro_v = filtro_local.replace("AND UPPER(p.local)", "AND UPPER(local)")
 
     q_opciones = f"""
         WITH padres AS (
+            -- Un registro por (id_orden, sku_padre) con cuántas unidades se vendieron
             SELECT id_orden, ab_categoria, sku_producto AS sku_padre,
                    SUM(cantidad_vendida) AS cant_padre_orden
             FROM ventas
             WHERE fecha_venta BETWEEN :i AND :f
               AND es_opcion = false
               AND ab_categoria IS NOT NULL
-              {filtro_local.replace("AND UPPER(p.local)", "AND UPPER(local)")}
+              {filtro_v}
             GROUP BY id_orden, ab_categoria, sku_producto
         ),
         opciones AS (
+            -- Opciones costeables por (id_orden, ab_categoria, sku_opcion)
             SELECT id_orden, ab_categoria, sku_producto AS sku_opcion,
                    SUM(cantidad_vendida) AS cant_opcion_orden
             FROM ventas
             WHERE fecha_venta BETWEEN :i AND :f
               AND es_opcion = true
               AND ba_opcion IN ('{ba_costeables_sql}')
-              {filtro_local.replace("AND UPPER(p.local)", "AND UPPER(local)")}
+              {filtro_v}
             GROUP BY id_orden, ab_categoria, sku_producto
+        ),
+        -- Cant total de padres por (id_orden, ab_categoria) para normalizar
+        total_padres_por_orden AS (
+            SELECT id_orden, ab_categoria,
+                   SUM(cant_padre_orden) AS total_padre_orden
+            FROM padres
+            GROUP BY id_orden, ab_categoria
         )
         SELECT
             p.sku_padre,
             o.sku_opcion,
-            -- cant_opcion normalizada por unidades del padre en ese pedido
-            SUM(o.cant_opcion_orden::float / NULLIF(p.cant_padre_orden, 0)) AS cant_opcion_norm
+            -- Fracción de la opción atribuible a este sku_padre específico:
+            -- cant_opcion × (cant_este_padre / total_padres_en_ab) / cant_este_padre
+            -- = cant_opcion / total_padres_en_ab
+            SUM(
+                o.cant_opcion_orden::float
+                / NULLIF(tp.total_padre_orden, 0)
+            ) AS cant_opcion_norm
         FROM padres p
         JOIN opciones o
           ON p.id_orden     = o.id_orden
          AND p.ab_categoria = o.ab_categoria
+        JOIN total_padres_por_orden tp
+          ON tp.id_orden     = p.id_orden
+         AND tp.ab_categoria = p.ab_categoria
         GROUP BY p.sku_padre, o.sku_opcion
     """
     df_op = run_query(q_opciones, params_loc)
@@ -4186,18 +4204,20 @@ elif modulo.startswith("📊"):
                                   AND ba_opcion IN ('{_ba_sql}')
                                   {_f_local_dbg}
                                 GROUP BY id_orden, ab_categoria, sku_producto, nombre_producto, ba_opcion
+                            ),
+                            total_padres_por_orden AS (
+                                SELECT id_orden, ab_categoria,
+                                       SUM(cant_padre_orden) AS total_padre_orden
+                                FROM padres GROUP BY id_orden, ab_categoria
                             )
                             SELECT
-                                o.sku_opcion,
-                                o.nombre_opcion,
-                                o.ba_opcion,
-                                SUM(o.cant_opcion_orden) AS cant_raw,
-                                SUM(p.cant_padre_orden)  AS cant_padre_raw,
-                                SUM(o.cant_opcion_orden::float / NULLIF(p.cant_padre_orden,0)) AS cant_norm
+                                o.sku_opcion, o.nombre_opcion, o.ba_opcion,
+                                SUM(o.cant_opcion_orden)   AS cant_raw,
+                                SUM(tp.total_padre_orden)  AS cant_padre_raw,
+                                SUM(o.cant_opcion_orden::float / NULLIF(tp.total_padre_orden,0)) AS cant_norm
                             FROM padres p
-                            JOIN opciones o
-                              ON p.id_orden     = o.id_orden
-                             AND p.ab_categoria = o.ab_categoria
+                            JOIN opciones o  ON p.id_orden=o.id_orden AND p.ab_categoria=o.ab_categoria
+                            JOIN total_padres_por_orden tp ON tp.id_orden=p.id_orden AND tp.ab_categoria=p.ab_categoria
                             GROUP BY o.sku_opcion, o.nombre_opcion, o.ba_opcion
                             ORDER BY cant_raw DESC
                         """, _params)
@@ -4247,18 +4267,36 @@ elif modulo.startswith("📊"):
                             st.caption(f"Ingredientes INCLUIDOS tras filtro: {_df_rec_test[_mask]['nombre_ingrediente'].tolist()}")
                             st.caption(f"Ingredientes EXCLUIDOS: {_df_rec_test[~_mask]['nombre_ingrediente'].tolist()}")
 
-                        # 4d) CONTAR filas en recetas completa — buscar duplicados
-                        st.markdown("**4d️⃣ Duplicados en recetas (¿cuántas filas por codigo_venta?):**")
-                        _df_dup = run_query("""
-                            SELECT codigo_venta, COUNT(*) as filas,
-                                   COUNT(DISTINCT sku_ingrediente) as ingredientes_unicos
-                            FROM recetas
-                            WHERE codigo_venta IN ('AE06','AE05','PAC-001')
-                            GROUP BY codigo_venta ORDER BY filas DESC
+                        # 4e) Reproducir calcular_costo_platos para AE06 paso a paso
+                        st.markdown("**4e️⃣ Reproducción EXACTA de calcular_costo_platos para AE06:**")
+                        _df_rec_all = run_query("SELECT * FROM recetas")
+                        _df_precio_e = run_query("""
+                            SELECT DISTINCT ON (sku) sku,
+                                   costo_realfinal / NULLIF(cant_conv * NULLIF(formato,0), 0) as precio_unitario
+                            FROM compras WHERE cant_conv>0 AND costo_realfinal>0 AND formato>0
+                            ORDER BY sku, fecha_dte DESC
                         """)
-                        st.dataframe(_df_dup, use_container_width=True)
-                        _total_recetas = run_query("SELECT COUNT(*) as total FROM recetas")
-                        st.caption(f"Total filas en tabla recetas: {_total_recetas['total'].iloc[0] if not _total_recetas.empty else 'N/A'}")
+                        if not _df_rec_all.empty and not _df_precio_e.empty:
+                            # Aplicar mismo filtro que calcular_costo_platos
+                            _es_op_e = pd.to_numeric(_df_rec_all['es_opcion'], errors='coerce')
+                            _df_dir_e = _df_rec_all[
+                                (_df_rec_all['es_procesado'] == False) &
+                                (_es_op_e.isna() | (_es_op_e == 0))
+                            ].copy()
+                            # Solo AE06
+                            _df_dir_ae06 = _df_dir_e[_df_dir_e['codigo_venta'] == 'AE06'].copy()
+                            st.caption(f"Filas en df_dir para AE06: {len(_df_dir_ae06)}")
+                            _df_dir_ae06['cant_real'] = pd.to_numeric(_df_dir_ae06['cant_real'], errors='coerce').fillna(0)
+                            _es_pro_e = _df_dir_ae06['sku_ingrediente'].astype(str).str.startswith('PRO-')
+                            _dir_compra_e = _df_dir_ae06[~_es_pro_e].copy()
+                            _dir_pro_e    = _df_dir_ae06[_es_pro_e].copy()
+                            st.caption(f"Directos compra AE06: {_dir_compra_e['nombre_ingrediente'].tolist()}")
+                            st.caption(f"Directos PRO AE06: {_dir_pro_e['nombre_ingrediente'].tolist()}")
+                            _dir_compra_e = pd.merge(_dir_compra_e, _df_precio_e, left_on='sku_ingrediente', right_on='sku', how='left')
+                            _dir_compra_e['precio_unitario'] = pd.to_numeric(_dir_compra_e['precio_unitario'], errors='coerce').fillna(0)
+                            _dir_compra_e['costo_parcial'] = _dir_compra_e['cant_real'] * _dir_compra_e['precio_unitario']
+                            st.dataframe(_dir_compra_e[['nombre_ingrediente','sku_ingrediente','cant_real','precio_unitario','costo_parcial']].reset_index(drop=True), use_container_width=True)
+                            st.info(f"Suma costo_parcial directos AE06: ${_dir_compra_e['costo_parcial'].sum():,.2f}")
 
                         # 4b) RAW: recetas de AE06 con MUC — para ver cant_real exacta
                         st.markdown("**4b️⃣ RAW recetas AE06 × MUC (cálculo a mano):**")
