@@ -4,6 +4,7 @@ import numpy as np
 import io
 from sqlalchemy import create_engine, text
 from datetime import datetime, date
+import plotly.express as px
 
 
 # Template Excel embebido
