@@ -910,8 +910,8 @@ def calcular_cmv_con_opciones(fecha_i, fecha_f, local):
         df_opciones_rec['precio_unitario'] = pd.to_numeric(
             df_opciones_rec['precio_unitario'], errors='coerce').fillna(0)
         df_opciones_rec['costo_parcial'] = df_opciones_rec['cant_real'] * df_opciones_rec['precio_unitario']
-        # Agrupar por sku_ingrediente — ese es el SKU que aparece en ventas como sku_opcion
-        costo_op_sku = df_opciones_rec.groupby('sku_ingrediente')['costo_parcial'].sum().reset_index()
+        # Agrupar por codigo_venta — CHUX-021, PANX-001 etc. tienen su propia receta
+        costo_op_sku = df_opciones_rec.groupby('codigo_venta')['costo_parcial'].sum().reset_index()
         costo_op_sku.columns = ['sku_opcion', 'costo_receta_opcion']
 
     # cant_opcion_norm ya viene normalizada por unidades del padre en cada pedido.
