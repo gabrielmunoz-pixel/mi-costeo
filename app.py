@@ -4609,231 +4609,733 @@ elif modulo.startswith("📊"):
     # ----------------------------------------------------------
     elif "Informe 3" in informe_sel:
 
-        # Selectores de mes
-        meses_disp3 = run_query("""
-            SELECT DISTINCT DATE_TRUNC('month', fecha_dte::timestamp)::date as mes
-            FROM compras WHERE subcat IN ('Directo','Indirecto') ORDER BY 1
-        """)
+        _tab_var3, _tab_8020 = st.tabs(["🔀 Variación de Precios", "📊 80/20 Compras"])
 
-        if meses_disp3.empty:
-            st.warning("No hay datos de compras disponibles.")
-        else:
-            meses_list3 = pd.to_datetime(meses_disp3['mes']).tolist()
-            meses_fmt3  = [m.strftime('%B %Y').capitalize() for m in meses_list3]
+        with _tab_var3:
+            # ── Selectores de mes ──────────────────────────────────
+            meses_disp3 = run_query("""
+                SELECT DISTINCT DATE_TRUNC('month', fecha_dte::timestamp)::date as mes
+                FROM compras WHERE subcat IN ('Directo','Indirecto') ORDER BY 1
+            """)
 
-            mc1, mc2, mc3 = st.columns([2, 2, 2])
-            with mc1:
-                mes_base_idx3 = st.selectbox("Mes muestra (canasta)", range(len(meses_fmt3)),
-                                             format_func=lambda i: meses_fmt3[i],
-                                             index=0, key='inf3_base')
-            with mc2:
-                mes_comp_idx3 = st.selectbox("Mes comparación (precios)", range(len(meses_fmt3)),
-                                             format_func=lambda i: meses_fmt3[i],
-                                             index=len(meses_list3)-1, key='inf3_comp')
-            with mc3:
-                cat3_q = run_query("SELECT DISTINCT categoria_producto FROM compras WHERE categoria_producto IS NOT NULL AND subcat IN ('Directo','Indirecto') ORDER BY 1")
-                cats3  = ['Todos'] + cat3_q['categoria_producto'].tolist() if not cat3_q.empty else ['Todos']
-                cat3_sel = st.selectbox("Categoría", cats3, key='inf3_cat')
+            if meses_disp3.empty:
+                st.warning("No hay datos de compras disponibles.")
+            else:
+                meses_list3 = pd.to_datetime(meses_disp3['mes']).tolist()
+                meses_fmt3  = [m.strftime('%B %Y').capitalize() for m in meses_list3]
 
-            mes_base3     = meses_list3[mes_base_idx3]
-            mes_comp3     = meses_list3[mes_comp_idx3]
-            mes_base3_str = mes_base3.strftime('%B %Y').capitalize()
-            mes_comp3_str = mes_comp3.strftime('%B %Y').capitalize()
+                mc1, mc2, mc3 = st.columns([2, 2, 2])
+                with mc1:
+                    mes_base_idx3 = st.selectbox("Mes muestra (canasta)", range(len(meses_fmt3)),
+                                                 format_func=lambda i: meses_fmt3[i],
+                                                 index=0, key='inf3_base')
+                with mc2:
+                    mes_comp_idx3 = st.selectbox("Mes comparación (precios)", range(len(meses_fmt3)),
+                                                 format_func=lambda i: meses_fmt3[i],
+                                                 index=len(meses_list3)-1, key='inf3_comp')
+                with mc3:
+                    cat3_q = run_query("SELECT DISTINCT categoria_producto FROM compras WHERE categoria_producto IS NOT NULL AND subcat IN ('Directo','Indirecto') ORDER BY 1")
+                    cats3  = ['Todos'] + cat3_q['categoria_producto'].tolist() if not cat3_q.empty else ['Todos']
+                    cat3_sel = st.selectbox("Categoría", cats3, key='inf3_cat')
 
-            # Filtro texto + ordenamiento
-            fc1, fc2, fc3 = st.columns([3, 2, 1])
-            with fc1:
-                filtro_texto3 = st.text_input("🔍 Buscar SKU o producto",
-                                              placeholder="Ej: AL-AF-276 o papas...",
-                                              key='inf3_buscar')
-            with fc2:
-                ord3_col_sel = st.selectbox("Ordenar por", [
-                    'Producto', f'Cant. {mes_base3_str}',
-                    f'Costo {mes_base3_str}', f'Costo {mes_comp3_str}',
-                    'Δ$ Precio', 'Δ% Precio'
-                ], key='ord3_col')
-            with fc3:
-                ord3_dir = st.selectbox("Dir.", ['↓', '↑'], key='ord3_dir')
+                mes_base3     = meses_list3[mes_base_idx3]
+                mes_comp3     = meses_list3[mes_comp_idx3]
+                mes_base3_str = mes_base3.strftime('%B %Y').capitalize()
+                mes_comp3_str = mes_comp3.strftime('%B %Y').capitalize()
 
-            if st.button("▶ Generar Informe 3"):
-                base_i = mes_base3.strftime('%Y-%m-01')
-                base_f = (mes_base3 + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
-                comp_i = mes_comp3.strftime('%Y-%m-01')
-                comp_f = (mes_comp3 + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
-                filtro_cat3 = f"AND categoria_producto = '{cat3_sel}'" if cat3_sel != 'Todos' else ""
+                # Filtro texto + ordenamiento
+                fc1, fc2, fc3 = st.columns([3, 2, 1])
+                with fc1:
+                    filtro_texto3 = st.text_input("🔍 Buscar SKU o producto",
+                                                  placeholder="Ej: AL-AF-276 o papas...",
+                                                  key='inf3_buscar')
+                with fc2:
+                    ord3_col_sel = st.selectbox("Ordenar por", [
+                        'Producto', f'Cant. {mes_base3_str}',
+                        f'Costo {mes_base3_str}', f'Costo {mes_comp3_str}',
+                        'Δ$ Precio', 'Δ% Precio'
+                    ], key='ord3_col')
+                with fc3:
+                    ord3_dir = st.selectbox("Dir.", ['↓', '↑'], key='ord3_dir')
 
-                q_ing = _build_variacion_query(
-                    base_i, base_f, comp_i, comp_f,
-                    filtro_cat=filtro_cat3
-                )
-                df3 = run_query(q_ing)
+                if st.button("▶ Generar Informe 3"):
+                    base_i = mes_base3.strftime('%Y-%m-01')
+                    base_f = (mes_base3 + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
+                    comp_i = mes_comp3.strftime('%Y-%m-01')
+                    comp_f = (mes_comp3 + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
+                    filtro_cat3 = f"AND categoria_producto = '{cat3_sel}'" if cat3_sel != 'Todos' else ""
 
-                if df3.empty:
-                    st.warning("Sin datos para el mes seleccionado.")
+                    q_ing = _build_variacion_query(
+                        base_i, base_f, comp_i, comp_f,
+                        filtro_cat=filtro_cat3
+                    )
+                    df3 = run_query(q_ing)
+
+                    if df3.empty:
+                        st.warning("Sin datos para el mes seleccionado.")
+                    else:
+                        df3 = _procesar_variacion_df(df3)
+                        st.session_state['inf3_df']     = df3
+                        st.session_state['inf3_labels'] = (mes_base3_str, mes_comp3_str)
+                        st.session_state['inf3_fechas'] = (base_i, base_f, comp_i, comp_f)
+                        st.session_state['inf3_local_label'] = f"Cadena — {cat3_sel}" if cat3_sel != 'Todos' else 'Cadena Completa'
+
+                if 'inf3_df' in st.session_state:
+                    df3 = st.session_state['inf3_df'].copy()
+                    mes_base3_str, mes_comp3_str = st.session_state['inf3_labels']
+
+                    # Ordenar
+                    asc3 = ord3_dir == '↑'
+                    sort_map3 = {
+                        'Producto':                 ('nombre',       asc3),
+                        f'Cant. {mes_base3_str}':   ('cant_base',    asc3),
+                        f'Costo {mes_base3_str}':   ('impacto_base', asc3),
+                        f'Costo {mes_comp3_str}':   ('impacto_comp', asc3),
+                        'Δ$ Precio':               ('delta_dinero', asc3),
+                        'Δ% Precio':               ('delta_pct',    asc3),
+                    }
+                    if ord3_col_sel in sort_map3:
+                        col_s, asc_s = sort_map3[ord3_col_sel]
+                        df3 = df3.sort_values(col_s, ascending=asc_s, na_position='last')
+
+                    # Filtro de texto
+                    if filtro_texto3:
+                        mask3 = (
+                            df3['sku'].str.contains(filtro_texto3, case=False, na=False) |
+                            df3['nombre'].str.contains(filtro_texto3, case=False, na=False)
+                        )
+                        df3 = df3[mask3]
+
+                    # Métricas
+                    tot_base = df3['impacto_base'].sum()
+                    tot_comp = df3['impacto_comp'].sum()
+                    tot_delta = tot_comp - tot_base
+                    tot_pct   = (tot_delta / tot_base * 100) if tot_base > 0 else 0
+                    sin_precio = df3['sin_precio_comp'].sum()
+
+                    mm1, mm2, mm3, mm4 = st.columns(4)
+                    mm1.metric(f"Canasta {mes_base3_str}",     f"${tot_base:,.0f}")
+                    mm2.metric(f"Canasta a precios {mes_comp3_str}", f"${tot_comp:,.0f}")
+                    mm3.metric("Δ$ impacto precio",            f"${tot_delta:,.0f}")
+                    mm4.metric("Δ% total",                     f"{tot_pct:+.1f}%")
+                    if sin_precio > 0:
+                        st.info(f"ℹ️ {int(sin_precio)} ingrediente(s) sin precio en mes de comparación — se usó precio del mes muestra.")
+
+                    st.markdown("<br>", unsafe_allow_html=True)
+
+                    def badge3(val):
+                        if val is None or (isinstance(val, float) and pd.isna(val)):
+                            return '<span style="color:#444">—</span>'
+                        if val > 10:
+                            return f'<span style="background:#3a1a1a;color:#e84545;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:+.1f}%</span>'
+                        elif val > 3:
+                            return f'<span style="background:#3a2a1a;color:#e89c45;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:+.1f}%</span>'
+                        elif val < -3:
+                            return f'<span style="background:#1a3a2a;color:#4caf7d;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:+.1f}%</span>'
+                        return f'<span style="color:#aaa;font-size:0.75rem">{val:+.1f}%</span>'
+
+                    def fmt_d3(val):
+                        if val > 0: return f'<span style="color:#e84545;font-weight:600">${val:,.0f}</span>'
+                        if val < 0: return f'<span style="color:#4caf7d;font-weight:600">${val:,.0f}</span>'
+                        return f'<span style="color:#aaa">${val:,.0f}</span>'
+
+                    rows3 = ''
+                    for _, r in df3.iterrows():
+                        bg = '#1e1212' if (r['delta_dinero'] or 0) > 0 else '#121e14' if (r['delta_dinero'] or 0) < 0 else ''
+                        sin_p = r.get('sin_precio_comp', False)
+                        row_bg = bg if bg else ('rgba(13,30,60,0.6)' if sin_p else '')
+                        icono_cell = '<span style="color:#4a9eda;font-size:0.75rem">ℹ️ </span>' if sin_p else ''
+                        precio_comp_color = '#4a9eda' if sin_p else '#ccc'
+                        rows3 += (
+                            f'<tr style="border-bottom:1px solid #1e1e1e;background:{row_bg}">'
+                            f'<td style="padding:10px 14px;color:#666;font-family:monospace;font-size:0.76rem">{r.get("sku","")}</td>'
+                            f'<td style="padding:10px 14px;font-weight:500;color:{"#4a9eda" if sin_p else "#e8e4de"}">{icono_cell}{r.get("nombre","")}</td>'
+                            f'<td style="padding:10px 14px;color:#555;font-size:0.8rem">{r.get("categoria","")}</td>'
+                            f'<td style="padding:10px 14px;color:#666;font-size:0.78rem">{r.get("proveedor","")}</td>'
+                            f'<td style="padding:10px 14px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">{r.get("cant_base",0):,.2f}</td>'
+                            f'<td style="padding:10px 14px;text-align:right;color:#888;font-variant-numeric:tabular-nums">${r.get("precio_base",0):,.2f}</td>'
+                            f'<td style="padding:10px 14px;text-align:right;color:{precio_comp_color};font-variant-numeric:tabular-nums">${r.get("precio_comp",0):,.2f}</td>'
+                            f'<td style="padding:10px 14px;text-align:right;color:#777;font-variant-numeric:tabular-nums">${r.get("impacto_base",0):,.0f}</td>'
+                            f'<td style="padding:10px 14px;text-align:right;color:#e8e4de;font-variant-numeric:tabular-nums">${r.get("impacto_comp",0):,.0f}</td>'
+                            f'<td style="padding:10px 14px;text-align:right">{fmt_d3(r.get("delta_dinero",0))}</td>'
+                            f'<td style="padding:10px 14px;text-align:center">{badge3(r.get("delta_pct",None))}</td>'
+                            f'</tr>'
+                        )
+
+                    hs3 = 'padding:11px 14px;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
+                    hdrs3 = ['SKU', 'Producto', 'Categoría', 'Proveedor',
+                              f'Cant. {mes_base3_str}',
+                              f'P. Unit {mes_base3_str}', f'P. Unit {mes_comp3_str}',
+                              f'Total {mes_base3_str}', f'Total {mes_comp3_str}',
+                              'Δ$', 'Δ%']
+                    tabla3 = (
+                        '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
+                        '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.84rem">'
+                        '<thead><tr style="background:#111">'
+                        + ''.join([f'<th style="{hs3};text-align:{"left" if i<4 else "right"}">{h}</th>' for i, h in enumerate(hdrs3)])
+                        + f'</tr></thead><tbody>{rows3}</tbody></table></div>'
+                    )
+                    st.markdown(tabla3, unsafe_allow_html=True)
+
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    d1, d2, d3 = st.columns(3)
+
+                    # ── Botón 1: Excel ────────────────────────────────────
+                    with d1:
+                        buf_inf3 = io.BytesIO()
+                        with pd.ExcelWriter(buf_inf3, engine='openpyxl') as w:
+                            df3[['sku','nombre','categoria','proveedor','cant_base',
+                                  'precio_base','precio_comp','impacto_base',
+                                  'impacto_comp','delta_dinero','delta_pct']].to_excel(w, sheet_name='Canasta', index=False)
+                        st.download_button("📥 Excel", buf_inf3.getvalue(),
+                            "Informe3_Canasta.xlsx", use_container_width=True)
+
+                    # ── Botón 2: PDF resumen de lo que está en pantalla (1 página) ──
+                    with d2:
+                        _label_pdf = st.session_state.get('inf3_local_label', 'Cadena Completa')
+                        _pdf_actual = generar_pdf_variacion(df3, mes_base3_str, mes_comp3_str, _label_pdf)
+                        st.download_button("📄 PDF — Resumen cadena", _pdf_actual,
+                            f"Variacion_{_label_pdf.replace(' ','_')}_{mes_base3_str}_vs_{mes_comp3_str}.pdf",
+                            mime="application/pdf", use_container_width=True)
+
+                    # ── Botón 3: PDF con 1 página por cada local (10 páginas) ──
+                    with d3:
+                        if st.button("📄 PDF — Por local", key="pdf_todos", use_container_width=True):
+                            if 'inf3_fechas' not in st.session_state:
+                                st.error("Primero genera el informe con ▶")
+                            else:
+                                with st.spinner("Generando resumen por local..."):
+                                    from pypdf import PdfWriter as PdfW, PdfReader as PdfR
+                                    _bi, _bf, _ci, _cf = st.session_state['inf3_fechas']
+                                    writer_all = PdfW()
+
+                                    for loc in [l for l in get_locales() if l not in ('Todos', None)]:
+                                        try:
+                                            _fl = f"AND UPPER(c.local) = UPPER('{loc}')"
+                                            q_loc = _build_variacion_query(
+                                                _bi, _bf, _ci, _cf,
+                                                filtro_local=_fl
+                                            )
+                                            df_loc = run_query(q_loc)
+                                            if df_loc.empty: continue
+                                            df_loc = _procesar_variacion_df(df_loc)
+                                            pdf_loc = generar_pdf_variacion(df_loc, mes_base3_str, mes_comp3_str, loc)
+                                            for pg in PdfR(io.BytesIO(pdf_loc)).pages:
+                                                writer_all.add_page(pg)
+                                        except Exception:
+                                            continue
+
+                                    buf_all = io.BytesIO()
+                                    writer_all.write(buf_all)
+                                    st.session_state['pdf_locales_bytes']  = buf_all.getvalue()
+                                    st.session_state['pdf_locales_nombre'] = f"Variacion_PorLocal_{mes_base3_str}_vs_{mes_comp3_str}.pdf"
+
+                    # Botón descarga aparece debajo al estar listo
+                    if 'pdf_locales_bytes' in st.session_state:
+                        st.download_button("⬇️ Descargar PDF — Por local",
+                            st.session_state['pdf_locales_bytes'],
+                            st.session_state['pdf_locales_nombre'],
+                            mime="application/pdf", key="pdf_locales_dl", use_container_width=True)
+
+        # ══════════════════════════════════════════════════════
+        # TAB 2 — 80/20 COMPRAS
+        # Top 15 SKUs por gasto con evolución de precio y
+        # análisis de impacto en canasta (cantidad fija = mes 1)
+        # ══════════════════════════════════════════════════════
+        with _tab_8020:
+            st.markdown(
+                "<div style='margin-bottom:0.5rem;color:#888;font-size:0.82rem'>"
+                "Identifica los <b style='color:#d4a853'>15 ingredientes</b> que concentran "
+                "el mayor gasto de compras. Para cada uno muestra la variación de precio "
+                "entre el mes inicial y final, y el impacto monetario usando la "
+                "<b>cantidad comprada en el mes inicial</b> como base fija."
+                "</div>",
+                unsafe_allow_html=True
+            )
+
+            # ── Selectores de período propios ──────────────────────
+            _meses_8020 = run_query("""
+                SELECT DISTINCT DATE_TRUNC('month', fecha_dte::timestamp)::date AS mes
+                FROM compras WHERE subcat IN ('Directo','Indirecto') ORDER BY 1
+            """)
+
+            if _meses_8020.empty:
+                st.warning("No hay datos de compras disponibles.")
+            else:
+                _ml = pd.to_datetime(_meses_8020['mes']).tolist()
+                _mf = [m.strftime('%B %Y').capitalize() for m in _ml]
+
+                _c1, _c2 = st.columns(2)
+                with _c1:
+                    _idx_i = st.selectbox(
+                        "Mes inicio", range(len(_mf)),
+                        format_func=lambda i: _mf[i],
+                        index=0, key='p8020_inicio'
+                    )
+                with _c2:
+                    _idx_f = st.selectbox(
+                        "Mes fin", range(len(_mf)),
+                        format_func=lambda i: _mf[i],
+                        index=len(_ml) - 1, key='p8020_fin'
+                    )
+
+                _mes_i  = _ml[_idx_i]
+                _mes_f  = _ml[_idx_f]
+                _str_i  = _mes_i.strftime('%B %Y').capitalize()
+                _str_f  = _mes_f.strftime('%B %Y').capitalize()
+
+                if _mes_f < _mes_i:
+                    st.warning("⚠️ El mes fin debe ser igual o posterior al mes inicio.")
                 else:
-                    df3 = _procesar_variacion_df(df3)
-                    st.session_state['inf3_df']     = df3
-                    st.session_state['inf3_labels'] = (mes_base3_str, mes_comp3_str)
-                    st.session_state['inf3_fechas'] = (base_i, base_f, comp_i, comp_f)
-                    st.session_state['inf3_local_label'] = f"Cadena — {cat3_sel}" if cat3_sel != 'Todos' else 'Cadena Completa'
+                    if st.button("▶ Generar 80/20", key="btn_8020"):
 
-            if 'inf3_df' in st.session_state:
-                df3 = st.session_state['inf3_df'].copy()
-                mes_base3_str, mes_comp3_str = st.session_state['inf3_labels']
+                        # ── Lista de meses en el rango ────────────────────
+                        _rango_meses = pd.date_range(
+                            _mes_i, _mes_f + pd.offsets.MonthEnd(1), freq='MS'
+                        ).tolist()
 
-                # Ordenar
-                asc3 = ord3_dir == '↑'
-                sort_map3 = {
-                    'Producto':                 ('nombre',       asc3),
-                    f'Cant. {mes_base3_str}':   ('cant_base',    asc3),
-                    f'Costo {mes_base3_str}':   ('impacto_base', asc3),
-                    f'Costo {mes_comp3_str}':   ('impacto_comp', asc3),
-                    'Δ$ Precio':               ('delta_dinero', asc3),
-                    'Δ% Precio':               ('delta_pct',    asc3),
-                }
-                if ord3_col_sel in sort_map3:
-                    col_s, asc_s = sort_map3[ord3_col_sel]
-                    df3 = df3.sort_values(col_s, ascending=asc_s, na_position='last')
+                        # ── Último precio histórico por SKU (fallback) ────
+                        _q_fallback = """
+                            SELECT DISTINCT ON (COALESCE(e.sku_receta, c.sku))
+                                COALESCE(e.sku_receta, c.sku)                          AS sku,
+                                SUM(c.costo_realfinal) OVER w
+                                    / NULLIF(SUM(c.cant_conv) OVER w, 0)               AS precio_fb
+                            FROM compras c
+                            LEFT JOIN sku_equivalencias e ON c.sku = e.sku_compra
+                            WHERE c.subcat IN ('Directo','Indirecto')
+                              AND c.costo_realfinal > 0 AND c.cant_conv > 0
+                            WINDOW w AS (
+                                PARTITION BY COALESCE(e.sku_receta, c.sku),
+                                             DATE_TRUNC('month', c.fecha_dte::timestamp)
+                            )
+                            ORDER BY COALESCE(e.sku_receta, c.sku),
+                                     DATE_TRUNC('month', c.fecha_dte::timestamp) DESC
+                        """
+                        _df_fb = run_query(_q_fallback)
+                        _fb_map = {}
+                        if not _df_fb.empty:
+                            _df_fb['precio_fb'] = pd.to_numeric(_df_fb['precio_fb'], errors='coerce')
+                            _fb_map = dict(zip(_df_fb['sku'], _df_fb['precio_fb']))
 
-                # Filtro de texto
-                if filtro_texto3:
-                    mask3 = (
-                        df3['sku'].str.contains(filtro_texto3, case=False, na=False) |
-                        df3['nombre'].str.contains(filtro_texto3, case=False, na=False)
-                    )
-                    df3 = df3[mask3]
+                        # ── Precio por SKU × mes en todo el rango ─────────
+                        _fi_str = _mes_i.strftime('%Y-%m-01')
+                        _ff_str = (_mes_f + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
 
-                # Métricas
-                tot_base = df3['impacto_base'].sum()
-                tot_comp = df3['impacto_comp'].sum()
-                tot_delta = tot_comp - tot_base
-                tot_pct   = (tot_delta / tot_base * 100) if tot_base > 0 else 0
-                sin_precio = df3['sin_precio_comp'].sum()
+                        _q_precios = f"""
+                            SELECT
+                                COALESCE(e.sku_receta, c.sku)                          AS sku,
+                                DATE_TRUNC('month', c.fecha_dte::timestamp)::date     AS mes,
+                                MIN(c.nombre_producto)                                  AS nombre,
+                                MIN(c.categoria_producto)                               AS categoria,
+                                SUM(c.cant_conv)                                        AS cant_mes,
+                                SUM(c.costo_realfinal)                                  AS gasto_mes,
+                                SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv), 0)   AS precio_mes
+                            FROM compras c
+                            LEFT JOIN sku_equivalencias e ON c.sku = e.sku_compra
+                            WHERE c.fecha_dte::date BETWEEN '{_fi_str}' AND '{_ff_str}'
+                              AND c.subcat IN ('Directo','Indirecto')
+                              AND c.costo_realfinal > 0 AND c.cant_conv > 0
+                            GROUP BY 1, 2
+                            ORDER BY 1, 2
+                        """
+                        _df_pm = run_query(_q_precios)
 
-                mm1, mm2, mm3, mm4 = st.columns(4)
-                mm1.metric(f"Canasta {mes_base3_str}",     f"${tot_base:,.0f}")
-                mm2.metric(f"Canasta a precios {mes_comp3_str}", f"${tot_comp:,.0f}")
-                mm3.metric("Δ$ impacto precio",            f"${tot_delta:,.0f}")
-                mm4.metric("Δ% total",                     f"{tot_pct:+.1f}%")
-                if sin_precio > 0:
-                    st.info(f"ℹ️ {int(sin_precio)} ingrediente(s) sin precio en mes de comparación — se usó precio del mes muestra.")
-
-                st.markdown("<br>", unsafe_allow_html=True)
-
-                def badge3(val):
-                    if val is None or (isinstance(val, float) and pd.isna(val)):
-                        return '<span style="color:#444">—</span>'
-                    if val > 10:
-                        return f'<span style="background:#3a1a1a;color:#e84545;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:+.1f}%</span>'
-                    elif val > 3:
-                        return f'<span style="background:#3a2a1a;color:#e89c45;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:+.1f}%</span>'
-                    elif val < -3:
-                        return f'<span style="background:#1a3a2a;color:#4caf7d;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:+.1f}%</span>'
-                    return f'<span style="color:#aaa;font-size:0.75rem">{val:+.1f}%</span>'
-
-                def fmt_d3(val):
-                    if val > 0: return f'<span style="color:#e84545;font-weight:600">${val:,.0f}</span>'
-                    if val < 0: return f'<span style="color:#4caf7d;font-weight:600">${val:,.0f}</span>'
-                    return f'<span style="color:#aaa">${val:,.0f}</span>'
-
-                rows3 = ''
-                for _, r in df3.iterrows():
-                    bg = '#1e1212' if (r['delta_dinero'] or 0) > 0 else '#121e14' if (r['delta_dinero'] or 0) < 0 else ''
-                    sin_p = r.get('sin_precio_comp', False)
-                    row_bg = bg if bg else ('rgba(13,30,60,0.6)' if sin_p else '')
-                    icono_cell = '<span style="color:#4a9eda;font-size:0.75rem">ℹ️ </span>' if sin_p else ''
-                    precio_comp_color = '#4a9eda' if sin_p else '#ccc'
-                    rows3 += (
-                        f'<tr style="border-bottom:1px solid #1e1e1e;background:{row_bg}">'
-                        f'<td style="padding:10px 14px;color:#666;font-family:monospace;font-size:0.76rem">{r.get("sku","")}</td>'
-                        f'<td style="padding:10px 14px;font-weight:500;color:{"#4a9eda" if sin_p else "#e8e4de"}">{icono_cell}{r.get("nombre","")}</td>'
-                        f'<td style="padding:10px 14px;color:#555;font-size:0.8rem">{r.get("categoria","")}</td>'
-                        f'<td style="padding:10px 14px;color:#666;font-size:0.78rem">{r.get("proveedor","")}</td>'
-                        f'<td style="padding:10px 14px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">{r.get("cant_base",0):,.2f}</td>'
-                        f'<td style="padding:10px 14px;text-align:right;color:#888;font-variant-numeric:tabular-nums">${r.get("precio_base",0):,.2f}</td>'
-                        f'<td style="padding:10px 14px;text-align:right;color:{precio_comp_color};font-variant-numeric:tabular-nums">${r.get("precio_comp",0):,.2f}</td>'
-                        f'<td style="padding:10px 14px;text-align:right;color:#777;font-variant-numeric:tabular-nums">${r.get("impacto_base",0):,.0f}</td>'
-                        f'<td style="padding:10px 14px;text-align:right;color:#e8e4de;font-variant-numeric:tabular-nums">${r.get("impacto_comp",0):,.0f}</td>'
-                        f'<td style="padding:10px 14px;text-align:right">{fmt_d3(r.get("delta_dinero",0))}</td>'
-                        f'<td style="padding:10px 14px;text-align:center">{badge3(r.get("delta_pct",None))}</td>'
-                        f'</tr>'
-                    )
-
-                hs3 = 'padding:11px 14px;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
-                hdrs3 = ['SKU', 'Producto', 'Categoría', 'Proveedor',
-                          f'Cant. {mes_base3_str}',
-                          f'P. Unit {mes_base3_str}', f'P. Unit {mes_comp3_str}',
-                          f'Total {mes_base3_str}', f'Total {mes_comp3_str}',
-                          'Δ$', 'Δ%']
-                tabla3 = (
-                    '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
-                    '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.84rem">'
-                    '<thead><tr style="background:#111">'
-                    + ''.join([f'<th style="{hs3};text-align:{"left" if i<4 else "right"}">{h}</th>' for i, h in enumerate(hdrs3)])
-                    + f'</tr></thead><tbody>{rows3}</tbody></table></div>'
-                )
-                st.markdown(tabla3, unsafe_allow_html=True)
-
-                st.markdown("<br>", unsafe_allow_html=True)
-                d1, d2, d3 = st.columns(3)
-
-                # ── Botón 1: Excel ────────────────────────────────────
-                with d1:
-                    buf_inf3 = io.BytesIO()
-                    with pd.ExcelWriter(buf_inf3, engine='openpyxl') as w:
-                        df3[['sku','nombre','categoria','proveedor','cant_base',
-                              'precio_base','precio_comp','impacto_base',
-                              'impacto_comp','delta_dinero','delta_pct']].to_excel(w, sheet_name='Canasta', index=False)
-                    st.download_button("📥 Excel", buf_inf3.getvalue(),
-                        "Informe3_Canasta.xlsx", use_container_width=True)
-
-                # ── Botón 2: PDF resumen de lo que está en pantalla (1 página) ──
-                with d2:
-                    _label_pdf = st.session_state.get('inf3_local_label', 'Cadena Completa')
-                    _pdf_actual = generar_pdf_variacion(df3, mes_base3_str, mes_comp3_str, _label_pdf)
-                    st.download_button("📄 PDF — Resumen cadena", _pdf_actual,
-                        f"Variacion_{_label_pdf.replace(' ','_')}_{mes_base3_str}_vs_{mes_comp3_str}.pdf",
-                        mime="application/pdf", use_container_width=True)
-
-                # ── Botón 3: PDF con 1 página por cada local (10 páginas) ──
-                with d3:
-                    if st.button("📄 PDF — Por local", key="pdf_todos", use_container_width=True):
-                        if 'inf3_fechas' not in st.session_state:
-                            st.error("Primero genera el informe con ▶")
+                        if _df_pm.empty:
+                            st.warning("Sin datos para el período seleccionado.")
+                            st.session_state.pop('p8020_data', None)
                         else:
-                            with st.spinner("Generando resumen por local..."):
-                                from pypdf import PdfWriter as PdfW, PdfReader as PdfR
-                                _bi, _bf, _ci, _cf = st.session_state['inf3_fechas']
-                                writer_all = PdfW()
+                            for _col in ['cant_mes', 'gasto_mes', 'precio_mes']:
+                                _df_pm[_col] = pd.to_numeric(_df_pm[_col], errors='coerce').fillna(0)
 
-                                for loc in [l for l in get_locales() if l not in ('Todos', None)]:
-                                    try:
-                                        _fl = f"AND UPPER(c.local) = UPPER('{loc}')"
-                                        q_loc = _build_variacion_query(
-                                            _bi, _bf, _ci, _cf,
-                                            filtro_local=_fl
+                            # ── Top 15 por gasto total en el período ──────
+                            _gasto_total = (
+                                _df_pm.groupby('sku')['gasto_mes'].sum()
+                                .reset_index().rename(columns={'gasto_mes': 'gasto_total'})
+                                .sort_values('gasto_total', ascending=False)
+                                .head(15)
+                            )
+                            _top15_skus   = _gasto_total['sku'].tolist()
+                            _gasto_cadena = _df_pm['gasto_mes'].sum()
+
+                            # ── Cant y nombre del mes inicial ─────────────
+                            _mes_i_date = _mes_i.date() if hasattr(_mes_i, 'date') else _mes_i
+                            _df_mes1 = _df_pm[
+                                (_df_pm['sku'].isin(_top15_skus)) &
+                                (_df_pm['mes'] == _mes_i_date)
+                            ][['sku', 'nombre', 'categoria', 'cant_mes']].drop_duplicates('sku')
+
+                            # ── Construir filas ────────────────────────────
+                            _rows_8020 = []
+                            for _sku in _top15_skus:
+                                _info    = _df_mes1[_df_mes1['sku'] == _sku]
+                                _nombre  = _info['nombre'].values[0]    if len(_info) else _sku
+                                _cat     = _info['categoria'].values[0] if len(_info) else '—'
+                                _cant_q1 = float(_info['cant_mes'].values[0]) if len(_info) else 0.0
+
+                                # Precio mes inicial
+                                _ps_ini = _df_pm[
+                                    (_df_pm['sku'] == _sku) & (_df_pm['mes'] == _mes_i_date)
+                                ]['precio_mes']
+                                _p_ini_real = float(_ps_ini.values[0]) if len(_ps_ini) else None
+                                _p_ini_fb   = _p_ini_real is None
+                                _p_ini      = _p_ini_real if _p_ini_real is not None else _fb_map.get(_sku, 0.0)
+
+                                # Precio mes final
+                                _mes_f_date = _mes_f.date() if hasattr(_mes_f, 'date') else _mes_f
+                                _ps_fin = _df_pm[
+                                    (_df_pm['sku'] == _sku) & (_df_pm['mes'] == _mes_f_date)
+                                ]['precio_mes']
+                                _p_fin_real = float(_ps_fin.values[0]) if len(_ps_fin) else None
+                                _p_fin_fb   = _p_fin_real is None
+                                _p_fin      = _p_fin_real if _p_fin_real is not None else _fb_map.get(_sku, _p_ini)
+
+                                _delta_pct = ((_p_fin / _p_ini) - 1) * 100 if _p_ini > 0 else None
+                                _impacto   = (_p_fin - _p_ini) * _cant_q1
+
+                                _gasto_sku = float(
+                                    _gasto_total[_gasto_total['sku'] == _sku]['gasto_total'].values[0]
+                                )
+                                _pct_total = (_gasto_sku / _gasto_cadena * 100) if _gasto_cadena > 0 else 0
+
+                                # Evolución mensual completa
+                                _evolucion = []
+                                for _m in pd.date_range(_mes_i, _mes_f + pd.offsets.MonthEnd(1), freq='MS'):
+                                    _md = _m.date() if hasattr(_m, 'date') else _m
+                                    _ps = _df_pm[
+                                        (_df_pm['sku'] == _sku) & (_df_pm['mes'] == _md)
+                                    ]['precio_mes']
+                                    _p_real = float(_ps.values[0]) if len(_ps) else None
+                                    _evolucion.append({
+                                        'mes_str':       _m.strftime('%b %Y').capitalize(),
+                                        'precio':        _p_real,
+                                        'fb':            _p_real is None,
+                                        'precio_display': _p_real if _p_real is not None
+                                                           else _fb_map.get(_sku),
+                                    })
+
+                                _rows_8020.append({
+                                    'sku':             _sku,
+                                    'nombre':          _nombre,
+                                    'categoria':       _cat,
+                                    'cant_q1':         _cant_q1,
+                                    'p_ini':           _p_ini,
+                                    'p_ini_fb':        _p_ini_fb,
+                                    'p_fin':           _p_fin,
+                                    'p_fin_fb':        _p_fin_fb,
+                                    'delta_pct':       _delta_pct,
+                                    'impacto':         _impacto,
+                                    'gasto_total':     _gasto_sku,
+                                    'pct_total':       _pct_total,
+                                    'evolucion':       _evolucion,
+                                    'tiene_intermedios': len(_evolucion) > 2,
+                                })
+
+                            # Calcular % acumulado
+                            _acum = 0.0
+                            for _r in _rows_8020:
+                                _acum += _r['pct_total']
+                                _r['acum_pct'] = _acum
+
+                            st.session_state['p8020_data']   = _rows_8020
+                            st.session_state['p8020_labels'] = (_str_i, _str_f)
+                            st.session_state['p8020_cadena'] = _gasto_cadena
+                            st.session_state['p8020_meses_n'] = len(pd.date_range(
+                                _mes_i, _mes_f + pd.offsets.MonthEnd(1), freq='MS'
+                            ))
+
+                    # ── RENDERIZADO (fuera del botón, persiste con session_state) ──
+                    if 'p8020_data' in st.session_state:
+                        _rows_8020    = st.session_state['p8020_data']
+                        _str_i, _str_f = st.session_state['p8020_labels']
+                        _gasto_cadena  = st.session_state['p8020_cadena']
+                        _n_meses       = st.session_state['p8020_meses_n']
+
+                        # ── KPIs ──────────────────────────────────────────
+                        _top15_gasto   = sum(r['gasto_total'] for r in _rows_8020)
+                        _top15_pct     = (_top15_gasto / _gasto_cadena * 100) if _gasto_cadena > 0 else 0
+                        _impacto_total = sum(r['impacto'] for r in _rows_8020)
+
+                        _k1, _k2, _k3, _k4 = st.columns(4)
+                        _k1.metric("💰 Gasto total cadena",  f"${_gasto_cadena:,.0f}")
+                        _k2.metric("🏆 Top 15 concentra",    f"{_top15_pct:.1f}% del gasto")
+                        _k3.metric("📈 Impacto Δ$ canasta",  f"${_impacto_total:+,.0f}")
+                        _k4.metric("📅 Período",             f"{_str_i} → {_str_f}")
+
+                        st.markdown("<br>", unsafe_allow_html=True)
+
+                        # ── GRÁFICO PARETO ────────────────────────────────
+                        import json as _json
+                        _labels_ch = [r['nombre'][:22] + '…' if len(r['nombre']) > 22
+                                      else r['nombre'] for r in _rows_8020]
+                        _gastos_ch = [round(r['gasto_total'], 0) for r in _rows_8020]
+                        _acums_ch  = [round(r['acum_pct'],    1) for r in _rows_8020]
+
+                        _chart_html = f"""
+                        <div style="background:#0d0d0d;border:1px solid #1e1e1e;
+                                    border-radius:12px;padding:1rem 1.2rem 0.5rem">
+                          <div style="font-size:0.7rem;text-transform:uppercase;
+                                      letter-spacing:0.1em;color:#555;margin-bottom:0.6rem">
+                            Pareto — Gasto acumulado por SKU (Top 15)
+                          </div>
+                          <canvas id="paretoChart8020" height="90"></canvas>
+                        </div>
+                        <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+                        <script>
+                        (function(){{
+                          const ctx = document.getElementById('paretoChart8020').getContext('2d');
+                          new Chart(ctx, {{
+                            data: {{
+                              labels: {_json.dumps(_labels_ch)},
+                              datasets: [
+                                {{
+                                  type: 'bar', label: 'Gasto $',
+                                  data: {_json.dumps(_gastos_ch)},
+                                  backgroundColor: 'rgba(212,168,83,0.75)',
+                                  borderColor: '#d4a853', borderWidth: 1,
+                                  yAxisID: 'y', order: 2,
+                                }},
+                                {{
+                                  type: 'line', label: '% Acumulado',
+                                  data: {_json.dumps(_acums_ch)},
+                                  borderColor: '#4caf7d', backgroundColor: 'transparent',
+                                  pointBackgroundColor: '#4caf7d', pointRadius: 3,
+                                  borderWidth: 2, yAxisID: 'y2', order: 1, tension: 0.3,
+                                }}
+                              ]
+                            }},
+                            options: {{
+                              responsive: true,
+                              interaction: {{ mode: 'index', intersect: false }},
+                              plugins: {{
+                                legend: {{ labels: {{ color: '#888', font: {{ size: 11 }} }} }},
+                                tooltip: {{
+                                  callbacks: {{
+                                    label: function(ctx) {{
+                                      if (ctx.datasetIndex === 0)
+                                        return ' $' + ctx.parsed.y.toLocaleString('es-CL');
+                                      return ' ' + ctx.parsed.y.toFixed(1) + '%';
+                                    }}
+                                  }}
+                                }}
+                              }},
+                              scales: {{
+                                x: {{
+                                  ticks: {{ color: '#555', font: {{ size: 10 }}, maxRotation: 35 }},
+                                  grid: {{ color: '#1a1a1a' }}
+                                }},
+                                y: {{
+                                  position: 'left',
+                                  ticks: {{
+                                    color: '#666', font: {{ size: 10 }},
+                                    callback: v => '$' + (v/1000).toFixed(0) + 'k'
+                                  }},
+                                  grid: {{ color: '#1a1a1a' }}
+                                }},
+                                y2: {{
+                                  position: 'right', min: 0, max: 100,
+                                  ticks: {{ color: '#4caf7d', font: {{ size: 10 }},
+                                            callback: v => v + '%' }},
+                                  grid: {{ drawOnChartArea: false }}
+                                }}
+                              }}
+                            }}
+                          }});
+                        }})();
+                        </script>
+                        """
+                        st.components.v1.html(_chart_html, height=320, scrolling=False)
+
+                        st.markdown("<br>", unsafe_allow_html=True)
+
+                        # ── HELPERS VISUALIZACIÓN ─────────────────────────
+                        def _badge_delta_8020(val):
+                            if val is None or (isinstance(val, float) and pd.isna(val)):
+                                return '<span style="color:#444">—</span>'
+                            if val > 10:
+                                return (f'<span style="background:#3a1a1a;color:#e84545;'
+                                        f'padding:2px 8px;border-radius:12px;font-size:0.77rem;'
+                                        f'font-weight:600">{val:+.1f}%</span>')
+                            elif val > 3:
+                                return (f'<span style="background:#3a2a1a;color:#e89c45;'
+                                        f'padding:2px 8px;border-radius:12px;font-size:0.77rem;'
+                                        f'font-weight:600">{val:+.1f}%</span>')
+                            elif val < -3:
+                                return (f'<span style="background:#1a3a2a;color:#4caf7d;'
+                                        f'padding:2px 8px;border-radius:12px;font-size:0.77rem;'
+                                        f'font-weight:600">{val:+.1f}%</span>')
+                            return f'<span style="color:#aaa;font-size:0.76rem">{val:+.1f}%</span>'
+
+                        def _fmt_imp_8020(val):
+                            if val > 0:
+                                return f'<span style="color:#e84545;font-weight:600">${val:+,.0f}</span>'
+                            if val < 0:
+                                return f'<span style="color:#4caf7d;font-weight:600">${val:+,.0f}</span>'
+                            return '<span style="color:#aaa">$0</span>'
+
+                        def _fb_icon_8020(is_fb):
+                            if is_fb:
+                                return ('<span title="Sin compras en este mes — precio del último '
+                                        'registro histórico" style="color:#4a9eda;font-size:0.7rem">'
+                                        '🔵 </span>')
+                            return ''
+
+                        # ── TABLA TOP 15 ──────────────────────────────────
+                        _hs_t = ('padding:10px 12px;font-size:0.68rem;text-transform:uppercase;'
+                                 'letter-spacing:0.09em;font-weight:600;color:#444;'
+                                 'border-bottom:1px solid #2a2a2a')
+                        _hdrs_t = ['#', 'SKU', 'Producto', 'Categoría',
+                                   f'Cant. {_str_i}',
+                                   f'P.Unit {_str_i}', f'P.Unit {_str_f}',
+                                   'Δ% Precio', 'Impacto $ canasta',
+                                   '% gasto', '% acum.']
+                        _hdr_html = ''.join([
+                            f'<th style="{_hs_t};text-align:{"left" if i < 4 else "right"}">{h}</th>'
+                            for i, h in enumerate(_hdrs_t)
+                        ])
+
+                        _rows_html_t = ''
+                        for _pos, _r in enumerate(_rows_8020, 1):
+                            _bg = '#1e1212' if _r['impacto'] > 0 else '#121e14' if _r['impacto'] < 0 else ''
+                            _rows_html_t += (
+                                f'<tr style="border-bottom:1px solid #1e1e1e;background:{_bg}">'
+                                f'<td style="padding:9px 12px;color:#555;font-size:0.78rem;'
+                                f'text-align:right">{_pos}</td>'
+                                f'<td style="padding:9px 12px;color:#555;font-family:monospace;'
+                                f'font-size:0.74rem">{_r["sku"]}</td>'
+                                f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de">'
+                                f'{_r["nombre"]}</td>'
+                                f'<td style="padding:9px 12px;color:#555;font-size:0.78rem">'
+                                f'{_r["categoria"]}</td>'
+                                f'<td style="padding:9px 12px;text-align:right;color:#aaa">'
+                                f'{_r["cant_q1"]:,.2f}</td>'
+                                f'<td style="padding:9px 12px;text-align:right;color:#888">'
+                                f'{_fb_icon_8020(_r["p_ini_fb"])}${_r["p_ini"]:,.2f}</td>'
+                                f'<td style="padding:9px 12px;text-align:right;color:#ccc">'
+                                f'{_fb_icon_8020(_r["p_fin_fb"])}${_r["p_fin"]:,.2f}</td>'
+                                f'<td style="padding:9px 12px;text-align:center">'
+                                f'{_badge_delta_8020(_r["delta_pct"])}</td>'
+                                f'<td style="padding:9px 12px;text-align:right">'
+                                f'{_fmt_imp_8020(_r["impacto"])}</td>'
+                                f'<td style="padding:9px 12px;text-align:right;color:#d4a853;'
+                                f'font-size:0.8rem">{_r["pct_total"]:.1f}%</td>'
+                                f'<td style="padding:9px 12px;text-align:right;color:#4caf7d;'
+                                f'font-size:0.8rem">{_r["acum_pct"]:.1f}%</td>'
+                                f'</tr>'
+                            )
+
+                        # Fila total cadena
+                        _tot_html = (
+                            f'<tr style="background:#111;border-top:2px solid #333">'
+                            f'<td colspan="4" style="padding:9px 12px;color:#d4a853;'
+                            f'font-weight:700;font-size:0.8rem">TOTAL CADENA</td>'
+                            f'<td style="padding:9px 12px;text-align:right;color:#555">—</td>'
+                            f'<td style="padding:9px 12px;text-align:right;color:#555">—</td>'
+                            f'<td style="padding:9px 12px;text-align:right;color:#555">—</td>'
+                            f'<td style="padding:9px 12px;text-align:right;color:#555">—</td>'
+                            f'<td style="padding:9px 12px;text-align:right">'
+                            f'{_fmt_imp_8020(_impacto_total)}</td>'
+                            f'<td style="padding:9px 12px;text-align:right;color:#d4a853;'
+                            f'font-weight:700">100.0%</td>'
+                            f'<td style="padding:9px 12px;text-align:right;color:#d4a853;'
+                            f'font-weight:700">{_top15_pct:.1f}%</td>'
+                            f'</tr>'
+                        )
+
+                        st.markdown(
+                            '<div style="overflow-x:auto;border-radius:14px;'
+                            'border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
+                            '<table style="width:100%;border-collapse:collapse;'
+                            'font-family:DM Sans,sans-serif;font-size:0.84rem">'
+                            f'<thead><tr style="background:#111">{_hdr_html}</tr></thead>'
+                            f'<tbody>{_rows_html_t}{_tot_html}</tbody></table></div>',
+                            unsafe_allow_html=True
+                        )
+
+                        # ── DESPLEGABLES DE EVOLUCIÓN ─────────────────────
+                        _tiene_intermedios = any(r['tiene_intermedios'] for r in _rows_8020)
+                        if _tiene_intermedios and _n_meses > 2:
+                            st.markdown("<br>", unsafe_allow_html=True)
+                            st.markdown(
+                                "<div style='font-size:0.72rem;text-transform:uppercase;"
+                                "letter-spacing:0.09em;color:#555;margin-bottom:0.4rem'>"
+                                "📈 Evolución mensual por SKU</div>",
+                                unsafe_allow_html=True
+                            )
+                            for _r in _rows_8020:
+                                if not _r['tiene_intermedios']:
+                                    continue
+                                with st.expander(f"{_r['nombre']}  ·  {_r['sku']}"):
+                                    _evo_rows = ''
+                                    _p_prev   = None
+                                    for _e in _r['evolucion']:
+                                        _p_d = _e['precio_display']
+                                        if _p_d is None:
+                                            _pc = '<span style="color:#444">—</span>'
+                                            _dc = '<span style="color:#444">—</span>'
+                                        else:
+                                            _pc = (
+                                                f'{_fb_icon_8020(_e["fb"])}'
+                                                f'<span style="color:{"#4a9eda" if _e["fb"] else "#ccc"}">'
+                                                f'${_p_d:,.2f}</span>'
+                                            )
+                                            if _p_prev is not None and _p_prev > 0:
+                                                _dc = _badge_delta_8020((_p_d / _p_prev - 1) * 100)
+                                            else:
+                                                _dc = '<span style="color:#444">—</span>'
+                                            _p_prev = _p_d
+                                        _evo_rows += (
+                                            f'<tr style="border-bottom:1px solid #1a1a1a">'
+                                            f'<td style="padding:6px 12px;color:#888">{_e["mes_str"]}</td>'
+                                            f'<td style="padding:6px 12px;text-align:right">{_pc}</td>'
+                                            f'<td style="padding:6px 12px;text-align:center">{_dc}</td>'
+                                            f'</tr>'
                                         )
-                                        df_loc = run_query(q_loc)
-                                        if df_loc.empty: continue
-                                        df_loc = _procesar_variacion_df(df_loc)
-                                        pdf_loc = generar_pdf_variacion(df_loc, mes_base3_str, mes_comp3_str, loc)
-                                        for pg in PdfR(io.BytesIO(pdf_loc)).pages:
-                                            writer_all.add_page(pg)
-                                    except Exception:
-                                        continue
+                                    st.markdown(
+                                        '<table style="width:100%;border-collapse:collapse;'
+                                        'font-family:DM Sans,sans-serif;font-size:0.82rem;'
+                                        'background:#111;border-radius:8px">'
+                                        '<thead><tr style="background:#0d0d0d">'
+                                        '<th style="padding:6px 12px;text-align:left;color:#444;'
+                                        'font-size:0.68rem;text-transform:uppercase">Mes</th>'
+                                        '<th style="padding:6px 12px;text-align:right;color:#444;'
+                                        'font-size:0.68rem;text-transform:uppercase">P.Unit</th>'
+                                        '<th style="padding:6px 12px;text-align:center;color:#444;'
+                                        'font-size:0.68rem;text-transform:uppercase">Δ% vs mes ant.</th>'
+                                        f'</tr></thead><tbody>{_evo_rows}</tbody></table>',
+                                        unsafe_allow_html=True
+                                    )
 
-                                buf_all = io.BytesIO()
-                                writer_all.write(buf_all)
-                                st.session_state['pdf_locales_bytes']  = buf_all.getvalue()
-                                st.session_state['pdf_locales_nombre'] = f"Variacion_PorLocal_{mes_base3_str}_vs_{mes_comp3_str}.pdf"
+                        # Nota fallback
+                        st.markdown(
+                            "<div style='margin-top:0.6rem;font-size:0.74rem;color:#444'>"
+                            "🔵 Sin compras en ese mes — se usó el último precio histórico disponible en BD."
+                            "</div>",
+                            unsafe_allow_html=True
+                        )
 
-                # Botón descarga aparece debajo al estar listo
-                if 'pdf_locales_bytes' in st.session_state:
-                    st.download_button("⬇️ Descargar PDF — Por local",
-                        st.session_state['pdf_locales_bytes'],
-                        st.session_state['pdf_locales_nombre'],
-                        mime="application/pdf", key="pdf_locales_dl", use_container_width=True)
-
+                        # ── Excel ─────────────────────────────────────────
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        _buf_8020 = io.BytesIO()
+                        _df_excel = pd.DataFrame([{
+                            'Ranking':          i + 1,
+                            'SKU':              _r['sku'],
+                            'Producto':         _r['nombre'],
+                            'Categoría':        _r['categoria'],
+                            f'Cant {_str_i}':   _r['cant_q1'],
+                            f'P.Unit {_str_i}': _r['p_ini'],
+                            f'P.Unit {_str_f}': _r['p_fin'],
+                            'Δ% Precio':        _r['delta_pct'],
+                            'Impacto $ canasta': _r['impacto'],
+                            '% gasto total':    _r['pct_total'],
+                            '% acumulado':      _r['acum_pct'],
+                        } for i, _r in enumerate(_rows_8020)])
+                        with pd.ExcelWriter(_buf_8020, engine='openpyxl') as _w:
+                            _df_excel.to_excel(_w, sheet_name='8020_Compras', index=False)
+                        st.download_button(
+                            "📥 Excel — Top 15 80/20", _buf_8020.getvalue(),
+                            f"8020_Compras_{_str_i}_a_{_str_f}.xlsx",
+                            use_container_width=True
+                        )
 
 
     # ----------------------------------------------------------
