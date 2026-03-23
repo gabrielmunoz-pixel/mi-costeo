@@ -3995,10 +3995,10 @@ if modulo.startswith("📦"):
                             st.success(f"✅ {clasificados:,}/{total:,} registros clasificados ({clasificados/total*100:.1f}%)")
 
                             cc1, cc2, cc3, cc4 = st.columns(4)
-                            cc1.metric("Plan A (Nombre)", f"{plan_a:,}", f"{plan_a/total*100:.1f}%")
-                            cc2.metric("Plan B (Proveedor)", f"{plan_b:,}", f"{plan_b/total*100:.1f}%")
-                            cc3.metric("Plan C (SKU)", f"{plan_c:,}", f"{plan_c/total*100:.1f}%")
-                            cc4.metric("Sin match", f"{sin_match:,}", f"{sin_match/total*100:.1f}%")
+                            cc1.metric("Plan A (Nombre)", f"{plan_a:,}", f"{plan_a/total*100:.2f}%")
+                            cc2.metric("Plan B (Proveedor)", f"{plan_b:,}", f"{plan_b/total*100:.2f}%")
+                            cc3.metric("Plan C (SKU)", f"{plan_c:,}", f"{plan_c/total*100:.2f}%")
+                            cc4.metric("Sin match", f"{sin_match:,}", f"{sin_match/total*100:.2f}%")
 
                             # Vista de sin match para revisión
                             if sin_match > 0:
@@ -4251,15 +4251,15 @@ elif modulo.startswith("📊"):
             m1.metric("💰 Venta Total",    f"${venta_total:,.0f}")
             m2.metric("📦 CMV Total",      f"${cmv_total:,.0f}", delta=f"{cmv_pct_gral:.1f}% venta")
             m3.metric("📈 MC Total",       f"${mc_total:,.0f}")
-            m4.metric("🎯 Margen",         f"{margen_gral:.1f}%")
+            m4.metric("🎯 Margen",         f"{margen_gral:.2f}%")
 
             st.markdown("<br>", unsafe_allow_html=True)
 
             def badge_margen(val):
                 if pd.isna(val): return '<span style="color:#555">—</span>'
-                if val >= 60:   return f'<span style="background:#1a3a2a;color:#4caf7d;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:.1f}%</span>'
-                elif val >= 40: return f'<span style="background:#3a2a1a;color:#e89c45;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:.1f}%</span>'
-                return f'<span style="background:#3a1a1a;color:#e84545;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:.1f}%</span>'
+                if val >= 60:   return f'<span style="background:#1a3a2a;color:#4caf7d;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:.2f}%</span>'
+                elif val >= 40: return f'<span style="background:#3a2a1a;color:#e89c45;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:.2f}%</span>'
+                return f'<span style="background:#3a1a1a;color:#e84545;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:.2f}%</span>'
 
             def badge_cuadrante(val):
                 colors = {"⭐ Estrella":"#d4a853","❓ Interrogante":"#4caf7d","🐄 Vaca":"#5b8dd9","🐶 Perro":"#888"}
@@ -4428,7 +4428,7 @@ elif modulo.startswith("📊"):
                                     f'<span style="color:#666;font-size:0.75rem;width:90px">${lrow["venta"]:,.0f}</span>'
                                     f'<div style="flex:1;background:#1a1a1a;border-radius:3px;height:6px">'
                                     f'<div style="background:#4caf7d;height:6px;border-radius:3px;width:{bar_w}%"></div></div>'
-                                    f'<span style="color:#888;font-size:0.75rem;width:40px;text-align:right">{pct_loc:.1f}%</span>'
+                                    f'<span style="color:#888;font-size:0.75rem;width:40px;text-align:right">{pct_loc:.2f}%</span>'
                                     f'</div>'
                                 )
                             loc_html += '</div>'
@@ -4528,12 +4528,12 @@ elif modulo.startswith("📊"):
                     if val is None or (isinstance(val, float) and pd.isna(val)):
                         return '<span style="color:#555">—</span>'
                     if val > 20:
-                        return f'<span style="background:#3a1a1a;color:#e84545;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:+.1f}%</span>'
+                        return f'<span style="background:#3a1a1a;color:#e84545;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:+.2f}%</span>'
                     elif val > 5:
-                        return f'<span style="background:#3a2a1a;color:#e89c45;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:+.1f}%</span>'
+                        return f'<span style="background:#3a2a1a;color:#e89c45;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:+.2f}%</span>'
                     elif val < -5:
-                        return f'<span style="background:#1a3a2a;color:#4caf7d;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:+.1f}%</span>'
-                    return f'<span style="color:#aaa;font-size:0.78rem">{val:+.1f}%</span>'
+                        return f'<span style="background:#1a3a2a;color:#4caf7d;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:+.2f}%</span>'
+                    return f'<span style="color:#aaa;font-size:0.78rem">{val:+.2f}%</span>'
 
                 def fmt_dinero_html(val):
                     if val > 0:
@@ -4717,7 +4717,7 @@ elif modulo.startswith("📊"):
                     mm1.metric(f"Canasta {mes_base3_str}",     f"${tot_base:,.0f}")
                     mm2.metric(f"Canasta a precios {mes_comp3_str}", f"${tot_comp:,.0f}")
                     mm3.metric("Δ$ impacto precio",            f"${tot_delta:,.0f}")
-                    mm4.metric("Δ% total",                     f"{tot_pct:+.1f}%")
+                    mm4.metric("Δ% total",                     f"{tot_pct:+.2f}%")
                     if sin_precio > 0:
                         st.info(f"ℹ️ {int(sin_precio)} ingrediente(s) sin precio en mes de comparación — se usó precio del mes muestra.")
 
@@ -4727,12 +4727,12 @@ elif modulo.startswith("📊"):
                         if val is None or (isinstance(val, float) and pd.isna(val)):
                             return '<span style="color:#444">—</span>'
                         if val > 10:
-                            return f'<span style="background:#3a1a1a;color:#e84545;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:+.1f}%</span>'
+                            return f'<span style="background:#3a1a1a;color:#e84545;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:+.2f}%</span>'
                         elif val > 3:
-                            return f'<span style="background:#3a2a1a;color:#e89c45;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:+.1f}%</span>'
+                            return f'<span style="background:#3a2a1a;color:#e89c45;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:+.2f}%</span>'
                         elif val < -3:
-                            return f'<span style="background:#1a3a2a;color:#4caf7d;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:+.1f}%</span>'
-                        return f'<span style="color:#aaa;font-size:0.75rem">{val:+.1f}%</span>'
+                            return f'<span style="background:#1a3a2a;color:#4caf7d;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:+.2f}%</span>'
+                        return f'<span style="color:#aaa;font-size:0.75rem">{val:+.2f}%</span>'
 
                     def fmt_d3(val):
                         if val > 0: return f'<span style="color:#e84545;font-weight:600">${val:,.0f}</span>'
@@ -5109,8 +5109,8 @@ elif modulo.startswith("📊"):
                         # Helpers de formato para subtextos
                         def _fmt_k(v):
                             """Siempre en millones (M) — nunca en miles (k)"""
-                            if v == 0: return "$0M"
-                            return f"${v/1_000_000:,.0f}M"
+                            if v == 0: return "$0.00M"
+                            return f"${v/1_000_000:,.2f}M"
 
                         def _color_var(v):
                             return "#e84545" if v > 0 else "#4caf7d" if v < 0 else "#666"
@@ -5143,7 +5143,7 @@ elif modulo.startswith("📊"):
                                 {_fmt_k(_gasto_fin_c)} {_fin_label}
                                 &nbsp;
                                 <span style="color:{_c_var1};font-weight:600">
-                                  {_arrow(_pct_mes)}&nbsp;{abs(_pct_mes):.1f}%
+                                  {_arrow(_pct_mes)}&nbsp;{abs(_pct_mes):.2f}%
                                 </span>
                               </div>
                             </div>""", unsafe_allow_html=True)
@@ -5159,12 +5159,12 @@ elif modulo.startswith("📊"):
                                 🏆 Top 15 concentra</div>
                               <div style="font-size:1.6rem;font-weight:700;color:#f0ede8;
                                           letter-spacing:-0.02em;line-height:1.2">
-                                {_top15_pct:.1f}% del gasto</div>
+                                {_top15_pct:.2f}% del gasto</div>
                               <div style="margin-top:6px;font-size:0.72rem;color:#555">
                                 Impacto canasta:&nbsp;
                                 <span style="color:{_c2_imp};font-weight:600">
                                   {("+" if _impacto_total >= 0 else "") + _fmt_k(_impacto_total)}
-                                  &nbsp;({_arrow(_imp_pct_top)}{abs(_imp_pct_top):.1f}%)
+                                  &nbsp;({_arrow(_imp_pct_top)}{abs(_imp_pct_top):.2f}%)
                                 </span>
                               </div>
                             </div>""", unsafe_allow_html=True)
@@ -5183,7 +5183,7 @@ elif modulo.startswith("📊"):
                                 {("+" if _impacto_total >= 0 else "") + _fmt_k(_impacto_total)}</div>
                               <div style="margin-top:6px;font-size:0.72rem">
                                 <span style="color:{_c3};font-weight:600">
-                                  {_arrow(_imp_pct_c3)}&nbsp;{abs(_imp_pct_c3):.1f}%
+                                  {_arrow(_imp_pct_c3)}&nbsp;{abs(_imp_pct_c3):.2f}%
                                 </span>
                                 <span style="color:#555">&nbsp;sobre gasto {_ini_label}</span>
                               </div>
@@ -5202,7 +5202,7 @@ elif modulo.startswith("📊"):
                                 {("+" if _var_compra >= 0 else "") + _fmt_k(_var_compra)}</div>
                               <div style="margin-top:6px;font-size:0.72rem">
                                 <span style="color:{_c4};font-weight:600">
-                                  {_arrow(_var_compra_pct)}&nbsp;{abs(_var_compra_pct):.1f}%
+                                  {_arrow(_var_compra_pct)}&nbsp;{abs(_var_compra_pct):.2f}%
                                 </span>
                                 <span style="color:#555">&nbsp;vs {_ini_label}</span>
                               </div>
@@ -5215,16 +5215,16 @@ elif modulo.startswith("📊"):
                             if val > 10:
                                 return (f'<span style="background:#3a1a1a;color:#e84545;'
                                         f'padding:2px 8px;border-radius:12px;font-size:0.77rem;'
-                                        f'font-weight:600">{val:+.1f}%</span>')
+                                        f'font-weight:600">{val:+.2f}%</span>')
                             elif val > 3:
                                 return (f'<span style="background:#3a2a1a;color:#e89c45;'
                                         f'padding:2px 8px;border-radius:12px;font-size:0.77rem;'
-                                        f'font-weight:600">{val:+.1f}%</span>')
+                                        f'font-weight:600">{val:+.2f}%</span>')
                             elif val < -3:
                                 return (f'<span style="background:#1a3a2a;color:#4caf7d;'
                                         f'padding:2px 8px;border-radius:12px;font-size:0.77rem;'
-                                        f'font-weight:600">{val:+.1f}%</span>')
-                            return f'<span style="color:#aaa;font-size:0.76rem">{val:+.1f}%</span>'
+                                        f'font-weight:600">{val:+.2f}%</span>')
+                            return f'<span style="color:#aaa;font-size:0.76rem">{val:+.2f}%</span>'
 
                         def _fmt_imp_8020(val):
                             if val > 0:
@@ -5237,7 +5237,7 @@ elif modulo.startswith("📊"):
                             """Siempre en millones (M) — nunca en miles (k)"""
                             if val == 0:
                                 return '<span style="color:#555">—</span>'
-                            return f'<span style="color:#ccc">${val/1_000_000:,.0f}M</span>'
+                            return f'<span style="color:#ccc">${val/1_000_000:,.2f}M</span>'
 
                         def _fb_icon_8020(is_fb):
                             if is_fb:
@@ -5318,7 +5318,7 @@ elif modulo.startswith("📊"):
                             f'<td style="padding:9px 12px;text-align:right;color:#d4a853;'
                             f'font-weight:700">100.0%</td>'
                             f'<td style="padding:9px 12px;text-align:right;color:#d4a853;'
-                            f'font-weight:700">{_top15_pct:.1f}%</td>'
+                            f'font-weight:700">{_top15_pct:.2f}%</td>'
                             f'</tr>'
                         )
 
@@ -5346,9 +5346,9 @@ elif modulo.startswith("📊"):
                                 f'<td style="padding:9px 12px;text-align:right">'
                                 f'{_fmt_miles(_r.get("gasto_fin", 0))}</td>'
                                 f'<td style="padding:9px 12px;text-align:right;color:#d4a853;'
-                                f'font-size:0.8rem">{_r["pct_total"]:.1f}%</td>'
+                                f'font-size:0.8rem">{_r["pct_total"]:.2f}%</td>'
                                 f'<td style="padding:9px 12px;text-align:right;color:#4caf7d;'
-                                f'font-size:0.8rem">{_acum_render:.1f}%</td>'
+                                f'font-size:0.8rem">{_acum_render:.2f}%</td>'
                                 f'</tr>'
                             )
 
@@ -5465,8 +5465,8 @@ elif modulo.startswith("📊"):
 
                             def fmt_m(v):
                                 """Siempre en millones (M)"""
-                                if v == 0: return "$0M"
-                                return f"${v/1_000_000:,.0f}M"
+                                if v == 0: return "$0.00M"
+                                return f"${v/1_000_000:,.2f}M"
 
                             buf = io.BytesIO()
                             doc = SimpleDocTemplate(buf, pagesize=PAGE,
@@ -5513,11 +5513,11 @@ elif modulo.startswith("📊"):
                                  P("VAR. COMPRA",5.5,CM,align=TA_CENTER)],
                                 [P(fmt_m(gasto_total),11,CG,bold=True,align=TA_CENTER),
                                  P(fmt_m(gasto_ini),  11,CT,bold=True,align=TA_CENTER),
-                                 P(f"{fmt_m(gasto_fin)} ({'+' if _pct_mes_pdf>=0 else ''}{_pct_mes_pdf:.1f}%)",
+                                 P(f"{fmt_m(gasto_fin)} ({'+' if _pct_mes_pdf>=0 else ''}{_pct_mes_pdf:.2f}%)",
                                    9,_c_var,bold=True,align=TA_CENTER),
                                  P(f"{'+' if impacto_total>=0 else ''}{fmt_m(impacto_total)}",
                                    11,_c_imp,bold=True,align=TA_CENTER),
-                                 P(f"{'+' if var_compra>=0 else ''}{fmt_m(var_compra)} ({'+' if var_compra_pct>=0 else ''}{var_compra_pct:.1f}%)",
+                                 P(f"{'+' if var_compra>=0 else ''}{fmt_m(var_compra)} ({'+' if var_compra_pct>=0 else ''}{var_compra_pct:.2f}%)",
                                    9,_c_var2,bold=True,align=TA_CENTER)],
                             ]
                             kpi_tbl = Table(kpi_rows, colWidths=[kw]*5)
@@ -5550,13 +5550,13 @@ elif modulo.startswith("📊"):
                                     P(str(r.get('nombre','')),6.5,CT,align=TA_LEFT),
                                     P(f"${r.get('p_ini',0):,.0f}",6,CM),
                                     P(f"${r.get('p_fin',0):,.0f}",6,CT),
-                                    P(f"{(r.get('delta_pct') or 0):+.1f}%",6,dc,bold=True),
+                                    P(f"{(r.get('delta_pct') or 0):+.2f}%",6,dc,bold=True),
                                     P(f"{'+' if r.get('impacto',0)>=0 else ''}{fmt_m(r.get('impacto',0))}",
                                       6,ic,bold=True),
                                     P(fmt_m(r.get('gasto_ini',0)),6,CM),
                                     P(fmt_m(r.get('gasto_fin',0)),6,CT),
-                                    P(f"{r.get('pct_total',0):.1f}%",6,CG),
-                                    P(f"{r.get('acum_pct',0):.1f}%",6,CGr),
+                                    P(f"{r.get('pct_total',0):.2f}%",6,CG),
+                                    P(f"{r.get('acum_pct',0):.2f}%",6,CGr),
                                 ])
                             # Fila total
                             tbl_rows.append([
@@ -7239,11 +7239,11 @@ elif informe_sel == "Bar":
                 if pd.isna(pct):
                     return '<span style="color:#444">—</span>'
                 if pct > 10:
-                    return f'<span style="color:#4cdd8a;font-weight:600">▲ {pct:.1f}%</span>'
+                    return f'<span style="color:#4cdd8a;font-weight:600">▲ {pct:.2f}%</span>'
                 elif pct < -10:
-                    return f'<span style="color:#e84545;font-weight:600">▼ {pct:.1f}%</span>'
+                    return f'<span style="color:#e84545;font-weight:600">▼ {pct:.2f}%</span>'
                 else:
-                    return f'<span style="color:#888">→ {pct:.1f}%</span>'
+                    return f'<span style="color:#888">→ {pct:.2f}%</span>'
 
             def cv_badge(cv):
                 if pd.isna(cv):
