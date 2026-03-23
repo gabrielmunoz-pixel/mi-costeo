@@ -4902,7 +4902,7 @@ elif modulo.startswith("📊"):
                                     / NULLIF(SUM(c.cant_conv) OVER w, 0)               AS precio_fb
                             FROM compras c
                             LEFT JOIN sku_equivalencias e ON c.sku = e.sku_compra
-                            WHERE c.subcat IN ('Directo','Indirecto')
+                            WHERE UPPER(c.categoria_producto) != 'ADMINISTRACIÓN'
                               AND c.costo_realfinal > 0 AND c.cant_conv > 0
                             WINDOW w AS (
                                 PARTITION BY COALESCE(e.sku_receta, c.sku),
@@ -4933,7 +4933,7 @@ elif modulo.startswith("📊"):
                             FROM compras c
                             LEFT JOIN sku_equivalencias e ON c.sku = e.sku_compra
                             WHERE c.fecha_dte::date BETWEEN '{_fi_str}' AND '{_ff_str}'
-                              AND c.subcat IN ('Directo','Indirecto')
+                              AND UPPER(c.categoria_producto) != 'ADMINISTRACIÓN'
                               AND c.costo_realfinal > 0 AND c.cant_conv > 0
                             GROUP BY 1, 2
                             ORDER BY 1, 2
