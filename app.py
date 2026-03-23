@@ -2197,6 +2197,104 @@ with st.sidebar:
 # ============================================================
 LOGO_PATH = '/mount/src/mi-costeo/Logo_AE.jpg'
 
+# ============================================================
+# HELPER REUTILIZABLE: Query de variación de precios
+# Precio unitario = SUM(costo_realfinal) / SUM(cant_conv)
+#   → expresa el precio en la unidad real del SKU (Kg, L, Un)
+#   → impacto = cant_base × precio  (sin × formato)
+# ============================================================
+def _build_variacion_query(fecha_base_i, fecha_base_f,
+                            fecha_comp_i, fecha_comp_f,
+                            filtro_cat="", filtro_local=""):
+    """
+    Construye la query SQL del Informe de Variación de Precios.
+
+    Precio unitario = SUM(costo_realfinal) / NULLIF(SUM(cant_conv), 0)
+    Esto expresa el precio en la unidad real del SKU (Kg / L / Un),
+    a diferencia del MUC que usa la unidad mínima de compra.
+
+    El impacto monetario se calcula como:
+        impacto = cant_base × precio_unitario
+    Los totales de canasta son equivalentes a los del método MUC.
+
+    Parámetros
+    ----------
+    fecha_base_i / fecha_base_f : str  YYYY-MM-DD  mes de referencia
+    fecha_comp_i / fecha_comp_f : str  YYYY-MM-DD  mes de comparación
+    filtro_cat   : str  fragmento SQL adicional, ej. "AND categoria_producto = 'X'"
+    filtro_local : str  fragmento SQL adicional, ej. "AND UPPER(c.local) = UPPER('Y')"
+    """
+    return f"""
+        WITH equiv AS (
+            SELECT sku_compra, sku_receta FROM sku_equivalencias
+        ),
+        base AS (
+            SELECT
+                COALESCE(e.sku_receta, c.sku)                              AS sku,
+                MIN(c.nombre_producto)                                     AS nombre,
+                MIN(c.nombre_proveedor)                                    AS proveedor,
+                MIN(c.categoria_producto)                                  AS categoria,
+                MAX(c.formato)                                             AS formato,
+                SUM(c.cant_conv)                                           AS cant_base,
+                SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv), 0)      AS precio_base
+            FROM compras c
+            LEFT JOIN equiv e ON c.sku = e.sku_compra
+            WHERE c.fecha_dte::date BETWEEN '{fecha_base_i}' AND '{fecha_base_f}'
+              AND c.subcat IN ('Directo','Indirecto')
+              AND c.costo_realfinal > 0
+              AND c.monto_real > 0
+              AND c.cant_conv > 0
+              {filtro_cat}
+              {filtro_local}
+            GROUP BY 1
+        ),
+        comp AS (
+            SELECT
+                COALESCE(e.sku_receta, c.sku)                              AS sku,
+                SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv), 0)      AS precio_comp
+            FROM compras c
+            LEFT JOIN equiv e ON c.sku = e.sku_compra
+            WHERE c.fecha_dte::date BETWEEN '{fecha_comp_i}' AND '{fecha_comp_f}'
+              AND c.subcat IN ('Directo','Indirecto')
+              AND c.costo_realfinal > 0
+              AND c.monto_real > 0
+              AND c.cant_conv > 0
+              {filtro_local}
+            GROUP BY 1
+        )
+        SELECT
+            b.sku, b.nombre, b.proveedor, b.categoria,
+            b.formato, b.cant_base, b.precio_base,
+            c.precio_comp,
+            b.cant_base * b.precio_base                               AS impacto_base,
+            b.cant_base * COALESCE(c.precio_comp, b.precio_base)     AS impacto_comp
+        FROM base b
+        LEFT JOIN comp c ON b.sku = c.sku
+        ORDER BY b.nombre
+    """
+
+
+def _procesar_variacion_df(df):
+    """
+    Aplica los tipos numéricos y calcula columnas derivadas
+    sobre un DataFrame crudo devuelto por _build_variacion_query.
+    Retorna el DataFrame listo para visualización.
+    """
+    df['precio_base']  = pd.to_numeric(df['precio_base'],  errors='coerce').fillna(0)
+    df['precio_comp']  = pd.to_numeric(df['precio_comp'],  errors='coerce').fillna(df['precio_base'])
+    df['cant_base']    = pd.to_numeric(df['cant_base'],    errors='coerce').fillna(0)
+    df['formato']      = pd.to_numeric(df['formato'],      errors='coerce').fillna(1)
+    df['impacto_base'] = pd.to_numeric(df['impacto_base'], errors='coerce').fillna(0)
+    df['impacto_comp'] = df['cant_base'] * df['precio_comp']
+    df['delta_dinero'] = df['impacto_comp'] - df['impacto_base']
+    df['delta_pct']    = df.apply(
+        lambda r: (r['delta_dinero'] / r['impacto_base'] * 100)
+        if r['impacto_base'] > 0 else None, axis=1
+    )
+    df['sin_precio_comp'] = df['precio_comp'] == df['precio_base']
+    return df
+
+
 def generar_pdf_variacion(df, mes_base, mes_comp, local='Cadena Completa'):
     import os
     from reportlab.lib.pagesizes import A4, landscape
@@ -2324,7 +2422,7 @@ def generar_pdf_variacion(df, mes_base, mes_comp, local='Cadena Completa'):
                     P("Sin movimientos significativos", 6.5, CM)]
         mb = mes_base[:3]; mc = mes_comp[:3]
         cw   = [5*mm, 15*mm, _PROD, 20*mm, 20*mm, 20*mm, 14*mm]
-        hdrs = ['#', 'SKU', 'Producto', f'MUC {mb}', f'MUC {mc}', 'Δ$', 'Δ%']
+        hdrs = ['#', 'SKU', 'Producto', f'P.Unit {mb}', f'P.Unit {mc}', 'Δ$', 'Δ%']
         rows = [[P(h, 6, CM, bold=True, align=TA_LEFT if i < 3 else TA_RIGHT)
                  for i, h in enumerate(hdrs)]]
         for pos, (_, r) in enumerate(df_sub.iterrows(), 1):
@@ -4564,68 +4662,16 @@ elif modulo.startswith("📊"):
                 comp_f = (mes_comp3 + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
                 filtro_cat3 = f"AND categoria_producto = '{cat3_sel}'" if cat3_sel != 'Todos' else ""
 
-                q_ing = f"""
-                    WITH equiv AS (
-                        SELECT sku_compra, sku_receta FROM sku_equivalencias
-                    ),
-                    base AS (
-                        SELECT
-                            COALESCE(e.sku_receta, c.sku)                                               AS sku,
-                            MIN(c.nombre_producto)                                                      AS nombre,
-                            MIN(c.nombre_proveedor)                                                     AS proveedor,
-                            MIN(c.categoria_producto)                                                   AS categoria,
-                            MAX(c.formato)                                                              AS formato,
-                            SUM(c.cant_conv)                                                            AS cant_base,
-                            SUM(c.costo_realfinal) / NULLIF(SUM(c.costo_realfinal / NULLIF(c.muc,0)),0) AS precio_base
-                        FROM compras c
-                        LEFT JOIN equiv e ON c.sku = e.sku_compra
-                        WHERE c.fecha_dte::date BETWEEN '{base_i}' AND '{base_f}'
-                          AND c.subcat IN ('Directo','Indirecto')
-                          AND c.costo_realfinal > 0
-                          AND c.monto_real > 0
-                          AND c.muc > 0
-                          {filtro_cat3}
-                        GROUP BY 1
-                    ),
-                    comp AS (
-                        SELECT
-                            COALESCE(e.sku_receta, c.sku)                                               AS sku,
-                            SUM(c.costo_realfinal) / NULLIF(SUM(c.costo_realfinal / NULLIF(c.muc,0)),0) AS precio_comp
-                        FROM compras c
-                        LEFT JOIN equiv e ON c.sku = e.sku_compra
-                        WHERE c.fecha_dte::date BETWEEN '{comp_i}' AND '{comp_f}'
-                          AND c.subcat IN ('Directo','Indirecto')
-                          AND c.costo_realfinal > 0
-                          AND c.monto_real > 0
-                          AND c.muc > 0
-                        GROUP BY 1
-                    )
-                    SELECT
-                        b.sku, b.nombre, b.proveedor, b.categoria,
-                        b.formato, b.cant_base, b.precio_base,
-                        c.precio_comp,
-                        b.cant_base * b.precio_base * b.formato                          AS impacto_base,
-                        b.cant_base * COALESCE(c.precio_comp, b.precio_base) * b.formato AS impacto_comp
-                    FROM base b
-                    LEFT JOIN comp c ON b.sku = c.sku
-                    ORDER BY b.nombre
-                """
+                q_ing = _build_variacion_query(
+                    base_i, base_f, comp_i, comp_f,
+                    filtro_cat=filtro_cat3
+                )
                 df3 = run_query(q_ing)
 
                 if df3.empty:
                     st.warning("Sin datos para el mes seleccionado.")
                 else:
-                    df3['precio_base']  = pd.to_numeric(df3['precio_base'],  errors='coerce').fillna(0)
-                    df3['precio_comp']  = pd.to_numeric(df3['precio_comp'],  errors='coerce').fillna(df3['precio_base'])
-                    df3['cant_base']    = pd.to_numeric(df3['cant_base'],    errors='coerce').fillna(0)
-                    df3['formato']      = pd.to_numeric(df3['formato'],      errors='coerce').fillna(1)
-                    df3['impacto_base'] = pd.to_numeric(df3['impacto_base'], errors='coerce').fillna(0)
-                    df3['impacto_comp'] = df3['cant_base'] * df3['precio_comp'] * df3['formato']
-                    df3['delta_dinero'] = df3['impacto_comp'] - df3['impacto_base']
-                    df3['delta_pct']    = df3.apply(
-                        lambda r: (r['delta_dinero'] / r['impacto_base'] * 100) if r['impacto_base'] > 0 else None, axis=1
-                    )
-                    df3['sin_precio_comp'] = df3['precio_comp'] == df3['precio_base']
+                    df3 = _procesar_variacion_df(df3)
                     st.session_state['inf3_df']     = df3
                     st.session_state['inf3_labels'] = (mes_base3_str, mes_comp3_str)
                     st.session_state['inf3_fechas'] = (base_i, base_f, comp_i, comp_f)
@@ -4763,46 +4809,13 @@ elif modulo.startswith("📊"):
                                 for loc in [l for l in get_locales() if l not in ('Todos', None)]:
                                     try:
                                         _fl = f"AND UPPER(c.local) = UPPER('{loc}')"
-                                        q_loc = f"""
-                                            WITH equiv AS (SELECT sku_compra, sku_receta FROM sku_equivalencias),
-                                            base AS (
-                                                SELECT COALESCE(e.sku_receta,c.sku) AS sku,
-                                                       MIN(c.nombre_producto) AS nombre,
-                                                       MIN(c.nombre_proveedor) AS proveedor,
-                                                       MIN(c.categoria_producto) AS categoria,
-                                                       MAX(c.formato) AS formato,
-                                                       SUM(c.cant_conv) AS cant_base,
-                                                       SUM(c.costo_realfinal)/NULLIF(SUM(c.costo_realfinal/NULLIF(c.muc,0)),0) AS precio_base
-                                                FROM compras c LEFT JOIN equiv e ON c.sku=e.sku_compra
-                                                WHERE c.fecha_dte::date BETWEEN '{_bi}' AND '{_bf}'
-                                                  AND c.subcat IN ('Directo','Indirecto')
-                                                  AND c.costo_realfinal>0 AND c.monto_real>0 AND c.muc>0
-                                                  {_fl} GROUP BY 1),
-                                            comp AS (
-                                                SELECT COALESCE(e.sku_receta,c.sku) AS sku,
-                                                       SUM(c.costo_realfinal)/NULLIF(SUM(c.costo_realfinal/NULLIF(c.muc,0)),0) AS precio_comp
-                                                FROM compras c LEFT JOIN equiv e ON c.sku=e.sku_compra
-                                                WHERE c.fecha_dte::date BETWEEN '{_ci}' AND '{_cf}'
-                                                  AND c.subcat IN ('Directo','Indirecto')
-                                                  AND c.costo_realfinal>0 AND c.monto_real>0 AND c.muc>0
-                                                  {_fl} GROUP BY 1)
-                                            SELECT b.sku,b.nombre,b.proveedor,b.categoria,b.formato,b.cant_base,
-                                                   b.precio_base, c.precio_comp,
-                                                   b.cant_base*b.precio_base*b.formato AS impacto_base,
-                                                   b.cant_base*COALESCE(c.precio_comp,b.precio_base)*b.formato AS impacto_comp
-                                            FROM base b LEFT JOIN comp c ON b.sku=c.sku ORDER BY b.nombre
-                                        """
+                                        q_loc = _build_variacion_query(
+                                            _bi, _bf, _ci, _cf,
+                                            filtro_local=_fl
+                                        )
                                         df_loc = run_query(q_loc)
                                         if df_loc.empty: continue
-                                        df_loc['precio_base']  = pd.to_numeric(df_loc['precio_base'],  errors='coerce').fillna(0)
-                                        df_loc['precio_comp']  = pd.to_numeric(df_loc['precio_comp'],  errors='coerce').fillna(df_loc['precio_base'])
-                                        df_loc['cant_base']    = pd.to_numeric(df_loc['cant_base'],    errors='coerce').fillna(0)
-                                        df_loc['formato']      = pd.to_numeric(df_loc['formato'],      errors='coerce').fillna(1)
-                                        df_loc['impacto_base'] = pd.to_numeric(df_loc['impacto_base'], errors='coerce').fillna(0)
-                                        df_loc['impacto_comp'] = df_loc['cant_base'] * df_loc['precio_comp'] * df_loc['formato']
-                                        df_loc['delta_dinero'] = df_loc['impacto_comp'] - df_loc['impacto_base']
-                                        df_loc['delta_pct']    = df_loc.apply(
-                                            lambda r: (r['delta_dinero']/r['impacto_base']*100) if r['impacto_base']>0 else None, axis=1)
+                                        df_loc = _procesar_variacion_df(df_loc)
                                         pdf_loc = generar_pdf_variacion(df_loc, mes_base3_str, mes_comp3_str, loc)
                                         for pg in PdfR(io.BytesIO(pdf_loc)).pages:
                                             writer_all.add_page(pg)
