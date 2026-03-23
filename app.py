@@ -4911,7 +4911,7 @@ elif modulo.startswith("📊"):
                         ).tolist()
 
                         # ── Último precio histórico por SKU (fallback) ────
-                        _q_fallback = f"""
+                        _q_fallback = """
                             SELECT DISTINCT ON (COALESCE(e.sku_receta, c.sku))
                                 COALESCE(e.sku_receta, c.sku)                          AS sku,
                                 SUM(c.costo_realfinal) OVER w
@@ -5071,7 +5071,7 @@ elif modulo.startswith("📊"):
 
                             st.session_state['p8020_data']        = _rows_8020
                             st.session_state['p8020_labels']      = (_str_i, _str_f)
-                            st.session_state['p8020_local_val']   = _local_8020
+                            st.session_state['p8020_local']       = _local_8020
                             st.session_state['p8020_cadena']      = _gasto_cadena
                             st.session_state['p8020_meses_n']     = len(pd.date_range(
                                 _mes_i, _mes_f + pd.offsets.MonthEnd(1), freq='MS'
@@ -5092,7 +5092,7 @@ elif modulo.startswith("📊"):
                         _n_meses       = st.session_state['p8020_meses_n']
                         _gasto_ini_c   = st.session_state.get('p8020_gasto_ini', 0)
                         _gasto_fin_c   = st.session_state.get('p8020_gasto_fin', 0)
-                        _local_label   = st.session_state.get('p8020_local_val', 'Todos')
+                        _local_label   = st.session_state.get('p8020_local', 'Todos')
 
                         # ── Cálculos KPI ──────────────────────────────────
                         _top15_gasto   = sum(r['gasto_total'] for r in _rows_8020)
@@ -5104,36 +5104,10 @@ elif modulo.startswith("📊"):
                         _var_compra    = _gasto_fin_c - _gasto_ini_c
                         _var_compra_pct = (_var_compra / _gasto_ini_c * 100) if _gasto_ini_c > 0 else 0
 
-                        # Cuadro 3: variación de ventas ini → fin
-                        _filtro_local_v = (
-                            f"AND UPPER(local) = UPPER('{_local_label}')"
-                            if _local_label != 'Todos' else ''
-                        )
-                        _fi_v  = _mes_i.strftime('%Y-%m-01')
-                        _ff_v  = (_mes_f + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
-                        _df_vta = run_query(f"""
-                            SELECT
-                                DATE_TRUNC('month', fecha_venta::timestamp)::date AS mes,
-                                SUM(monto_venta_real) AS venta_mes
-                            FROM ventas
-                            WHERE fecha_venta::date BETWEEN '{_fi_v}' AND '{_ff_v}'
-                              AND es_opcion = false
-                              {_filtro_local_v}
-                            GROUP BY 1
-                            ORDER BY 1
-                        """)
-                        _mes_i_d = _mes_i.date() if hasattr(_mes_i, 'date') else _mes_i
-                        _mes_f_d = _mes_f.date() if hasattr(_mes_f, 'date') else _mes_f
-                        _vta_ini = float(_df_vta[_df_vta['mes'] == _mes_i_d]['venta_mes'].sum()) if not _df_vta.empty else 0.0
-                        _vta_fin = float(_df_vta[_df_vta['mes'] == _mes_f_d]['venta_mes'].sum()) if not _df_vta.empty else 0.0
-                        _var_vta     = _vta_fin - _vta_ini
-                        _var_vta_pct = ((_vta_fin / _vta_ini) - 1) * 100 if _vta_ini > 0 else 0
-
                         # Helpers de formato para subtextos
                         def _fmt_k(v):
                             """Formatea en millones (M) o miles (k) — nunca B"""
-                            av = abs(v)
-                            if av >= 1_000_000: return f"${v/1_000_000:,.2f}M"
+                            if v >= 1_000_000: return f"${v/1_000_000:,.0f}M"
                             return f"${v/1_000:.0f}k"
 
                         def _color_var(v):
@@ -5193,25 +5167,23 @@ elif modulo.startswith("📊"):
                               </div>
                             </div>""", unsafe_allow_html=True)
 
-                        # Cuadro 3: Variación de ventas ini → fin
-                        _c3_vta = "#4caf7d" if _var_vta >= 0 else "#e84545"
+                        # Cuadro 3: Impacto Δ$ canasta + Δ% sobre gasto inicial
+                        _c3 = _color_var(_impacto_total)
+                        _imp_pct_c3 = (_impacto_total / _gasto_ini_c * 100) if _gasto_ini_c > 0 else 0
                         with _k3:
                             st.markdown(f"""
                             <div style="background:#1a1a1a;border-radius:10px;padding:16px 20px;
                                         border:1px solid #2a2a2a;min-height:100px">
                               <div style="font-size:0.72rem;color:#888;margin-bottom:4px">
-                                📊 Variación ventas — {_titulo_local}</div>
-                              <div style="font-size:1.6rem;font-weight:700;color:{_c3_vta};
+                                📈 Impacto Δ$ canasta</div>
+                              <div style="font-size:1.6rem;font-weight:700;color:{_c3};
                                           letter-spacing:-0.02em;line-height:1.2">
-                                {("+" if _var_vta >= 0 else "") + _fmt_k(_var_vta)}</div>
-                              <div style="margin-top:6px;font-size:0.72rem;color:#555">
-                                {_fmt_k(_vta_ini)} {_ini_label}
-                                &nbsp;→&nbsp;
-                                {_fmt_k(_vta_fin)} {_fin_label}
-                                &nbsp;
-                                <span style="color:{_c3_vta};font-weight:600">
-                                  {_arrow(_var_vta_pct)}&nbsp;{abs(_var_vta_pct):.1f}%
+                                {("+" if _impacto_total >= 0 else "") + _fmt_k(_impacto_total)}</div>
+                              <div style="margin-top:6px;font-size:0.72rem">
+                                <span style="color:{_c3};font-weight:600">
+                                  {_arrow(_imp_pct_c3)}&nbsp;{abs(_imp_pct_c3):.1f}%
                                 </span>
+                                <span style="color:#555">&nbsp;sobre gasto {_ini_label}</span>
                               </div>
                             </div>""", unsafe_allow_html=True)
 
@@ -5233,92 +5205,6 @@ elif modulo.startswith("📊"):
                                 <span style="color:#555">&nbsp;vs {_ini_label}</span>
                               </div>
                             </div>""", unsafe_allow_html=True)
-
-                        st.markdown("<br>", unsafe_allow_html=True)
-
-                        # ── GRÁFICO PARETO ────────────────────────────────
-                        import json as _json
-                        _labels_ch = [r['nombre'][:22] + '…' if len(r['nombre']) > 22
-                                      else r['nombre'] for r in _rows_8020]
-                        _gastos_ch = [round(r['gasto_total'], 0) for r in _rows_8020]
-                        _acums_ch  = [round(r['acum_pct'],    1) for r in _rows_8020]
-
-                        _chart_html = f"""
-                        <div style="background:#0d0d0d;border:1px solid #1e1e1e;
-                                    border-radius:12px;padding:1rem 1.2rem 0.5rem">
-                          <div style="font-size:0.7rem;text-transform:uppercase;
-                                      letter-spacing:0.1em;color:#555;margin-bottom:0.6rem">
-                            Pareto — Gasto acumulado por SKU (Top 15)
-                          </div>
-                          <canvas id="paretoChart8020" height="90"></canvas>
-                        </div>
-                        <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-                        <script>
-                        (function(){{
-                          const ctx = document.getElementById('paretoChart8020').getContext('2d');
-                          new Chart(ctx, {{
-                            data: {{
-                              labels: {_json.dumps(_labels_ch)},
-                              datasets: [
-                                {{
-                                  type: 'bar', label: 'Gasto $',
-                                  data: {_json.dumps(_gastos_ch)},
-                                  backgroundColor: 'rgba(212,168,83,0.75)',
-                                  borderColor: '#d4a853', borderWidth: 1,
-                                  yAxisID: 'y', order: 2,
-                                }},
-                                {{
-                                  type: 'line', label: '% Acumulado',
-                                  data: {_json.dumps(_acums_ch)},
-                                  borderColor: '#4caf7d', backgroundColor: 'transparent',
-                                  pointBackgroundColor: '#4caf7d', pointRadius: 3,
-                                  borderWidth: 2, yAxisID: 'y2', order: 1, tension: 0.3,
-                                }}
-                              ]
-                            }},
-                            options: {{
-                              responsive: true,
-                              interaction: {{ mode: 'index', intersect: false }},
-                              plugins: {{
-                                legend: {{ labels: {{ color: '#888', font: {{ size: 11 }} }} }},
-                                tooltip: {{
-                                  callbacks: {{
-                                    label: function(ctx) {{
-                                      if (ctx.datasetIndex === 0)
-                                        return ' $' + ctx.parsed.y.toLocaleString('es-CL');
-                                      return ' ' + ctx.parsed.y.toFixed(1) + '%';
-                                    }}
-                                  }}
-                                }}
-                              }},
-                              scales: {{
-                                x: {{
-                                  ticks: {{ color: '#555', font: {{ size: 10 }}, maxRotation: 35 }},
-                                  grid: {{ color: '#1a1a1a' }}
-                                }},
-                                y: {{
-                                  position: 'left',
-                                  ticks: {{
-                                    color: '#666', font: {{ size: 10 }},
-                                    callback: v => '$' + (v/1000).toFixed(0) + 'k'
-                                  }},
-                                  grid: {{ color: '#1a1a1a' }}
-                                }},
-                                y2: {{
-                                  position: 'right', min: 0, max: 100,
-                                  ticks: {{ color: '#4caf7d', font: {{ size: 10 }},
-                                            callback: v => v + '%' }},
-                                  grid: {{ drawOnChartArea: false }}
-                                }}
-                              }}
-                            }}
-                          }});
-                        }})();
-                        </script>
-                        """
-                        st.components.v1.html(_chart_html, height=320, scrolling=False)
-
-                        st.markdown("<br>", unsafe_allow_html=True)
 
                         # ── HELPERS VISUALIZACIÓN ─────────────────────────
                         def _badge_delta_8020(val):
@@ -5360,6 +5246,49 @@ elif modulo.startswith("📊"):
                                         '🔵 </span>')
                             return ''
 
+                        # ── Botón alternador de orden ────────────────────
+                        if 'p8020_orden' not in st.session_state:
+                            st.session_state['p8020_orden'] = 'volumen'
+
+                        _orden_actual = st.session_state['p8020_orden']
+                        _btn_label = (
+                            "🔀 Ver por variación de precio"
+                            if _orden_actual == 'volumen'
+                            else "🔀 Ver por volumen de compra"
+                        )
+                        _orden_tag = (
+                            '<span style="font-size:0.72rem;color:#555;margin-left:0.5rem">'
+                            f'Ordenado por: <b style="color:#d4a853">'
+                            f'{"volumen de compra" if _orden_actual == "volumen" else "variación de precio (|Δ%|)"}'
+                            '</b></span>'
+                        )
+                        _ob1, _ob2 = st.columns([1, 3])
+                        with _ob1:
+                            if st.button(_btn_label, key="btn_orden_8020",
+                                         use_container_width=True):
+                                st.session_state['p8020_orden'] = (
+                                    'variacion' if _orden_actual == 'volumen' else 'volumen'
+                                )
+                                st.rerun()
+                        with _ob2:
+                            st.markdown(_orden_tag, unsafe_allow_html=True)
+
+                        # Aplicar orden a la copia de renderizado
+                        _rows_render = sorted(
+                            _rows_8020,
+                            key=lambda r: (
+                                -r['gasto_total']
+                                if st.session_state['p8020_orden'] == 'volumen'
+                                else -(abs(r['delta_pct']) if r['delta_pct'] is not None else 0)
+                            )
+                        )
+                        # Recalcular % acum. según el nuevo orden
+                        _acum_r = 0.0
+                        for _rr in _rows_render:
+                            _acum_r += _rr['pct_total']
+                            _rr = dict(_rr)   # no mutar el original
+                        # (usamos índice para recalcular inline al renderizar)
+
                         # ── TABLA TOP 15 con desplegables inline ──────────
                         _hs_t = ('padding:10px 12px;font-size:0.68rem;text-transform:uppercase;'
                                  'letter-spacing:0.09em;font-weight:600;color:#444;'
@@ -5394,7 +5323,9 @@ elif modulo.startswith("📊"):
                         )
 
                         _rows_html_t = ''
-                        for _pos, _r in enumerate(_rows_8020, 1):
+                        _acum_render = 0.0
+                        for _pos, _r in enumerate(_rows_render, 1):
+                            _acum_render += _r['pct_total']
                             _bg = '#1e1212' if _r['impacto'] > 0 else '#121e14' if _r['impacto'] < 0 else ''
                             _rows_html_t += (
                                 f'<tr style="border-bottom:1px solid #1e1e1e;background:{_bg}">'
@@ -5417,7 +5348,7 @@ elif modulo.startswith("📊"):
                                 f'<td style="padding:9px 12px;text-align:right;color:#d4a853;'
                                 f'font-size:0.8rem">{_r["pct_total"]:.1f}%</td>'
                                 f'<td style="padding:9px 12px;text-align:right;color:#4caf7d;'
-                                f'font-size:0.8rem">{_r["acum_pct"]:.1f}%</td>'
+                                f'font-size:0.8rem">{_acum_render:.1f}%</td>'
                                 f'</tr>'
                             )
 
@@ -5440,7 +5371,7 @@ elif modulo.startswith("📊"):
                                 "📈 Evolución mensual — abre el producto para ver detalle</div>",
                                 unsafe_allow_html=True
                             )
-                            for _r in _rows_8020:
+                            for _r in _rows_render:
                                 with st.expander(f"{_r['nombre']}"):
                                     _evo_rows = ''
                                     _p_prev   = None
