@@ -4911,7 +4911,7 @@ elif modulo.startswith("📊"):
                         ).tolist()
 
                         # ── Último precio histórico por SKU (fallback) ────
-                        _q_fallback = """
+                        _q_fallback = f"""
                             SELECT DISTINCT ON (COALESCE(e.sku_receta, c.sku))
                                 COALESCE(e.sku_receta, c.sku)                          AS sku,
                                 SUM(c.costo_realfinal) OVER w
@@ -4923,7 +4923,7 @@ elif modulo.startswith("📊"):
                                       'Á','A'),'É','E'),'Í','I'),'Ó','O'))
                                   != 'ADMINISTRACION'
                               AND c.costo_realfinal > 0 AND c.cant_conv > 0
-                              {_filtro_local_8020}
+                              {{_filtro_local_8020}}
                             WINDOW w AS (
                                 PARTITION BY COALESCE(e.sku_receta, c.sku),
                                              DATE_TRUNC('month', c.fecha_dte::timestamp)
@@ -5071,7 +5071,7 @@ elif modulo.startswith("📊"):
 
                             st.session_state['p8020_data']        = _rows_8020
                             st.session_state['p8020_labels']      = (_str_i, _str_f)
-                            st.session_state['p8020_local']       = _local_8020
+                            st.session_state['p8020_local_val']   = _local_8020
                             st.session_state['p8020_cadena']      = _gasto_cadena
                             st.session_state['p8020_meses_n']     = len(pd.date_range(
                                 _mes_i, _mes_f + pd.offsets.MonthEnd(1), freq='MS'
@@ -5092,7 +5092,7 @@ elif modulo.startswith("📊"):
                         _n_meses       = st.session_state['p8020_meses_n']
                         _gasto_ini_c   = st.session_state.get('p8020_gasto_ini', 0)
                         _gasto_fin_c   = st.session_state.get('p8020_gasto_fin', 0)
-                        _local_label   = st.session_state.get('p8020_local', 'Todos')
+                        _local_label   = st.session_state.get('p8020_local_val', 'Todos')
 
                         # ── Cálculos KPI ──────────────────────────────────
                         _top15_gasto   = sum(r['gasto_total'] for r in _rows_8020)
