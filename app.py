@@ -5051,30 +5051,130 @@ elif modulo.startswith("📊"):
                                 _acum += _r['pct_total']
                                 _r['acum_pct'] = _acum
 
-                            st.session_state['p8020_data']   = _rows_8020
-                            st.session_state['p8020_labels'] = (_str_i, _str_f)
-                            st.session_state['p8020_cadena'] = _gasto_cadena
-                            st.session_state['p8020_meses_n'] = len(pd.date_range(
+                            st.session_state['p8020_data']        = _rows_8020
+                            st.session_state['p8020_labels']      = (_str_i, _str_f)
+                            st.session_state['p8020_cadena']      = _gasto_cadena
+                            st.session_state['p8020_meses_n']     = len(pd.date_range(
                                 _mes_i, _mes_f + pd.offsets.MonthEnd(1), freq='MS'
                             ))
+                            # Gasto total cadena por mes ini y fin (para cuadro 1 y 4)
+                            st.session_state['p8020_gasto_ini'] = float(
+                                _df_pm[_df_pm['mes'] == _mes_i_date]['gasto_mes'].sum()
+                            )
+                            st.session_state['p8020_gasto_fin'] = float(
+                                _df_pm[_df_pm['mes'] == _mes_f_date]['gasto_mes'].sum()
+                            )
 
                     # ── RENDERIZADO (fuera del botón, persiste con session_state) ──
                     if 'p8020_data' in st.session_state:
-                        _rows_8020    = st.session_state['p8020_data']
+                        _rows_8020     = st.session_state['p8020_data']
                         _str_i, _str_f = st.session_state['p8020_labels']
                         _gasto_cadena  = st.session_state['p8020_cadena']
                         _n_meses       = st.session_state['p8020_meses_n']
+                        _gasto_ini_c   = st.session_state.get('p8020_gasto_ini', 0)
+                        _gasto_fin_c   = st.session_state.get('p8020_gasto_fin', 0)
 
-                        # ── KPIs ──────────────────────────────────────────
+                        # ── Cálculos KPI ──────────────────────────────────
                         _top15_gasto   = sum(r['gasto_total'] for r in _rows_8020)
                         _top15_pct     = (_top15_gasto / _gasto_cadena * 100) if _gasto_cadena > 0 else 0
                         _impacto_total = sum(r['impacto'] for r in _rows_8020)
+                        _impacto_pct   = (_impacto_total / _gasto_ini_c * 100) if _gasto_ini_c > 0 else 0
 
+                        # Cuadro 4: variación total de compra cadena ini → fin
+                        _var_compra    = _gasto_fin_c - _gasto_ini_c
+                        _var_compra_pct = (_var_compra / _gasto_ini_c * 100) if _gasto_ini_c > 0 else 0
+
+                        # Helpers de formato para subtextos
+                        def _fmt_k(v):
+                            if v >= 1_000_000_000: return f"${v/1_000_000_000:.2f}B"
+                            if v >= 1_000_000:     return f"${v/1_000_000:.1f}M"
+                            return f"${v/1_000:.0f}k"
+
+                        def _color_var(v):
+                            return "#e84545" if v > 0 else "#4caf7d" if v < 0 else "#666"
+
+                        def _arrow(v):
+                            return "▲" if v > 0 else "▼" if v < 0 else "●"
+
+                        _ini_label = _str_i.split()[0][:3]   # "Nov"
+                        _fin_label = _str_f.split()[0][:3]   # "Dec"
+
+                        # ── Cuadros custom via HTML (mantienen tamaño st.metric) ──
                         _k1, _k2, _k3, _k4 = st.columns(4)
-                        _k1.metric("💰 Gasto total cadena",  f"${_gasto_cadena:,.0f}")
-                        _k2.metric("🏆 Top 15 concentra",    f"{_top15_pct:.1f}% del gasto")
-                        _k3.metric("📈 Impacto Δ$ canasta",  f"${_impacto_total:+,.0f}")
-                        _k4.metric("📅 Período",             f"{_str_i} → {_str_f}")
+
+                        # Cuadro 1: Gasto total + desglose ini/fin con Δ%
+                        _c_var1 = _color_var(_gasto_fin_c - _gasto_ini_c)
+                        _pct_mes = ((_gasto_fin_c / _gasto_ini_c) - 1) * 100 if _gasto_ini_c > 0 else 0
+                        with _k1:
+                            st.markdown(f"""
+                            <div style="background:#1a1a1a;border-radius:10px;padding:16px 20px;
+                                        border:1px solid #2a2a2a;min-height:100px">
+                              <div style="font-size:0.72rem;color:#888;margin-bottom:4px">
+                                💰 Gasto total cadena</div>
+                              <div style="font-size:1.6rem;font-weight:700;color:#d4a853;
+                                          letter-spacing:-0.02em;line-height:1.2">
+                                {_fmt_k(_gasto_cadena)}</div>
+                              <div style="margin-top:6px;font-size:0.72rem;color:#555">
+                                {_fmt_k(_gasto_ini_c)} {_ini_label}
+                                &nbsp;→&nbsp;
+                                {_fmt_k(_gasto_fin_c)} {_fin_label}
+                                &nbsp;
+                                <span style="color:{_c_var1};font-weight:600">
+                                  {_arrow(_pct_mes)}&nbsp;{abs(_pct_mes):.1f}%
+                                </span>
+                              </div>
+                            </div>""", unsafe_allow_html=True)
+
+                        # Cuadro 2: Top 15 — sin cambios
+                        with _k2:
+                            st.markdown(f"""
+                            <div style="background:#1a1a1a;border-radius:10px;padding:16px 20px;
+                                        border:1px solid #2a2a2a;min-height:100px">
+                              <div style="font-size:0.72rem;color:#888;margin-bottom:4px">
+                                🏆 Top 15 concentra</div>
+                              <div style="font-size:1.6rem;font-weight:700;color:#f0ede8;
+                                          letter-spacing:-0.02em;line-height:1.2">
+                                {_top15_pct:.1f}% del gasto</div>
+                              <div style="margin-top:6px;font-size:0.72rem;color:#555">
+                                &nbsp;</div>
+                            </div>""", unsafe_allow_html=True)
+
+                        # Cuadro 3: Impacto Δ$ canasta — sin cambios
+                        _c3 = _color_var(_impacto_total)
+                        with _k3:
+                            st.markdown(f"""
+                            <div style="background:#1a1a1a;border-radius:10px;padding:16px 20px;
+                                        border:1px solid #2a2a2a;min-height:100px">
+                              <div style="font-size:0.72rem;color:#888;margin-bottom:4px">
+                                📈 Impacto Δ$ canasta</div>
+                              <div style="font-size:1.6rem;font-weight:700;color:{_c3};
+                                          letter-spacing:-0.02em;line-height:1.2">
+                                {_fmt_k(abs(_impacto_total)) if _impacto_total >= 0
+                                 else "-" + _fmt_k(abs(_impacto_total))}</div>
+                              <div style="margin-top:6px;font-size:0.72rem;color:#555">
+                                &nbsp;</div>
+                            </div>""", unsafe_allow_html=True)
+
+                        # Cuadro 4: Variación total compra cadena ini → fin
+                        _c4 = _color_var(_var_compra)
+                        with _k4:
+                            st.markdown(f"""
+                            <div style="background:#1a1a1a;border-radius:10px;padding:16px 20px;
+                                        border:1px solid #2a2a2a;min-height:100px">
+                              <div style="font-size:0.72rem;color:#888;margin-bottom:4px">
+                                🔄 Variación compra cadena</div>
+                              <div style="font-size:1.6rem;font-weight:700;color:{_c4};
+                                          letter-spacing:-0.02em;line-height:1.2">
+                                {("+" if _var_compra >= 0 else "") + _fmt_k(_var_compra)}</div>
+                              <div style="margin-top:6px;font-size:0.72rem">
+                                <span style="color:{_c4};font-weight:600">
+                                  {_arrow(_var_compra_pct)}&nbsp;{abs(_var_compra_pct):.1f}%
+                                </span>
+                                <span style="color:#555">
+                                  &nbsp;vs {_ini_label}
+                                </span>
+                              </div>
+                            </div>""", unsafe_allow_html=True)
 
                         st.markdown("<br>", unsafe_allow_html=True)
 
