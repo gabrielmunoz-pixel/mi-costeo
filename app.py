@@ -5264,11 +5264,12 @@ elif modulo.startswith("📊"):
                             return f'<span style="color:#aaa;font-size:0.76rem">{val:+.2f}%</span>'
 
                         def _fmt_imp_8020(val):
+                            v = val / 1_000_000
                             if val > 0:
-                                return f'<span style="color:#e84545;font-weight:600">${val:+,.0f}</span>'
+                                return f'<span style="color:#e84545;font-weight:600">+${v:,.2f}M</span>'
                             if val < 0:
-                                return f'<span style="color:#4caf7d;font-weight:600">${val:+,.0f}</span>'
-                            return '<span style="color:#aaa">$0</span>'
+                                return f'<span style="color:#4caf7d;font-weight:600">-${abs(v):,.2f}M</span>'
+                            return '<span style="color:#aaa">$0.00M</span>'
 
                         def _fmt_miles(val):
                             """Siempre en millones (M) — nunca en miles (k)"""
@@ -5371,9 +5372,9 @@ elif modulo.startswith("📊"):
                                 f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de">'
                                 f'{_r["nombre"]}</td>'
                                 f'<td style="padding:9px 12px;text-align:right;color:#888">'
-                                f'{_fb_icon_8020(_r["p_ini_fb"])}${_r["p_ini"]:,.2f}</td>'
+                                f'{_fb_icon_8020(_r["p_ini_fb"])}${_r["p_ini"]:,.0f}</td>'
                                 f'<td style="padding:9px 12px;text-align:right;color:#ccc">'
-                                f'{_fb_icon_8020(_r["p_fin_fb"])}${_r["p_fin"]:,.2f}</td>'
+                                f'{_fb_icon_8020(_r["p_fin_fb"])}${_r["p_fin"]:,.0f}</td>'
                                 f'<td style="padding:9px 12px;text-align:center">'
                                 f'{_badge_delta_8020(_r["delta_pct"])}</td>'
                                 f'<td style="padding:9px 12px;text-align:right">'
