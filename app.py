@@ -4865,7 +4865,14 @@ elif modulo.startswith("📊"):
                 _ml = pd.to_datetime(_meses_8020['mes']).tolist()
                 _mf = [m.strftime('%B %Y').capitalize() for m in _ml]
 
-                _c1, _c2 = st.columns(2)
+                _locales_8020_q = run_query(
+                    "SELECT DISTINCT local FROM compras WHERE local IS NOT NULL ORDER BY 1"
+                )
+                _locales_8020 = ['Todos'] + (
+                    _locales_8020_q['local'].tolist() if not _locales_8020_q.empty else []
+                )
+
+                _c1, _c2, _c3 = st.columns(3)
                 with _c1:
                     _idx_i = st.selectbox(
                         "Mes inicio", range(len(_mf)),
@@ -4878,6 +4885,10 @@ elif modulo.startswith("📊"):
                         format_func=lambda i: _mf[i],
                         index=len(_ml) - 1, key='p8020_fin'
                     )
+                with _c3:
+                    _local_8020 = st.selectbox(
+                        "Local", _locales_8020, key='p8020_local'
+                    )
 
                 _mes_i  = _ml[_idx_i]
                 _mes_f  = _ml[_idx_f]
@@ -4888,6 +4899,11 @@ elif modulo.startswith("📊"):
                     st.warning("⚠️ El mes fin debe ser igual o posterior al mes inicio.")
                 else:
                     if st.button("▶ Generar 80/20", key="btn_8020"):
+                        # Filtro SQL de local
+                        _filtro_local_8020 = (
+                            f"AND UPPER(REPLACE(REPLACE(REPLACE(REPLACE(c.local,'Á','A'),'É','E'),'Í','I'),'Ó','O')) = UPPER(REPLACE(REPLACE(REPLACE(REPLACE('{_local_8020}','Á','A'),'É','E'),'Í','I'),'Ó','O'))"
+                            if _local_8020 != 'Todos' else ''
+                        )
 
                         # ── Lista de meses en el rango ────────────────────
                         _rango_meses = pd.date_range(
@@ -4907,6 +4923,7 @@ elif modulo.startswith("📊"):
                                       'Á','A'),'É','E'),'Í','I'),'Ó','O'))
                                   != 'ADMINISTRACION'
                               AND c.costo_realfinal > 0 AND c.cant_conv > 0
+                              {_filtro_local_8020}
                             WINDOW w AS (
                                 PARTITION BY COALESCE(e.sku_receta, c.sku),
                                              DATE_TRUNC('month', c.fecha_dte::timestamp)
@@ -4941,6 +4958,7 @@ elif modulo.startswith("📊"):
                                     'Á','A'),'É','E'),'Í','I'),'Ó','O'))
                                   != 'ADMINISTRACION'
                               AND c.costo_realfinal > 0 AND c.cant_conv > 0
+                              {_filtro_local_8020}
                             GROUP BY 1, 2
                             ORDER BY 1, 2
                         """
@@ -5053,6 +5071,7 @@ elif modulo.startswith("📊"):
 
                             st.session_state['p8020_data']        = _rows_8020
                             st.session_state['p8020_labels']      = (_str_i, _str_f)
+                            st.session_state['p8020_local']       = _local_8020
                             st.session_state['p8020_cadena']      = _gasto_cadena
                             st.session_state['p8020_meses_n']     = len(pd.date_range(
                                 _mes_i, _mes_f + pd.offsets.MonthEnd(1), freq='MS'
@@ -5073,6 +5092,7 @@ elif modulo.startswith("📊"):
                         _n_meses       = st.session_state['p8020_meses_n']
                         _gasto_ini_c   = st.session_state.get('p8020_gasto_ini', 0)
                         _gasto_fin_c   = st.session_state.get('p8020_gasto_fin', 0)
+                        _local_label   = st.session_state.get('p8020_local', 'Todos')
 
                         # ── Cálculos KPI ──────────────────────────────────
                         _top15_gasto   = sum(r['gasto_total'] for r in _rows_8020)
@@ -5086,8 +5106,8 @@ elif modulo.startswith("📊"):
 
                         # Helpers de formato para subtextos
                         def _fmt_k(v):
-                            if v >= 1_000_000_000: return f"${v/1_000_000_000:.2f}B"
-                            if v >= 1_000_000:     return f"${v/1_000_000:.1f}M"
+                            """Formatea en millones (M) o miles (k) — nunca B"""
+                            if v >= 1_000_000: return f"${v/1_000_000:,.0f}M"
                             return f"${v/1_000:.0f}k"
 
                         def _color_var(v):
@@ -5096,10 +5116,11 @@ elif modulo.startswith("📊"):
                         def _arrow(v):
                             return "▲" if v > 0 else "▼" if v < 0 else "●"
 
-                        _ini_label = _str_i.split()[0][:3]   # "Nov"
-                        _fin_label = _str_f.split()[0][:3]   # "Dec"
+                        _ini_label = _str_i.split()[0][:3]
+                        _fin_label = _str_f.split()[0][:3]
+                        _titulo_local = _local_label if _local_label != 'Todos' else 'Cadena'
 
-                        # ── Cuadros custom via HTML (mantienen tamaño st.metric) ──
+                        # ── Cuadros custom via HTML ────────────────────────
                         _k1, _k2, _k3, _k4 = st.columns(4)
 
                         # Cuadro 1: Gasto total + desglose ini/fin con Δ%
@@ -5110,7 +5131,7 @@ elif modulo.startswith("📊"):
                             <div style="background:#1a1a1a;border-radius:10px;padding:16px 20px;
                                         border:1px solid #2a2a2a;min-height:100px">
                               <div style="font-size:0.72rem;color:#888;margin-bottom:4px">
-                                💰 Gasto total cadena</div>
+                                💰 Gasto total — {_titulo_local}</div>
                               <div style="font-size:1.6rem;font-weight:700;color:#d4a853;
                                           letter-spacing:-0.02em;line-height:1.2">
                                 {_fmt_k(_gasto_cadena)}</div>
@@ -5125,7 +5146,9 @@ elif modulo.startswith("📊"):
                               </div>
                             </div>""", unsafe_allow_html=True)
 
-                        # Cuadro 2: Top 15 — sin cambios
+                        # Cuadro 2: Top 15 + impacto canasta en subtexto
+                        _c2_imp = _color_var(_impacto_total)
+                        _imp_pct_top = (_impacto_total / _gasto_ini_c * 100) if _gasto_ini_c > 0 else 0
                         with _k2:
                             st.markdown(f"""
                             <div style="background:#1a1a1a;border-radius:10px;padding:16px 20px;
@@ -5136,11 +5159,17 @@ elif modulo.startswith("📊"):
                                           letter-spacing:-0.02em;line-height:1.2">
                                 {_top15_pct:.1f}% del gasto</div>
                               <div style="margin-top:6px;font-size:0.72rem;color:#555">
-                                &nbsp;</div>
+                                Impacto canasta:&nbsp;
+                                <span style="color:{_c2_imp};font-weight:600">
+                                  {("+" if _impacto_total >= 0 else "") + _fmt_k(_impacto_total)}
+                                  &nbsp;({_arrow(_imp_pct_top)}{abs(_imp_pct_top):.1f}%)
+                                </span>
+                              </div>
                             </div>""", unsafe_allow_html=True)
 
-                        # Cuadro 3: Impacto Δ$ canasta — sin cambios
+                        # Cuadro 3: Impacto Δ$ canasta + Δ% sobre gasto inicial
                         _c3 = _color_var(_impacto_total)
+                        _imp_pct_c3 = (_impacto_total / _gasto_ini_c * 100) if _gasto_ini_c > 0 else 0
                         with _k3:
                             st.markdown(f"""
                             <div style="background:#1a1a1a;border-radius:10px;padding:16px 20px;
@@ -5149,10 +5178,13 @@ elif modulo.startswith("📊"):
                                 📈 Impacto Δ$ canasta</div>
                               <div style="font-size:1.6rem;font-weight:700;color:{_c3};
                                           letter-spacing:-0.02em;line-height:1.2">
-                                {_fmt_k(abs(_impacto_total)) if _impacto_total >= 0
-                                 else "-" + _fmt_k(abs(_impacto_total))}</div>
-                              <div style="margin-top:6px;font-size:0.72rem;color:#555">
-                                &nbsp;</div>
+                                {("+" if _impacto_total >= 0 else "") + _fmt_k(_impacto_total)}</div>
+                              <div style="margin-top:6px;font-size:0.72rem">
+                                <span style="color:{_c3};font-weight:600">
+                                  {_arrow(_imp_pct_c3)}&nbsp;{abs(_imp_pct_c3):.1f}%
+                                </span>
+                                <span style="color:#555">&nbsp;sobre gasto {_ini_label}</span>
+                              </div>
                             </div>""", unsafe_allow_html=True)
 
                         # Cuadro 4: Variación total compra cadena ini → fin
@@ -5162,7 +5194,7 @@ elif modulo.startswith("📊"):
                             <div style="background:#1a1a1a;border-radius:10px;padding:16px 20px;
                                         border:1px solid #2a2a2a;min-height:100px">
                               <div style="font-size:0.72rem;color:#888;margin-bottom:4px">
-                                🔄 Variación compra cadena</div>
+                                🔄 Variación compra — {_titulo_local}</div>
                               <div style="font-size:1.6rem;font-weight:700;color:{_c4};
                                           letter-spacing:-0.02em;line-height:1.2">
                                 {("+" if _var_compra >= 0 else "") + _fmt_k(_var_compra)}</div>
@@ -5170,9 +5202,7 @@ elif modulo.startswith("📊"):
                                 <span style="color:{_c4};font-weight:600">
                                   {_arrow(_var_compra_pct)}&nbsp;{abs(_var_compra_pct):.1f}%
                                 </span>
-                                <span style="color:#555">
-                                  &nbsp;vs {_ini_label}
-                                </span>
+                                <span style="color:#555">&nbsp;vs {_ini_label}</span>
                               </div>
                             </div>""", unsafe_allow_html=True)
 
@@ -5432,30 +5462,344 @@ elif modulo.startswith("📊"):
                             unsafe_allow_html=True
                         )
 
-                        # ── Excel ─────────────────────────────────────────
+                        # ── Botones de descarga ───────────────────────────
                         st.markdown("<br>", unsafe_allow_html=True)
-                        _buf_8020 = io.BytesIO()
-                        _df_excel = pd.DataFrame([{
-                            'Ranking':            i + 1,
-                            'SKU':                _r['sku'],
-                            'Producto':           _r['nombre'],
-                            'Categoría':          _r['categoria'],
-                            f'$ Compra {_str_i}': _r['gasto_ini'],
-                            f'$ Compra {_str_f}': _r['gasto_fin'],
-                            f'P.Unit {_str_i}':   _r['p_ini'],
-                            f'P.Unit {_str_f}':   _r['p_fin'],
-                            'Δ% Precio':          _r['delta_pct'],
-                            'Impacto $ canasta':  _r['impacto'],
-                            '% gasto total':      _r['pct_total'],
-                            '% acumulado':        _r['acum_pct'],
-                        } for i, _r in enumerate(_rows_8020)])
-                        with pd.ExcelWriter(_buf_8020, engine='openpyxl') as _w:
-                            _df_excel.to_excel(_w, sheet_name='8020_Compras', index=False)
-                        st.download_button(
-                            "📥 Excel — Top 15 80/20", _buf_8020.getvalue(),
-                            f"8020_Compras_{_str_i}_a_{_str_f}.xlsx",
-                            use_container_width=True
-                        )
+                        _pb1, _pb2 = st.columns(2)
+
+                        def _generar_pdf_8020(rows, str_i, str_f, local_lbl,
+                                              gasto_total, gasto_ini, gasto_fin,
+                                              impacto_total, var_compra, var_compra_pct):
+                            """Genera PDF del informe 80/20 para un local o cadena."""
+                            from reportlab.lib.pagesizes import A4, landscape
+                            from reportlab.lib import colors as rc
+                            from reportlab.lib.units import mm
+                            from reportlab.platypus import (SimpleDocTemplate, Table,
+                                TableStyle, Paragraph, Spacer, HRFlowable)
+                            from reportlab.lib.styles import ParagraphStyle
+                            from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
+                            import os
+
+                            CB  = rc.HexColor('#0d0d0d')
+                            CP  = rc.HexColor('#1a1a1a')
+                            CG  = rc.HexColor('#d4a853')
+                            CT  = rc.HexColor('#f0ede8')
+                            CM  = rc.HexColor('#666666')
+                            CM2 = rc.HexColor('#2a2a2a')
+                            CR  = rc.HexColor('#e84545')
+                            CGr = rc.HexColor('#4caf7d')
+                            CBo = rc.HexColor('#2a2a2a')
+
+                            PAGE = landscape(A4)
+                            W, H = PAGE
+                            LM = RM = 12*mm
+                            AVAIL = W - LM - RM
+
+                            def sty(sz, col, bold=False, align=TA_LEFT):
+                                return ParagraphStyle('_', fontSize=sz, textColor=col,
+                                    fontName='Helvetica-Bold' if bold else 'Helvetica',
+                                    alignment=align, leading=sz*1.25,
+                                    spaceAfter=0, spaceBefore=0)
+
+                            def P(txt, sz=7, col=None, bold=False, align=TA_RIGHT):
+                                return Paragraph(str(txt), sty(sz, col or CT,
+                                                               bold=bold, align=align))
+
+                            def fmt_m(v):
+                                if abs(v) >= 1_000_000: return f"${v/1_000_000:,.0f}M"
+                                return f"${v/1_000:.0f}k"
+
+                            buf = io.BytesIO()
+                            doc = SimpleDocTemplate(buf, pagesize=PAGE,
+                                leftMargin=LM, rightMargin=RM,
+                                topMargin=8*mm, bottomMargin=7*mm)
+                            story = []
+
+                            # Header
+                            hdr_data = [[
+                                Spacer(28*mm, 10*mm) if not os.path.exists(LOGO_PATH)
+                                    else __import__('reportlab.platypus',
+                                        fromlist=['Image']).Image(
+                                            LOGO_PATH, width=22*mm, height=22*mm),
+                                [P("INFORME 80/20 — COMPRAS", 13, CG,
+                                   bold=True, align=TA_CENTER),
+                                 Spacer(1, 1*mm),
+                                 P("ALEMAN EXPERTO", 7, CM, align=TA_CENTER)],
+                                [P(local_lbl.upper(), 10, CT, bold=True, align=TA_RIGHT),
+                                 Spacer(1, 1*mm),
+                                 P(f"{str_i}  →  {str_f}", 7.5, CM, align=TA_RIGHT)],
+                            ]]
+                            hdr_tbl = Table(hdr_data, colWidths=[30*mm, 160*mm, 83*mm])
+                            hdr_tbl.setStyle(TableStyle([
+                                ('VALIGN',        (0,0),(-1,-1),'MIDDLE'),
+                                ('LINEBELOW',     (0,0),(-1,0), 1.5, CG),
+                                ('TOPPADDING',    (0,0),(-1,-1),0),
+                                ('BOTTOMPADDING', (0,0),(-1,-1),4),
+                                ('LEFTPADDING',   (0,0),(-1,-1),0),
+                                ('RIGHTPADDING',  (0,0),(-1,-1),0),
+                            ]))
+                            story += [hdr_tbl, Spacer(1, 3*mm)]
+
+                            # KPIs
+                            _pct_mes_pdf = ((gasto_fin/gasto_ini)-1)*100 if gasto_ini>0 else 0
+                            _c_var = CR if _pct_mes_pdf > 0 else CGr
+                            _c_imp = CR if impacto_total > 0 else CGr
+                            _c_var2 = CR if var_compra > 0 else CGr
+                            kw = AVAIL / 5
+                            kpi_rows = [
+                                [P("GASTO TOTAL",5.5,CM,align=TA_CENTER),
+                                 P("GASTO INICIO",5.5,CM,align=TA_CENTER),
+                                 P("GASTO FIN",5.5,CM,align=TA_CENTER),
+                                 P("IMPACTO Δ$ CANASTA",5.5,CM,align=TA_CENTER),
+                                 P("VAR. COMPRA",5.5,CM,align=TA_CENTER)],
+                                [P(fmt_m(gasto_total),11,CG,bold=True,align=TA_CENTER),
+                                 P(fmt_m(gasto_ini),  11,CT,bold=True,align=TA_CENTER),
+                                 P(f"{fmt_m(gasto_fin)} ({'+' if _pct_mes_pdf>=0 else ''}{_pct_mes_pdf:.1f}%)",
+                                   9,_c_var,bold=True,align=TA_CENTER),
+                                 P(f"{'+' if impacto_total>=0 else ''}{fmt_m(impacto_total)}",
+                                   11,_c_imp,bold=True,align=TA_CENTER),
+                                 P(f"{'+' if var_compra>=0 else ''}{fmt_m(var_compra)} ({'+' if var_compra_pct>=0 else ''}{var_compra_pct:.1f}%)",
+                                   9,_c_var2,bold=True,align=TA_CENTER)],
+                            ]
+                            kpi_tbl = Table(kpi_rows, colWidths=[kw]*5)
+                            kpi_tbl.setStyle(TableStyle([
+                                ('BACKGROUND', (0,0),(-1,-1),CP),
+                                ('BOX',        (0,0),(-1,-1),0.5,CBo),
+                                ('LINEBEFORE', (1,0),(-1,-1),0.3,CBo),
+                                ('TOPPADDING', (0,0),(-1,-1),3),
+                                ('BOTTOMPADDING',(0,0),(-1,-1),3),
+                            ]))
+                            story += [kpi_tbl, Spacer(1, 4*mm)]
+
+                            # Tabla top 15
+                            _ini_l = str_i.split()[0][:3]
+                            _fin_l = str_f.split()[0][:3]
+                            col_w = [8*mm, 70*mm, 22*mm, 22*mm, 18*mm, 28*mm, 22*mm, 22*mm, 18*mm, 18*mm]
+                            hdrs_pdf = ['#','Producto',
+                                        f'P.Unit {_ini_l}', f'P.Unit {_fin_l}',
+                                        'Δ% Precio','Impacto $',
+                                        f'$ {_ini_l}', f'$ {_fin_l}',
+                                        '% gasto','% acum.']
+                            tbl_rows = [[P(h,6,CM,bold=True,
+                                           align=TA_LEFT if i<2 else TA_RIGHT)
+                                         for i,h in enumerate(hdrs_pdf)]]
+                            for pos,(r) in enumerate(rows, 1):
+                                dc = CR if (r.get('delta_pct') or 0)>0 else CGr
+                                ic = CR if r.get('impacto',0)>0 else CGr
+                                tbl_rows.append([
+                                    P(str(pos),6,CM,align=TA_CENTER),
+                                    P(str(r.get('nombre','')),6.5,CT,align=TA_LEFT),
+                                    P(f"${r.get('p_ini',0):,.0f}",6,CM),
+                                    P(f"${r.get('p_fin',0):,.0f}",6,CT),
+                                    P(f"{(r.get('delta_pct') or 0):+.1f}%",6,dc,bold=True),
+                                    P(f"{'+' if r.get('impacto',0)>=0 else ''}{fmt_m(r.get('impacto',0))}",
+                                      6,ic,bold=True),
+                                    P(fmt_m(r.get('gasto_ini',0)),6,CM),
+                                    P(fmt_m(r.get('gasto_fin',0)),6,CT),
+                                    P(f"{r.get('pct_total',0):.1f}%",6,CG),
+                                    P(f"{r.get('acum_pct',0):.1f}%",6,CGr),
+                                ])
+                            # Fila total
+                            tbl_rows.append([
+                                P('',6,CM),
+                                P('TOTAL',6.5,CG,bold=True,align=TA_LEFT),
+                                P('',6,CM),P('',6,CM),P('',6,CM),
+                                P(f"{'+' if impacto_total>=0 else ''}{fmt_m(impacto_total)}",
+                                  6,_c_imp,bold=True),
+                                P('',6,CM),P('',6,CM),
+                                P('100%',6,CG,bold=True),P('',6,CM),
+                            ])
+                            dtbl = Table(tbl_rows, colWidths=col_w, repeatRows=1)
+                            rs = [
+                                ('BACKGROUND',    (0,0),(-1,0),  rc.HexColor('#0d0d0d')),
+                                ('LINEBELOW',     (0,0),(-1,0),  0.8,CG),
+                                ('TOPPADDING',    (0,0),(-1,-1), 2),
+                                ('BOTTOMPADDING', (0,0),(-1,-1), 2),
+                                ('LEFTPADDING',   (0,0),(-1,-1), 3),
+                                ('RIGHTPADDING',  (0,0),(-1,-1), 3),
+                                ('LINEABOVE',     (0,-1),(-1,-1),1,CBo),
+                            ]
+                            for i in range(1, len(tbl_rows)-1):
+                                rs += [('BACKGROUND',(0,i),(-1,i),
+                                        rc.HexColor('#111111') if i%2==0 else CP),
+                                       ('LINEBELOW', (0,i),(-1,i),0.2,CM2)]
+                            dtbl.setStyle(TableStyle(rs))
+                            story += [dtbl, Spacer(1,3*mm)]
+
+                            # Footer
+                            story += [
+                                HRFlowable(width="100%",thickness=0.4,
+                                           color=rc.HexColor('#2a2a2a')),
+                                Spacer(1,1*mm),
+                                P(f"Aleman Experto · 80/20 Compras · {local_lbl} · {str_i} → {str_f}",
+                                  5.5,CM,align=TA_CENTER),
+                            ]
+
+                            def add_bg(c, d):
+                                c.saveState()
+                                c.setFillColor(CB)
+                                c.rect(0,0,W,H,fill=1,stroke=0)
+                                c.restoreState()
+
+                            doc.build(story, onFirstPage=add_bg, onLaterPages=add_bg)
+                            buf.seek(0)
+                            return buf.getvalue()
+
+                        # ── Botón 1: PDF este local / cadena ──────────────
+                        with _pb1:
+                            _lbl_btn1 = f"📄 PDF — {_local_label if _local_label != 'Todos' else 'Cadena'}"
+                            if st.button(_lbl_btn1, key="btn_pdf_8020_local",
+                                         use_container_width=True):
+                                with st.spinner("Generando PDF..."):
+                                    _pdf_local = _generar_pdf_8020(
+                                        _rows_8020, _str_i, _str_f,
+                                        _local_label if _local_label != 'Todos' else 'Cadena Completa',
+                                        _gasto_cadena, _gasto_ini_c, _gasto_fin_c,
+                                        _impacto_total, _var_compra, _var_compra_pct
+                                    )
+                                st.session_state['pdf_8020_local_bytes'] = _pdf_local
+                                st.session_state['pdf_8020_local_nombre'] = (
+                                    f"8020_{(_local_label if _local_label != 'Todos' else 'Cadena').replace(' ','_')}"
+                                    f"_{_str_i}_a_{_str_f}.pdf"
+                                )
+                            if 'pdf_8020_local_bytes' in st.session_state:
+                                st.download_button(
+                                    "⬇️ Descargar PDF",
+                                    st.session_state['pdf_8020_local_bytes'],
+                                    st.session_state['pdf_8020_local_nombre'],
+                                    mime="application/pdf",
+                                    key="dl_pdf_8020_local",
+                                    use_container_width=True
+                                )
+
+                        # ── Botón 2: PDF cadena + detalle por local ───────
+                        with _pb2:
+                            if st.button("📄 PDF — Cadena + por local",
+                                         key="btn_pdf_8020_all",
+                                         use_container_width=True):
+                                with st.spinner("Generando resumen por local..."):
+                                    try:
+                                        from pypdf import PdfWriter as _PdfW, PdfReader as _PdfR
+
+                                        _fi_str_pdf = _mes_i.strftime('%Y-%m-01') if hasattr(_mes_i,'strftime') else str(_mes_i)
+                                        _ff_str_pdf = (_mes_f + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d') if hasattr(_mes_f,'strftime') else str(_mes_f)
+                                        _mes_i_date_pdf = _mes_i.date() if hasattr(_mes_i,'date') else _mes_i
+                                        _mes_f_date_pdf = _mes_f.date() if hasattr(_mes_f,'date') else _mes_f
+
+                                        _writer_all = _PdfW()
+
+                                        # Página 1: cadena completa (datos ya calculados)
+                                        _pdf_cadena = _generar_pdf_8020(
+                                            _rows_8020, _str_i, _str_f,
+                                            'Cadena Completa',
+                                            _gasto_cadena, _gasto_ini_c, _gasto_fin_c,
+                                            _impacto_total, _var_compra, _var_compra_pct
+                                        )
+                                        for _pg in _PdfR(io.BytesIO(_pdf_cadena)).pages:
+                                            _writer_all.add_page(_pg)
+
+                                        # Una página por local
+                                        for _loc in [l for l in get_locales()
+                                                     if l not in ('Todos', None)]:
+                                            try:
+                                                _fl_loc = (
+                                                    f"AND UPPER(REPLACE(REPLACE(REPLACE(REPLACE(c.local,"
+                                                    f"'Á','A'),'É','E'),'Í','I'),'Ó','O')) = "
+                                                    f"UPPER(REPLACE(REPLACE(REPLACE(REPLACE('{_loc}',"
+                                                    f"'Á','A'),'É','E'),'Í','I'),'Ó','O'))"
+                                                )
+                                                _q_loc_pdf = f"""
+                                                    SELECT
+                                                        COALESCE(e.sku_receta, c.sku)                         AS sku,
+                                                        DATE_TRUNC('month', c.fecha_dte::timestamp)::date     AS mes,
+                                                        MIN(c.nombre_producto)                                AS nombre,
+                                                        MIN(c.categoria_producto)                             AS categoria,
+                                                        SUM(c.cant_conv)                                      AS cant_mes,
+                                                        SUM(c.costo_realfinal)                                AS gasto_mes,
+                                                        SUM(c.costo_realfinal)/NULLIF(SUM(c.cant_conv),0)     AS precio_mes
+                                                    FROM compras c
+                                                    LEFT JOIN sku_equivalencias e ON c.sku = e.sku_compra
+                                                    WHERE c.fecha_dte::date BETWEEN '{_fi_str_pdf}' AND '{_ff_str_pdf}'
+                                                      AND UPPER(REPLACE(REPLACE(REPLACE(REPLACE(
+                                                          c.categoria_producto,'Á','A'),'É','E'),'Í','I'),'Ó','O'))
+                                                          != 'ADMINISTRACION'
+                                                      AND c.costo_realfinal > 0 AND c.cant_conv > 0
+                                                      {_fl_loc}
+                                                    GROUP BY 1,2 ORDER BY 1,2
+                                                """
+                                                _df_loc = run_query(_q_loc_pdf)
+                                                if _df_loc.empty: continue
+                                                for _col in ['cant_mes','gasto_mes','precio_mes']:
+                                                    _df_loc[_col] = pd.to_numeric(
+                                                        _df_loc[_col], errors='coerce').fillna(0)
+                                                _gt_loc = (
+                                                    _df_loc.groupby('sku')['gasto_mes'].sum()
+                                                    .reset_index()
+                                                    .rename(columns={'gasto_mes':'gasto_total'})
+                                                    .sort_values('gasto_total', ascending=False)
+                                                    .head(15)
+                                                )
+                                                _skus_loc  = _gt_loc['sku'].tolist()
+                                                _gc_loc    = float(_df_loc['gasto_mes'].sum())
+                                                _gi_loc    = float(_df_loc[_df_loc['mes']==_mes_i_date_pdf]['gasto_mes'].sum())
+                                                _gf_loc    = float(_df_loc[_df_loc['mes']==_mes_f_date_pdf]['gasto_mes'].sum())
+                                                _vc_loc    = _gf_loc - _gi_loc
+                                                _vcp_loc   = (_vc_loc/_gi_loc*100) if _gi_loc>0 else 0
+
+                                                _rows_loc = []
+                                                _acum_loc = 0.0
+                                                for _sk in _skus_loc:
+                                                    _nm = _df_loc[_df_loc['sku']==_sk]['nombre'].values
+                                                    _nm = _nm[0] if len(_nm) else _sk
+                                                    _gi_s = _df_loc[(_df_loc['sku']==_sk)&(_df_loc['mes']==_mes_i_date_pdf)]['gasto_mes']
+                                                    _gf_s = _df_loc[(_df_loc['sku']==_sk)&(_df_loc['mes']==_mes_f_date_pdf)]['gasto_mes']
+                                                    _pi_s = _df_loc[(_df_loc['sku']==_sk)&(_df_loc['mes']==_mes_i_date_pdf)]['precio_mes']
+                                                    _pf_s = _df_loc[(_df_loc['sku']==_sk)&(_df_loc['mes']==_mes_f_date_pdf)]['precio_mes']
+                                                    _gi_v = float(_gi_s.values[0]) if len(_gi_s) else 0.0
+                                                    _gf_v = float(_gf_s.values[0]) if len(_gf_s) else 0.0
+                                                    _pi_v = float(_pi_s.values[0]) if len(_pi_s) else _fb_map.get(_sk,0.0)
+                                                    _pf_v = float(_pf_s.values[0]) if len(_pf_s) else _fb_map.get(_sk,_pi_v)
+                                                    _dp   = ((_pf_v/_pi_v)-1)*100 if _pi_v>0 else None
+                                                    _cq   = float(_df_loc[(_df_loc['sku']==_sk)&(_df_loc['mes']==_mes_i_date_pdf)]['cant_mes'].values[0]) if len(_df_loc[(_df_loc['sku']==_sk)&(_df_loc['mes']==_mes_i_date_pdf)]) else 0.0
+                                                    _imp  = (_pf_v-_pi_v)*_cq
+                                                    _gs_v = float(_gt_loc[_gt_loc['sku']==_sk]['gasto_total'].values[0])
+                                                    _pt   = (_gs_v/_gc_loc*100) if _gc_loc>0 else 0
+                                                    _acum_loc += _pt
+                                                    _rows_loc.append({
+                                                        'nombre':_nm,'p_ini':_pi_v,'p_fin':_pf_v,
+                                                        'delta_pct':_dp,'impacto':_imp,
+                                                        'gasto_ini':_gi_v,'gasto_fin':_gf_v,
+                                                        'pct_total':_pt,'acum_pct':_acum_loc,
+                                                    })
+
+                                                _imp_loc = sum(r['impacto'] for r in _rows_loc)
+                                                _pdf_loc = _generar_pdf_8020(
+                                                    _rows_loc, _str_i, _str_f, _loc,
+                                                    _gc_loc, _gi_loc, _gf_loc,
+                                                    _imp_loc, _vc_loc, _vcp_loc
+                                                )
+                                                for _pg in _PdfR(io.BytesIO(_pdf_loc)).pages:
+                                                    _writer_all.add_page(_pg)
+                                            except Exception:
+                                                continue
+
+                                        _buf_all_pdf = io.BytesIO()
+                                        _writer_all.write(_buf_all_pdf)
+                                        st.session_state['pdf_8020_all_bytes'] = _buf_all_pdf.getvalue()
+                                        st.session_state['pdf_8020_all_nombre'] = (
+                                            f"8020_CadenaYLocales_{_str_i}_a_{_str_f}.pdf"
+                                        )
+                                    except Exception as _ex:
+                                        st.error(f"Error generando PDF: {_ex}")
+
+                            if 'pdf_8020_all_bytes' in st.session_state:
+                                st.download_button(
+                                    "⬇️ Descargar PDF — Cadena + locales",
+                                    st.session_state['pdf_8020_all_bytes'],
+                                    st.session_state['pdf_8020_all_nombre'],
+                                    mime="application/pdf",
+                                    key="dl_pdf_8020_all",
+                                    use_container_width=True
+                                )
 
 
     # ----------------------------------------------------------
