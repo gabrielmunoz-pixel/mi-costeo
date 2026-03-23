@@ -5085,7 +5085,9 @@ elif modulo.startswith("📊"):
                             )
 
                     # ── RENDERIZADO (fuera del botón, persiste con session_state) ──
-                    if 'p8020_data' in st.session_state:
+                    _p8020_keys = ('p8020_data', 'p8020_labels', 'p8020_cadena',
+                                   'p8020_meses_n')
+                    if all(k in st.session_state for k in _p8020_keys):
                         _rows_8020     = st.session_state['p8020_data']
                         _str_i, _str_f = st.session_state['p8020_labels']
                         _gasto_cadena  = st.session_state['p8020_cadena']
