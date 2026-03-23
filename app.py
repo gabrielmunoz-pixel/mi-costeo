@@ -5108,9 +5108,9 @@ elif modulo.startswith("📊"):
 
                         # Helpers de formato para subtextos
                         def _fmt_k(v):
-                            """Formatea en millones (M) o miles (k) — nunca B"""
-                            if v >= 1_000_000: return f"${v/1_000_000:,.0f}M"
-                            return f"${v/1_000:.0f}k"
+                            """Siempre en millones (M) — nunca en miles (k)"""
+                            if v == 0: return "$0M"
+                            return f"${v/1_000_000:,.0f}M"
 
                         def _color_var(v):
                             return "#e84545" if v > 0 else "#4caf7d" if v < 0 else "#666"
@@ -5234,12 +5234,10 @@ elif modulo.startswith("📊"):
                             return '<span style="color:#aaa">$0</span>'
 
                         def _fmt_miles(val):
-                            """Formatea en miles: $1.234k o $12.3M"""
+                            """Siempre en millones (M) — nunca en miles (k)"""
                             if val == 0:
                                 return '<span style="color:#555">—</span>'
-                            if val >= 1_000_000:
-                                return f'<span style="color:#ccc">${val/1_000_000:.1f}M</span>'
-                            return f'<span style="color:#aaa">${val/1_000:.0f}k</span>'
+                            return f'<span style="color:#ccc">${val/1_000_000:,.0f}M</span>'
 
                         def _fb_icon_8020(is_fb):
                             if is_fb:
@@ -5466,8 +5464,9 @@ elif modulo.startswith("📊"):
                                                                bold=bold, align=align))
 
                             def fmt_m(v):
-                                if abs(v) >= 1_000_000: return f"${v/1_000_000:,.0f}M"
-                                return f"${v/1_000:.0f}k"
+                                """Siempre en millones (M)"""
+                                if v == 0: return "$0M"
+                                return f"${v/1_000_000:,.0f}M"
 
                             buf = io.BytesIO()
                             doc = SimpleDocTemplate(buf, pagesize=PAGE,
