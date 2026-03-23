@@ -5083,6 +5083,37 @@ elif modulo.startswith("📊"):
                             st.session_state['p8020_gasto_fin'] = float(
                                 _df_pm[_df_pm['mes'] == _mes_f_date]['gasto_mes'].sum()
                             )
+                            # Venta real por mes ini y fin (para cuadro 3)
+                            _filtro_local_venta = (
+                                f"AND UPPER(REPLACE(REPLACE(REPLACE(REPLACE(local,"
+                                f"'Á','A'),'É','E'),'Í','I'),'Ó','O')) = "
+                                f"UPPER(REPLACE(REPLACE(REPLACE(REPLACE('{_local_8020}',"
+                                f"'Á','A'),'É','E'),'Í','I'),'Ó','O'))"
+                                if _local_8020 != 'Todos' else ''
+                            )
+                            _q_venta = f"""
+                                SELECT
+                                    DATE_TRUNC('month', fecha_venta::timestamp)::date AS mes,
+                                    SUM(monto_venta_real) AS venta_mes
+                                FROM ventas
+                                WHERE fecha_venta::date BETWEEN '{_fi_str}' AND '{_ff_str}'
+                                  {_filtro_local_venta}
+                                GROUP BY 1
+                            """
+                            _df_venta = run_query(_q_venta)
+                            if not _df_venta.empty:
+                                _df_venta['mes'] = pd.to_datetime(
+                                    _df_venta['mes']).dt.date
+                                _df_venta['venta_mes'] = pd.to_numeric(
+                                    _df_venta['venta_mes'], errors='coerce').fillna(0)
+                                _vi = float(_df_venta[
+                                    _df_venta['mes'] == _mes_i_date]['venta_mes'].sum())
+                                _vf = float(_df_venta[
+                                    _df_venta['mes'] == _mes_f_date]['venta_mes'].sum())
+                            else:
+                                _vi, _vf = 0.0, 0.0
+                            st.session_state['p8020_venta_ini'] = _vi
+                            st.session_state['p8020_venta_fin'] = _vf
 
                     # ── RENDERIZADO (fuera del botón, persiste con session_state) ──
                     _p8020_keys = ('p8020_data', 'p8020_labels', 'p8020_cadena',
@@ -5095,6 +5126,8 @@ elif modulo.startswith("📊"):
                         _gasto_ini_c   = st.session_state.get('p8020_gasto_ini', 0)
                         _gasto_fin_c   = st.session_state.get('p8020_gasto_fin', 0)
                         _local_label   = st.session_state.get('p8020_local_val', 'Todos')
+                        _venta_ini     = st.session_state.get('p8020_venta_ini', 0)
+                        _venta_fin     = st.session_state.get('p8020_venta_fin', 0)
 
                         # ── Cálculos KPI ──────────────────────────────────
                         _top15_gasto   = sum(r['gasto_total'] for r in _rows_8020)
@@ -5169,23 +5202,27 @@ elif modulo.startswith("📊"):
                               </div>
                             </div>""", unsafe_allow_html=True)
 
-                        # Cuadro 3: Impacto Δ$ canasta + Δ% sobre gasto inicial
-                        _c3 = _color_var(_impacto_total)
-                        _imp_pct_c3 = (_impacto_total / _gasto_ini_c * 100) if _gasto_ini_c > 0 else 0
+                        # Cuadro 3: Variación de venta ini → fin
+                        _var_venta     = _venta_fin - _venta_ini
+                        _var_venta_pct = ((_venta_fin / _venta_ini) - 1) * 100 if _venta_ini > 0 else 0
+                        _c3 = _color_var(-_var_venta)  # rojo si baja venta, verde si sube
+                        _c3_val = _color_var(-_var_venta)
                         with _k3:
                             st.markdown(f"""
                             <div style="background:#1a1a1a;border-radius:10px;padding:16px 20px;
                                         border:1px solid #2a2a2a;min-height:100px">
                               <div style="font-size:0.72rem;color:#888;margin-bottom:4px">
-                                📈 Impacto Δ$ canasta</div>
-                              <div style="font-size:1.6rem;font-weight:700;color:{_c3};
+                                🛒 Variación venta — {_titulo_local}</div>
+                              <div style="font-size:1.6rem;font-weight:700;color:{_c3_val};
                                           letter-spacing:-0.02em;line-height:1.2">
-                                {("+" if _impacto_total >= 0 else "") + _fmt_k(_impacto_total)}</div>
+                                {("+" if _var_venta >= 0 else "") + _fmt_k(_var_venta)}</div>
                               <div style="margin-top:6px;font-size:0.72rem">
-                                <span style="color:{_c3};font-weight:600">
-                                  {_arrow(_imp_pct_c3)}&nbsp;{abs(_imp_pct_c3):.2f}%
+                                <span style="color:{_c3_val};font-weight:600">
+                                  {_arrow(_var_venta_pct)}&nbsp;{abs(_var_venta_pct):.2f}%
                                 </span>
-                                <span style="color:#555">&nbsp;sobre gasto {_ini_label}</span>
+                                <span style="color:#555">
+                                  &nbsp;{_fmt_k(_venta_ini)} {_ini_label} → {_fmt_k(_venta_fin)} {_fin_label}
+                                </span>
                               </div>
                             </div>""", unsafe_allow_html=True)
 
