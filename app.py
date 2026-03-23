@@ -4963,12 +4963,13 @@ elif modulo.startswith("📊"):
                             _top15_skus   = _gasto_total['sku'].tolist()
                             _gasto_cadena = _df_pm['gasto_mes'].sum()
 
-                            # ── Cant y nombre del mes inicial ─────────────
+                            # ── Cant, nombre y gasto del mes inicial ──────
                             _mes_i_date = _mes_i.date() if hasattr(_mes_i, 'date') else _mes_i
+                            _mes_f_date = _mes_f.date() if hasattr(_mes_f, 'date') else _mes_f
                             _df_mes1 = _df_pm[
                                 (_df_pm['sku'].isin(_top15_skus)) &
                                 (_df_pm['mes'] == _mes_i_date)
-                            ][['sku', 'nombre', 'categoria', 'cant_mes']].drop_duplicates('sku')
+                            ][['sku', 'nombre', 'categoria', 'cant_mes', 'gasto_mes']].drop_duplicates('sku')
 
                             # ── Construir filas ────────────────────────────
                             _rows_8020 = []
@@ -4976,7 +4977,14 @@ elif modulo.startswith("📊"):
                                 _info    = _df_mes1[_df_mes1['sku'] == _sku]
                                 _nombre  = _info['nombre'].values[0]    if len(_info) else _sku
                                 _cat     = _info['categoria'].values[0] if len(_info) else '—'
-                                _cant_q1 = float(_info['cant_mes'].values[0]) if len(_info) else 0.0
+                                _cant_q1 = float(_info['cant_mes'].values[0])  if len(_info) else 0.0
+                                _gasto_ini = float(_info['gasto_mes'].values[0]) if len(_info) else 0.0
+
+                                # Gasto mes final
+                                _gs_fin = _df_pm[
+                                    (_df_pm['sku'] == _sku) & (_df_pm['mes'] == _mes_f_date)
+                                ]['gasto_mes']
+                                _gasto_fin = float(_gs_fin.values[0]) if len(_gs_fin) else 0.0
 
                                 # Precio mes inicial
                                 _ps_ini = _df_pm[
@@ -4987,7 +4995,6 @@ elif modulo.startswith("📊"):
                                 _p_ini      = _p_ini_real if _p_ini_real is not None else _fb_map.get(_sku, 0.0)
 
                                 # Precio mes final
-                                _mes_f_date = _mes_f.date() if hasattr(_mes_f, 'date') else _mes_f
                                 _ps_fin = _df_pm[
                                     (_df_pm['sku'] == _sku) & (_df_pm['mes'] == _mes_f_date)
                                 ]['precio_mes']
@@ -5024,6 +5031,8 @@ elif modulo.startswith("📊"):
                                     'nombre':          _nombre,
                                     'categoria':       _cat,
                                     'cant_q1':         _cant_q1,
+                                    'gasto_ini':       _gasto_ini,
+                                    'gasto_fin':       _gasto_fin,
                                     'p_ini':           _p_ini,
                                     'p_ini_fb':        _p_ini_fb,
                                     'p_fin':           _p_fin,
@@ -5178,6 +5187,14 @@ elif modulo.startswith("📊"):
                                 return f'<span style="color:#4caf7d;font-weight:600">${val:+,.0f}</span>'
                             return '<span style="color:#aaa">$0</span>'
 
+                        def _fmt_miles(val):
+                            """Formatea en miles: $1.234k o $12.3M"""
+                            if val == 0:
+                                return '<span style="color:#555">—</span>'
+                            if val >= 1_000_000:
+                                return f'<span style="color:#ccc">${val/1_000_000:.1f}M</span>'
+                            return f'<span style="color:#aaa">${val/1_000:.0f}k</span>'
+
                         def _fb_icon_8020(is_fb):
                             if is_fb:
                                 return ('<span title="Sin compras en este mes — precio del último '
@@ -5185,19 +5202,38 @@ elif modulo.startswith("📊"):
                                         '🔵 </span>')
                             return ''
 
-                        # ── TABLA TOP 15 ──────────────────────────────────
+                        # ── TABLA TOP 15 con desplegables inline ──────────
                         _hs_t = ('padding:10px 12px;font-size:0.68rem;text-transform:uppercase;'
                                  'letter-spacing:0.09em;font-weight:600;color:#444;'
                                  'border-bottom:1px solid #2a2a2a')
-                        _hdrs_t = ['#', 'SKU', 'Producto', 'Categoría',
-                                   f'Cant. {_str_i}',
+                        _hdrs_t = ['#', 'Producto',
                                    f'P.Unit {_str_i}', f'P.Unit {_str_f}',
                                    'Δ% Precio', 'Impacto $ canasta',
+                                   f'$ {_str_i}', f'$ {_str_f}',
                                    '% gasto', '% acum.']
                         _hdr_html = ''.join([
-                            f'<th style="{_hs_t};text-align:{"left" if i < 4 else "right"}">{h}</th>'
+                            f'<th style="{_hs_t};text-align:{"left" if i < 2 else "right"}">{h}</th>'
                             for i, h in enumerate(_hdrs_t)
                         ])
+
+                        # Fila total cadena (colspan 2 para # + Producto)
+                        _tot_html = (
+                            f'<tr style="background:#111;border-top:2px solid #333">'
+                            f'<td colspan="2" style="padding:9px 12px;color:#d4a853;'
+                            f'font-weight:700;font-size:0.8rem">TOTAL CADENA</td>'
+                            f'<td style="padding:9px 12px;text-align:right;color:#555">—</td>'
+                            f'<td style="padding:9px 12px;text-align:right;color:#555">—</td>'
+                            f'<td style="padding:9px 12px;text-align:right;color:#555">—</td>'
+                            f'<td style="padding:9px 12px;text-align:right">'
+                            f'{_fmt_imp_8020(_impacto_total)}</td>'
+                            f'<td style="padding:9px 12px;text-align:right;color:#555">—</td>'
+                            f'<td style="padding:9px 12px;text-align:right;color:#555">—</td>'
+                            f'<td style="padding:9px 12px;text-align:right;color:#d4a853;'
+                            f'font-weight:700">100.0%</td>'
+                            f'<td style="padding:9px 12px;text-align:right;color:#d4a853;'
+                            f'font-weight:700">{_top15_pct:.1f}%</td>'
+                            f'</tr>'
+                        )
 
                         _rows_html_t = ''
                         for _pos, _r in enumerate(_rows_8020, 1):
@@ -5206,14 +5242,8 @@ elif modulo.startswith("📊"):
                                 f'<tr style="border-bottom:1px solid #1e1e1e;background:{_bg}">'
                                 f'<td style="padding:9px 12px;color:#555;font-size:0.78rem;'
                                 f'text-align:right">{_pos}</td>'
-                                f'<td style="padding:9px 12px;color:#555;font-family:monospace;'
-                                f'font-size:0.74rem">{_r["sku"]}</td>'
                                 f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de">'
                                 f'{_r["nombre"]}</td>'
-                                f'<td style="padding:9px 12px;color:#555;font-size:0.78rem">'
-                                f'{_r["categoria"]}</td>'
-                                f'<td style="padding:9px 12px;text-align:right;color:#aaa">'
-                                f'{_r["cant_q1"]:,.2f}</td>'
                                 f'<td style="padding:9px 12px;text-align:right;color:#888">'
                                 f'{_fb_icon_8020(_r["p_ini_fb"])}${_r["p_ini"]:,.2f}</td>'
                                 f'<td style="padding:9px 12px;text-align:right;color:#ccc">'
@@ -5222,30 +5252,16 @@ elif modulo.startswith("📊"):
                                 f'{_badge_delta_8020(_r["delta_pct"])}</td>'
                                 f'<td style="padding:9px 12px;text-align:right">'
                                 f'{_fmt_imp_8020(_r["impacto"])}</td>'
+                                f'<td style="padding:9px 12px;text-align:right">'
+                                f'{_fmt_miles(_r["gasto_ini"])}</td>'
+                                f'<td style="padding:9px 12px;text-align:right">'
+                                f'{_fmt_miles(_r["gasto_fin"])}</td>'
                                 f'<td style="padding:9px 12px;text-align:right;color:#d4a853;'
                                 f'font-size:0.8rem">{_r["pct_total"]:.1f}%</td>'
                                 f'<td style="padding:9px 12px;text-align:right;color:#4caf7d;'
                                 f'font-size:0.8rem">{_r["acum_pct"]:.1f}%</td>'
                                 f'</tr>'
                             )
-
-                        # Fila total cadena
-                        _tot_html = (
-                            f'<tr style="background:#111;border-top:2px solid #333">'
-                            f'<td colspan="4" style="padding:9px 12px;color:#d4a853;'
-                            f'font-weight:700;font-size:0.8rem">TOTAL CADENA</td>'
-                            f'<td style="padding:9px 12px;text-align:right;color:#555">—</td>'
-                            f'<td style="padding:9px 12px;text-align:right;color:#555">—</td>'
-                            f'<td style="padding:9px 12px;text-align:right;color:#555">—</td>'
-                            f'<td style="padding:9px 12px;text-align:right;color:#555">—</td>'
-                            f'<td style="padding:9px 12px;text-align:right">'
-                            f'{_fmt_imp_8020(_impacto_total)}</td>'
-                            f'<td style="padding:9px 12px;text-align:right;color:#d4a853;'
-                            f'font-weight:700">100.0%</td>'
-                            f'<td style="padding:9px 12px;text-align:right;color:#d4a853;'
-                            f'font-weight:700">{_top15_pct:.1f}%</td>'
-                            f'</tr>'
-                        )
 
                         st.markdown(
                             '<div style="overflow-x:auto;border-radius:14px;'
@@ -5257,20 +5273,17 @@ elif modulo.startswith("📊"):
                             unsafe_allow_html=True
                         )
 
-                        # ── DESPLEGABLES DE EVOLUCIÓN ─────────────────────
-                        _tiene_intermedios = any(r['tiene_intermedios'] for r in _rows_8020)
-                        if _tiene_intermedios and _n_meses > 2:
+                        # ── DESPLEGABLES INLINE (solo si hay meses intermedios) ──
+                        if _n_meses > 2:
                             st.markdown("<br>", unsafe_allow_html=True)
                             st.markdown(
                                 "<div style='font-size:0.72rem;text-transform:uppercase;"
                                 "letter-spacing:0.09em;color:#555;margin-bottom:0.4rem'>"
-                                "📈 Evolución mensual por SKU</div>",
+                                "📈 Evolución mensual — abre el producto para ver detalle</div>",
                                 unsafe_allow_html=True
                             )
                             for _r in _rows_8020:
-                                if not _r['tiene_intermedios']:
-                                    continue
-                                with st.expander(f"{_r['nombre']}  ·  {_r['sku']}"):
+                                with st.expander(f"{_r['nombre']}"):
                                     _evo_rows = ''
                                     _p_prev   = None
                                     for _e in _r['evolucion']:
@@ -5323,17 +5336,18 @@ elif modulo.startswith("📊"):
                         st.markdown("<br>", unsafe_allow_html=True)
                         _buf_8020 = io.BytesIO()
                         _df_excel = pd.DataFrame([{
-                            'Ranking':          i + 1,
-                            'SKU':              _r['sku'],
-                            'Producto':         _r['nombre'],
-                            'Categoría':        _r['categoria'],
-                            f'Cant {_str_i}':   _r['cant_q1'],
-                            f'P.Unit {_str_i}': _r['p_ini'],
-                            f'P.Unit {_str_f}': _r['p_fin'],
-                            'Δ% Precio':        _r['delta_pct'],
-                            'Impacto $ canasta': _r['impacto'],
-                            '% gasto total':    _r['pct_total'],
-                            '% acumulado':      _r['acum_pct'],
+                            'Ranking':            i + 1,
+                            'SKU':                _r['sku'],
+                            'Producto':           _r['nombre'],
+                            'Categoría':          _r['categoria'],
+                            f'$ Compra {_str_i}': _r['gasto_ini'],
+                            f'$ Compra {_str_f}': _r['gasto_fin'],
+                            f'P.Unit {_str_i}':   _r['p_ini'],
+                            f'P.Unit {_str_f}':   _r['p_fin'],
+                            'Δ% Precio':          _r['delta_pct'],
+                            'Impacto $ canasta':  _r['impacto'],
+                            '% gasto total':      _r['pct_total'],
+                            '% acumulado':        _r['acum_pct'],
                         } for i, _r in enumerate(_rows_8020)])
                         with pd.ExcelWriter(_buf_8020, engine='openpyxl') as _w:
                             _df_excel.to_excel(_w, sheet_name='8020_Compras', index=False)
