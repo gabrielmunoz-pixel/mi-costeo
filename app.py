@@ -5104,10 +5104,36 @@ elif modulo.startswith("📊"):
                         _var_compra    = _gasto_fin_c - _gasto_ini_c
                         _var_compra_pct = (_var_compra / _gasto_ini_c * 100) if _gasto_ini_c > 0 else 0
 
+                        # Cuadro 3: variación de ventas ini → fin
+                        _filtro_local_v = (
+                            f"AND UPPER(local) = UPPER('{_local_label}')"
+                            if _local_label != 'Todos' else ''
+                        )
+                        _fi_v  = _mes_i.strftime('%Y-%m-01')
+                        _ff_v  = (_mes_f + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
+                        _df_vta = run_query(f"""
+                            SELECT
+                                DATE_TRUNC('month', fecha_venta::timestamp)::date AS mes,
+                                SUM(monto_venta_real) AS venta_mes
+                            FROM ventas
+                            WHERE fecha_venta::date BETWEEN '{_fi_v}' AND '{_ff_v}'
+                              AND es_opcion = false
+                              {_filtro_local_v}
+                            GROUP BY 1
+                            ORDER BY 1
+                        """)
+                        _mes_i_d = _mes_i.date() if hasattr(_mes_i, 'date') else _mes_i
+                        _mes_f_d = _mes_f.date() if hasattr(_mes_f, 'date') else _mes_f
+                        _vta_ini = float(_df_vta[_df_vta['mes'] == _mes_i_d]['venta_mes'].sum()) if not _df_vta.empty else 0.0
+                        _vta_fin = float(_df_vta[_df_vta['mes'] == _mes_f_d]['venta_mes'].sum()) if not _df_vta.empty else 0.0
+                        _var_vta     = _vta_fin - _vta_ini
+                        _var_vta_pct = ((_vta_fin / _vta_ini) - 1) * 100 if _vta_ini > 0 else 0
+
                         # Helpers de formato para subtextos
                         def _fmt_k(v):
                             """Formatea en millones (M) o miles (k) — nunca B"""
-                            if v >= 1_000_000: return f"${v/1_000_000:,.0f}M"
+                            av = abs(v)
+                            if av >= 1_000_000: return f"${v/1_000_000:,.2f}M"
                             return f"${v/1_000:.0f}k"
 
                         def _color_var(v):
@@ -5167,23 +5193,25 @@ elif modulo.startswith("📊"):
                               </div>
                             </div>""", unsafe_allow_html=True)
 
-                        # Cuadro 3: Impacto Δ$ canasta + Δ% sobre gasto inicial
-                        _c3 = _color_var(_impacto_total)
-                        _imp_pct_c3 = (_impacto_total / _gasto_ini_c * 100) if _gasto_ini_c > 0 else 0
+                        # Cuadro 3: Variación de ventas ini → fin
+                        _c3_vta = "#4caf7d" if _var_vta >= 0 else "#e84545"
                         with _k3:
                             st.markdown(f"""
                             <div style="background:#1a1a1a;border-radius:10px;padding:16px 20px;
                                         border:1px solid #2a2a2a;min-height:100px">
                               <div style="font-size:0.72rem;color:#888;margin-bottom:4px">
-                                📈 Impacto Δ$ canasta</div>
-                              <div style="font-size:1.6rem;font-weight:700;color:{_c3};
+                                📊 Variación ventas — {_titulo_local}</div>
+                              <div style="font-size:1.6rem;font-weight:700;color:{_c3_vta};
                                           letter-spacing:-0.02em;line-height:1.2">
-                                {("+" if _impacto_total >= 0 else "") + _fmt_k(_impacto_total)}</div>
-                              <div style="margin-top:6px;font-size:0.72rem">
-                                <span style="color:{_c3};font-weight:600">
-                                  {_arrow(_imp_pct_c3)}&nbsp;{abs(_imp_pct_c3):.1f}%
+                                {("+" if _var_vta >= 0 else "") + _fmt_k(_var_vta)}</div>
+                              <div style="margin-top:6px;font-size:0.72rem;color:#555">
+                                {_fmt_k(_vta_ini)} {_ini_label}
+                                &nbsp;→&nbsp;
+                                {_fmt_k(_vta_fin)} {_fin_label}
+                                &nbsp;
+                                <span style="color:{_c3_vta};font-weight:600">
+                                  {_arrow(_var_vta_pct)}&nbsp;{abs(_var_vta_pct):.1f}%
                                 </span>
-                                <span style="color:#555">&nbsp;sobre gasto {_ini_label}</span>
                               </div>
                             </div>""", unsafe_allow_html=True)
 
