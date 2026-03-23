@@ -4911,7 +4911,7 @@ elif modulo.startswith("📊"):
                         ).tolist()
 
                         # ── Último precio histórico por SKU (fallback) ────
-                        _q_fallback = """
+                        _q_fallback = f"""
                             SELECT DISTINCT ON (COALESCE(e.sku_receta, c.sku))
                                 COALESCE(e.sku_receta, c.sku)                          AS sku,
                                 SUM(c.costo_realfinal) OVER w
