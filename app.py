@@ -4923,7 +4923,7 @@ elif modulo.startswith("📊"):
                                       'Á','A'),'É','E'),'Í','I'),'Ó','O'))
                                   != 'ADMINISTRACION'
                               AND c.costo_realfinal > 0 AND c.cant_conv > 0
-                              {{_filtro_local_8020}}
+                              {_filtro_local_8020}
                             WINDOW w AS (
                                 PARTITION BY COALESCE(e.sku_receta, c.sku),
                                              DATE_TRUNC('month', c.fecha_dte::timestamp)
