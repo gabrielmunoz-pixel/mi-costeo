@@ -4198,7 +4198,94 @@ if modulo.startswith("📦"):
                     for _k in [_k for _k in st.session_state if _k.startswith('ac_')]:
                         del st.session_state[_k]
 
-                # ── Multiselect por nombre de producto ────────────
+                # ── Descarga / Carga masiva ───────────────────────
+                st.markdown("#### 📥 Edición masiva")
+                _dl1, _dl2 = st.columns([1, 2])
+
+                with _dl1:
+                    # Generar Excel para descarga
+                    _df_export = _df_ac[['nombre_producto', 'sku', 'categoria', 'conversion', 'formato', 'muc_prom', 'n_registros']].copy()
+                    _df_export.columns = ['Producto', 'SKU', 'Categoria', 'Conversion', 'Formato', 'MUC_prom', 'N_registros']
+                    _buf_exp = io.BytesIO()
+                    with pd.ExcelWriter(_buf_exp, engine='openpyxl') as _w:
+                        _df_export.to_excel(_w, index=False, sheet_name='Mapeo')
+                    st.download_button(
+                        "📥 Descargar lista",
+                        data=_buf_exp.getvalue(),
+                        file_name="mapeo_categorias.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
+
+                with _dl2:
+                    _upload_ac = st.file_uploader(
+                        "📤 Subir lista modificada (.xlsx)",
+                        type="xlsx",
+                        key="ac_upload"
+                    )
+
+                if _upload_ac is not None:
+                    try:
+                        _df_up = pd.read_excel(_upload_ac, sheet_name='Mapeo')
+                        # Validar columnas mínimas
+                        _cols_req = ['Producto', 'SKU', 'Categoria', 'Conversion', 'Formato']
+                        _cols_faltantes = [c for c in _cols_req if c not in _df_up.columns]
+                        if _cols_faltantes:
+                            st.error(f"❌ Columnas faltantes en el archivo: {', '.join(_cols_faltantes)}")
+                        else:
+                            _df_up = _df_up.dropna(subset=['Producto'])
+                            _df_up['SKU']        = _df_up['SKU'].fillna('').astype(str).str.strip()
+                            _df_up['Categoria']  = _df_up['Categoria'].fillna('').astype(str).str.strip()
+                            _df_up['Conversion'] = pd.to_numeric(_df_up['Conversion'], errors='coerce').fillna(1)
+                            _df_up['Formato']    = pd.to_numeric(_df_up['Formato'],    errors='coerce').fillna(1)
+
+                            st.markdown(f"**{len(_df_up)} productos en el archivo.** Vista previa:")
+                            st.dataframe(_df_up[_cols_req].head(10), use_container_width=True, hide_index=True)
+
+                            if st.button("💾 Aplicar cambios masivos", key="ac_apply_bulk", type="primary"):
+                                _engine_ac = get_engine()
+                                _ok = 0
+                                _err = 0
+                                try:
+                                    with _engine_ac.connect() as _conn_ac:
+                                        for _, _row in _df_up.iterrows():
+                                            _nombre = str(_row['Producto']).strip()
+                                            _sku    = str(_row['SKU']).strip()
+                                            _cat    = str(_row['Categoria']).strip()
+                                            _conv   = float(_row['Conversion'])
+                                            _fmt    = float(_row['Formato'])
+                                            if not _nombre or not _sku:
+                                                _err += 1
+                                                continue
+                                            _conn_ac.execute(text("""
+                                                UPDATE compras SET
+                                                    sku                = :sku,
+                                                    categoria_producto = :cat,
+                                                    conversion         = :conv,
+                                                    formato            = :fmt,
+                                                    cant_conv          = cantidad * :conv,
+                                                    muc                = CASE WHEN :fmt = 1
+                                                                         THEN costo_realfinal / NULLIF(cantidad * :conv, 0)
+                                                                         ELSE costo_realfinal / NULLIF(cantidad * :conv * :fmt, 0) END
+                                                WHERE TRIM(nombre_producto) = :nombre
+                                            """), {
+                                                'sku':    _sku,
+                                                'cat':    _cat,
+                                                'conv':   _conv,
+                                                'fmt':    _fmt,
+                                                'nombre': _nombre
+                                            })
+                                            _ok += 1
+                                        _conn_ac.commit()
+                                    st.success(f"✅ {_ok} productos actualizados" + (f" — {_err} omitidos por datos vacíos" if _err else ""))
+                                    _limpiar_ac()
+                                    st.rerun()
+                                except Exception as _e_bulk:
+                                    st.error(f"Error: {_e_bulk}")
+                    except Exception as _e_up:
+                        st.error(f"Error al leer el archivo: {_e_up}")
+
+                st.markdown("---")
                 _opciones_tabla_ac = _df_ac.apply(
                     lambda r: f"{str(r['nombre_producto'])[:50]} | SKU: {r['sku']} [{r['categoria']}]",
                     axis=1
