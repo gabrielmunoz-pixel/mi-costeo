@@ -4148,14 +4148,12 @@ if modulo.startswith("📦"):
             _fbusq_ac = '' if not _busq_ac else f"AND (UPPER(sku) LIKE UPPER('%{_busq_ac}%') OR UPPER(nombre_producto) LIKE UPPER('%{_busq_ac}%'))"
             _q_ac = f"""
                 SELECT
-                    nombre_producto,
+                    TRIM(nombre_producto)                               AS nombre_producto,
                     MODE() WITHIN GROUP (ORDER BY sku)                  AS sku,
                     MODE() WITHIN GROUP (ORDER BY categoria_producto)   AS categoria,
                     MODE() WITHIN GROUP (ORDER BY conversion::text)     AS conversion,
                     MODE() WITHIN GROUP (ORDER BY formato::text)        AS formato,
                     ROUND(AVG(muc)::numeric, 2)                         AS muc_prom,
-                    ROUND(MIN(muc)::numeric, 2)                         AS muc_min,
-                    ROUND(MAX(muc)::numeric, 2)                         AS muc_max,
                     COUNT(*)                                            AS n_registros,
                     ARRAY_AGG(id)                                       AS ids
                 FROM compras
@@ -4164,15 +4162,13 @@ if modulo.startswith("📦"):
                   AND id NOT IN (SELECT compra_id FROM compras_excluidas)
                   {_fcat_ac}
                   {_fbusq_ac}
-                GROUP BY nombre_producto
+                GROUP BY TRIM(nombre_producto)
                 ORDER BY categoria, nombre_producto
                 LIMIT 800
             """
             _df_ac = run_query(_q_ac)
             if not _df_ac.empty:
                 _df_ac['muc_prom']   = pd.to_numeric(_df_ac['muc_prom'],   errors='coerce').fillna(0)
-                _df_ac['muc_min']    = pd.to_numeric(_df_ac['muc_min'],    errors='coerce').fillna(0)
-                _df_ac['muc_max']    = pd.to_numeric(_df_ac['muc_max'],    errors='coerce').fillna(0)
                 _df_ac['conversion'] = pd.to_numeric(_df_ac['conversion'], errors='coerce').fillna(1)
                 _df_ac['formato']    = pd.to_numeric(_df_ac['formato'],    errors='coerce').fillna(1)
                 _df_ac['n_registros']= pd.to_numeric(_df_ac['n_registros'],errors='coerce').fillna(0).astype(int)
@@ -4304,14 +4300,12 @@ if modulo.startswith("📦"):
                 else:
                     st.caption('☝️ Selecciona productos en la tabla para aplicar acciones.')
 
-                # ── Tabla HTML — una fila por nombre de producto ──
                 _hs_ac = 'padding:8px 12px;font-size:0.67rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
+                _hdrs_ac = ['Producto', 'SKU actual', 'Categoría', 'Conv.', 'Formato', 'MUC prom.', '# Reg.']
                 _rows_ac = ''
                 for _, _r in _df_ac.iterrows():
                     _nreg  = int(_r.get('n_registros', 0) or 0)
                     _muc_p = float(_r.get('muc_prom', 0) or 0)
-                    _muc_n = float(_r.get('muc_min',  0) or 0)
-                    _muc_x = float(_r.get('muc_max',  0) or 0)
                     _rows_ac += (
                         f'<tr style="border-bottom:1px solid #1e1e1e">'
                         f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de;font-size:0.8rem">{str(_r.get("nombre_producto",""))}</td>'
@@ -4320,18 +4314,14 @@ if modulo.startswith("📦"):
                         f'<td style="padding:9px 12px;text-align:right;color:#888">{float(_r.get("conversion",1)):.3g}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#888">{float(_r.get("formato",1)):.3g}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#aaa">{_muc_p:,.2f}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:#666;font-size:0.75rem">{_muc_n:,.2f} – {_muc_x:,.2f}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#666">{_nreg}</td>'
                         f'</tr>'
                     )
-
-                _hdrs_ac = ['Producto', 'SKU actual', 'Categoría', 'Conv.', 'Formato', 'MUC prom.', 'MUC min–max', '# Reg.']
                 st.markdown(
                     '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
                     '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
                     '<thead><tr style="background:#111">'
-                    + ''.join([f'<th style="{_hs_ac};text-align:{"left" if _i < 3 else "right" if _i >= 3 else "left"}">{_h}</th>'
-                                for _i, _h in enumerate(_hdrs_ac)])
+                    + ''.join([f'<th style="{_hs_ac};text-align:{"left" if _i < 3 else "right"}">{_h}</th>' for _i, _h in enumerate(_hdrs_ac)])
                     + f'</tr></thead><tbody>{_rows_ac}</tbody></table></div>',
                     unsafe_allow_html=True
                 )
