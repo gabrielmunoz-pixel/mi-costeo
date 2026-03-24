@@ -5531,14 +5531,20 @@ elif modulo.startswith("📊"):
                             st.markdown(_orden_tag, unsafe_allow_html=True)
 
                         # Aplicar orden a la copia de renderizado
-                        _rows_render = sorted(
-                            _rows_8020,
-                            key=lambda r: (
-                                -r['gasto_total']
-                                if st.session_state['p8020_orden'] == 'volumen'
-                                else -(abs(r['delta_pct']) if r['delta_pct'] is not None else 0)
+                        if st.session_state['p8020_orden'] == 'volumen':
+                            _rows_render = sorted(_rows_8020, key=lambda r: -r['gasto_total'])
+                        else:
+                            # Alzas primero (delta > 0), ordenadas de mayor a menor
+                            # Luego bajas (delta <= 0), ordenadas de mayor a menor en magnitud
+                            _alzas = sorted(
+                                [r for r in _rows_8020 if (r['delta_pct'] or 0) > 0],
+                                key=lambda r: -(r['delta_pct'] or 0)
                             )
-                        )
+                            _bajas = sorted(
+                                [r for r in _rows_8020 if (r['delta_pct'] or 0) <= 0],
+                                key=lambda r: (r['delta_pct'] or 0)
+                            )
+                            _rows_render = _alzas + _bajas
                         # Recalcular % acum. según el nuevo orden
                         _acum_r = 0.0
                         for _rr in _rows_render:
