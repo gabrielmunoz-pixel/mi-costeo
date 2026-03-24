@@ -58,13 +58,22 @@ def _ensure_users_table():
         conn.commit()
 
 def _check_login(username, password):
+    # Admin login: no requiere BD
     if username == ADMIN_USER and _hash_pw(password) == ADMIN_HASH:
         return "admin"
+    # Usuarios normales: consulta BD con manejo de error explícito
     try:
-        df = run_query("SELECT password_hash, permisos FROM app_usuarios WHERE username=:u", {"u": username})
+        engine = get_engine()
+        if engine is None:
+            return None
+        with engine.connect() as conn:
+            df = pd.read_sql(
+                text("SELECT password_hash, permisos FROM app_usuarios WHERE username=:u"),
+                conn, params={"u": username}
+            )
         if not df.empty and df["password_hash"].iloc[0] == _hash_pw(password):
             return df["permisos"].iloc[0]
-    except:
+    except Exception:
         pass
     return None
 
@@ -2091,17 +2100,15 @@ def get_locales():
 
 
 # ============================================================
-# INIT
-# ============================================================
-init_exclusiones()
-
-# ============================================================
 # SIDEBAR
 # ============================================================
 # ── LOGIN GATE ────────────────────────────────────────────────
 if not st.session_state.get("logged_in"):
     _render_login()
     st.stop()
+
+# ── INIT (solo después de autenticado) ───────────────────────
+init_exclusiones()
 
 with st.sidebar:
     st.markdown("""
