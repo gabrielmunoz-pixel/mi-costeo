@@ -587,7 +587,15 @@ def get_engine():
             conn_str,
             pool_pre_ping=True,
             pool_recycle=300,
-            connect_args={"options": "-c statement_timeout=30000"}
+            pool_timeout=10,
+            connect_args={
+                "options":              "-c statement_timeout=30000",
+                "connect_timeout":      8,
+                "keepalives":           1,
+                "keepalives_idle":      30,
+                "keepalives_interval":  10,
+                "keepalives_count":     3,
+            }
         )
     except Exception as e:
         st.error(f"❌ Error de conexión: {e}")
