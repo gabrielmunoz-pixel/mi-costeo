@@ -2503,7 +2503,7 @@ if modulo.startswith("📦"):
     </div>
     """, unsafe_allow_html=True)
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(["📖 Recetario", "🛒 Compras", "📈 Ventas", "🔀 Equivalencias SKU", "🔍 Auditoría Compras", "📦 Inventario / Uso", "🗂️ Clasificación", "🧮 Explosión MRP"])
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs(["📖 Recetario", "🛒 Compras", "📈 Ventas", "🔀 Equivalencias SKU", "🔍 Auditoría Compras", "📦 Inventario / Uso", "🗂️ Clasificación", "🧮 Explosión MRP", "🏷️ Auditoría Categorías"])
 
     with tab1:
         st.markdown("<div class='info-box'>Carga las hojas <b>Directos</b> y <b>Procesados</b> de tu recetario. Esto reemplaza el recetario actual.</div>", unsafe_allow_html=True)
@@ -4107,6 +4107,274 @@ if modulo.startswith("📦"):
                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             except Exception as e:
                 st.error(f"Error al procesar: {e}")
+
+    # ══════════════════════════════════════════════════════════
+    # TAB 9 — AUDITORÍA DE CATEGORÍAS
+    # ══════════════════════════════════════════════════════════
+    with tab9:
+        st.markdown("<div class='info-box'>Revisa y corrige <b>categoría</b>, <b>conversión</b> y <b>formato</b> de los SKUs. Filtra por grupo de categoría para detectar desechables u otros grupos mal clasificados. La dispersión muestra cuánto varía el MUC del SKU — valores altos indican conversión o formato inconsistente.</div>", unsafe_allow_html=True)
+
+        # ── Controles ──────────────────────────────────────────
+        cc1, cc2, cc3 = st.columns([2, 2, 1])
+        with cc1:
+            _cat_q_ac = run_query("SELECT DISTINCT categoria_producto FROM compras WHERE categoria_producto IS NOT NULL ORDER BY 1")
+            _cats_ac   = _cat_q_ac['categoria_producto'].tolist() if not _cat_q_ac.empty else []
+            _cat_sel_ac = st.selectbox("Filtrar por categoría", ['Todas'] + _cats_ac, key='ac_cat')
+        with cc2:
+            _busq_ac = st.text_input("🔍 Buscar SKU / nombre", key='ac_busq', placeholder='ej: VASO, DES-001...')
+        with cc3:
+            _umbral_ac = st.slider("Umbral dispersión", min_value=1.5, max_value=20.0, value=3.0, step=0.5, key='ac_umbral')
+
+        if st.button("▶ Ejecutar", key='ac_run'):
+            st.session_state.pop('ac_df', None)
+
+        if 'ac_df' not in st.session_state:
+            _fcat_ac = '' if _cat_sel_ac == 'Todas' else f"AND categoria_producto = '{_cat_sel_ac}'"
+            _fbusq_ac = '' if not _busq_ac else f"AND (UPPER(sku) LIKE UPPER('%{_busq_ac}%') OR UPPER(nombre_producto) LIKE UPPER('%{_busq_ac}%'))"
+            _q_ac = f"""
+                WITH base AS (
+                    SELECT
+                        sku,
+                        ROUND(muc::numeric, 1)                                          AS muc_grupo,
+                        COUNT(*)                                                        AS n_registros,
+                        ARRAY_AGG(id)                                                   AS ids,
+                        MODE() WITHIN GROUP (ORDER BY nombre_producto)                  AS nombre_producto,
+                        MODE() WITHIN GROUP (ORDER BY categoria_producto)               AS categoria,
+                        MAX(conversion)                                                 AS conversion,
+                        MAX(formato)                                                    AS formato,
+                        ROUND(AVG(monto_real / NULLIF(cantidad, 0))::numeric, 2)       AS precio_factura
+                    FROM compras
+                    WHERE muc > 0
+                      AND costo_realfinal > 0
+                      AND monto_real > 0
+                      AND UPPER(sku) NOT IN ('N. CREDITO', 'NCR', 'COLACION')
+                      AND id NOT IN (SELECT compra_id FROM compras_excluidas)
+                      {_fcat_ac}
+                      {_fbusq_ac}
+                    GROUP BY sku, ROUND(muc::numeric, 1)
+                    HAVING ROUND(muc::numeric, 1) > 0
+                ),
+                disp AS (
+                    SELECT
+                        sku,
+                        MAX(muc_grupo)                                                  AS muc_max,
+                        MIN(muc_grupo)                                                  AS muc_min,
+                        ROUND((MAX(muc_grupo) / NULLIF(MIN(muc_grupo), 0))::numeric, 1) AS dispersion,
+                        SUM(n_registros)                                                AS total_registros,
+                        COUNT(*)                                                        AS n_grupos
+                    FROM base
+                    WHERE muc_grupo > 0
+                    GROUP BY sku
+                )
+                SELECT
+                    b.sku,
+                    b.nombre_producto,
+                    b.categoria,
+                    b.conversion,
+                    b.formato,
+                    b.muc_grupo                                                         AS muc,
+                    b.n_registros,
+                    b.ids,
+                    b.precio_factura,
+                    d.muc_min,
+                    d.muc_max,
+                    COALESCE(d.dispersion, 1)                                           AS dispersion,
+                    d.total_registros
+                FROM base b
+                LEFT JOIN disp d ON b.sku = d.sku
+                WHERE COALESCE(d.dispersion, 1) >= {_umbral_ac}
+                ORDER BY COALESCE(d.dispersion, 1) DESC, b.sku, b.muc_grupo
+                LIMIT 600
+            """
+            _df_ac = run_query(_q_ac)
+            st.session_state['ac_df'] = _df_ac
+
+        if 'ac_df' in st.session_state:
+            _df_ac = st.session_state['ac_df'].copy()
+
+            if _df_ac.empty:
+                st.success("✅ Sin inconsistencias detectadas con los filtros actuales.")
+            else:
+                # ── Métricas ──────────────────────────────────────
+                _n_skus_ac  = _df_ac['sku'].nunique()
+                _n_grps_ac  = len(_df_ac)
+                _n_regs_ac  = int(_df_ac['n_registros'].sum())
+                _am1, _am2, _am3 = st.columns(3)
+                _am1.metric("SKUs con dispersión", _n_skus_ac)
+                _am2.metric("Grupos MUC", _n_grps_ac)
+                _am3.metric("Registros afectados", _n_regs_ac)
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                # ── Selector SKU ──────────────────────────────────
+                import ast as _ast_ac
+                def _parse_ids_ac(raw):
+                    if isinstance(raw, list): return [int(i) for i in raw]
+                    try:    return [int(i) for i in _ast_ac.literal_eval(str(raw))]
+                    except: return []
+
+                _opciones_ac = _df_ac.apply(
+                    lambda r: f"{r['sku']} — {str(r['nombre_producto'])[:40]} | MUC {float(r['muc']):.1f} ({int(r['n_registros'])} reg. | {float(r['dispersion']):.0f}×)",
+                    axis=1
+                ).tolist()
+
+                _sel_ac = st.selectbox(
+                    "🔍 Seleccionar grupo SKU / MUC",
+                    [None] + _opciones_ac,
+                    format_func=lambda x: "— Todos —" if x is None else x,
+                    key='ac_sel'
+                )
+
+                # ── Filtrar tabla ─────────────────────────────────
+                if _sel_ac:
+                    _sku_fil_ac = _sel_ac.split(' — ')[0].strip()
+                    _df_tabla_ac = _df_ac[_df_ac['sku'] == _sku_fil_ac].reset_index(drop=True)
+                else:
+                    _sku_fil_ac = None
+                    _df_tabla_ac = _df_ac.reset_index(drop=True)
+
+                st.caption(f"{'SKU: ' + _sku_fil_ac if _sku_fil_ac else 'Todos los SKUs'} — {len(_df_tabla_ac)} grupos MUC")
+
+                # ── Multiselect ───────────────────────────────────
+                _prev_ac = st.session_state.get('ac_multisel', [])
+                _opciones_tabla_ac = _df_tabla_ac.apply(
+                    lambda r: f"{r['sku']} | MUC {float(r['muc']):.1f} | {int(r['n_registros'])} reg. | {float(r['dispersion']):.0f}×",
+                    axis=1
+                ).tolist()
+
+                _sel_multi_ac = st.multiselect(
+                    "Seleccionar grupos para editar",
+                    _opciones_tabla_ac,
+                    default=[o for o in _prev_ac if o in _opciones_tabla_ac],
+                    key='ac_multisel'
+                )
+
+                # ── Calcular selección ────────────────────────────
+                _idx_sel_ac = [i for i, o in enumerate(_opciones_tabla_ac) if o in _sel_multi_ac]
+                _sel_rows_ac = _df_tabla_ac.iloc[_idx_sel_ac].reset_index(drop=True) if _idx_sel_ac else pd.DataFrame()
+                _ids_sel_ac  = []
+                _skus_sel_ac = []
+                for _, _r in _sel_rows_ac.iterrows():
+                    _ids_sel_ac  += _parse_ids_ac(_r['ids'])
+                    _skus_sel_ac.append(_r['sku'])
+                _skus_sel_ac = list(set(_skus_sel_ac))
+
+                def _limpiar_ac():
+                    st.session_state.pop('ac_df', None)
+                    for _k in [_k for _k in st.session_state if _k.startswith('ac_')]:
+                        del st.session_state[_k]
+
+                # ── Panel de acciones ─────────────────────────────
+                if not _sel_rows_ac.empty:
+                    st.markdown(f'**⚙️ {len(_sel_rows_ac)} grupo(s) — {len(_ids_sel_ac)} registros seleccionados**')
+                    _pa1, _pa2, _pa3, _pa4 = st.columns([2, 2, 2, 1])
+
+                    with _pa1:
+                        # Categorías disponibles para reasignar
+                        _cats_edit = run_query("SELECT DISTINCT categoria_producto FROM compras WHERE categoria_producto IS NOT NULL ORDER BY 1")
+                        _cats_lista = _cats_edit['categoria_producto'].tolist() if not _cats_edit.empty else []
+                        _cat_actual = str(_sel_rows_ac.iloc[0]['categoria']) if not _sel_rows_ac.empty else ''
+                        _cat_idx    = _cats_lista.index(_cat_actual) if _cat_actual in _cats_lista else 0
+                        _nueva_cat_ac = st.selectbox('Nueva categoría', _cats_lista, index=_cat_idx, key='ac_nueva_cat')
+
+                    with _pa2:
+                        _nueva_conv_ac = st.number_input('Nueva conversion',
+                            value=float(_sel_rows_ac.iloc[0]['conversion'] or 1),
+                            min_value=0.001, step=0.1, key='ac_nueva_conv')
+
+                    with _pa3:
+                        _nuevo_fmt_ac = st.number_input('Nuevo formato',
+                            value=float(_sel_rows_ac.iloc[0]['formato'] or 1),
+                            min_value=0.001, step=1.0, key='ac_nuevo_fmt')
+
+                    with _pa4:
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        if st.button('💾 Aplicar', key='ac_apply'):
+                            _engine_ac = get_engine()
+                            try:
+                                with _engine_ac.connect() as _conn_ac:
+                                    # Verificar IDs pertenecen a los SKUs seleccionados
+                                    _check_ac = pd.read_sql(
+                                        text('SELECT id, sku FROM compras WHERE id = ANY(:ids)'),
+                                        _conn_ac, params={'ids': _ids_sel_ac}
+                                    )
+                                    _ids_mal = _check_ac[~_check_ac['sku'].isin(_skus_sel_ac)]['id'].tolist()
+                                    if _ids_mal:
+                                        st.error(f'🚫 {len(_ids_mal)} IDs no coinciden con SKUs seleccionados. Cancelado.')
+                                    else:
+                                        _conn_ac.execute(text("""
+                                            UPDATE compras SET
+                                                categoria_producto = :cat,
+                                                conversion         = :conv,
+                                                formato            = :fmt,
+                                                cant_conv          = cantidad * :conv,
+                                                muc                = CASE WHEN :fmt = 1
+                                                                     THEN costo_realfinal / NULLIF(cantidad * :conv, 0)
+                                                                     ELSE costo_realfinal / NULLIF(cantidad * :conv * :fmt, 0) END
+                                            WHERE id = ANY(:ids) AND sku = ANY(:skus)
+                                        """), {
+                                            'cat':  _nueva_cat_ac,
+                                            'conv': _nueva_conv_ac,
+                                            'fmt':  _nuevo_fmt_ac,
+                                            'ids':  _ids_sel_ac,
+                                            'skus': _skus_sel_ac
+                                        })
+                                        _conn_ac.commit()
+                                        st.success(f'✅ {len(_ids_sel_ac)} registros actualizados')
+                                        _limpiar_ac()
+                                        st.rerun()
+                            except Exception as _e_ac:
+                                st.error(f'Error: {_e_ac}')
+
+                    # También permite solo corregir conv/formato sin cambiar categoría
+                    _pn1, _pn2 = st.columns([3, 1])
+                    with _pn2:
+                        if st.button('✅ Marcar revisado', key='ac_revisado'):
+                            _limpiar_ac()
+                            st.rerun()
+                    st.markdown('---')
+                else:
+                    st.caption('☝️ Selecciona grupos en la tabla para aplicar acciones.')
+
+                # ── Tabla HTML ────────────────────────────────────
+                _hs_ac = 'padding:8px 12px;font-size:0.67rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
+                _rows_ac = ''
+                for _, _r in _df_tabla_ac.iterrows():
+                    _muc_v   = float(_r.get('muc', 0) or 0)
+                    _muc_min = float(_r.get('muc_min', 0) or 0)
+                    _muc_max = float(_r.get('muc_max', 0) or 0)
+                    _disp_v  = float(_r.get('dispersion', 1) or 1)
+                    _nreg    = int(_r.get('n_registros', 0) or 0)
+                    _precio  = float(_r.get('precio_factura', 0) or 0)
+                    _es_out  = _muc_min > 0 and (abs(_muc_v - _muc_min) < 0.0001 or abs(_muc_v - _muc_max) < 0.0001)
+                    if _disp_v > 8:   _dc = '#e84545'; _dl = f'🔴 {_disp_v:.0f}×'
+                    elif _disp_v > 2: _dc = '#e89c45'; _dl = f'🟡 {_disp_v:.1f}×'
+                    else:             _dc = '#aaa';    _dl = f'⚪ {_disp_v:.1f}×'
+                    _mc = '#e84545' if _es_out else '#aaa'
+                    _mw = '700'     if _es_out else '400'
+                    _rows_ac += (
+                        f'<tr style="border-bottom:1px solid #1e1e1e">'
+                        f'<td style="padding:9px 12px;color:#666;font-family:monospace;font-size:0.72rem">{_r.get("sku","")}</td>'
+                        f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de;font-size:0.8rem">{str(_r.get("nombre_producto",""))}</td>'
+                        f'<td style="padding:9px 12px;color:#777;font-size:0.75rem">{_r.get("categoria","")}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#888">{_r.get("conversion","")}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#888">{_r.get("formato","")}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#aaa">${_precio:,.2f}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:{_mc};font-weight:{_mw}">{_muc_v:,.4f}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#666">{_nreg}</td>'
+                        f'<td style="padding:9px 12px;text-align:center;color:{_dc};font-weight:600">{_dl}</td>'
+                        f'</tr>'
+                    )
+
+                _hdrs_ac = ['SKU', 'Producto', 'Categoría', 'Conv.', 'Formato', 'Neto Fact/u', 'MUC', '# Reg.', 'Dispersión']
+                st.markdown(
+                    '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
+                    '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
+                    '<thead><tr style="background:#111">'
+                    + ''.join([f'<th style="{_hs_ac};text-align:{"left" if _i < 3 else "right" if _i < 8 else "center"}">{_h}</th>'
+                                for _i, _h in enumerate(_hdrs_ac)])
+                    + f'</tr></thead><tbody>{_rows_ac}</tbody></table></div>',
+                    unsafe_allow_html=True
+                )
 
 # ============================================================
 # MÓDULO: EXPLOSIÓN MRP (eliminado — ahora en pestaña de Gestión de Datos)
