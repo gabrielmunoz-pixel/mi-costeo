@@ -5645,7 +5645,7 @@ elif modulo.startswith("📊"):
                             )
                             _bajas = sorted(
                                 [r for r in _rows_8020 if (r['delta_pct'] or 0) < 0],
-                                key=lambda r: (r['delta_pct'] or 0)
+                                key=lambda r: -(r['delta_pct'] or 0)
                             )
                             _ceros = [r for r in _rows_8020 if (r['delta_pct'] or 0) == 0]
                             _rows_render = _alzas + _ceros + _bajas
