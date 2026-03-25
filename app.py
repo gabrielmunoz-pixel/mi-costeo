@@ -763,7 +763,7 @@ def calcular_costo_platos(fecha_i, fecha_f, local):
     if df_precio.empty:
         return pd.DataFrame()
 
-    df_rec = run_query("SELECT * FROM recetas")
+    df_rec = get_recetas()
     if df_rec.empty:
         return pd.DataFrame()
 
@@ -1186,9 +1186,9 @@ def get_opciones_por_local(fecha_i, fecha_f, ab_categoria_padre):
 # ============================================================
 # INFORME 2: DESVIACIÓN REAL VS TEÓRICO
 # ============================================================
+@st.cache_data(ttl=300, show_spinner=False)
 def informe_desviacion(fecha_i, fecha_f, local):
-    engine = get_engine()
-    if engine is None:
+    if get_engine() is None:
         return pd.DataFrame()
 
     # Ventas del período — casteamos fechas a string para evitar problemas de tipo con SQLAlchemy
@@ -1207,7 +1207,7 @@ def informe_desviacion(fecha_i, fecha_f, local):
     df_v = run_query(q_v, params)
 
     # Recetario completo
-    df_rec = run_query("SELECT * FROM recetas")
+    df_rec = get_recetas()
     if df_rec.empty or df_v.empty:
         return pd.DataFrame()
 
@@ -1353,7 +1353,7 @@ def informe_desviacion(fecha_i, fecha_f, local):
     dict_nombres = dict(zip(nombres_compras['sku'], nombres_compras['nombre_compra'])) if not nombres_compras.empty else {}
 
     # Fallback de nombres via equivalencias
-    df_equiv = run_query("SELECT sku_compra, sku_receta FROM sku_equivalencias")
+    df_equiv = get_equivalencias()
     if not df_equiv.empty:
         for _, row in df_equiv.iterrows():
             sku_dest = row['sku_receta']
@@ -2007,9 +2007,23 @@ def semaforo_margen(val):
         return 'background-color: #3a1a1a; color: #e84545'
 
 
+@st.cache_data(ttl=300, show_spinner=False)
 def get_locales():
     df = run_query("SELECT DISTINCT local FROM ventas WHERE local IS NOT NULL ORDER BY 1")
     return ["Todos"] + df['local'].tolist() if not df.empty else ["Todos"]
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_recetas():
+    return run_query("SELECT * FROM recetas")
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_equivalencias():
+    return run_query("SELECT sku_compra, sku_receta FROM sku_equivalencias")
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_categorias_compras():
+    df = run_query("SELECT DISTINCT categoria_producto FROM compras WHERE categoria_producto IS NOT NULL ORDER BY 1")
+    return df['categoria_producto'].tolist() if not df.empty else []
 
 
 # ============================================================
@@ -4045,8 +4059,7 @@ if modulo.startswith("📦"):
         # ── Controles ──────────────────────────────────────────
         cc1, cc2 = st.columns([2, 3])
         with cc1:
-            _cat_q_ac = run_query("SELECT DISTINCT categoria_producto FROM compras WHERE categoria_producto IS NOT NULL ORDER BY 1")
-            _cats_ac  = _cat_q_ac['categoria_producto'].tolist() if not _cat_q_ac.empty else []
+            _cats_ac  = get_categorias_compras()
             _cat_sel_ac = st.selectbox("Filtrar por categoría", ['Todas'] + _cats_ac, key='ac_cat')
         with cc2:
             _busq_ac = st.text_input("🔍 Buscar nombre / SKU", key='ac_busq', placeholder='ej: VASO, BOLSA, DES-001...')
@@ -4236,8 +4249,7 @@ if modulo.startswith("📦"):
                         )
 
                     with _pa2:
-                        _cats_edit  = run_query("SELECT DISTINCT categoria_producto FROM compras WHERE categoria_producto IS NOT NULL ORDER BY 1")
-                        _cats_lista = _cats_edit['categoria_producto'].tolist() if not _cats_edit.empty else []
+                        _cats_lista = get_categorias_compras()
                         _cat_actual = str(_sel_rows_ac.iloc[0]['categoria']) if not _sel_rows_ac.empty else ''
                         _cat_idx    = _cats_lista.index(_cat_actual) if _cat_actual in _cats_lista else 0
                         _nueva_cat_ac = st.selectbox('Nueva categoría', _cats_lista, index=_cat_idx, key='ac_nueva_cat')
@@ -6952,8 +6964,7 @@ elif informe_sel == "Auditor":
     with fa3:
         ff_ac = st.date_input("Hasta", key="ac_ff", value=f_fin)
     with fa4:
-        cats_q = run_query("SELECT DISTINCT categoria_producto FROM compras WHERE categoria_producto IS NOT NULL ORDER BY 1")
-        cats_ac = ["Todas"] + cats_q['categoria_producto'].tolist() if not cats_q.empty else ["Todas"]
+        cats_ac = ["Todas"] + get_categorias_compras()
         cat_ac = st.selectbox("Categoría", cats_ac, key="ac_cat")
 
     fa5, fa6 = st.columns([2, 2])
