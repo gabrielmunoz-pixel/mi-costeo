@@ -4695,15 +4695,15 @@ elif modulo.startswith("📊"):
                                         pivot = pivot.sort_values('TOTAL', ascending=False)
                                         st.dataframe(pivot.astype(int), use_container_width=True)
 
-            # Descarga
-            buf2 = io.BytesIO()
-            with pd.ExcelWriter(buf2, engine='openpyxl') as w:
-                cols_excel = ['sku_producto','categoria_menu','nombre_producto','cant','venta',
-                              'cmv_unitario','cmv_base','cmv_opciones','cmv_total','cmv_pct',
-                              'mc_unitario','mc_total','margen_pct','mix_pct','umbral_pct','cuadrante']
-                cols_excel = [c for c in cols_excel if c in df_inf1.columns]
-                df_inf1[cols_excel].to_excel(w, sheet_name='Rentabilidad', index=False)
-            st.download_button("📥 Descargar Informe 1", buf2.getvalue(), "Informe1_Rentabilidad.xlsx")
+                # Descarga
+                buf2 = io.BytesIO()
+                with pd.ExcelWriter(buf2, engine='openpyxl') as w:
+                    cols_excel = ['sku_producto','categoria_menu','nombre_producto','cant','venta',
+                                  'cmv_unitario','cmv_base','cmv_opciones','cmv_total','cmv_pct',
+                                  'mc_unitario','mc_total','margen_pct','mix_pct','umbral_pct','cuadrante']
+                    cols_excel = [c for c in cols_excel if c in df_inf1.columns]
+                    df_inf1[cols_excel].to_excel(w, sheet_name='Rentabilidad', index=False)
+                st.download_button("📥 Descargar Informe 1", buf2.getvalue(), "Informe1_Rentabilidad.xlsx")
 
             with _tab_rent2:
                 st.markdown("<br>", unsafe_allow_html=True)
