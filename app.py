@@ -4503,195 +4503,197 @@ elif modulo.startswith("📊"):
 
             hs  = 'padding:10px 12px;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
 
-            # ── VISTA INTEREMPRESA ─────────────────────────────
-            if "Interempresa" in vista:
-                st.markdown("#### Detalle por Producto")
+            _tab_rent1, _tab_rent2 = st.tabs(["📊 Detalle por Producto", "🔲 Cuadrantes"])
 
-                for _, r in df_inf1.iterrows():
-                    ab   = r.get('ab_categoria', '')
-                    tiene_opciones = ab and ab in abs_con_opciones
-                    mg_per = r.get('margen_pct', r.get('margen_periodo', 0))
+            with _tab_rent1:
+                if "Interempresa" in vista:
+                    st.markdown("#### Detalle por Producto")
 
-                    bg = '#121e14' if mg_per >= 60 else '#1e1a12' if mg_per >= 40 else '#1e1212'
+                    for _, r in df_inf1.iterrows():
+                        ab   = r.get('ab_categoria', '')
+                        tiene_opciones = ab and ab in abs_con_opciones
+                        mg_per = r.get('margen_pct', r.get('margen_periodo', 0))
 
-                    row_html = (
-                        f'<div style="display:grid;grid-template-columns:90px 140px 1fr 80px 100px 90px 100px 80px;'
-                        f'gap:0;background:{bg};border-bottom:1px solid #1e1e1e;padding:6px 0;align-items:center">'
-                        f'<span style="padding:0 12px;color:#666;font-size:0.74rem;font-family:monospace">{r.get("sku_producto","")}</span>'
-                        f'<span style="padding:0 8px;color:#555;font-size:0.74rem">{r.get("categoria_menu","")}</span>'
-                        f'<span style="padding:0 8px;font-weight:500;color:#e8e4de;font-size:0.82rem">'
-                        f'{r.get("nombre_producto","")} {"🔽" if tiene_opciones else ""}</span>'
-                        f'<span style="text-align:right;padding:0 12px;color:#aaa">{r.get("cant",0):,.0f}</span>'
-                        f'<span style="text-align:right;padding:0 12px;color:#ccc">${r.get("venta",0):,.0f}</span>'
-                        f'<span style="text-align:right;padding:0 12px;color:#666">${r.get("cmv_unitario",0):,.0f}</span>'
-                        f'<span style="text-align:right;padding:0 12px">{fmt_mc(r.get("mc_total",0))}</span>'
-                        f'<span style="text-align:center;padding:0 8px">{badge_margen(mg_per)}</span>'
-                        f'</div>'
-                    )
-                    st.markdown(row_html, unsafe_allow_html=True)
+                        bg = '#121e14' if mg_per >= 60 else '#1e1a12' if mg_per >= 40 else '#1e1212'
 
-                    if tiene_opciones:
-                        with st.expander(f"  ↳ Opciones de {r.get('nombre_producto','')}"):
-                            grupos = get_opciones_producto(fi_, ff_, local_, ab, sku_padre=r.get('sku_producto'))
-                            if grupos:
-                                for grp_nombre, df_g in grupos.items():
-                                    total_grp = df_g['cant'].sum()
-                                    st.markdown(
-                                        f'<div style="font-size:0.7rem;text-transform:uppercase;'
-                                        f'letter-spacing:0.1em;color:#666;margin:8px 0 4px;'
-                                        f'border-bottom:1px solid #222;padding-bottom:3px">'
-                                        f'{grp_nombre} — {int(total_grp):,} uds</div>',
-                                        unsafe_allow_html=True
-                                    )
-                                    op_html = '<div style="background:#0d0d0d;padding:4px 12px 8px;border-radius:6px">'
-                                    for _, op in df_g.iterrows():
-                                        bar_w = int(float(op['pct'] or 0))
-                                        op_html += (
-                                            f'<div style="display:flex;align-items:center;gap:10px;padding:3px 0">'
-                                            f'<span style="color:#555;font-size:0.7rem;font-family:monospace;width:75px">{op["sku_producto"]}</span>'
-                                            f'<span style="color:#ccc;font-size:0.78rem;flex:1">{op["nombre_producto"]}</span>'
-                                            f'<span style="color:#d4a853;font-weight:600;font-size:0.78rem;width:55px;text-align:right">{int(op["cant"]):,}</span>'
-                                            f'<div style="width:100px;background:#1a1a1a;border-radius:3px;height:5px">'
-                                            f'<div style="background:#d4a853;height:5px;border-radius:3px;width:{bar_w}%"></div></div>'
-                                            f'<span style="color:#666;font-size:0.73rem;width:40px;text-align:right">{op["pct"]}%</span>'
-                                            f'</div>'
-                                        )
-                                    op_html += '</div>'
-                                    st.markdown(op_html, unsafe_allow_html=True)
-                            else:
-                                st.caption("Sin datos de opciones para este período.")
+                        row_html = (
+                            f'<div style="display:grid;grid-template-columns:90px 140px 1fr 80px 100px 90px 100px 80px;'
+                            f'gap:0;background:{bg};border-bottom:1px solid #1e1e1e;padding:6px 0;align-items:center">'
+                            f'<span style="padding:0 12px;color:#666;font-size:0.74rem;font-family:monospace">{r.get("sku_producto","")}</span>'
+                            f'<span style="padding:0 8px;color:#555;font-size:0.74rem">{r.get("categoria_menu","")}</span>'
+                            f'<span style="padding:0 8px;font-weight:500;color:#e8e4de;font-size:0.82rem">'
+                            f'{r.get("nombre_producto","")} {"🔽" if tiene_opciones else ""}</span>'
+                            f'<span style="text-align:right;padding:0 12px;color:#aaa">{r.get("cant",0):,.0f}</span>'
+                            f'<span style="text-align:right;padding:0 12px;color:#ccc">${r.get("venta",0):,.0f}</span>'
+                            f'<span style="text-align:right;padding:0 12px;color:#666">${r.get("cmv_unitario",0):,.0f}</span>'
+                            f'<span style="text-align:right;padding:0 12px">{fmt_mc(r.get("mc_total",0))}</span>'
+                            f'<span style="text-align:center;padding:0 8px">{badge_margen(mg_per)}</span>'
+                            f'</div>'
+                        )
+                        st.markdown(row_html, unsafe_allow_html=True)
 
-                # Resumen por Categoría
-                st.markdown("---")
-                st.markdown("#### Resumen por Categoría")
-                cat = df_inf1.groupby('categoria_menu').agg(
-                    venta=('venta','sum'),
-                    cmv=('cmv_total','sum') if 'cmv_total' in df_inf1.columns else ('costo_total_teorico','sum'),
-                    mc=('mc_total','sum') if 'mc_total' in df_inf1.columns else ('rentabilidad_periodo','sum'),
-                    productos=('sku_producto','count')
-                ).reset_index()
-                cat['margen_pct'] = cat.apply(lambda r: r['mc']/r['venta']*100 if r['venta']>0 else 0, axis=1).round(1)
-                cat['cmv_pct']    = cat.apply(lambda r: r['cmv']/r['venta']*100 if r['venta']>0 else 0, axis=1).round(1)
-                cat = cat.sort_values('mc', ascending=False)
-
-                cat_rows = ''
-                for _, r in cat.iterrows():
-                    cat_rows += (
-                        f'<tr style="border-bottom:1px solid #1e1e1e">'
-                        f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de">{r["categoria_menu"]}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:#aaa">{r["productos"]:,.0f}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:#ccc">${r["venta"]:,.0f}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:#666">${r["cmv"]:,.0f}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:#888">{r["cmv_pct"]:.1f}%</td>'
-                        f'<td style="padding:9px 12px;text-align:right">{fmt_mc(r["mc"])}</td>'
-                        f'<td style="padding:9px 12px;text-align:center">{badge_margen(r["margen_pct"])}</td>'
-                        f'</tr>'
-                    )
-                cat_html = (
-                    '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
-                    '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
-                    '<thead><tr style="background:#111">'
-                    f'<th style="{hs};text-align:left">Categoría</th>'
-                    f'<th style="{hs};text-align:right">Prods</th>'
-                    f'<th style="{hs};text-align:right">Venta</th>'
-                    f'<th style="{hs};text-align:right">CMV</th>'
-                    f'<th style="{hs};text-align:right">CMV%</th>'
-                    f'<th style="{hs};text-align:right">MC</th>'
-                    f'<th style="{hs};text-align:center">Margen</th>'
-                    f'</tr></thead><tbody>{cat_rows}</tbody></table></div>'
-                )
-                st.markdown(cat_html, unsafe_allow_html=True)
-
-            # ── VISTA POR LOCAL ────────────────────────────────
-            else:
-                st.markdown("#### Detalle por Producto — Por Local")
-
-                # Obtener locales disponibles en el período
-                locales_q = run_query(
-                    "SELECT DISTINCT local FROM ventas WHERE fecha_venta BETWEEN :i AND :f AND es_opcion=false ORDER BY 1",
-                    {'i': str(fi_), 'f': str(ff_)}
-                )
-                locales_disp = locales_q['local'].tolist() if not locales_q.empty else []
-
-                for _, r in df_inf1.iterrows():
-                    ab = r.get('ab_categoria', '')
-                    tiene_opciones = ab and ab in abs_con_opciones
-                    mg_per = r.get('margen_periodo', 0)
-                    bg = '#121e14' if mg_per >= 60 else '#1e1a12' if mg_per >= 40 else '#1e1212'
-
-                    # Fila resumen del producto
-                    row_html = (
-                        f'<div style="background:{bg};border-bottom:1px solid #1e1e1e;padding:7px 12px;'
-                        f'display:flex;align-items:center;gap:12px">'
-                        f'<span style="color:#666;font-size:0.74rem;font-family:monospace;width:80px">{r.get("sku_producto","")}</span>'
-                        f'<span style="color:#555;font-size:0.74rem;width:130px">{r.get("categoria_menu","")}</span>'
-                        f'<span style="font-weight:500;color:#e8e4de;flex:1">{r.get("nombre_producto","")} {"🔽" if tiene_opciones else ""}</span>'
-                        f'<span style="color:#aaa;font-size:0.78rem">{r.get("cant",0):,.0f} uds</span>'
-                        f'<span style="color:#ccc;font-size:0.78rem">${r.get("venta",0):,.0f}</span>'
-                        f'{badge_margen(mg_per)}'
-                        f'</div>'
-                    )
-                    st.markdown(row_html, unsafe_allow_html=True)
-
-                    with st.expander(f"  ↳ Detalle por local — {r.get('nombre_producto','')}"):
-                        # Ventas por local de este producto
-                        df_loc_prod = run_query("""
-                            SELECT local,
-                                   SUM(cantidad_vendida) as cant,
-                                   SUM(monto_venta_real) as venta
-                            FROM ventas
-                            WHERE fecha_venta BETWEEN :i AND :f
-                              AND sku_producto = :sku
-                              AND es_opcion = false
-                            GROUP BY local ORDER BY cant DESC
-                        """, {'i': str(fi_), 'f': str(ff_), 'sku': r['sku_producto']})
-
-                        if not df_loc_prod.empty:
-                            total_cant = df_loc_prod['cant'].sum()
-                            loc_html = '<div style="background:#0d0d0d;padding:8px 12px;border-radius:8px">'
-                            for _, lrow in df_loc_prod.iterrows():
-                                pct_loc = lrow['cant'] / total_cant * 100 if total_cant else 0
-                                bar_w   = int(pct_loc)
-                                loc_html += (
-                                    f'<div style="display:flex;align-items:center;gap:12px;padding:4px 0">'
-                                    f'<span style="color:#888;font-size:0.78rem;width:160px">{lrow["local"]}</span>'
-                                    f'<span style="color:#d4a853;font-weight:600;width:60px">{int(lrow["cant"])}</span>'
-                                    f'<span style="color:#666;font-size:0.75rem;width:90px">${lrow["venta"]:,.0f}</span>'
-                                    f'<div style="flex:1;background:#1a1a1a;border-radius:3px;height:6px">'
-                                    f'<div style="background:#4caf7d;height:6px;border-radius:3px;width:{bar_w}%"></div></div>'
-                                    f'<span style="color:#888;font-size:0.75rem;width:40px;text-align:right">{pct_loc:.2f}%</span>'
-                                    f'</div>'
-                                )
-                            loc_html += '</div>'
-                            st.markdown(loc_html, unsafe_allow_html=True)
-
-                        # Opciones por local si aplica
                         if tiene_opciones:
-                            st.markdown("**Distribución de opciones por local:**")
-                            df_op_loc = get_opciones_por_local(fi_, ff_, ab)
-                            if not df_op_loc.empty:
-                                locales_op = sorted(df_op_loc['local'].unique().tolist())
-                                grupos_u = [g for g in list(BA_GRUPOS.keys())+['Otros'] if g in df_op_loc['grupo'].unique()]
-                                for grp in grupos_u:
-                                    df_grp = df_op_loc[df_op_loc['grupo']==grp]
-                                    st.markdown(
-                                        f'<div style="font-size:0.7rem;text-transform:uppercase;'
-                                        f'letter-spacing:0.1em;color:#666;margin:8px 0 4px;'
-                                        f'border-bottom:1px solid #222;padding-bottom:3px">{grp}</div>',
-                                        unsafe_allow_html=True
+                            with st.expander(f"  ↳ Opciones de {r.get('nombre_producto','')}"):
+                                grupos = get_opciones_producto(fi_, ff_, local_, ab, sku_padre=r.get('sku_producto'))
+                                if grupos:
+                                    for grp_nombre, df_g in grupos.items():
+                                        total_grp = df_g['cant'].sum()
+                                        st.markdown(
+                                            f'<div style="font-size:0.7rem;text-transform:uppercase;'
+                                            f'letter-spacing:0.1em;color:#666;margin:8px 0 4px;'
+                                            f'border-bottom:1px solid #222;padding-bottom:3px">'
+                                            f'{grp_nombre} — {int(total_grp):,} uds</div>',
+                                            unsafe_allow_html=True
+                                        )
+                                        op_html = '<div style="background:#0d0d0d;padding:4px 12px 8px;border-radius:6px">'
+                                        for _, op in df_g.iterrows():
+                                            bar_w = int(float(op['pct'] or 0))
+                                            op_html += (
+                                                f'<div style="display:flex;align-items:center;gap:10px;padding:3px 0">'
+                                                f'<span style="color:#555;font-size:0.7rem;font-family:monospace;width:75px">{op["sku_producto"]}</span>'
+                                                f'<span style="color:#ccc;font-size:0.78rem;flex:1">{op["nombre_producto"]}</span>'
+                                                f'<span style="color:#d4a853;font-weight:600;font-size:0.78rem;width:55px;text-align:right">{int(op["cant"]):,}</span>'
+                                                f'<div style="width:100px;background:#1a1a1a;border-radius:3px;height:5px">'
+                                                f'<div style="background:#d4a853;height:5px;border-radius:3px;width:{bar_w}%"></div></div>'
+                                                f'<span style="color:#666;font-size:0.73rem;width:40px;text-align:right">{op["pct"]}%</span>'
+                                                f'</div>'
+                                            )
+                                        op_html += '</div>'
+                                        st.markdown(op_html, unsafe_allow_html=True)
+                                else:
+                                    st.caption("Sin datos de opciones para este período.")
+
+                    # Resumen por Categoría
+                    st.markdown("---")
+                    st.markdown("#### Resumen por Categoría")
+                    cat = df_inf1.groupby('categoria_menu').agg(
+                        venta=('venta','sum'),
+                        cmv=('cmv_total','sum') if 'cmv_total' in df_inf1.columns else ('costo_total_teorico','sum'),
+                        mc=('mc_total','sum') if 'mc_total' in df_inf1.columns else ('rentabilidad_periodo','sum'),
+                        productos=('sku_producto','count')
+                    ).reset_index()
+                    cat['margen_pct'] = cat.apply(lambda r: r['mc']/r['venta']*100 if r['venta']>0 else 0, axis=1).round(1)
+                    cat['cmv_pct']    = cat.apply(lambda r: r['cmv']/r['venta']*100 if r['venta']>0 else 0, axis=1).round(1)
+                    cat = cat.sort_values('mc', ascending=False)
+
+                    cat_rows = ''
+                    for _, r in cat.iterrows():
+                        cat_rows += (
+                            f'<tr style="border-bottom:1px solid #1e1e1e">'
+                            f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de">{r["categoria_menu"]}</td>'
+                            f'<td style="padding:9px 12px;text-align:right;color:#aaa">{r["productos"]:,.0f}</td>'
+                            f'<td style="padding:9px 12px;text-align:right;color:#ccc">${r["venta"]:,.0f}</td>'
+                            f'<td style="padding:9px 12px;text-align:right;color:#666">${r["cmv"]:,.0f}</td>'
+                            f'<td style="padding:9px 12px;text-align:right;color:#888">{r["cmv_pct"]:.1f}%</td>'
+                            f'<td style="padding:9px 12px;text-align:right">{fmt_mc(r["mc"])}</td>'
+                            f'<td style="padding:9px 12px;text-align:center">{badge_margen(r["margen_pct"])}</td>'
+                            f'</tr>'
+                        )
+                    cat_html = (
+                        '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
+                        '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
+                        '<thead><tr style="background:#111">'
+                        f'<th style="{hs};text-align:left">Categoría</th>'
+                        f'<th style="{hs};text-align:right">Prods</th>'
+                        f'<th style="{hs};text-align:right">Venta</th>'
+                        f'<th style="{hs};text-align:right">CMV</th>'
+                        f'<th style="{hs};text-align:right">CMV%</th>'
+                        f'<th style="{hs};text-align:right">MC</th>'
+                        f'<th style="{hs};text-align:center">Margen</th>'
+                        f'</tr></thead><tbody>{cat_rows}</tbody></table></div>'
+                    )
+                    st.markdown(cat_html, unsafe_allow_html=True)
+
+                # ── VISTA POR LOCAL ────────────────────────────────
+                else:
+                    st.markdown("#### Detalle por Producto — Por Local")
+
+                    # Obtener locales disponibles en el período
+                    locales_q = run_query(
+                        "SELECT DISTINCT local FROM ventas WHERE fecha_venta BETWEEN :i AND :f AND es_opcion=false ORDER BY 1",
+                        {'i': str(fi_), 'f': str(ff_)}
+                    )
+                    locales_disp = locales_q['local'].tolist() if not locales_q.empty else []
+
+                    for _, r in df_inf1.iterrows():
+                        ab = r.get('ab_categoria', '')
+                        tiene_opciones = ab and ab in abs_con_opciones
+                        mg_per = r.get('margen_periodo', 0)
+                        bg = '#121e14' if mg_per >= 60 else '#1e1a12' if mg_per >= 40 else '#1e1212'
+
+                        # Fila resumen del producto
+                        row_html = (
+                            f'<div style="background:{bg};border-bottom:1px solid #1e1e1e;padding:7px 12px;'
+                            f'display:flex;align-items:center;gap:12px">'
+                            f'<span style="color:#666;font-size:0.74rem;font-family:monospace;width:80px">{r.get("sku_producto","")}</span>'
+                            f'<span style="color:#555;font-size:0.74rem;width:130px">{r.get("categoria_menu","")}</span>'
+                            f'<span style="font-weight:500;color:#e8e4de;flex:1">{r.get("nombre_producto","")} {"🔽" if tiene_opciones else ""}</span>'
+                            f'<span style="color:#aaa;font-size:0.78rem">{r.get("cant",0):,.0f} uds</span>'
+                            f'<span style="color:#ccc;font-size:0.78rem">${r.get("venta",0):,.0f}</span>'
+                            f'{badge_margen(mg_per)}'
+                            f'</div>'
+                        )
+                        st.markdown(row_html, unsafe_allow_html=True)
+
+                        with st.expander(f"  ↳ Detalle por local — {r.get('nombre_producto','')}"):
+                            # Ventas por local de este producto
+                            df_loc_prod = run_query("""
+                                SELECT local,
+                                       SUM(cantidad_vendida) as cant,
+                                       SUM(monto_venta_real) as venta
+                                FROM ventas
+                                WHERE fecha_venta BETWEEN :i AND :f
+                                  AND sku_producto = :sku
+                                  AND es_opcion = false
+                                GROUP BY local ORDER BY cant DESC
+                            """, {'i': str(fi_), 'f': str(ff_), 'sku': r['sku_producto']})
+
+                            if not df_loc_prod.empty:
+                                total_cant = df_loc_prod['cant'].sum()
+                                loc_html = '<div style="background:#0d0d0d;padding:8px 12px;border-radius:8px">'
+                                for _, lrow in df_loc_prod.iterrows():
+                                    pct_loc = lrow['cant'] / total_cant * 100 if total_cant else 0
+                                    bar_w   = int(pct_loc)
+                                    loc_html += (
+                                        f'<div style="display:flex;align-items:center;gap:12px;padding:4px 0">'
+                                        f'<span style="color:#888;font-size:0.78rem;width:160px">{lrow["local"]}</span>'
+                                        f'<span style="color:#d4a853;font-weight:600;width:60px">{int(lrow["cant"])}</span>'
+                                        f'<span style="color:#666;font-size:0.75rem;width:90px">${lrow["venta"]:,.0f}</span>'
+                                        f'<div style="flex:1;background:#1a1a1a;border-radius:3px;height:6px">'
+                                        f'<div style="background:#4caf7d;height:6px;border-radius:3px;width:{bar_w}%"></div></div>'
+                                        f'<span style="color:#888;font-size:0.75rem;width:40px;text-align:right">{pct_loc:.2f}%</span>'
+                                        f'</div>'
                                     )
-                                    pivot = df_grp.pivot_table(
-                                        index='nombre_producto', columns='local',
-                                        values='cant', aggfunc='sum', fill_value=0
-                                    )
-                                    # Reorder columns to known locales order
-                                    cols_ord = [l for l in ['CHICUREO','LA DEHESA','LA REINA','LAS CONDES',
-                                                             'LOS TRAPENSES','MACUL','NUEVA PROVIDENCIA',
-                                                             'PROVIDENCIA','QUILIN','VITACURA'] if l in pivot.columns]
-                                    pivot = pivot.reindex(columns=cols_ord, fill_value=0)
-                                    pivot['TOTAL'] = pivot.sum(axis=1)
-                                    pivot = pivot.sort_values('TOTAL', ascending=False)
-                                    st.dataframe(pivot.astype(int), use_container_width=True)
+                                loc_html += '</div>'
+                                st.markdown(loc_html, unsafe_allow_html=True)
+
+                            # Opciones por local si aplica
+                            if tiene_opciones:
+                                st.markdown("**Distribución de opciones por local:**")
+                                df_op_loc = get_opciones_por_local(fi_, ff_, ab)
+                                if not df_op_loc.empty:
+                                    locales_op = sorted(df_op_loc['local'].unique().tolist())
+                                    grupos_u = [g for g in list(BA_GRUPOS.keys())+['Otros'] if g in df_op_loc['grupo'].unique()]
+                                    for grp in grupos_u:
+                                        df_grp = df_op_loc[df_op_loc['grupo']==grp]
+                                        st.markdown(
+                                            f'<div style="font-size:0.7rem;text-transform:uppercase;'
+                                            f'letter-spacing:0.1em;color:#666;margin:8px 0 4px;'
+                                            f'border-bottom:1px solid #222;padding-bottom:3px">{grp}</div>',
+                                            unsafe_allow_html=True
+                                        )
+                                        pivot = df_grp.pivot_table(
+                                            index='nombre_producto', columns='local',
+                                            values='cant', aggfunc='sum', fill_value=0
+                                        )
+                                        # Reorder columns to known locales order
+                                        cols_ord = [l for l in ['CHICUREO','LA DEHESA','LA REINA','LAS CONDES',
+                                                                 'LOS TRAPENSES','MACUL','NUEVA PROVIDENCIA',
+                                                                 'PROVIDENCIA','QUILIN','VITACURA'] if l in pivot.columns]
+                                        pivot = pivot.reindex(columns=cols_ord, fill_value=0)
+                                        pivot['TOTAL'] = pivot.sum(axis=1)
+                                        pivot = pivot.sort_values('TOTAL', ascending=False)
+                                        st.dataframe(pivot.astype(int), use_container_width=True)
 
             # Descarga
             buf2 = io.BytesIO()
@@ -4702,6 +4704,93 @@ elif modulo.startswith("📊"):
                 cols_excel = [c for c in cols_excel if c in df_inf1.columns]
                 df_inf1[cols_excel].to_excel(w, sheet_name='Rentabilidad', index=False)
             st.download_button("📥 Descargar Informe 1", buf2.getvalue(), "Informe1_Rentabilidad.xlsx")
+
+            with _tab_rent2:
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                # Renombrar cuadrantes al esquema del negocio
+                _map_cuad = {
+                    "⭐ Estrella":     "⭐ Estrella",
+                    "🐄 Vaca":         "🚦 Tráfico",
+                    "❓ Interrogante": "😴 Dormidos",
+                    "🐶 Perro":        "💀 Peso Muerto",
+                }
+                _colors_cuad = {
+                    "⭐ Estrella":   ("#d4a853", "#1a1500"),
+                    "🚦 Tráfico":   ("#5b8dd9", "#0a1525"),
+                    "😴 Dormidos":  ("#4caf7d", "#0a1e14"),
+                    "💀 Peso Muerto": ("#888",   "#111"),
+                }
+                _desc_cuad = {
+                    "⭐ Estrella":   "Alto volumen · Alta rentabilidad",
+                    "🚦 Tráfico":   "Alto volumen · Baja rentabilidad",
+                    "😴 Dormidos":  "Bajo volumen · Alta rentabilidad",
+                    "💀 Peso Muerto": "Bajo volumen · Baja rentabilidad",
+                }
+
+                df_cuad = df_inf1.copy()
+                df_cuad['cuadrante_neg'] = df_cuad['cuadrante'].map(_map_cuad).fillna(df_cuad['cuadrante'])
+
+                _cats_cuad = sorted(df_cuad['categoria_menu'].dropna().unique().tolist())
+                _cat_cuad_sel = st.selectbox("Filtrar por categoría", ["Todas"] + _cats_cuad, key='cuad_cat')
+                if _cat_cuad_sel != "Todas":
+                    df_cuad = df_cuad[df_cuad['categoria_menu'] == _cat_cuad_sel]
+
+                _orden_cuad = ["⭐ Estrella", "🚦 Tráfico", "😴 Dormidos", "💀 Peso Muerto"]
+
+                _hs_cuad = 'padding:7px 10px;font-size:0.66rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
+
+                for _cq in _orden_cuad:
+                    _color, _bg = _colors_cuad[_cq]
+                    _desc = _desc_cuad[_cq]
+                    _df_cq = df_cuad[df_cuad['cuadrante_neg'] == _cq].copy()
+                    if _df_cq.empty:
+                        continue
+
+                    # Top 15 por venta dentro del cuadrante
+                    _df_cq = _df_cq.nlargest(15, 'venta').reset_index(drop=True)
+
+                    st.markdown(
+                        f'<div style="margin:1.2rem 0 0.4rem;padding:10px 16px;border-radius:10px;'
+                        f'background:{_bg};border-left:3px solid {_color}">'
+                        f'<span style="font-size:1rem;font-weight:700;color:{_color}">{_cq}</span>'
+                        f'<span style="font-size:0.75rem;color:#666;margin-left:12px">{_desc}</span>'
+                        f'<span style="font-size:0.72rem;color:#555;float:right">{len(_df_cq)} producto(s)</span>'
+                        f'</div>',
+                        unsafe_allow_html=True
+                    )
+
+                    _rows_cq = ''
+                    for _rk, _rc in _df_cq.iterrows():
+                        _mg  = float(_rc.get('margen_pct', 0) or 0)
+                        _mc  = float(_rc.get('mc_total', 0) or 0)
+                        _vt  = float(_rc.get('venta', 0) or 0)
+                        _cnt = int(_rc.get('cant', 0) or 0)
+                        _mgu = float(_rc.get('mc_unitario', 0) or 0)
+                        _mg_color = '#4caf7d' if _mg >= 40 else '#e89c45' if _mg >= 20 else '#e84545'
+                        _rows_cq += (
+                            f'<tr style="border-bottom:1px solid #1a1a1a">'
+                            f'<td style="padding:8px 10px;color:#555;font-size:0.72rem;text-align:right;width:28px">{_rk+1}</td>'
+                            f'<td style="padding:8px 10px;font-weight:500;color:#e8e4de;font-size:0.8rem">{str(_rc.get("nombre_producto",""))[:40]}</td>'
+                            f'<td style="padding:8px 10px;color:#666;font-size:0.72rem">{_rc.get("categoria_menu","")}</td>'
+                            f'<td style="padding:8px 10px;text-align:right;color:#aaa">{_cnt:,}</td>'
+                            f'<td style="padding:8px 10px;text-align:right;color:#aaa">${_vt:,.0f}</td>'
+                            f'<td style="padding:8px 10px;text-align:right;color:#aaa">${_mgu:,.0f}</td>'
+                            f'<td style="padding:8px 10px;text-align:right;color:{_mg_color};font-weight:600">{_mg:.1f}%</td>'
+                            f'<td style="padding:8px 10px;text-align:right">{fmt_mc(_mc)}</td>'
+                            f'</tr>'
+                        )
+
+                    _hdrs_cq = ['#', 'Producto', 'Categoría', 'Und.', 'Venta', 'MC/u', 'Margen', 'MC Total']
+                    st.markdown(
+                        '<div style="overflow-x:auto;border-radius:10px;border:1px solid #1e1e1e;background:#0d0d0d;margin-bottom:0.5rem">'
+                        '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
+                        '<thead><tr style="background:#111">'
+                        + ''.join([f'<th style="{_hs_cuad};text-align:{"right" if i in (0,3,4,5,6,7) else "left"}">{h}</th>'
+                                   for i, h in enumerate(_hdrs_cq)])
+                        + f'</tr></thead><tbody>{_rows_cq}</tbody></table></div>',
+                        unsafe_allow_html=True
+                    )
 
     # ----------------------------------------------------------
     # INFORME 2
