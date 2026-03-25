@@ -4729,68 +4729,72 @@ elif modulo.startswith("📊"):
                 }
 
                 df_cuad = df_inf1.copy()
-                df_cuad['cuadrante_neg'] = df_cuad['cuadrante'].map(_map_cuad).fillna(df_cuad['cuadrante'])
 
-                _cats_cuad = sorted(df_cuad['categoria_menu'].dropna().unique().tolist())
-                _cat_cuad_sel = st.selectbox("Filtrar por categoría", ["Todas"] + _cats_cuad, key='cuad_cat')
-                if _cat_cuad_sel != "Todas":
-                    df_cuad = df_cuad[df_cuad['categoria_menu'] == _cat_cuad_sel]
+                if 'cuadrante' not in df_cuad.columns:
+                    st.info("El informe no contiene datos de cuadrante. Regenera el informe.")
+                else:
+                    df_cuad['cuadrante_neg'] = df_cuad['cuadrante'].map(_map_cuad).fillna(df_cuad['cuadrante'])
 
-                _orden_cuad = ["⭐ Estrella", "🚦 Tráfico", "😴 Dormidos", "💀 Peso Muerto"]
+                    _cats_cuad = sorted(df_cuad['categoria_menu'].dropna().unique().tolist())
+                    _cat_cuad_sel = st.selectbox("Filtrar por categoría", ["Todas"] + _cats_cuad, key='cuad_cat')
+                    if _cat_cuad_sel != "Todas":
+                        df_cuad = df_cuad[df_cuad['categoria_menu'] == _cat_cuad_sel]
 
-                _hs_cuad = 'padding:7px 10px;font-size:0.66rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
+                    _orden_cuad = ["⭐ Estrella", "🚦 Tráfico", "😴 Dormidos", "💀 Peso Muerto"]
 
-                for _cq in _orden_cuad:
-                    _color, _bg = _colors_cuad[_cq]
-                    _desc = _desc_cuad[_cq]
-                    _df_cq = df_cuad[df_cuad['cuadrante_neg'] == _cq].copy()
-                    if _df_cq.empty:
-                        continue
+                    _hs_cuad = 'padding:7px 10px;font-size:0.66rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
 
-                    # Top 15 por venta dentro del cuadrante
-                    _df_cq = _df_cq.nlargest(15, 'venta').reset_index(drop=True)
+                    for _cq in _orden_cuad:
+                        _color, _bg = _colors_cuad[_cq]
+                        _desc = _desc_cuad[_cq]
+                        _df_cq = df_cuad[df_cuad['cuadrante_neg'] == _cq].copy()
+                        if _df_cq.empty:
+                            continue
 
-                    st.markdown(
-                        f'<div style="margin:1.2rem 0 0.4rem;padding:10px 16px;border-radius:10px;'
-                        f'background:{_bg};border-left:3px solid {_color}">'
-                        f'<span style="font-size:1rem;font-weight:700;color:{_color}">{_cq}</span>'
-                        f'<span style="font-size:0.75rem;color:#666;margin-left:12px">{_desc}</span>'
-                        f'<span style="font-size:0.72rem;color:#555;float:right">{len(_df_cq)} producto(s)</span>'
-                        f'</div>',
-                        unsafe_allow_html=True
-                    )
+                        # Top 15 por venta dentro del cuadrante
+                        _df_cq = _df_cq.nlargest(15, 'venta').reset_index(drop=True)
 
-                    _rows_cq = ''
-                    for _rk, _rc in _df_cq.iterrows():
-                        _mg  = float(_rc.get('margen_pct', 0) or 0)
-                        _mc  = float(_rc.get('mc_total', 0) or 0)
-                        _vt  = float(_rc.get('venta', 0) or 0)
-                        _cnt = int(_rc.get('cant', 0) or 0)
-                        _mgu = float(_rc.get('mc_unitario', 0) or 0)
-                        _mg_color = '#4caf7d' if _mg >= 40 else '#e89c45' if _mg >= 20 else '#e84545'
-                        _rows_cq += (
-                            f'<tr style="border-bottom:1px solid #1a1a1a">'
-                            f'<td style="padding:8px 10px;color:#555;font-size:0.72rem;text-align:right;width:28px">{_rk+1}</td>'
-                            f'<td style="padding:8px 10px;font-weight:500;color:#e8e4de;font-size:0.8rem">{str(_rc.get("nombre_producto",""))[:40]}</td>'
-                            f'<td style="padding:8px 10px;color:#666;font-size:0.72rem">{_rc.get("categoria_menu","")}</td>'
-                            f'<td style="padding:8px 10px;text-align:right;color:#aaa">{_cnt:,}</td>'
-                            f'<td style="padding:8px 10px;text-align:right;color:#aaa">${_vt:,.0f}</td>'
-                            f'<td style="padding:8px 10px;text-align:right;color:#aaa">${_mgu:,.0f}</td>'
-                            f'<td style="padding:8px 10px;text-align:right;color:{_mg_color};font-weight:600">{_mg:.1f}%</td>'
-                            f'<td style="padding:8px 10px;text-align:right">{fmt_mc(_mc)}</td>'
-                            f'</tr>'
+                        st.markdown(
+                            f'<div style="margin:1.2rem 0 0.4rem;padding:10px 16px;border-radius:10px;'
+                            f'background:{_bg};border-left:3px solid {_color}">'
+                            f'<span style="font-size:1rem;font-weight:700;color:{_color}">{_cq}</span>'
+                            f'<span style="font-size:0.75rem;color:#666;margin-left:12px">{_desc}</span>'
+                            f'<span style="font-size:0.72rem;color:#555;float:right">{len(_df_cq)} producto(s)</span>'
+                            f'</div>',
+                            unsafe_allow_html=True
                         )
 
-                    _hdrs_cq = ['#', 'Producto', 'Categoría', 'Und.', 'Venta', 'MC/u', 'Margen', 'MC Total']
-                    st.markdown(
-                        '<div style="overflow-x:auto;border-radius:10px;border:1px solid #1e1e1e;background:#0d0d0d;margin-bottom:0.5rem">'
-                        '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
-                        '<thead><tr style="background:#111">'
-                        + ''.join([f'<th style="{_hs_cuad};text-align:{"right" if i in (0,3,4,5,6,7) else "left"}">{h}</th>'
-                                   for i, h in enumerate(_hdrs_cq)])
-                        + f'</tr></thead><tbody>{_rows_cq}</tbody></table></div>',
-                        unsafe_allow_html=True
-                    )
+                        _rows_cq = ''
+                        for _rk, _rc in _df_cq.iterrows():
+                            _mg  = float(_rc.get('margen_pct', 0) or 0)
+                            _mc  = float(_rc.get('mc_total', 0) or 0)
+                            _vt  = float(_rc.get('venta', 0) or 0)
+                            _cnt = int(_rc.get('cant', 0) or 0)
+                            _mgu = float(_rc.get('mc_unitario', 0) or 0)
+                            _mg_color = '#4caf7d' if _mg >= 40 else '#e89c45' if _mg >= 20 else '#e84545'
+                            _rows_cq += (
+                                f'<tr style="border-bottom:1px solid #1a1a1a">'
+                                f'<td style="padding:8px 10px;color:#555;font-size:0.72rem;text-align:right;width:28px">{_rk+1}</td>'
+                                f'<td style="padding:8px 10px;font-weight:500;color:#e8e4de;font-size:0.8rem">{str(_rc.get("nombre_producto",""))[:40]}</td>'
+                                f'<td style="padding:8px 10px;color:#666;font-size:0.72rem">{_rc.get("categoria_menu","")}</td>'
+                                f'<td style="padding:8px 10px;text-align:right;color:#aaa">{_cnt:,}</td>'
+                                f'<td style="padding:8px 10px;text-align:right;color:#aaa">${_vt:,.0f}</td>'
+                                f'<td style="padding:8px 10px;text-align:right;color:#aaa">${_mgu:,.0f}</td>'
+                                f'<td style="padding:8px 10px;text-align:right;color:{_mg_color};font-weight:600">{_mg:.1f}%</td>'
+                                f'<td style="padding:8px 10px;text-align:right">{fmt_mc(_mc)}</td>'
+                                f'</tr>'
+                            )
+
+                        _hdrs_cq = ['#', 'Producto', 'Categoría', 'Und.', 'Venta', 'MC/u', 'Margen', 'MC Total']
+                        st.markdown(
+                            '<div style="overflow-x:auto;border-radius:10px;border:1px solid #1e1e1e;background:#0d0d0d;margin-bottom:0.5rem">'
+                            '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
+                            '<thead><tr style="background:#111">'
+                            + ''.join([f'<th style="{_hs_cuad};text-align:{"right" if i in (0,3,4,5,6,7) else "left"}">{h}</th>'
+                                       for i, h in enumerate(_hdrs_cq)])
+                            + f'</tr></thead><tbody>{_rows_cq}</tbody></table></div>',
+                            unsafe_allow_html=True
+                        )
 
     # ----------------------------------------------------------
     # INFORME 2
@@ -5635,17 +5639,16 @@ elif modulo.startswith("📊"):
                         if st.session_state['p8020_orden'] == 'volumen':
                             _rows_render = sorted(_rows_8020, key=lambda r: -r['gasto_total'])
                         else:
-                            # Alzas primero (delta > 0), ordenadas de mayor a menor
-                            # Luego bajas (delta <= 0), ordenadas de mayor a menor en magnitud
                             _alzas = sorted(
                                 [r for r in _rows_8020 if (r['delta_pct'] or 0) > 0],
                                 key=lambda r: -(r['delta_pct'] or 0)
                             )
                             _bajas = sorted(
-                                [r for r in _rows_8020 if (r['delta_pct'] or 0) <= 0],
+                                [r for r in _rows_8020 if (r['delta_pct'] or 0) < 0],
                                 key=lambda r: (r['delta_pct'] or 0)
                             )
-                            _rows_render = _alzas + _bajas
+                            _ceros = [r for r in _rows_8020 if (r['delta_pct'] or 0) == 0]
+                            _rows_render = _alzas + _ceros + _bajas
                         # Recalcular % acum. según el nuevo orden
                         _acum_r = 0.0
                         for _rr in _rows_render:
