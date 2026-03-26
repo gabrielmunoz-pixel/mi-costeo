@@ -4,14 +4,47 @@ import numpy as np
 import io
 from sqlalchemy import create_engine, text
 from datetime import datetime, date
-from mobile_adapter import (
-    inject_mobile_css,
-    kpi_row,
-    tabla_mobile,
-    badge_margen      as _badge_margen_mobile,
-    badge_delta_pct,
-    fmt_dinero        as _fmt_dinero_mobile,
-)
+
+# ── CSS Mobile Propuesta A ──────────────────────────────────────────────────
+def _inject_mobile_css():
+    st.markdown("""
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&display=swap');
+    html, body, [class*="css"] { font-family: 'DM Sans', sans-serif !important; }
+    section[data-testid="stSidebar"] { min-width:210px !important; max-width:230px !important; }
+    section[data-testid="stSidebar"] button { min-height:46px !important; font-size:0.92rem !important; }
+    .main .block-container { padding-left:1rem !important; padding-right:1rem !important; padding-top:1.2rem !important; max-width:100% !important; }
+    .kpi-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:1.25rem; }
+    .kpi-box { background:#1a1a1a; border-radius:10px; padding:14px 16px; }
+    .kpi-box.alerta { background:#1e1010; }
+    .kpi-box .k-label { font-size:0.68rem; color:#666; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:5px; }
+    .kpi-box .k-value { font-size:1.25rem; font-weight:600; color:#f0ede8; font-variant-numeric:tabular-nums; }
+    .kpi-box.alerta .k-label { color:#944; }
+    .kpi-box.alerta .k-value { color:#e84545; }
+    .kpi-box .k-delta { font-size:0.75rem; color:#e84545; margin-top:2px; }
+    .section-label { font-size:0.68rem; text-transform:uppercase; letter-spacing:0.1em; color:#555; margin-bottom:8px; padding-bottom:6px; border-bottom:1px solid #1e1e1e; }
+    .ing-card { background:#111; border:1px solid #1e1e1e; border-radius:12px; padding:13px 15px; margin-bottom:7px; }
+    .ing-card-top { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:10px; }
+    .ing-nombre { font-size:0.88rem; font-weight:500; color:#f0ede8; line-height:1.3; }
+    .ing-sku { font-size:0.68rem; color:#555; font-family:monospace; margin-top:2px; }
+    .ing-badge { font-size:0.75rem; font-weight:600; padding:3px 9px; border-radius:20px; white-space:nowrap; margin-left:8px; flex-shrink:0; }
+    .badge-up { background:#1e1010; color:#e84545; }
+    .badge-down { background:#101e12; color:#4caf7d; }
+    .badge-neu { background:#1a1a1a; color:#888; }
+    .ing-grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:4px 8px; }
+    .ing-kv .ik { font-size:0.62rem; color:#555; text-transform:uppercase; letter-spacing:0.06em; }
+    .ing-kv .iv { font-size:0.82rem; font-weight:500; color:#c8c4be; font-variant-numeric:tabular-nums; }
+    .iv-up { color:#e84545 !important; }
+    .iv-down { color:#4caf7d !important; }
+    .inf-footer { display:flex; justify-content:space-between; background:#1a1a1a; border-radius:8px; padding:10px 14px; margin-top:12px; font-size:0.75rem; color:#555; }
+    [data-testid="stTabs"] > div:first-child { overflow-x:auto !important; -webkit-overflow-scrolling:touch !important; scrollbar-width:none !important; flex-wrap:nowrap !important; }
+    [data-testid="stTabs"] > div:first-child::-webkit-scrollbar { display:none !important; }
+    button[data-baseweb="tab"] { min-width:fit-content !important; white-space:nowrap !important; }
+    [data-testid="stDownloadButton"] > button, [data-testid="stButton"] > button { width:100% !important; min-height:46px !important; border-radius:10px !important; }
+    @media (max-width:640px) { [data-testid="column"] { width:100% !important; flex:1 1 100% !important; min-width:100% !important; } }
+    @media print { section[data-testid="stSidebar"] { display:none !important; } }
+    </style>
+    """, unsafe_allow_html=True)
 
 
 # Template Excel embebido
@@ -26,7 +59,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
-inject_mobile_css()  # ← Mobile-First CSS adapter
+_inject_mobile_css()
 
 # ============================================================
 # SISTEMA DE LOGIN Y GESTIÓN DE USUARIOS
@@ -4487,12 +4520,28 @@ elif modulo.startswith("📊"):
             margen_gral  = mc_total / venta_total * 100 if venta_total > 0 else 0
             cmv_pct_gral = cmv_total / venta_total * 100 if venta_total > 0 else 0
 
-            kpi_row([
-                {"label": "💰 Venta Total", "value": f"${venta_total:,.0f}", "delta": None,                        "delta_type": "neu"},
-                {"label": "📦 CMV Total",   "value": f"${cmv_total:,.0f}",  "delta": f"{cmv_pct_gral:.1f}% vta",  "delta_type": "up"},
-                {"label": "📈 MC Total",    "value": f"${mc_total:,.0f}",   "delta": None,                        "delta_type": "neu"},
-                {"label": "🎯 Margen",      "value": f"{margen_gral:.2f}%", "delta": None,                        "delta_type": "neu"},
-            ])
+            _alerta1 = "alerta" if cmv_pct_gral > 35 else ""
+            st.markdown(f"""
+            <div class="kpi-grid">
+                <div class="kpi-box">
+                    <div class="k-label">Venta total</div>
+                    <div class="k-value">${venta_total:,.0f}</div>
+                </div>
+                <div class="kpi-box {_alerta1}">
+                    <div class="k-label">CMV total</div>
+                    <div class="k-value">${cmv_total:,.0f}</div>
+                    <div class="k-delta">{cmv_pct_gral:.1f}% de venta</div>
+                </div>
+                <div class="kpi-box">
+                    <div class="k-label">Margen contribución</div>
+                    <div class="k-value">${mc_total:,.0f}</div>
+                </div>
+                <div class="kpi-box">
+                    <div class="k-label">Margen %</div>
+                    <div class="k-value">{margen_gral:.2f}%</div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
 
             st.markdown("<br>", unsafe_allow_html=True)
 
@@ -4517,56 +4566,40 @@ elif modulo.startswith("📊"):
 
             with _tab_rent1:
                 if "Interempresa" in vista:
-                    st.markdown("#### Detalle por Producto")
+                    st.markdown('<div class="section-label">Detalle por Producto</div>', unsafe_allow_html=True)
 
-                    # ── Columnas desktop (con hide=True para las que sobran en mobile) ──
-                    def _fmt_prod_nombre(v):
-                        return f'<span style="font-weight:500;color:#e8e4de;font-size:0.83rem">{v}</span>'
-
-                    _cols_rent = [
-                        {"key": "sku_producto",    "label": "SKU",      "align": "left",  "hide": True,
-                         "fmt": lambda v: f'<span style="color:#555;font-family:monospace;font-size:0.73rem">{v}</span>'},
-                        {"key": "categoria_menu",  "label": "Categoría","align": "left",  "hide": True,
-                         "fmt": lambda v: f'<span style="color:#555;font-size:0.74rem">{v}</span>'},
-                        {"key": "nombre_producto", "label": "Producto",  "align": "left",
-                         "fmt": _fmt_prod_nombre},
-                        {"key": "cant",            "label": "Cant.",     "align": "right",
-                         "fmt": lambda v: f'<span style="color:#aaa">{float(v or 0):,.0f}</span>'},
-                        {"key": "venta",           "label": "Venta $",  "align": "right",
-                         "fmt": lambda v: f'<span style="color:#ccc">${float(v or 0):,.0f}</span>'},
-                        {"key": "cmv_unitario",    "label": "CMV u.",   "align": "right", "hide": True,
-                         "fmt": lambda v: f'<span style="color:#666">${float(v or 0):,.0f}</span>'},
-                        {"key": "mc_total",        "label": "MC $",     "align": "right",
-                         "fmt": lambda v: _fmt_dinero_mobile(v, positivo_malo=False)},
-                        {"key": "_margen",         "label": "Margen",   "align": "center",
-                         "fmt": lambda v: _badge_margen_mobile(v)},
-                    ]
-
-                    # Preparar filas añadiendo _margen calculado
-                    _filas_rent = []
-                    for _, r in df_inf1.iterrows():
-                        fila = r.to_dict()
-                        fila['_margen'] = r.get('margen_pct', r.get('margen_periodo', 0))
-                        _filas_rent.append(fila)
-
-                    def _color_rent(fila):
-                        mg = fila.get('_margen', 0) or 0
-                        if mg >= 60: return '#121e14'
-                        if mg >= 40: return '#1e1a12'
-                        return '#1e1212'
-
-                    tabla_mobile(
-                        filas=_filas_rent,
-                        columnas_desktop=_cols_rent,
-                        columnas_mobile_header=["nombre_producto", "_margen"],
-                        columnas_mobile_body=["cant", "venta", "mc_total"],
-                        color_fn=_color_rent,
-                    )
-
-                    # ── Expanders de opciones (sin cambios) ──────────────
                     for _, r in df_inf1.iterrows():
                         ab   = r.get('ab_categoria', '')
                         tiene_opciones = ab and ab in abs_con_opciones
+                        mg_per = float(r.get('margen_pct', r.get('margen_periodo', 0)) or 0)
+                        mc_val = float(r.get('mc_total', 0) or 0)
+
+                        if mg_per >= 60:
+                            badge_cls, badge_txt = 'badge-down', f'{mg_per:.1f}%'
+                        elif mg_per >= 40:
+                            badge_cls, badge_txt = 'badge-neu',  f'{mg_per:.1f}%'
+                        else:
+                            badge_cls, badge_txt = 'badge-up',   f'{mg_per:.1f}%'
+
+                        mc_cls = 'iv-down' if mc_val >= 0 else 'iv-up'
+
+                        card_html = f"""
+                        <div class="ing-card">
+                            <div class="ing-card-top">
+                                <div>
+                                    <div class="ing-nombre">{r.get('nombre_producto','')} {'↓' if tiene_opciones else ''}</div>
+                                    <div class="ing-sku">{r.get('sku_producto','')} &nbsp;·&nbsp; {r.get('categoria_menu','')}</div>
+                                </div>
+                                <span class="ing-badge {badge_cls}">{badge_txt}</span>
+                            </div>
+                            <div class="ing-grid">
+                                <div class="ing-kv"><div class="ik">Cant.</div><div class="iv">{float(r.get('cant',0) or 0):,.0f}</div></div>
+                                <div class="ing-kv"><div class="ik">Venta</div><div class="iv">${float(r.get('venta',0) or 0):,.0f}</div></div>
+                                <div class="ing-kv"><div class="ik">MC</div><div class="iv {mc_cls}">${mc_val:,.0f}</div></div>
+                            </div>
+                        </div>
+                        """
+                        st.markdown(card_html, unsafe_allow_html=True)
 
                         if tiene_opciones:
                             with st.expander(f"  ↳ Opciones de {r.get('nombre_producto','')}"):
@@ -5073,14 +5106,27 @@ elif modulo.startswith("📊"):
                     tot_pct   = (tot_delta / tot_base * 100) if tot_base > 0 else 0
                     sin_precio = df3['sin_precio_comp'].sum()
 
-                    _dt_pct  = "up"  if tot_pct  > 0 else "down"
-                    _dt_delt = "up"  if tot_delta > 0 else "down"
-                    kpi_row([
-                        {"label": f"Canasta {mes_base3_str}",         "value": f"${tot_base:,.0f}",  "delta": None, "delta_type": "neu"},
-                        {"label": f"A precios {mes_comp3_str}",        "value": f"${tot_comp:,.0f}",  "delta": None, "delta_type": "neu"},
-                        {"label": "Δ$ impacto precio",                 "value": f"${tot_delta:,.0f}", "delta": None, "delta_type": _dt_delt},
-                        {"label": "Δ% total",                          "value": f"{tot_pct:+.2f}%",   "delta": None, "delta_type": _dt_pct},
-                    ])
+                    _alerta_delta = "alerta" if tot_delta > 0 else ""
+                    st.markdown(f"""
+                    <div class="kpi-grid">
+                        <div class="kpi-box">
+                            <div class="k-label">Canasta {mes_base3_str}</div>
+                            <div class="k-value">${tot_base:,.0f}</div>
+                        </div>
+                        <div class="kpi-box">
+                            <div class="k-label">A precios {mes_comp3_str}</div>
+                            <div class="k-value">${tot_comp:,.0f}</div>
+                        </div>
+                        <div class="kpi-box {_alerta_delta}">
+                            <div class="k-label">Impacto precio Δ$</div>
+                            <div class="k-value">${tot_delta:+,.0f}</div>
+                        </div>
+                        <div class="kpi-box {_alerta_delta}">
+                            <div class="k-label">Variación total</div>
+                            <div class="k-value">{tot_pct:+.2f}%</div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
                     if sin_precio > 0:
                         st.info(f"ℹ️ {int(sin_precio)} ingrediente(s) sin precio en mes de comparación — se usó precio del mes muestra.")
 
@@ -5102,52 +5148,43 @@ elif modulo.startswith("📊"):
                         if val < 0: return f'<span style="color:#4caf7d;font-weight:600">${val:,.0f}</span>'
                         return f'<span style="color:#aaa">${val:,.0f}</span>'
 
-                    # ── Columnas desktop/mobile de la tabla ───────────────
-                    def _fmt_nombre3(v):
-                        return f'<span style="font-weight:500;color:#e8e4de">{v}</span>'
+                    rows3 = ''
+                    for _, r in df3.iterrows():
+                        bg = '#1e1212' if (r['delta_dinero'] or 0) > 0 else '#121e14' if (r['delta_dinero'] or 0) < 0 else ''
+                        sin_p = r.get('sin_precio_comp', False)
+                        row_bg = bg if bg else ('rgba(13,30,60,0.6)' if sin_p else '')
+                        icono_cell = '<span style="color:#4a9eda;font-size:0.75rem">ℹ️ </span>' if sin_p else ''
+                        precio_comp_color = '#4a9eda' if sin_p else '#ccc'
+                        rows3 += (
+                            f'<tr style="border-bottom:1px solid #1e1e1e;background:{row_bg}">'
+                            f'<td style="padding:10px 14px;color:#666;font-family:monospace;font-size:0.76rem">{r.get("sku","")}</td>'
+                            f'<td style="padding:10px 14px;font-weight:500;color:{"#4a9eda" if sin_p else "#e8e4de"}">{icono_cell}{r.get("nombre","")}</td>'
+                            f'<td style="padding:10px 14px;color:#555;font-size:0.8rem">{r.get("categoria","")}</td>'
+                            f'<td style="padding:10px 14px;color:#666;font-size:0.78rem">{r.get("proveedor","")}</td>'
+                            f'<td style="padding:10px 14px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">{r.get("cant_base",0):,.2f}</td>'
+                            f'<td style="padding:10px 14px;text-align:right;color:#888;font-variant-numeric:tabular-nums">${r.get("precio_base",0):,.2f}</td>'
+                            f'<td style="padding:10px 14px;text-align:right;color:{precio_comp_color};font-variant-numeric:tabular-nums">${r.get("precio_comp",0):,.2f}</td>'
+                            f'<td style="padding:10px 14px;text-align:right;color:#777;font-variant-numeric:tabular-nums">${r.get("impacto_base",0):,.0f}</td>'
+                            f'<td style="padding:10px 14px;text-align:right;color:#e8e4de;font-variant-numeric:tabular-nums">${r.get("impacto_comp",0):,.0f}</td>'
+                            f'<td style="padding:10px 14px;text-align:right">{fmt_d3(r.get("delta_dinero",0))}</td>'
+                            f'<td style="padding:10px 14px;text-align:center">{badge3(r.get("delta_pct",None))}</td>'
+                            f'</tr>'
+                        )
 
-                    _mb3_str = mes_base3_str
-                    _mc3_str = mes_comp3_str
-                    _cols_var3 = [
-                        {"key": "sku",          "label": "SKU",              "align": "left",  "hide": True,
-                         "fmt": lambda v: f'<span style="color:#555;font-family:monospace;font-size:0.73rem">{v}</span>'},
-                        {"key": "nombre",       "label": "Producto",         "align": "left",
-                         "fmt": lambda v: _fmt_nombre3(v)},
-                        {"key": "categoria",    "label": "Categoría",        "align": "left",  "hide": True,
-                         "fmt": lambda v: f'<span style="color:#555;font-size:0.78rem">{v}</span>'},
-                        {"key": "proveedor",    "label": "Proveedor",        "align": "left",  "hide": True,
-                         "fmt": lambda v: f'<span style="color:#555;font-size:0.78rem">{v}</span>'},
-                        {"key": "cant_base",    "label": f"Cant. {_mb3_str}", "align": "right",
-                         "fmt": lambda v: f'<span style="color:#aaa;font-variant-numeric:tabular-nums">{float(v or 0):,.2f}</span>'},
-                        {"key": "precio_base",  "label": f"P. {_mb3_str}",   "align": "right", "hide": True,
-                         "fmt": lambda v: f'<span style="color:#888">${float(v or 0):,.2f}</span>'},
-                        {"key": "precio_comp",  "label": f"P. {_mc3_str}",   "align": "right", "hide": True,
-                         "fmt": lambda v: f'<span style="color:#ccc">${float(v or 0):,.2f}</span>'},
-                        {"key": "impacto_base", "label": f"Total {_mb3_str}", "align": "right",
-                         "fmt": lambda v: f'<span style="color:#777">${float(v or 0):,.0f}</span>'},
-                        {"key": "impacto_comp", "label": f"Total {_mc3_str}", "align": "right",
-                         "fmt": lambda v: f'<span style="color:#e8e4de">${float(v or 0):,.0f}</span>'},
-                        {"key": "delta_dinero", "label": "Δ$",              "align": "right",
-                         "fmt": lambda v: fmt_d3(float(v or 0))},
-                        {"key": "delta_pct",    "label": "Δ%",              "align": "center",
-                         "fmt": lambda v: badge3(v)},
-                    ]
-
-                    def _color_var3(fila):
-                        dd = fila.get('delta_dinero') or 0
-                        sin_p = fila.get('sin_precio_comp', False)
-                        if dd > 0: return '#1e1212'
-                        if dd < 0: return '#121e14'
-                        if sin_p:  return 'rgba(13,30,60,0.6)'
-                        return ''
-
-                    tabla_mobile(
-                        filas=df3.to_dict(orient='records'),
-                        columnas_desktop=_cols_var3,
-                        columnas_mobile_header=["nombre", "delta_pct"],
-                        columnas_mobile_body=["cant_base", "impacto_base", "impacto_comp", "delta_dinero"],
-                        color_fn=_color_var3,
+                    hs3 = 'padding:11px 14px;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
+                    hdrs3 = ['SKU', 'Producto', 'Categoría', 'Proveedor',
+                              f'Cant. {mes_base3_str}',
+                              f'P. Unit {mes_base3_str}', f'P. Unit {mes_comp3_str}',
+                              f'Total {mes_base3_str}', f'Total {mes_comp3_str}',
+                              'Δ$', 'Δ%']
+                    tabla3 = (
+                        '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
+                        '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.84rem">'
+                        '<thead><tr style="background:#111">'
+                        + ''.join([f'<th style="{hs3};text-align:{"left" if i<4 else "right"}">{h}</th>' for i, h in enumerate(hdrs3)])
+                        + f'</tr></thead><tbody>{rows3}</tbody></table></div>'
                     )
+                    st.markdown(tabla3, unsafe_allow_html=True)
 
                     st.markdown("<br>", unsafe_allow_html=True)
                     d1, d2, d3 = st.columns(3)
