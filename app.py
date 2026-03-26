@@ -5106,7 +5106,11 @@ elif modulo.startswith("📊"):
                     tot_pct   = (tot_delta / tot_base * 100) if tot_base > 0 else 0
                     sin_precio = df3['sin_precio_comp'].sum()
 
-                    _alerta_delta = "alerta" if tot_delta > 0 else ""
+                    # ── Color según dirección del delta ───────────────────
+                    _col_delta = "#e84545" if tot_delta > 0 else "#4caf7d" if tot_delta < 0 else "#888"
+                    _col_pct   = "#e84545" if tot_pct   > 0 else "#4caf7d" if tot_pct   < 0 else "#888"
+                    _bg_delta  = "#1e1010" if tot_delta > 0 else "#101e12" if tot_delta < 0 else "#1a1a1a"
+
                     st.markdown(f"""
                     <div class="kpi-grid">
                         <div class="kpi-box">
@@ -5117,18 +5121,21 @@ elif modulo.startswith("📊"):
                             <div class="k-label">A precios {mes_comp3_str}</div>
                             <div class="k-value">${tot_comp:,.0f}</div>
                         </div>
-                        <div class="kpi-box {_alerta_delta}">
-                            <div class="k-label">Impacto precio Δ$</div>
-                            <div class="k-value">${tot_delta:+,.0f}</div>
+                        <div style="background:{_bg_delta};border-radius:10px;padding:14px 16px;">
+                            <div class="k-label" style="color:{_col_delta};opacity:0.8">Impacto precio Δ$</div>
+                            <div class="k-value" style="color:{_col_delta}">${tot_delta:+,.0f}</div>
                         </div>
-                        <div class="kpi-box {_alerta_delta}">
-                            <div class="k-label">Variación total</div>
-                            <div class="k-value">{tot_pct:+.2f}%</div>
+                        <div style="background:{_bg_delta};border-radius:10px;padding:14px 16px;">
+                            <div class="k-label" style="color:{_col_pct};opacity:0.8">Variación total</div>
+                            <div class="k-value" style="color:{_col_pct}">{tot_pct:+.2f}%</div>
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
                     if sin_precio > 0:
                         st.info(f"ℹ️ {int(sin_precio)} ingrediente(s) sin precio en mes de comparación — se usó precio del mes muestra.")
+
+                    st.markdown("<br>", unsafe_allow_html=True)
+
 
                     st.markdown("<br>", unsafe_allow_html=True)
 
