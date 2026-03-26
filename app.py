@@ -5020,18 +5020,31 @@ elif modulo.startswith("📊"):
                 meses_list3 = pd.to_datetime(meses_disp3['mes']).tolist()
                 meses_fmt3  = [m.strftime('%B %Y').capitalize() for m in meses_list3]
 
-                mc1, mc2, mc3 = st.columns([2, 2, 2])
-                with mc1:
-                    mes_base_idx3 = st.selectbox("Mes muestra (canasta)", range(len(meses_fmt3)),
-                                                 format_func=lambda i: meses_fmt3[i],
-                                                 index=0, key='inf3_base')
-                with mc2:
-                    mes_comp_idx3 = st.selectbox("Mes comparación (precios)", range(len(meses_fmt3)),
-                                                 format_func=lambda i: meses_fmt3[i],
-                                                 index=len(meses_list3)-1, key='inf3_comp')
-                with mc3:
-                    cat3_q = run_query("SELECT DISTINCT categoria_producto FROM compras WHERE categoria_producto IS NOT NULL AND subcat IN ('Directo','Indirecto') ORDER BY 1")
-                    cats3  = ['Todos'] + cat3_q['categoria_producto'].tolist() if not cat3_q.empty else ['Todos']
+                # ── Período: dos meses en fila con flecha ─────────
+                _p1, _arrow_col, _p2 = st.columns([10, 1, 10])
+                with _p1:
+                    mes_base_idx3 = st.selectbox(
+                        "Mes muestra",
+                        range(len(meses_fmt3)),
+                        format_func=lambda i: meses_fmt3[i],
+                        index=0, key='inf3_base'
+                    )
+                with _arrow_col:
+                    st.markdown("<div style='text-align:center;padding-top:28px;color:#555;font-size:1rem'>→</div>", unsafe_allow_html=True)
+                with _p2:
+                    mes_comp_idx3 = st.selectbox(
+                        "Mes comparación",
+                        range(len(meses_fmt3)),
+                        format_func=lambda i: meses_fmt3[i],
+                        index=len(meses_list3)-1, key='inf3_comp'
+                    )
+
+                # ── Categoría + Ordenar en 2 columnas ─────────────
+                cat3_q = run_query("SELECT DISTINCT categoria_producto FROM compras WHERE categoria_producto IS NOT NULL AND subcat IN ('Directo','Indirecto') ORDER BY 1")
+                cats3  = ['Todos'] + cat3_q['categoria_producto'].tolist() if not cat3_q.empty else ['Todos']
+
+                _cf1, _cf2 = st.columns(2)
+                with _cf1:
                     cat3_sel = st.selectbox("Categoría", cats3, key='inf3_cat')
 
                 mes_base3     = meses_list3[mes_base_idx3]
@@ -5039,20 +5052,21 @@ elif modulo.startswith("📊"):
                 mes_base3_str = mes_base3.strftime('%B %Y').capitalize()
                 mes_comp3_str = mes_comp3.strftime('%B %Y').capitalize()
 
-                # Filtro texto + ordenamiento
-                fc1, fc2, fc3 = st.columns([3, 2, 1])
-                with fc1:
-                    filtro_texto3 = st.text_input("🔍 Buscar SKU o producto",
-                                                  placeholder="Ej: AL-AF-276 o papas...",
-                                                  key='inf3_buscar')
-                with fc2:
+                with _cf2:
                     ord3_col_sel = st.selectbox("Ordenar por", [
                         'Producto', f'Cant. {mes_base3_str}',
                         f'Costo {mes_base3_str}', f'Costo {mes_comp3_str}',
                         'Δ$ Precio', 'Δ% Precio'
                     ], key='ord3_col')
-                with fc3:
-                    ord3_dir = st.selectbox("Dir.", ['↓', '↑'], key='ord3_dir')
+
+                # ── Búsqueda ancho completo ────────────────────────
+                filtro_texto3 = st.text_input(
+                    "🔍 Buscar SKU o producto",
+                    placeholder="Ej: AL-AF-276 o papas...",
+                    key='inf3_buscar'
+                )
+                ord3_dir = '↓'
+
 
                 if st.button("▶ Generar Informe 3"):
                     base_i = mes_base3.strftime('%Y-%m-01')
