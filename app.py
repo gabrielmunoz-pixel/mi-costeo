@@ -2160,6 +2160,7 @@ with st.sidebar:
                     st.rerun()
 
 
+    modulo = st.session_state['modulo']
     st.divider()
     modulo_actual  = st.session_state.get('modulo','')
     submenu_actual = st.session_state.get('submenu','')
