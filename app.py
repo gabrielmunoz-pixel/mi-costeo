@@ -2,8 +2,9 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import io
+import uuid as _uuid
 from sqlalchemy import create_engine, text
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 # ── CSS Mobile Propuesta A ──────────────────────────────────────────────────
 def _inject_mobile_css():
@@ -98,6 +99,87 @@ def _ensure_users_table():
         """))
         conn.commit()
 
+# ── Sesiones persistentes ────────────────────────────────────
+_SESSION_TIMEOUT_HOURS = 8  # sesión expira tras 8h de inactividad
+
+def _ensure_sessions_table():
+    engine = get_engine()
+    if engine is None: return
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS app_sesiones (
+                    token TEXT PRIMARY KEY,
+                    username TEXT NOT NULL,
+                    role TEXT NOT NULL DEFAULT 'user',
+                    permisos TEXT DEFAULT '',
+                    last_activity TIMESTAMP NOT NULL DEFAULT NOW()
+                )
+            """))
+            conn.commit()
+    except Exception:
+        pass
+
+def _create_session(username, role, permisos):
+    """Crea sesión en BD y retorna token."""
+    engine = get_engine()
+    if engine is None: return None
+    token = str(_uuid.uuid4())
+    try:
+        with engine.connect() as conn:
+            conn.execute(text(
+                "INSERT INTO app_sesiones (token, username, role, permisos, last_activity) "
+                "VALUES (:t, :u, :r, :p, NOW())"
+            ), {"t": token, "u": username, "r": role, "p": permisos})
+            conn.commit()
+        return token
+    except Exception:
+        return None
+
+def _validate_session(token):
+    """Valida token y actualiza actividad. Retorna (username, role, permisos) o None."""
+    engine = get_engine()
+    if engine is None or not token: return None
+    try:
+        with engine.connect() as conn:
+            df = pd.read_sql(text(
+                "SELECT username, role, permisos, last_activity FROM app_sesiones WHERE token=:t"
+            ), conn, params={"t": token})
+            if df.empty: return None
+            last = pd.to_datetime(df['last_activity'].iloc[0])
+            if (datetime.utcnow() - last).total_seconds() > _SESSION_TIMEOUT_HOURS * 3600:
+                conn.execute(text("DELETE FROM app_sesiones WHERE token=:t"), {"t": token})
+                conn.commit()
+                return None
+            conn.execute(text("UPDATE app_sesiones SET last_activity=NOW() WHERE token=:t"), {"t": token})
+            conn.commit()
+            return (df['username'].iloc[0], df['role'].iloc[0], df['permisos'].iloc[0])
+    except Exception:
+        return None
+
+def _destroy_session(token):
+    engine = get_engine()
+    if engine is None or not token: return
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("DELETE FROM app_sesiones WHERE token=:t"), {"t": token})
+            conn.commit()
+    except Exception:
+        pass
+
+def _cleanup_expired_sessions():
+    """Limpia sesiones expiradas (se ejecuta esporádicamente)."""
+    engine = get_engine()
+    if engine is None: return
+    try:
+        with engine.connect() as conn:
+            conn.execute(text(
+                "DELETE FROM app_sesiones WHERE last_activity < NOW() - INTERVAL ':h hours'"
+            ).bindparams(h=_SESSION_TIMEOUT_HOURS))
+            conn.commit()
+    except Exception:
+        pass
+
 def _check_login(username, password):
     # Admin login: no requiere BD
     if username == ADMIN_USER and _hash_pw(password) == ADMIN_HASH:
@@ -136,10 +218,17 @@ def _render_login():
         if st.button("Ingresar", use_container_width=True, type="primary"):
             result = _check_login(username, password)
             if result is not None:
+                role = "admin" if username == ADMIN_USER else "user"
+                permisos = result if result != "admin" else "admin"
+                # Crear sesión persistente en BD
+                token = _create_session(username, role, permisos)
+                if token:
+                    st.query_params["s"] = token
                 st.session_state["logged_in"] = True
                 st.session_state["current_user"] = username
-                st.session_state["user_role"] = "admin" if username == ADMIN_USER else "user"
-                st.session_state["user_permisos"] = result if result != "admin" else "admin"
+                st.session_state["user_role"] = role
+                st.session_state["user_permisos"] = permisos
+                st.session_state["session_token"] = token
                 st.rerun()
             else:
                 st.error("Usuario o contraseña incorrectos.")
@@ -1063,10 +1152,13 @@ def informe_rentabilidad(fecha_i, fecha_f, local):
     df['umbral_pct']   = 100 / n_items_cat * 70  # 70% del reparto uniforme
 
     # Cuadrante BCG gastronómico por categoría
-    mc_prom_cat = df.groupby('categoria_menu')['mc_unitario'].transform('mean')
+    # Usamos MEDIANA de mix_pct y mc_unitario por categoría como umbral
+    # Esto evita que outliers distorsionen la clasificación
+    mediana_mix_cat = df.groupby('categoria_menu')['mix_pct'].transform('median')
+    mediana_mc_cat  = df.groupby('categoria_menu')['mc_unitario'].transform('median')
     def cuadrante(r):
-        alta_pop  = r['mix_pct'] >= r['umbral_pct']
-        alto_mc   = r['mc_unitario'] >= mc_prom_cat[r.name]
+        alta_pop  = r['mix_pct']      >= mediana_mix_cat[r.name]
+        alto_mc   = r['mc_unitario']  >= mediana_mc_cat[r.name]
         if alta_pop and alto_mc:   return "⭐ Estrella"
         if not alta_pop and alto_mc: return "❓ Interrogante"
         if alta_pop and not alto_mc: return "🐄 Vaca"
@@ -2071,6 +2163,23 @@ def get_categorias_compras():
 # SIDEBAR
 # ============================================================
 # ── LOGIN GATE ────────────────────────────────────────────────
+_ensure_sessions_table()
+
+# Intentar restaurar sesión si no hay login activo
+if not st.session_state.get("logged_in"):
+    _token_from_url = st.query_params.get("s", None)
+    if _token_from_url:
+        _sess = _validate_session(_token_from_url)
+        if _sess:
+            st.session_state["logged_in"] = True
+            st.session_state["current_user"] = _sess[0]
+            st.session_state["user_role"] = _sess[1]
+            st.session_state["user_permisos"] = _sess[2]
+            st.session_state["session_token"] = _token_from_url
+        else:
+            # Token expirado o inválido: limpiar URL
+            st.query_params.clear()
+
 if not st.session_state.get("logged_in"):
     _render_login()
     st.stop()
@@ -2095,8 +2204,10 @@ with st.sidebar:
     _role  = st.session_state.get("user_role","")
     st.markdown(f"<div style='font-size:0.72rem;color:#888;margin-bottom:4px'>👤 {_uname} {'(Admin)' if _role=='admin' else ''}</div>", unsafe_allow_html=True)
     if st.button("🚪 Cerrar sesión", use_container_width=True):
-        for k in ["logged_in","current_user","user_role","user_permisos","modulo"]:
+        _destroy_session(st.session_state.get("session_token"))
+        for k in ["logged_in","current_user","user_role","user_permisos","modulo","session_token"]:
             st.session_state.pop(k, None)
+        st.query_params.clear()
         st.rerun()
 
     st.divider()
@@ -4564,13 +4675,42 @@ elif modulo.startswith("📊"):
 
             hs  = 'padding:10px 12px;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
 
+            # ── Filtros: Categoría + Ordenar ────────────────────────
+            _cats_rent = sorted(df_inf1['categoria_menu'].dropna().unique().tolist())
+            _fc1, _fc2 = st.columns(2)
+            with _fc1:
+                _cat_rent_sel = st.selectbox("Categoría", ["Todas"] + _cats_rent, key='inf1_cat_filter')
+            with _fc2:
+                _ord_rent_sel = st.selectbox("Ordenar por", [
+                    'Venta (mayor a menor)', 'Rentabilidad % (mayor a menor)',
+                    'Volumen (mayor a menor)', 'Venta (menor a mayor)',
+                    'Rentabilidad % (menor a mayor)', 'Volumen (menor a mayor)'
+                ], key='inf1_ord')
+
+            # Aplicar filtro de categoría
+            _df_inf1_view = df_inf1.copy()
+            if _cat_rent_sel != "Todas":
+                _df_inf1_view = _df_inf1_view[_df_inf1_view['categoria_menu'] == _cat_rent_sel]
+
+            # Aplicar ordenamiento
+            _ord_map_rent = {
+                'Venta (mayor a menor)':           ('venta',      False),
+                'Rentabilidad % (mayor a menor)':  ('margen_pct', False),
+                'Volumen (mayor a menor)':         ('cant',       False),
+                'Venta (menor a mayor)':           ('venta',      True),
+                'Rentabilidad % (menor a mayor)':  ('margen_pct', True),
+                'Volumen (menor a mayor)':         ('cant',       True),
+            }
+            _ocol, _oasc = _ord_map_rent.get(_ord_rent_sel, ('venta', False))
+            _df_inf1_view = _df_inf1_view.sort_values(_ocol, ascending=_oasc, na_position='last')
+
             _tab_rent1, _tab_rent2 = st.tabs(["📊 Detalle por Producto", "🔲 Cuadrantes"])
 
             with _tab_rent1:
                 if "Interempresa" in vista:
                     st.markdown('<div class="section-label">Detalle por Producto</div>', unsafe_allow_html=True)
 
-                    for _, r in df_inf1.iterrows():
+                    for _, r in _df_inf1_view.iterrows():
                         ab   = r.get('ab_categoria', '')
                         tiene_opciones = ab and ab in abs_con_opciones
                         mg_per = float(r.get('margen_pct', r.get('margen_periodo', 0)) or 0)
@@ -4637,10 +4777,10 @@ elif modulo.startswith("📊"):
                     # Resumen por Categoría
                     st.markdown("---")
                     st.markdown("#### Resumen por Categoría")
-                    cat = df_inf1.groupby('categoria_menu').agg(
+                    cat = _df_inf1_view.groupby('categoria_menu').agg(
                         venta=('venta','sum'),
-                        cmv=('cmv_total','sum') if 'cmv_total' in df_inf1.columns else ('costo_total_teorico','sum'),
-                        mc=('mc_total','sum') if 'mc_total' in df_inf1.columns else ('rentabilidad_periodo','sum'),
+                        cmv=('cmv_total','sum') if 'cmv_total' in _df_inf1_view.columns else ('costo_total_teorico','sum'),
+                        mc=('mc_total','sum') if 'mc_total' in _df_inf1_view.columns else ('rentabilidad_periodo','sum'),
                         productos=('sku_producto','count')
                     ).reset_index()
                     cat['margen_pct'] = cat.apply(lambda r: r['mc']/r['venta']*100 if r['venta']>0 else 0, axis=1).round(1)
@@ -4686,7 +4826,7 @@ elif modulo.startswith("📊"):
                     )
                     locales_disp = locales_q['local'].tolist() if not locales_q.empty else []
 
-                    for _, r in df_inf1.iterrows():
+                    for _, r in _df_inf1_view.iterrows():
                         ab = r.get('ab_categoria', '')
                         tiene_opciones = ab and ab in abs_con_opciones
                         mg_per = r.get('margen_periodo', 0)
@@ -4772,8 +4912,8 @@ elif modulo.startswith("📊"):
                     cols_excel = ['sku_producto','categoria_menu','nombre_producto','cant','venta',
                                   'cmv_unitario','cmv_base','cmv_opciones','cmv_total','cmv_pct',
                                   'mc_unitario','mc_total','margen_pct','mix_pct','umbral_pct','cuadrante']
-                    cols_excel = [c for c in cols_excel if c in df_inf1.columns]
-                    df_inf1[cols_excel].to_excel(w, sheet_name='Rentabilidad', index=False)
+                    cols_excel = [c for c in cols_excel if c in _df_inf1_view.columns]
+                    _df_inf1_view[cols_excel].to_excel(w, sheet_name='Rentabilidad', index=False)
                 st.download_button("📥 Descargar Informe 1", buf2.getvalue(), "Informe1_Rentabilidad.xlsx")
 
             with _tab_rent2:
