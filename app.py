@@ -5578,114 +5578,40 @@ elif modulo.startswith("📊"):
                         _fin_label = _str_f.split()[0][:3]
                         _titulo_local = _local_label if _local_label != 'Todos' else 'Cadena'
 
-                        # ── Cuadros custom via HTML ────────────────────────
-                        _k1, _k2, _k3, _k4 = st.columns(4)
-
-                        # Cuadro 1: Gasto total + desglose ini/fin con Δ%
-                        _c_var1 = _color_var(_gasto_fin_c - _gasto_ini_c)
-                        _pct_mes = ((_gasto_fin_c / _gasto_ini_c) - 1) * 100 if _gasto_ini_c > 0 else 0
-                        with _k1:
-                            st.markdown(f"""
-                            <div style="background:#1a1a1a;border-radius:10px;padding:16px 20px;
-                                        border:1px solid #2a2a2a;min-height:100px">
-                              <div style="font-size:0.72rem;color:#888;margin-bottom:4px">
-                                💰 Gasto total — {_titulo_local}</div>
-                              <div style="font-size:1.6rem;font-weight:700;color:#d4a853;
-                                          letter-spacing:-0.02em;line-height:1.2">
-                                {_fmt_k(_gasto_cadena)}</div>
-                              <div style="margin-top:6px;font-size:0.72rem;color:#555">
-                                {_fmt_k(_gasto_ini_c)} {_ini_label}
-                                &nbsp;→&nbsp;
-                                {_fmt_k(_gasto_fin_c)} {_fin_label}
-                                &nbsp;
-                                <span style="color:{_c_var1};font-weight:600">
-                                  {_arrow(_pct_mes)}&nbsp;{abs(_pct_mes):.2f}%
-                                </span>
-                              </div>
-                            </div>""", unsafe_allow_html=True)
-
-                        # Cuadro 2: Top 15 + impacto canasta en subtexto
-                        _c2_imp = _color_var(_impacto_total)
+                        # ── KPIs en grid 2x2 (cuadrado en mobile) ─────────
+                        _c_var1   = _color_var(_gasto_fin_c - _gasto_ini_c)
+                        _pct_mes  = ((_gasto_fin_c / _gasto_ini_c) - 1) * 100 if _gasto_ini_c > 0 else 0
+                        _c2_imp   = _color_var(_impacto_total)
                         _imp_pct_top = (_impacto_total / _gasto_ini_c * 100) if _gasto_ini_c > 0 else 0
-                        with _k2:
-                            st.markdown(f"""
-                            <div style="background:#1a1a1a;border-radius:10px;padding:16px 20px;
-                                        border:1px solid #2a2a2a;min-height:100px">
-                              <div style="font-size:0.72rem;color:#888;margin-bottom:4px">
-                                🏆 Top 15 concentra</div>
-                              <div style="font-size:1.6rem;font-weight:700;color:#f0ede8;
-                                          letter-spacing:-0.02em;line-height:1.2">
-                                {_top15_pct:.2f}% del gasto</div>
-                              <div style="margin-top:6px;font-size:0.72rem;color:#555">
-                                Impacto canasta:&nbsp;
-                                <span style="color:{_c2_imp};font-weight:600">
-                                  {("+" if _impacto_total >= 0 else "") + _fmt_k(_impacto_total)}
-                                  &nbsp;({_arrow(_imp_pct_top)}{abs(_imp_pct_top):.2f}%)
-                                </span>
-                              </div>
-                            </div>""", unsafe_allow_html=True)
-
-                        # Cuadro 3: Variación de venta ini → fin
-                        _var_venta     = _venta_fin - _venta_ini
+                        _var_venta    = _venta_fin - _venta_ini
                         _var_venta_pct = ((_venta_fin / _venta_ini) - 1) * 100 if _venta_ini > 0 else 0
-                        _c3 = _color_var(-_var_venta)  # rojo si baja venta, verde si sube
-                        _c3_val = _color_var(-_var_venta)
-                        with _k3:
-                            st.markdown(f"""
-                            <div style="background:#1a1a1a;border-radius:10px;padding:16px 20px;
-                                        border:1px solid #2a2a2a;min-height:100px">
-                              <div style="font-size:0.72rem;color:#888;margin-bottom:4px">
-                                🛒 Variación venta — {_titulo_local}</div>
-                              <div style="font-size:1.6rem;font-weight:700;color:{_c3_val};
-                                          letter-spacing:-0.02em;line-height:1.2">
-                                {("+" if _var_venta >= 0 else "") + _fmt_k(_var_venta)}</div>
-                              <div style="margin-top:6px;font-size:0.72rem">
-                                <span style="color:{_c3_val};font-weight:600">
-                                  {_arrow(_var_venta_pct)}&nbsp;{abs(_var_venta_pct):.2f}%
-                                </span>
-                                <span style="color:#555">
-                                  &nbsp;{_fmt_k(_venta_ini)} {_ini_label} → {_fmt_k(_venta_fin)} {_fin_label}
-                                </span>
-                              </div>
-                            </div>""", unsafe_allow_html=True)
+                        _c3_val   = _color_var(-_var_venta)
+                        _c4       = _color_var(_var_compra)
 
-                        # Cuadro 4: Variación total compra cadena ini → fin
-                        _c4 = _color_var(_var_compra)
-                        with _k4:
-                            st.markdown(f"""
-                            <div style="background:#1a1a1a;border-radius:10px;padding:16px 20px;
-                                        border:1px solid #2a2a2a;min-height:100px">
-                              <div style="font-size:0.72rem;color:#888;margin-bottom:4px">
-                                🔄 Variación compra — {_titulo_local}</div>
-                              <div style="font-size:1.6rem;font-weight:700;color:{_c4};
-                                          letter-spacing:-0.02em;line-height:1.2">
-                                {("+" if _var_compra >= 0 else "") + _fmt_k(_var_compra)}</div>
-                              <div style="margin-top:6px;font-size:0.72rem">
-                                <span style="color:{_c4};font-weight:600">
-                                  {_arrow(_var_compra_pct)}&nbsp;{abs(_var_compra_pct):.2f}%
-                                </span>
-                                <span style="color:#555">&nbsp;vs {_ini_label}</span>
-                              </div>
-                            </div>""", unsafe_allow_html=True)
-
-                        # ── HELPERS VISUALIZACIÓN ─────────────────────────
-                        def _badge_delta_8020(val):
-                            if val is None or (isinstance(val, float) and pd.isna(val)):
-                                return '<span style="color:#444">—</span>'
-                            if val > 10:
-                                return (f'<span style="background:#3a1a1a;color:#e84545;'
-                                        f'padding:2px 8px;border-radius:12px;font-size:0.77rem;'
-                                        f'font-weight:600">{val:+.2f}%</span>')
-                            elif val > 3:
-                                return (f'<span style="background:#3a2a1a;color:#e89c45;'
-                                        f'padding:2px 8px;border-radius:12px;font-size:0.77rem;'
-                                        f'font-weight:600">{val:+.2f}%</span>')
-                            elif val < -3:
-                                return (f'<span style="background:#1a3a2a;color:#4caf7d;'
-                                        f'padding:2px 8px;border-radius:12px;font-size:0.77rem;'
-                                        f'font-weight:600">{val:+.2f}%</span>')
-                            return f'<span style="color:#aaa;font-size:0.76rem">{val:+.2f}%</span>'
-
+                        st.markdown(f"""
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:1.25rem">
+                          <div style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:10px;padding:14px 16px;">
+                            <div style="font-size:0.68rem;color:#888;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:5px">Gasto total — {_titulo_local}</div>
+                            <div style="font-size:1.25rem;font-weight:700;color:#d4a853;font-variant-numeric:tabular-nums">{_fmt_k(_gasto_cadena)}</div>
+                            <div style="font-size:0.72rem;color:#555;margin-top:4px">{_fmt_k(_gasto_ini_c)} {_ini_label} → {_fmt_k(_gasto_fin_c)} {_fin_label} <span style="color:{_c_var1};font-weight:600">{_arrow(_pct_mes)} {abs(_pct_mes):.2f}%</span></div>
+                          </div>
+                          <div style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:10px;padding:14px 16px;">
+                            <div style="font-size:0.68rem;color:#888;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:5px">Top 15 concentra</div>
+                            <div style="font-size:1.25rem;font-weight:700;color:#f0ede8;font-variant-numeric:tabular-nums">{_top15_pct:.2f}% del gasto</div>
+                            <div style="font-size:0.72rem;color:#555;margin-top:4px">Impacto: <span style="color:{_c2_imp};font-weight:600">{("+" if _impacto_total >= 0 else "") + _fmt_k(_impacto_total)} ({_arrow(_imp_pct_top)}{abs(_imp_pct_top):.2f}%)</span></div>
+                          </div>
+                          <div style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:10px;padding:14px 16px;">
+                            <div style="font-size:0.68rem;color:#888;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:5px">Variación venta — {_titulo_local}</div>
+                            <div style="font-size:1.25rem;font-weight:700;color:{_c3_val};font-variant-numeric:tabular-nums">{("+" if _var_venta >= 0 else "") + _fmt_k(_var_venta)}</div>
+                            <div style="font-size:0.72rem;color:#555;margin-top:4px"><span style="color:{_c3_val};font-weight:600">{_arrow(_var_venta_pct)} {abs(_var_venta_pct):.2f}%</span> · {_fmt_k(_venta_ini)} {_ini_label} → {_fmt_k(_venta_fin)} {_fin_label}</div>
+                          </div>
+                          <div style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:10px;padding:14px 16px;">
+                            <div style="font-size:0.68rem;color:#888;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:5px">Variación compra — {_titulo_local}</div>
+                            <div style="font-size:1.25rem;font-weight:700;color:{_c4};font-variant-numeric:tabular-nums">{("+" if _var_compra >= 0 else "") + _fmt_k(_var_compra)}</div>
+                            <div style="font-size:0.72rem;color:#555;margin-top:4px"><span style="color:{_c4};font-weight:600">{_arrow(_var_compra_pct)} {abs(_var_compra_pct):.2f}%</span> vs {_ini_label}</div>
+                          </div>
+                        </div>
+                        """, unsafe_allow_html=True)
                         def _fmt_imp_8020(val):
                             v = val / 1_000_000
                             if val > 0:
@@ -5755,76 +5681,59 @@ elif modulo.startswith("📊"):
                             _rr = dict(_rr)   # no mutar el original
                         # (usamos índice para recalcular inline al renderizar)
 
-                        # ── TABLA TOP 15 con desplegables inline ──────────
-                        _hs_t = ('padding:10px 12px;font-size:0.68rem;text-transform:uppercase;'
-                                 'letter-spacing:0.09em;font-weight:600;color:#444;'
-                                 'border-bottom:1px solid #2a2a2a')
-                        _hdrs_t = ['#', 'Producto',
-                                   f'P.Unit {_str_i}', f'P.Unit {_str_f}',
-                                   'Δ% Precio', 'Impacto $ canasta',
-                                   f'$ {_str_i}', f'$ {_str_f}',
-                                   '% gasto', '% acum.']
-                        _hdr_html = ''.join([
-                            f'<th style="{_hs_t};text-align:{"left" if i < 2 else "right"}">{h}</th>'
-                            for i, h in enumerate(_hdrs_t)
-                        ])
-
-                        # Fila total cadena (colspan 2 para # + Producto)
-                        _tot_html = (
-                            f'<tr style="background:#111;border-top:2px solid #333">'
-                            f'<td colspan="2" style="padding:9px 12px;color:#d4a853;'
-                            f'font-weight:700;font-size:0.8rem">TOTAL CADENA</td>'
-                            f'<td style="padding:9px 12px;text-align:right;color:#555">—</td>'
-                            f'<td style="padding:9px 12px;text-align:right;color:#555">—</td>'
-                            f'<td style="padding:9px 12px;text-align:right;color:#555">—</td>'
-                            f'<td style="padding:9px 12px;text-align:right">'
-                            f'{_fmt_imp_8020(_impacto_total)}</td>'
-                            f'<td style="padding:9px 12px;text-align:right;color:#555">—</td>'
-                            f'<td style="padding:9px 12px;text-align:right;color:#555">—</td>'
-                            f'<td style="padding:9px 12px;text-align:right;color:#d4a853;'
-                            f'font-weight:700">100.0%</td>'
-                            f'<td style="padding:9px 12px;text-align:right;color:#d4a853;'
-                            f'font-weight:700">{_top15_pct:.2f}%</td>'
-                            f'</tr>'
+                        # ── CARDS Top 15 — Propuesta A ───────────────────
+                        st.markdown(
+                            f'<div class="section-label">Top 15 ingredientes — {_str_i} → {_str_f}</div>',
+                            unsafe_allow_html=True
                         )
 
-                        _rows_html_t = ''
                         _acum_render = 0.0
                         for _pos, _r in enumerate(_rows_render, 1):
                             _acum_render += _r['pct_total']
-                            _bg = '#1e1212' if _r['impacto'] > 0 else '#121e14' if _r['impacto'] < 0 else ''
-                            _rows_html_t += (
-                                f'<tr style="border-bottom:1px solid #1e1e1e;background:{_bg}">'
-                                f'<td style="padding:9px 12px;color:#555;font-size:0.78rem;'
-                                f'text-align:right">{_pos}</td>'
-                                f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de">'
-                                f'{_r["nombre"]}</td>'
-                                f'<td style="padding:9px 12px;text-align:right;color:#888">'
-                                f'{_fb_icon_8020(_r["p_ini_fb"])}${_r["p_ini"]:,.0f}</td>'
-                                f'<td style="padding:9px 12px;text-align:right;color:#ccc">'
-                                f'{_fb_icon_8020(_r["p_fin_fb"])}${_r["p_fin"]:,.0f}</td>'
-                                f'<td style="padding:9px 12px;text-align:center">'
-                                f'{_badge_delta_8020(_r["delta_pct"])}</td>'
-                                f'<td style="padding:9px 12px;text-align:right">'
-                                f'{_fmt_imp_8020(_r["impacto"])}</td>'
-                                f'<td style="padding:9px 12px;text-align:right">'
-                                f'{_fmt_miles(_r.get("gasto_ini", 0))}</td>'
-                                f'<td style="padding:9px 12px;text-align:right">'
-                                f'{_fmt_miles(_r.get("gasto_fin", 0))}</td>'
-                                f'<td style="padding:9px 12px;text-align:right;color:#d4a853;'
-                                f'font-size:0.8rem">{_r["pct_total"]:.2f}%</td>'
-                                f'<td style="padding:9px 12px;text-align:right;color:#4caf7d;'
-                                f'font-size:0.8rem">{_acum_render:.2f}%</td>'
-                                f'</tr>'
-                            )
+                            _dp = _r.get('delta_pct', None)
 
+                            if _dp is None or (isinstance(_dp, float) and pd.isna(_dp)):
+                                _bcls8, _btxt8 = 'badge-neu', '—'
+                            elif float(_dp) > 3:
+                                _bcls8, _btxt8 = 'badge-up',   f'+{float(_dp):.2f}%'
+                            elif float(_dp) < -3:
+                                _bcls8, _btxt8 = 'badge-down', f'{float(_dp):.2f}%'
+                            else:
+                                _bcls8, _btxt8 = 'badge-neu',  f'{float(_dp):+.2f}%'
+
+                            _imp_val  = float(_r.get('impacto', 0) or 0)
+                            _imp_cls  = 'iv-up' if _imp_val > 0 else 'iv-down' if _imp_val < 0 else ''
+                            _imp_sign = '+' if _imp_val > 0 else ''
+
+                            st.markdown(f"""
+                            <div class="ing-card">
+                                <div class="ing-card-top">
+                                    <div>
+                                        <div class="ing-nombre">{_pos}. {_r['nombre']}</div>
+                                        <div class="ing-sku">{_r.get('pct_total', 0):.2f}% gasto · {_acum_render:.2f}% acum.</div>
+                                    </div>
+                                    <span class="ing-badge {_bcls8}">{_btxt8}</span>
+                                </div>
+                                <div class="ing-grid">
+                                    <div class="ing-kv">
+                                        <div class="ik">P. {_str_i}</div>
+                                        <div class="iv">{_fb_icon_8020(_r['p_ini_fb'])}${_r['p_ini']:,.0f}</div>
+                                    </div>
+                                    <div class="ing-kv">
+                                        <div class="ik">P. {_str_f}</div>
+                                        <div class="iv {"iv-up" if (_dp or 0) > 3 else "iv-down" if (_dp or 0) < -3 else ""}">{_fb_icon_8020(_r['p_fin_fb'])}${_r['p_fin']:,.0f}</div>
+                                    </div>
+                                    <div class="ing-kv">
+                                        <div class="ik">Impacto $</div>
+                                        <div class="iv {_imp_cls}">{_imp_sign}{_fmt_imp_8020(_imp_val)}</div>
+                                    </div>
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
+
+                        # Fila resumen total
                         st.markdown(
-                            '<div style="overflow-x:auto;border-radius:14px;'
-                            'border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
-                            '<table style="width:100%;border-collapse:collapse;'
-                            'font-family:DM Sans,sans-serif;font-size:0.84rem">'
-                            f'<thead><tr style="background:#111">{_hdr_html}</tr></thead>'
-                            f'<tbody>{_rows_html_t}{_tot_html}</tbody></table></div>',
+                            f'<div class="inf-footer"><span>Total impacto canasta</span><span>{_fmt_imp_8020(_impacto_total)}</span></div>',
                             unsafe_allow_html=True
                         )
 
