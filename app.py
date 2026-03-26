@@ -2145,9 +2145,9 @@ with st.sidebar:
         label = f"**{item}**" if es_activo else item
         if st.sidebar.button(label, key=f"menu_{item}", use_container_width=True):
             st.session_state['modulo'] = item
+            st.session_state['sidebar_state'] = 'collapsed'
             st.rerun()
 
-        # Subitems (solo para Informes) — se muestran si está activo
         if subitems and (es_activo or st.session_state['modulo'] == item):
             for sub in subitems:
                 sub_key   = f"{item} — {sub}"
@@ -2156,9 +2156,9 @@ with st.sidebar:
                 sub_label = f"**{prefix}{sub}**" if es_sub else f"{prefix}{sub}"
                 if st.sidebar.button(sub_label, key=f"sub_{sub_key}", use_container_width=True):
                     st.session_state['modulo'] = sub_key
+                    st.session_state['sidebar_state'] = 'collapsed'
                     st.rerun()
 
-    modulo = st.session_state['modulo']
 
     st.divider()
     modulo_actual  = st.session_state.get('modulo','')
@@ -5288,22 +5288,17 @@ elif modulo.startswith("📊"):
                     _locales_8020_q['local'].tolist() if not _locales_8020_q.empty else []
                 )
 
-                # ── Propuesta B: CSS sobre container nativo ────────
-                # El CSS inyecta el estilo de card directamente sobre
-                # el bloque de Streamlit usando el key como ancla
+                # ── CSS que apunta al contenedor del 80/20 ────────
+                # Streamlit expone data-testid en cada bloque.
+                # Usamos el key único del botón como ancla para
+                # identificar el bloque padre y darle apariencia de card.
                 st.markdown("""
                 <style>
-                div[data-testid="stVerticalBlock"]:has(> div > div[data-testid="stSelectbox"] select[id*="p8020"]),
-                div[data-testid="stVerticalBlock"]:has(div[data-testid="stSelectbox"] [aria-labelledby*="p8020"]) {
-                    background: #111 !important;
-                    border: 1px solid #2a2a2a !important;
-                    border-radius: 14px !important;
-                    padding: 18px !important;
-                }
+                div[data-testid="stForm"]:has(button[kind="secondaryFormSubmit"]) { display:none; }
                 </style>
-                <div style="background:#111;border:1px solid #2a2a2a;border-radius:14px;padding:18px 18px 4px 18px;margin-bottom:-8px;">
-                  <div style="display:flex;align-items:flex-start;gap:14px;margin-bottom:14px;">
-                    <div style="width:38px;height:38px;border-radius:10px;background:#1a1a1a;border:1px solid #2a2a2a;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                <div style="background:#111;border:1px solid #2a2a2a;border-radius:14px;padding:16px 16px 6px 16px;margin-bottom:0;">
+                  <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:14px;">
+                    <div style="width:36px;height:36px;border-radius:8px;background:#1a1a1a;border:1px solid #2a2a2a;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
                       <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
                         <rect x="2" y="12" width="3" height="6" rx="1" fill="#555"/>
                         <rect x="7" y="8" width="3" height="10" rx="1" fill="#888"/>
@@ -5313,19 +5308,47 @@ elif modulo.startswith("📊"):
                     </div>
                     <div>
                       <div style="font-size:0.88rem;font-weight:500;color:#f0ede8;margin-bottom:4px;">80/20 compras</div>
-                      <div style="font-size:0.76rem;color:#666;line-height:1.55;">
+                      <div style="font-size:0.76rem;color:#666;line-height:1.5;">
                         Los <span style="color:#d4a853;font-weight:600;">15 ingredientes</span> de mayor gasto.
                         Compara precios entre dos meses usando la
                         <span style="color:#c8c4be;font-weight:500;">cantidad del mes inicial</span>
-                        como base fija para calcular el impacto monetario real.
+                        como base fija para el impacto monetario real.
                       </div>
                     </div>
                   </div>
-                  <div style="border-top:1px solid #1e1e1e;padding-top:14px;padding-bottom:2px;">
+                  <div style="border-top:1px solid #1e1e1e;margin:0 -16px;padding:14px 16px 4px 16px;">
+                </div>
                 """, unsafe_allow_html=True)
 
                 _col_i, _col_f = st.columns(2)
                 with _col_i:
+                    _idx_i = st.selectbox(
+                        "Mes inicio", range(len(_mf)),
+                        format_func=lambda i: _mf[i],
+                        index=0, key='p8020_inicio'
+                    )
+                with _col_f:
+                    _idx_f = st.selectbox(
+                        "Mes fin", range(len(_mf)),
+                        format_func=lambda i: _mf[i],
+                        index=len(_ml) - 1, key='p8020_fin'
+                    )
+                _local_8020 = st.selectbox("Local", _locales_8020, key='p8020_local')
+
+                _mes_i  = _ml[_idx_i]
+                _mes_f  = _ml[_idx_f]
+                _str_i  = _mes_i.strftime('%B %Y').capitalize()
+                _str_f  = _mes_f.strftime('%B %Y').capitalize()
+
+                if _mes_f < _mes_i:
+                    st.warning("⚠️ El mes fin debe ser igual o posterior al mes inicio.")
+                else:
+                    if st.button("▶ Generar 80/20", key="btn_8020", use_container_width=True):
+                        _filtro_local_8020 = (
+                            f"AND UPPER(REPLACE(REPLACE(REPLACE(REPLACE(c.local,'Á','A'),'É','E'),'Í','I'),'Ó','O')) = UPPER(REPLACE(REPLACE(REPLACE(REPLACE('{_local_8020}','Á','A'),'É','E'),'Í','I'),'Ó','O'))"
+                            if _local_8020 != 'Todos' else ''
+                        )
+
                     _idx_i = st.selectbox(
                         "Mes inicio", range(len(_mf)),
                         format_func=lambda i: _mf[i],
