@@ -5289,52 +5289,45 @@ elif modulo.startswith("📊"):
                     _locales_8020_q['local'].tolist() if not _locales_8020_q.empty else []
                 )
 
-                # ── CSS que apunta al contenedor del 80/20 ────────
-                # Streamlit expone data-testid en cada bloque.
-                # Usamos el key único del botón como ancla para
-                # identificar el bloque padre y darle apariencia de card.
-                st.markdown("""
-                <style>
-                div[data-testid="stForm"]:has(button[kind="secondaryFormSubmit"]) { display:none; }
-                </style>
-                <div style="background:#111;border:1px solid #2a2a2a;border-radius:14px;padding:16px 16px 6px 16px;margin-bottom:0;">
-                  <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:14px;">
-                    <div style="width:36px;height:36px;border-radius:8px;background:#1a1a1a;border:1px solid #2a2a2a;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-                      <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
-                        <rect x="2" y="12" width="3" height="6" rx="1" fill="#555"/>
-                        <rect x="7" y="8" width="3" height="10" rx="1" fill="#888"/>
-                        <rect x="12" y="4" width="3" height="14" rx="1" fill="#d4a853"/>
-                        <rect x="17" y="1" width="3" height="17" rx="1" fill="#d4a853" opacity="0.4"/>
-                      </svg>
-                    </div>
-                    <div>
-                      <div style="font-size:0.88rem;font-weight:500;color:#f0ede8;margin-bottom:4px;">80/20 compras</div>
-                      <div style="font-size:0.76rem;color:#666;line-height:1.5;">
-                        Los <span style="color:#d4a853;font-weight:600;">15 ingredientes</span> de mayor gasto.
-                        Compara precios entre dos meses usando la
-                        <span style="color:#c8c4be;font-weight:500;">cantidad del mes inicial</span>
-                        como base fija para el impacto monetario real.
+                with st.container(border=True):
+                    # Header
+                    st.markdown("""
+                    <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:14px;">
+                      <div style="width:36px;height:36px;border-radius:8px;background:#1a1a1a;border:1px solid #2a2a2a;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                        <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
+                          <rect x="2" y="12" width="3" height="6" rx="1" fill="#555"/>
+                          <rect x="7" y="8" width="3" height="10" rx="1" fill="#888"/>
+                          <rect x="12" y="4" width="3" height="14" rx="1" fill="#d4a853"/>
+                          <rect x="17" y="1" width="3" height="17" rx="1" fill="#d4a853" opacity="0.4"/>
+                        </svg>
+                      </div>
+                      <div>
+                        <div style="font-size:0.88rem;font-weight:500;color:#f0ede8;margin-bottom:4px;">80/20 compras</div>
+                        <div style="font-size:0.76rem;color:#666;line-height:1.5;">
+                          Los <span style="color:#d4a853;font-weight:600;">15 ingredientes</span> de mayor gasto.
+                          Compara precios entre dos meses usando la
+                          <span style="color:#c8c4be;font-weight:500;">cantidad del mes inicial</span>
+                          como base fija para el impacto monetario real.
+                        </div>
                       </div>
                     </div>
-                  </div>
-                  <div style="border-top:1px solid #1e1e1e;margin:0 -16px;padding:14px 16px 4px 16px;">
-                </div>
-                """, unsafe_allow_html=True)
+                    """, unsafe_allow_html=True)
+                    # Selectores dentro del container
+                    _col_i, _col_f = st.columns(2)
+                    with _col_i:
+                        _idx_i = st.selectbox(
+                            "Mes inicio", range(len(_mf)),
+                            format_func=lambda i: _mf[i],
+                            index=0, key='p8020_inicio'
+                        )
+                    with _col_f:
+                        _idx_f = st.selectbox(
+                            "Mes fin", range(len(_mf)),
+                            format_func=lambda i: _mf[i],
+                            index=len(_ml) - 1, key='p8020_fin'
+                        )
+                    _local_8020 = st.selectbox("Local", _locales_8020, key='p8020_local')
 
-                _col_i, _col_f = st.columns(2)
-                with _col_i:
-                    _idx_i = st.selectbox(
-                        "Mes inicio", range(len(_mf)),
-                        format_func=lambda i: _mf[i],
-                        index=0, key='p8020_inicio'
-                    )
-                with _col_f:
-                    _idx_f = st.selectbox(
-                        "Mes fin", range(len(_mf)),
-                        format_func=lambda i: _mf[i],
-                        index=len(_ml) - 1, key='p8020_fin'
-                    )
-                _local_8020 = st.selectbox("Local", _locales_8020, key='p8020_local')
 
                 _mes_i  = _ml[_idx_i]
                 _mes_f  = _ml[_idx_f]
