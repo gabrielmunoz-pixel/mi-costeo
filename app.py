@@ -5266,15 +5266,6 @@ elif modulo.startswith("📊"):
         # análisis de impacto en canasta (cantidad fija = mes 1)
         # ══════════════════════════════════════════════════════
         with _tab_8020:
-            st.markdown(
-                "<div style='margin-bottom:0.5rem;color:#888;font-size:0.82rem'>"
-                "Identifica los <b style='color:#d4a853'>15 ingredientes</b> que concentran "
-                "el mayor gasto de compras. Para cada uno muestra la variación de precio "
-                "entre el mes inicial y final, y el impacto monetario usando la "
-                "<b>cantidad comprada en el mes inicial</b> como base fija."
-                "</div>",
-                unsafe_allow_html=True
-            )
 
             # ── Selectores de período propios ──────────────────────
             _meses_8020 = run_query("""
@@ -5295,23 +5286,50 @@ elif modulo.startswith("📊"):
                     _locales_8020_q['local'].tolist() if not _locales_8020_q.empty else []
                 )
 
-                _c1, _c2, _c3 = st.columns(3)
-                with _c1:
+                # ── Card ejecutiva Propuesta B ─────────────────────
+                st.markdown("""
+                <div style="background:#111;border:1px solid #2a2a2a;border-radius:14px;padding:20px;max-width:480px;">
+                  <div style="display:flex;align-items:flex-start;gap:14px;margin-bottom:18px;">
+                    <div style="width:40px;height:40px;border-radius:10px;background:#1a1a1a;border:1px solid #2a2a2a;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                      <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                        <rect x="2" y="12" width="3" height="6" rx="1" fill="#555"/>
+                        <rect x="7" y="8"  width="3" height="10" rx="1" fill="#888"/>
+                        <rect x="12" y="4" width="3" height="14" rx="1" fill="#d4a853"/>
+                        <rect x="17" y="1" width="3" height="17" rx="1" fill="#d4a853" opacity="0.4"/>
+                      </svg>
+                    </div>
+                    <div>
+                      <div style="font-size:0.88rem;font-weight:500;color:#f0ede8;margin-bottom:5px;">80/20 compras</div>
+                      <div style="font-size:0.78rem;color:#666;line-height:1.55;">
+                        Los <span style="color:#d4a853;font-weight:600;">15 ingredientes</span> de mayor gasto.
+                        Compara precios entre dos meses usando la
+                        <span style="color:#c8c4be;font-weight:500;">cantidad del mes inicial</span>
+                        como base fija para calcular el impacto monetario real.
+                      </div>
+                    </div>
+                  </div>
+                  <div style="border-top:1px solid #1e1e1e;padding-top:16px;">
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;" id="selectors-grid">
+                    </div>
+                  </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                # Selectores reales de Streamlit (funcionan con la lógica existente)
+                _col_i, _col_f = st.columns(2)
+                with _col_i:
                     _idx_i = st.selectbox(
                         "Mes inicio", range(len(_mf)),
                         format_func=lambda i: _mf[i],
                         index=0, key='p8020_inicio'
                     )
-                with _c2:
+                with _col_f:
                     _idx_f = st.selectbox(
                         "Mes fin", range(len(_mf)),
                         format_func=lambda i: _mf[i],
                         index=len(_ml) - 1, key='p8020_fin'
                     )
-                with _c3:
-                    _local_8020 = st.selectbox(
-                        "Local", _locales_8020, key='p8020_local'
-                    )
+                _local_8020 = st.selectbox("Local", _locales_8020, key='p8020_local')
 
                 _mes_i  = _ml[_idx_i]
                 _mes_f  = _ml[_idx_f]
@@ -5321,12 +5339,12 @@ elif modulo.startswith("📊"):
                 if _mes_f < _mes_i:
                     st.warning("⚠️ El mes fin debe ser igual o posterior al mes inicio.")
                 else:
-                    if st.button("▶ Generar 80/20", key="btn_8020"):
-                        # Filtro SQL de local
+                    if st.button("▶ Generar 80/20", key="btn_8020", use_container_width=True):
                         _filtro_local_8020 = (
                             f"AND UPPER(REPLACE(REPLACE(REPLACE(REPLACE(c.local,'Á','A'),'É','E'),'Í','I'),'Ó','O')) = UPPER(REPLACE(REPLACE(REPLACE(REPLACE('{_local_8020}','Á','A'),'É','E'),'Í','I'),'Ó','O'))"
                             if _local_8020 != 'Todos' else ''
                         )
+
 
                         # ── Lista de meses en el rango ────────────────────
                         _rango_meses = pd.date_range(
