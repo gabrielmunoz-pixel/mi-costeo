@@ -5350,32 +5350,6 @@ elif modulo.startswith("📊"):
                             if _local_8020 != 'Todos' else ''
                         )
 
-                    _idx_i = st.selectbox(
-                        "Mes inicio", range(len(_mf)),
-                        format_func=lambda i: _mf[i],
-                        index=0, key='p8020_inicio'
-                    )
-                with _col_f:
-                    _idx_f = st.selectbox(
-                        "Mes fin", range(len(_mf)),
-                        format_func=lambda i: _mf[i],
-                        index=len(_ml) - 1, key='p8020_fin'
-                    )
-                _local_8020 = st.selectbox("Local", _locales_8020, key='p8020_local')
-
-                _mes_i  = _ml[_idx_i]
-                _mes_f  = _ml[_idx_f]
-                _str_i  = _mes_i.strftime('%B %Y').capitalize()
-                _str_f  = _mes_f.strftime('%B %Y').capitalize()
-
-                if _mes_f < _mes_i:
-                    st.warning("⚠️ El mes fin debe ser igual o posterior al mes inicio.")
-                else:
-                    if st.button("▶ Generar 80/20", key="btn_8020", use_container_width=True):
-                        _filtro_local_8020 = (
-                            f"AND UPPER(REPLACE(REPLACE(REPLACE(REPLACE(c.local,'Á','A'),'É','E'),'Í','I'),'Ó','O')) = UPPER(REPLACE(REPLACE(REPLACE(REPLACE('{_local_8020}','Á','A'),'É','E'),'Í','I'),'Ó','O'))"
-                            if _local_8020 != 'Todos' else ''
-                        )
 
                         # ── Lista de meses en el rango ────────────────────
                         _rango_meses = pd.date_range(
