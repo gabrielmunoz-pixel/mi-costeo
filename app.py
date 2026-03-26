@@ -5132,59 +5132,66 @@ elif modulo.startswith("📊"):
 
                     st.markdown("<br>", unsafe_allow_html=True)
 
-                    def badge3(val):
-                        if val is None or (isinstance(val, float) and pd.isna(val)):
-                            return '<span style="color:#444">—</span>'
-                        if val > 10:
-                            return f'<span style="background:#3a1a1a;color:#e84545;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:+.2f}%</span>'
-                        elif val > 3:
-                            return f'<span style="background:#3a2a1a;color:#e89c45;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:+.2f}%</span>'
-                        elif val < -3:
-                            return f'<span style="background:#1a3a2a;color:#4caf7d;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:+.2f}%</span>'
-                        return f'<span style="color:#aaa;font-size:0.75rem">{val:+.2f}%</span>'
+                    # ── Conteo para footer ────────────────────────────────
+                    _n_suben = int((df3['delta_dinero'] > 0).sum())
+                    _n_bajan = int((df3['delta_dinero'] < 0).sum())
+                    _n_total = len(df3)
 
-                    def fmt_d3(val):
-                        if val > 0: return f'<span style="color:#e84545;font-weight:600">${val:,.0f}</span>'
-                        if val < 0: return f'<span style="color:#4caf7d;font-weight:600">${val:,.0f}</span>'
-                        return f'<span style="color:#aaa">${val:,.0f}</span>'
-
-                    rows3 = ''
-                    for _, r in df3.iterrows():
-                        bg = '#1e1212' if (r['delta_dinero'] or 0) > 0 else '#121e14' if (r['delta_dinero'] or 0) < 0 else ''
-                        sin_p = r.get('sin_precio_comp', False)
-                        row_bg = bg if bg else ('rgba(13,30,60,0.6)' if sin_p else '')
-                        icono_cell = '<span style="color:#4a9eda;font-size:0.75rem">ℹ️ </span>' if sin_p else ''
-                        precio_comp_color = '#4a9eda' if sin_p else '#ccc'
-                        rows3 += (
-                            f'<tr style="border-bottom:1px solid #1e1e1e;background:{row_bg}">'
-                            f'<td style="padding:10px 14px;color:#666;font-family:monospace;font-size:0.76rem">{r.get("sku","")}</td>'
-                            f'<td style="padding:10px 14px;font-weight:500;color:{"#4a9eda" if sin_p else "#e8e4de"}">{icono_cell}{r.get("nombre","")}</td>'
-                            f'<td style="padding:10px 14px;color:#555;font-size:0.8rem">{r.get("categoria","")}</td>'
-                            f'<td style="padding:10px 14px;color:#666;font-size:0.78rem">{r.get("proveedor","")}</td>'
-                            f'<td style="padding:10px 14px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">{r.get("cant_base",0):,.2f}</td>'
-                            f'<td style="padding:10px 14px;text-align:right;color:#888;font-variant-numeric:tabular-nums">${r.get("precio_base",0):,.2f}</td>'
-                            f'<td style="padding:10px 14px;text-align:right;color:{precio_comp_color};font-variant-numeric:tabular-nums">${r.get("precio_comp",0):,.2f}</td>'
-                            f'<td style="padding:10px 14px;text-align:right;color:#777;font-variant-numeric:tabular-nums">${r.get("impacto_base",0):,.0f}</td>'
-                            f'<td style="padding:10px 14px;text-align:right;color:#e8e4de;font-variant-numeric:tabular-nums">${r.get("impacto_comp",0):,.0f}</td>'
-                            f'<td style="padding:10px 14px;text-align:right">{fmt_d3(r.get("delta_dinero",0))}</td>'
-                            f'<td style="padding:10px 14px;text-align:center">{badge3(r.get("delta_pct",None))}</td>'
-                            f'</tr>'
-                        )
-
-                    hs3 = 'padding:11px 14px;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
-                    hdrs3 = ['SKU', 'Producto', 'Categoría', 'Proveedor',
-                              f'Cant. {mes_base3_str}',
-                              f'P. Unit {mes_base3_str}', f'P. Unit {mes_comp3_str}',
-                              f'Total {mes_base3_str}', f'Total {mes_comp3_str}',
-                              'Δ$', 'Δ%']
-                    tabla3 = (
-                        '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
-                        '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.84rem">'
-                        '<thead><tr style="background:#111">'
-                        + ''.join([f'<th style="{hs3};text-align:{"left" if i<4 else "right"}">{h}</th>' for i, h in enumerate(hdrs3)])
-                        + f'</tr></thead><tbody>{rows3}</tbody></table></div>'
+                    st.markdown(
+                        f'<div class="section-label">Ingredientes — {mes_base3_str} vs {mes_comp3_str}</div>',
+                        unsafe_allow_html=True
                     )
-                    st.markdown(tabla3, unsafe_allow_html=True)
+
+                    for _, r in df3.iterrows():
+                        _pct  = r.get('delta_pct', None)
+                        _dd   = float(r.get('delta_dinero', 0) or 0)
+                        _sinp = r.get('sin_precio_comp', False)
+
+                        if _pct is None or (isinstance(_pct, float) and pd.isna(_pct)):
+                            _bcls, _btxt = 'badge-neu', '—'
+                        elif float(_pct) > 3:
+                            _bcls, _btxt = 'badge-up',   f'+{float(_pct):.1f}%'
+                        elif float(_pct) < -3:
+                            _bcls, _btxt = 'badge-down', f'{float(_pct):.1f}%'
+                        else:
+                            _bcls, _btxt = 'badge-neu',  f'{float(_pct):+.1f}%'
+
+                        _pb   = float(r.get('precio_base', 0) or 0)
+                        _pc   = float(r.get('precio_comp', 0) or 0)
+                        _pcls = 'iv-up' if (_pct and float(_pct) > 3) else ('iv-down' if (_pct and float(_pct) < -3) else '')
+                        _stag = ' · sin precio comp.' if _sinp else ''
+
+                        st.markdown(f"""
+                        <div class="ing-card">
+                            <div class="ing-card-top">
+                                <div>
+                                    <div class="ing-nombre">{r.get('nombre','')}</div>
+                                    <div class="ing-sku">{r.get('sku','')} &middot; {r.get('categoria','')}{_stag}</div>
+                                </div>
+                                <span class="ing-badge {_bcls}">{_btxt}</span>
+                            </div>
+                            <div class="ing-grid">
+                                <div class="ing-kv">
+                                    <div class="ik">Cant. {mes_base3_str}</div>
+                                    <div class="iv">{float(r.get('cant_base',0) or 0):,.2f}</div>
+                                </div>
+                                <div class="ing-kv">
+                                    <div class="ik">P. {mes_base3_str}</div>
+                                    <div class="iv">${_pb:,.2f}</div>
+                                </div>
+                                <div class="ing-kv">
+                                    <div class="ik">P. {mes_comp3_str}</div>
+                                    <div class="iv {_pcls}">${_pc:,.2f}</div>
+                                </div>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                    st.markdown(
+                        f'<div class="inf-footer"><span>{_n_total} ingredientes</span><span>{_n_suben} suben &nbsp;·&nbsp; {_n_bajan} bajan</span></div>',
+                        unsafe_allow_html=True
+                    )
+
 
                     st.markdown("<br>", unsafe_allow_html=True)
                     d1, d2, d3 = st.columns(3)
