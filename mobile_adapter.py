@@ -81,16 +81,23 @@ def inject_mobile_css():
     ══════════════════════════════════════════════════════════════ */
     @media (max-width: 768px) {
 
-        /* Ocultar sidebar por defecto en mobile
-           (el usuario lo abre con el hamburger nativo de Streamlit) */
+        /* ── SIDEBAR: siempre visible, compacto ──────────────────── */
+        /* NUNCA display:none — es la única navegación disponible     */
         section[data-testid="stSidebar"] {
-            display: none;
+            min-width: 200px !important;
+            max-width: 220px !important;
         }
+        section[data-testid="stSidebar"] button {
+            min-height: 48px !important;
+            font-size: 0.95rem !important;
+            width: 100% !important;
+        }
+        /* Botón colapsar — siempre visible y grande */
         [data-testid="collapsedControl"] {
             display: flex !important;
         }
 
-        /* Contenedor principal sin padding lateral en pantalla pequeña */
+        /* Contenedor principal — padding reducido en pantalla pequeña */
         .main .block-container {
             padding-left:  0.5rem !important;
             padding-right: 0.5rem !important;
