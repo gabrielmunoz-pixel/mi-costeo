@@ -41,7 +41,6 @@ def _inject_mobile_css():
     [data-testid="stTabs"] > div:first-child::-webkit-scrollbar { display:none !important; }
     button[data-baseweb="tab"] { min-width:fit-content !important; white-space:nowrap !important; }
     [data-testid="stDownloadButton"] > button, [data-testid="stButton"] > button { width:100% !important; min-height:46px !important; border-radius:10px !important; }
-    @media (max-width:640px) { [data-testid="column"] { width:100% !important; flex:1 1 100% !important; min-width:100% !important; } }
     @media print { section[data-testid="stSidebar"] { display:none !important; } }
     </style>
     """, unsafe_allow_html=True)
