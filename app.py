@@ -2145,9 +2145,10 @@ with st.sidebar:
         label = f"**{item}**" if es_activo else item
         if st.sidebar.button(label, key=f"menu_{item}", use_container_width=True):
             st.session_state['modulo'] = item
+            st.rerun()
 
-        # Subitems (solo para Informes)
-        if subitems and es_activo:
+        # Subitems (solo para Informes) — se muestran si está activo
+        if subitems and (es_activo or st.session_state['modulo'] == item):
             for sub in subitems:
                 sub_key   = f"{item} — {sub}"
                 es_sub    = st.session_state['modulo'] == sub_key
@@ -2155,6 +2156,7 @@ with st.sidebar:
                 sub_label = f"**{prefix}{sub}**" if es_sub else f"{prefix}{sub}"
                 if st.sidebar.button(sub_label, key=f"sub_{sub_key}", use_container_width=True):
                     st.session_state['modulo'] = sub_key
+                    st.rerun()
 
     modulo = st.session_state['modulo']
 
@@ -5286,21 +5288,32 @@ elif modulo.startswith("📊"):
                     _locales_8020_q['local'].tolist() if not _locales_8020_q.empty else []
                 )
 
-                # ── Card ejecutiva Propuesta B ─────────────────────
+                # ── Propuesta B: CSS sobre container nativo ────────
+                # El CSS inyecta el estilo de card directamente sobre
+                # el bloque de Streamlit usando el key como ancla
                 st.markdown("""
-                <div style="background:#111;border:1px solid #2a2a2a;border-radius:14px;padding:20px;max-width:480px;">
-                  <div style="display:flex;align-items:flex-start;gap:14px;margin-bottom:18px;">
-                    <div style="width:40px;height:40px;border-radius:10px;background:#1a1a1a;border:1px solid #2a2a2a;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-                      <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                <style>
+                div[data-testid="stVerticalBlock"]:has(> div > div[data-testid="stSelectbox"] select[id*="p8020"]),
+                div[data-testid="stVerticalBlock"]:has(div[data-testid="stSelectbox"] [aria-labelledby*="p8020"]) {
+                    background: #111 !important;
+                    border: 1px solid #2a2a2a !important;
+                    border-radius: 14px !important;
+                    padding: 18px !important;
+                }
+                </style>
+                <div style="background:#111;border:1px solid #2a2a2a;border-radius:14px;padding:18px 18px 4px 18px;margin-bottom:-8px;">
+                  <div style="display:flex;align-items:flex-start;gap:14px;margin-bottom:14px;">
+                    <div style="width:38px;height:38px;border-radius:10px;background:#1a1a1a;border:1px solid #2a2a2a;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                      <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
                         <rect x="2" y="12" width="3" height="6" rx="1" fill="#555"/>
-                        <rect x="7" y="8"  width="3" height="10" rx="1" fill="#888"/>
+                        <rect x="7" y="8" width="3" height="10" rx="1" fill="#888"/>
                         <rect x="12" y="4" width="3" height="14" rx="1" fill="#d4a853"/>
                         <rect x="17" y="1" width="3" height="17" rx="1" fill="#d4a853" opacity="0.4"/>
                       </svg>
                     </div>
                     <div>
-                      <div style="font-size:0.88rem;font-weight:500;color:#f0ede8;margin-bottom:5px;">80/20 compras</div>
-                      <div style="font-size:0.78rem;color:#666;line-height:1.55;">
+                      <div style="font-size:0.88rem;font-weight:500;color:#f0ede8;margin-bottom:4px;">80/20 compras</div>
+                      <div style="font-size:0.76rem;color:#666;line-height:1.55;">
                         Los <span style="color:#d4a853;font-weight:600;">15 ingredientes</span> de mayor gasto.
                         Compara precios entre dos meses usando la
                         <span style="color:#c8c4be;font-weight:500;">cantidad del mes inicial</span>
@@ -5308,14 +5321,9 @@ elif modulo.startswith("📊"):
                       </div>
                     </div>
                   </div>
-                  <div style="border-top:1px solid #1e1e1e;padding-top:16px;">
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;" id="selectors-grid">
-                    </div>
-                  </div>
-                </div>
+                  <div style="border-top:1px solid #1e1e1e;padding-top:14px;padding-bottom:2px;">
                 """, unsafe_allow_html=True)
 
-                # Selectores reales de Streamlit (funcionan con la lógica existente)
                 _col_i, _col_f = st.columns(2)
                 with _col_i:
                     _idx_i = st.selectbox(
@@ -5344,7 +5352,6 @@ elif modulo.startswith("📊"):
                             f"AND UPPER(REPLACE(REPLACE(REPLACE(REPLACE(c.local,'Á','A'),'É','E'),'Í','I'),'Ó','O')) = UPPER(REPLACE(REPLACE(REPLACE(REPLACE('{_local_8020}','Á','A'),'É','E'),'Í','I'),'Ó','O'))"
                             if _local_8020 != 'Todos' else ''
                         )
-
 
                         # ── Lista de meses en el rango ────────────────────
                         _rango_meses = pd.date_range(
