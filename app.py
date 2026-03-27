@@ -2590,6 +2590,7 @@ def generar_pdf_variacion(df, mes_base, mes_comp, local='Cadena Completa'):
 # ============================================================
 # MÓDULO: GESTIÓN DE DATOS
 # ============================================================
+informe_sel = ""  # default — se sobreescribe dentro del bloque 📊
 if modulo.startswith("📦"):
     st.markdown(f"""
     <div style="margin-bottom:1.5rem">
