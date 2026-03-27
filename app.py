@@ -2332,6 +2332,7 @@ def _build_variacion_query(fecha_base_i, fecha_base_f,
                 MIN(c.nombre_proveedor)                                    AS proveedor,
                 MIN(c.categoria_producto)                                  AS categoria,
                 MAX(c.formato)                                             AS formato,
+                MAX(c.conversion)                                          AS conversion,
                 SUM(c.cant_conv)                                           AS cant_base,
                 SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv), 0)      AS precio_base
             FROM compras c
@@ -2361,7 +2362,7 @@ def _build_variacion_query(fecha_base_i, fecha_base_f,
         )
         SELECT
             b.sku, b.nombre, b.proveedor, b.categoria,
-            b.formato, b.cant_base, b.precio_base,
+            b.formato, b.conversion, b.cant_base, b.precio_base,
             c.precio_comp,
             b.cant_base * b.precio_base                               AS impacto_base,
             b.cant_base * COALESCE(c.precio_comp, b.precio_base)     AS impacto_comp
@@ -4724,6 +4725,8 @@ elif modulo.startswith("📊"):
                             badge_cls, badge_txt = 'badge-up',   f'{mg_per:.1f}%'
 
                         mc_cls = 'iv-down' if mc_val >= 0 else 'iv-up'
+                        _cmv_val = float(r.get('cmv_total', r.get('costo_total_teorico', 0)) or 0)
+                        _cmv_pct = float(r.get('cmv_pct', 0) or 0)
 
                         card_html = f"""
                         <div class="ing-card">
@@ -4734,9 +4737,10 @@ elif modulo.startswith("📊"):
                                 </div>
                                 <span class="ing-badge {badge_cls}">{badge_txt}</span>
                             </div>
-                            <div class="ing-grid">
+                            <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:4px 8px">
                                 <div class="ing-kv"><div class="ik">Cant.</div><div class="iv">{float(r.get('cant',0) or 0):,.0f}</div></div>
                                 <div class="ing-kv"><div class="ik">Venta</div><div class="iv">${float(r.get('venta',0) or 0):,.0f}</div></div>
+                                <div class="ing-kv"><div class="ik">CMV ({_cmv_pct:.0f}%)</div><div class="iv" style="color:#e89c45">${_cmv_val:,.0f}</div></div>
                                 <div class="ing-kv"><div class="ik">MC</div><div class="iv {mc_cls}">${mc_val:,.0f}</div></div>
                             </div>
                         </div>
@@ -5324,6 +5328,33 @@ elif modulo.startswith("📊"):
                         _pcls = 'iv-up' if (_pct and float(_pct) > 3) else ('iv-down' if (_pct and float(_pct) < -3) else '')
                         _stag = ' · sin precio comp.' if _sinp else ''
 
+                        # Determinar unidad de medida según conversion
+                        _conv = float(r.get('conversion', 1) or 1)
+                        _fmt  = float(r.get('formato', 1) or 1)
+                        if _conv == 1000:
+                            _um = 'kg'    # conversion 1000 = gramos → precio por kg
+                        elif _conv == 1:
+                            _um = 'un'
+                        else:
+                            _um = 'un'    # conversion N = unidades por envase
+
+                        # Cantidad: convertir cant_conv a unidad grande
+                        _cant_raw = float(r.get('cant_base', 0) or 0)
+                        if _conv == 1000:
+                            _cant_display = _cant_raw / 1000  # de gramos a kg
+                            _cant_label = f'{_cant_display:,.1f} {_um}'
+                        else:
+                            _cant_display = _cant_raw
+                            _cant_label = f'{_cant_display:,.0f} {_um}'
+
+                        # Precio: si conversion=1000, el precio ya está por gramo → mostrar por kg
+                        if _conv == 1000:
+                            _pb_display = _pb * 1000  # $/gramo → $/kg
+                            _pc_display = _pc * 1000
+                        else:
+                            _pb_display = _pb
+                            _pc_display = _pc
+
                         st.markdown(f"""
                         <div class="ing-card">
                             <div class="ing-card-top">
@@ -5336,15 +5367,15 @@ elif modulo.startswith("📊"):
                             <div class="ing-grid">
                                 <div class="ing-kv">
                                     <div class="ik">Cant. {mes_base3_str}</div>
-                                    <div class="iv">{float(r.get('cant_base',0) or 0):,.2f}</div>
+                                    <div class="iv">{_cant_label}</div>
                                 </div>
                                 <div class="ing-kv">
-                                    <div class="ik">P. {mes_base3_str}</div>
-                                    <div class="iv">${_pb:,.2f}</div>
+                                    <div class="ik">$/{_um} {mes_base3_str}</div>
+                                    <div class="iv">${_pb_display:,.0f}</div>
                                 </div>
                                 <div class="ing-kv">
-                                    <div class="ik">P. {mes_comp3_str}</div>
-                                    <div class="iv {_pcls}">${_pc:,.2f}</div>
+                                    <div class="ik">$/{_um} {mes_comp3_str}</div>
+                                    <div class="iv {_pcls}">${_pc_display:,.0f}</div>
                                 </div>
                             </div>
                         </div>
