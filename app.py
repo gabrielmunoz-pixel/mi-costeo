@@ -1215,6 +1215,9 @@ BA_COSTEABLES = {
     'BA.020',  # Opcion Proteinas
     'BA.250',  # Opción Proteínas Clásicos
     'BA.260',  # Opcion Sándwich Italiano (proteína específica)
+    'BA.140',  # Helados
+    'BA.230',  # Opcion Helado 2
+    'BA.240',  # Opcion Helado 3
 }
 
 # Mapeo BA jerarquía → grupo visual
