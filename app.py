@@ -4809,9 +4809,34 @@ elif modulo.startswith("📊"):
         # Vista: Interempresa o Por Local
         vista = st.radio("Vista", ["🌐 Interempresa", "📍 Por Local"], horizontal=True, key="rent_vista")
 
+        # ── Filtro de plato (previo al informe) ───────────────────
+        _df_platos_disp = run_query("""
+            SELECT DISTINCT sku_producto, MAX(nombre_producto) as nombre_producto
+            FROM ventas WHERE es_opcion = false
+            GROUP BY sku_producto ORDER BY sku_producto
+        """)
+        if not _df_platos_disp.empty:
+            _platos_opts = _df_platos_disp.apply(
+                lambda r: f"{r['sku_producto']} — {r['nombre_producto']}", axis=1
+            ).tolist()
+        else:
+            _platos_opts = []
+
+        _platos_sel = st.multiselect(
+            "🔍 Filtrar platos (dejar vacío = todos)",
+            _platos_opts,
+            key='inf1_platos_sel',
+            placeholder="Busca por SKU o nombre..."
+        )
+        _skus_filtro = [p.split(' — ')[0].strip() for p in _platos_sel] if _platos_sel else []
+
         if st.button("▶ Generar Informe 1"):
             with st.spinner("Calculando rentabilidad..."):
                 df_inf1 = informe_rentabilidad(f_inicio, f_fin, f_local)
+
+                # Aplicar filtro de platos si está activo
+                if _skus_filtro and not df_inf1.empty:
+                    df_inf1 = df_inf1[df_inf1['sku_producto'].isin(_skus_filtro)].reset_index(drop=True)
 
                 # Detectar qué AB tienen opciones en el período
                 _lf_op = "AND UPPER(local) = UPPER(:l)" if f_local != "Todos" else ""
@@ -4840,21 +4865,6 @@ elif modulo.startswith("📊"):
             fi_             = st.session_state['inf1_fi']
             ff_             = st.session_state['inf1_ff']
             local_          = st.session_state['inf1_local']
-
-            # ── Filtro de plato ───────────────────────────────────
-            _platos_disp = df_inf1.apply(
-                lambda r: f"{r['sku_producto']} — {r['nombre_producto']}",
-                axis=1
-            ).tolist()
-            _platos_sel = st.multiselect(
-                "🔍 Filtrar por plato (dejar vacío = todos)",
-                _platos_disp,
-                key='inf1_platos_sel',
-                placeholder="Busca por SKU o nombre..."
-            )
-            if _platos_sel:
-                _skus_sel = [p.split(' — ')[0].strip() for p in _platos_sel]
-                df_inf1 = df_inf1[df_inf1['sku_producto'].isin(_skus_sel)].reset_index(drop=True)
 
             venta_total  = df_inf1['venta'].sum()
             cmv_total    = df_inf1['cmv_total'].sum() if 'cmv_total' in df_inf1.columns else df_inf1['costo_total_teorico'].sum()
