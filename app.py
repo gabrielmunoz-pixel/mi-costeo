@@ -2605,21 +2605,233 @@ if modulo.startswith("📦"):
     tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs(["📖 Recetario", "🛒 Compras", "📈 Ventas", "🔀 Equivalencias SKU", "🔍 Auditoría Compras", "📦 Inventario / Uso", "🗂️ Clasificación", "🧮 Explosión MRP", "🏷️ Auditoría Categorías"])
 
     with tab1:
-        st.markdown("<div class='info-box'>Carga las hojas <b>Directos</b> y <b>Procesados</b> de tu recetario. Esto reemplaza el recetario actual.</div>", unsafe_allow_html=True)
-        c1, c2 = st.columns(2)
-        with c1:
-            f_dir  = st.file_uploader("Hoja Directos (.xlsx)", type="xlsx", key="dir")
-        with c2:
-            f_proc = st.file_uploader("Hoja Procesados (.xlsx)", type="xlsx", key="proc")
-        if f_dir and f_proc:
-            if st.button("🔄 Sincronizar Recetario"):
-                save_recetario(pd.read_excel(f_dir), pd.read_excel(f_proc))
+        _rt1, _rt2 = st.tabs(["📥 Carga Masiva", "✏️ Editor de Recetas"])
 
-        st.markdown("---")
-        df_rec_view = run_query("SELECT * FROM recetas LIMIT 200")
-        if not df_rec_view.empty:
-            st.caption(f"Vista previa recetario — {len(df_rec_view)} filas (máx 200)")
-            st.dataframe(df_rec_view, use_container_width=True, hide_index=True)
+        # ── CARGA MASIVA ─────────────────────────────────────────
+        with _rt1:
+            st.markdown("<div class='info-box'>Carga las hojas <b>Directos</b> y <b>Procesados</b> de tu recetario. <b>Esto reemplaza el recetario actual completo.</b></div>", unsafe_allow_html=True)
+            c1, c2 = st.columns(2)
+            with c1:
+                f_dir  = st.file_uploader("Hoja Directos (.xlsx)", type="xlsx", key="dir")
+            with c2:
+                f_proc = st.file_uploader("Hoja Procesados (.xlsx)", type="xlsx", key="proc")
+            if f_dir and f_proc:
+                if st.button("🔄 Sincronizar Recetario"):
+                    save_recetario(pd.read_excel(f_dir), pd.read_excel(f_proc))
+
+            st.markdown("---")
+            df_rec_view = get_recetas()
+            if not df_rec_view.empty:
+                st.caption(f"Vista previa recetario — {len(df_rec_view)} filas")
+                st.dataframe(df_rec_view, use_container_width=True, hide_index=True)
+
+        # ── EDITOR FILA POR FILA ──────────────────────────────────
+        with _rt2:
+            st.markdown("<div class='info-box'>Busca un plato por código de venta para ver, editar, agregar o eliminar sus ingredientes. También puedes crear una receta nueva.</div>", unsafe_allow_html=True)
+
+            # ── Selector de plato ─────────────────────────────────
+            _df_platos = get_recetas()
+            _platos_unicos = sorted(_df_platos['codigo_venta'].dropna().unique().tolist()) if not _df_platos.empty else []
+
+            _ec1, _ec2 = st.columns([2, 1])
+            with _ec1:
+                _sku_sel = st.selectbox("Seleccionar plato", [None] + _platos_unicos,
+                    format_func=lambda x: "— Selecciona un plato —" if x is None else x,
+                    key='rec_ed_sku')
+            with _ec2:
+                st.markdown("<br>", unsafe_allow_html=True)
+                _crear_nuevo = st.toggle("➕ Crear receta nueva", key='rec_ed_nuevo')
+
+            # ── CREAR RECETA NUEVA ────────────────────────────────
+            if _crear_nuevo:
+                st.markdown("#### ➕ Nueva Receta")
+                _nc1, _nc2 = st.columns(2)
+                with _nc1:
+                    _nuevo_cv   = st.text_input("Código de venta (ej: PAC-099)", key='rec_nuevo_cv').strip().upper()
+                    _nuevo_np   = st.text_input("Nombre del plato", key='rec_nuevo_np').strip()
+                    _nuevo_sku  = st.text_input("SKU ingrediente", key='rec_nuevo_sku').strip().upper()
+                    _nuevo_ni   = st.text_input("Nombre ingrediente", key='rec_nuevo_ni').strip()
+                with _nc2:
+                    _nuevo_cr   = st.number_input("cant_real", min_value=0.0, step=0.1, key='rec_nuevo_cr')
+                    _nuevo_ce   = st.number_input("cant_efic", min_value=0.0, step=0.1, key='rec_nuevo_ce')
+                    _nuevo_proc = st.selectbox("es_procesado", [False, True], key='rec_nuevo_proc')
+                    _nuevo_op   = st.selectbox("es_opcion", [None, 0, 1, 2, 3], key='rec_nuevo_op',
+                                               format_func=lambda x: "null" if x is None else str(x))
+
+                if st.button("💾 Guardar ingrediente", key='rec_nuevo_save', type='primary'):
+                    if not _nuevo_cv or not _nuevo_sku:
+                        st.error("Código de venta y SKU ingrediente son obligatorios.")
+                    else:
+                        try:
+                            _eng = get_engine()
+                            with _eng.connect() as _conn:
+                                _conn.execute(text("""
+                                    INSERT INTO recetas
+                                        (codigo_venta, nombre_plato, sku_ingrediente, nombre_ingrediente,
+                                         cant_real, cant_efic, es_procesado, es_opcion)
+                                    VALUES (:cv, :np, :sku, :ni, :cr, :ce, :proc, :op)
+                                """), {
+                                    'cv': _nuevo_cv, 'np': _nuevo_np,
+                                    'sku': _nuevo_sku, 'ni': _nuevo_ni,
+                                    'cr': _nuevo_cr, 'ce': _nuevo_ce,
+                                    'proc': _nuevo_proc, 'op': _nuevo_op
+                                })
+                                _conn.commit()
+                            st.success(f"✅ Ingrediente agregado a {_nuevo_cv}")
+                            st.cache_data.clear()
+                            st.rerun()
+                        except Exception as _e:
+                            st.error(f"Error: {_e}")
+
+            # ── EDITAR RECETA EXISTENTE ───────────────────────────
+            elif _sku_sel:
+                _df_ed = _df_platos[_df_platos['codigo_venta'] == _sku_sel].reset_index(drop=True)
+                _nombre_plato = _df_ed['nombre_plato'].iloc[0] if not _df_ed.empty else ''
+                st.markdown(f"#### 📋 {_sku_sel} — {_nombre_plato} &nbsp; <span style='color:#666;font-size:0.8rem'>({len(_df_ed)} ingredientes)</span>", unsafe_allow_html=True)
+
+                # ── Tabla de ingredientes actuales ────────────────
+                _hs_e = 'padding:7px 10px;font-size:0.67rem;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
+                _rows_e = ''
+                for _i, _r in _df_ed.iterrows():
+                    _proc_badge = '<span style="color:#d4a853;font-size:0.7rem">PRO</span>' if _r.get('es_procesado') else ''
+                    _op_val = _r.get('es_opcion')
+                    _op_badge = f'<span style="color:#5b8dd9;font-size:0.7rem">OP {_op_val}</span>' if _op_val not in (None, 0, '0', '') else ''
+                    _rows_e += (
+                        f'<tr style="border-bottom:1px solid #1a1a1a">'
+                        f'<td style="padding:8px 10px;color:#666;font-family:monospace;font-size:0.72rem">{_r.get("sku_ingrediente","")}</td>'
+                        f'<td style="padding:8px 10px;color:#e8e4de;font-size:0.8rem">{_r.get("nombre_ingrediente","")}</td>'
+                        f'<td style="padding:8px 10px;text-align:right;color:#aaa">{float(_r.get("cant_real",0) or 0):,.4g}</td>'
+                        f'<td style="padding:8px 10px;text-align:right;color:#666">{float(_r.get("cant_efic",0) or 0):,.4g}</td>'
+                        f'<td style="padding:8px 10px;text-align:center">{_proc_badge} {_op_badge}</td>'
+                        f'</tr>'
+                    )
+                st.markdown(
+                    '<div style="overflow-x:auto;border-radius:10px;border:1px solid #1e1e1e;background:#0d0d0d;margin-bottom:1rem">'
+                    '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
+                    '<thead><tr style="background:#111">'
+                    f'<th style="{_hs_e};text-align:left">SKU</th>'
+                    f'<th style="{_hs_e};text-align:left">Ingrediente</th>'
+                    f'<th style="{_hs_e};text-align:right">cant_real</th>'
+                    f'<th style="{_hs_e};text-align:right">cant_efic</th>'
+                    f'<th style="{_hs_e};text-align:center">Flags</th>'
+                    f'</tr></thead><tbody>{_rows_e}</tbody></table></div>',
+                    unsafe_allow_html=True
+                )
+
+                # ── Acciones ──────────────────────────────────────
+                _acc_tab1, _acc_tab2, _acc_tab3 = st.tabs(["✏️ Modificar ingrediente", "➕ Agregar ingrediente", "🗑️ Eliminar ingrediente"])
+
+                # MODIFICAR
+                with _acc_tab1:
+                    _skus_ing = _df_ed['sku_ingrediente'].tolist()
+                    _ing_opts = _df_ed.apply(lambda r: f"{r['sku_ingrediente']} — {r['nombre_ingrediente']}", axis=1).tolist()
+                    _ing_sel_mod = st.selectbox("Seleccionar ingrediente", _ing_opts, key='rec_mod_ing')
+                    _ing_idx = _ing_opts.index(_ing_sel_mod)
+                    _ing_row = _df_ed.iloc[_ing_idx]
+                    _ing_sku_mod = _skus_ing[_ing_idx]
+
+                    _m1, _m2, _m3, _m4 = st.columns(4)
+                    with _m1:
+                        _mod_cr = st.number_input("cant_real", value=float(_ing_row.get('cant_real',0) or 0),
+                                                  min_value=0.0, step=0.01, key='rec_mod_cr', format="%.4f")
+                    with _m2:
+                        _mod_ce = st.number_input("cant_efic", value=float(_ing_row.get('cant_efic',0) or 0),
+                                                  min_value=0.0, step=0.01, key='rec_mod_ce', format="%.4f")
+                    with _m3:
+                        _mod_proc_cur = bool(_ing_row.get('es_procesado', False))
+                        _mod_proc = st.selectbox("es_procesado", [False, True],
+                                                 index=1 if _mod_proc_cur else 0, key='rec_mod_proc')
+                    with _m4:
+                        _mod_op_cur = _ing_row.get('es_opcion')
+                        _op_opts = [None, 0, 1, 2, 3]
+                        _op_idx_cur = _op_opts.index(_mod_op_cur) if _mod_op_cur in _op_opts else 0
+                        _mod_op = st.selectbox("es_opcion", _op_opts, index=_op_idx_cur, key='rec_mod_op',
+                                               format_func=lambda x: "null" if x is None else str(x))
+
+                    if st.button("💾 Aplicar cambios", key='rec_mod_save', type='primary'):
+                        try:
+                            _eng = get_engine()
+                            with _eng.connect() as _conn:
+                                _conn.execute(text("""
+                                    UPDATE recetas SET
+                                        cant_real    = :cr,
+                                        cant_efic    = :ce,
+                                        es_procesado = :proc,
+                                        es_opcion    = :op
+                                    WHERE codigo_venta = :cv AND sku_ingrediente = :sku
+                                """), {'cr': _mod_cr, 'ce': _mod_ce, 'proc': _mod_proc,
+                                       'op': _mod_op, 'cv': _sku_sel, 'sku': _ing_sku_mod})
+                                _conn.commit()
+                            st.success(f"✅ {_ing_sku_mod} actualizado en {_sku_sel}")
+                            st.cache_data.clear()
+                            st.rerun()
+                        except Exception as _e:
+                            st.error(f"Error: {_e}")
+
+                # AGREGAR
+                with _acc_tab2:
+                    _a1, _a2 = st.columns(2)
+                    with _a1:
+                        _add_sku = st.text_input("SKU ingrediente", key='rec_add_sku').strip().upper()
+                        _add_ni  = st.text_input("Nombre ingrediente", key='rec_add_ni').strip()
+                        _add_cr  = st.number_input("cant_real", min_value=0.0, step=0.1, key='rec_add_cr')
+                    with _a2:
+                        _add_ce   = st.number_input("cant_efic", min_value=0.0, step=0.1, key='rec_add_ce')
+                        _add_proc = st.selectbox("es_procesado", [False, True], key='rec_add_proc')
+                        _add_op   = st.selectbox("es_opcion", [None, 0, 1, 2, 3], key='rec_add_op',
+                                                 format_func=lambda x: "null" if x is None else str(x))
+
+                    if st.button("➕ Agregar ingrediente", key='rec_add_save', type='primary'):
+                        if not _add_sku:
+                            st.error("SKU ingrediente es obligatorio.")
+                        else:
+                            try:
+                                _eng = get_engine()
+                                with _eng.connect() as _conn:
+                                    _conn.execute(text("""
+                                        INSERT INTO recetas
+                                            (codigo_venta, nombre_plato, sku_ingrediente, nombre_ingrediente,
+                                             cant_real, cant_efic, es_procesado, es_opcion)
+                                        VALUES (:cv, :np, :sku, :ni, :cr, :ce, :proc, :op)
+                                    """), {
+                                        'cv': _sku_sel, 'np': _nombre_plato,
+                                        'sku': _add_sku, 'ni': _add_ni,
+                                        'cr': _add_cr, 'ce': _add_ce,
+                                        'proc': _add_proc, 'op': _add_op
+                                    })
+                                    _conn.commit()
+                                st.success(f"✅ {_add_sku} agregado a {_sku_sel}")
+                                st.cache_data.clear()
+                                st.rerun()
+                            except Exception as _e:
+                                st.error(f"Error: {_e}")
+
+                # ELIMINAR
+                with _acc_tab3:
+                    _ing_opts_del = _df_ed.apply(lambda r: f"{r['sku_ingrediente']} — {r['nombre_ingrediente']}", axis=1).tolist()
+                    _ing_sel_del  = st.selectbox("Seleccionar ingrediente a eliminar", _ing_opts_del, key='rec_del_ing')
+                    _ing_sku_del  = _ing_sel_del.split(' — ')[0].strip()
+
+                    st.warning(f"⚠️ Esto eliminará **{_ing_sel_del}** de la receta **{_sku_sel}** permanentemente.")
+                    if st.button("🗑️ Eliminar", key='rec_del_save', type='primary'):
+                        try:
+                            _eng = get_engine()
+                            with _eng.connect() as _conn:
+                                _conn.execute(text("""
+                                    DELETE FROM recetas
+                                    WHERE codigo_venta = :cv AND sku_ingrediente = :sku
+                                """), {'cv': _sku_sel, 'sku': _ing_sku_del})
+                                _conn.commit()
+                            st.success(f"✅ {_ing_sku_del} eliminado de {_sku_sel}")
+                            st.cache_data.clear()
+                            st.rerun()
+                        except Exception as _e:
+                            st.error(f"Error: {_e}")
+
+            else:
+                st.caption("☝️ Selecciona un plato para editar o activa 'Crear receta nueva'.")
+
+
 
     with tab2:
         st.markdown("""
