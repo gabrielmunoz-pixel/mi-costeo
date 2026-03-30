@@ -8383,3 +8383,9 @@ elif informe_sel == "CuentasCasa":
                         f'<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif">'
                         f'<thead><tr>{hdr4}</tr></thead><tbody>{rows4_html}</tbody></table></div>',
                         unsafe_allow_html=True)
+
+# ============================================================
+# MÓDULO: GESTIÓN DE USUARIOS
+# ============================================================
+elif modulo.startswith("👥"):
+    _render_gestion_usuarios()
