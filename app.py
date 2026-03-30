@@ -897,8 +897,14 @@ def calcular_costo_platos(fecha_i, fecha_f, local):
     if df_rec.empty:
         return pd.DataFrame()
 
-    _es_op = pd.to_numeric(df_rec["es_opcion"], errors="coerce"); df_dir  = df_rec[(df_rec["es_procesado"] == False) & (_es_op.isna() | (_es_op == 0))].copy()
-    df_proc = df_rec[df_rec['es_procesado'] == True].copy()
+    _es_op  = pd.to_numeric(df_rec["es_opcion"], errors="coerce")
+    # df_proc = recipes that DEFINE a PRO- (codigo_venta starts with PRO-)
+    # df_dir  = recipes for sale plates (everything else), excluding pure options
+    df_proc = df_rec[df_rec['codigo_venta'].astype(str).str.startswith('PRO-')].copy()
+    df_dir  = df_rec[
+        ~df_rec['codigo_venta'].astype(str).str.startswith('PRO-') &
+        (_es_op.isna() | (_es_op == 0))
+    ].copy()
     # Los PRO- tienen sus propios ingredientes directos en la tabla recetas
     # con es_procesado=True. Usamos cant_efic × MUC para cada ingrediente del PRO-.
     proc_ingredientes = df_proc.copy()
