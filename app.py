@@ -4841,6 +4841,21 @@ elif modulo.startswith("📊"):
             ff_             = st.session_state['inf1_ff']
             local_          = st.session_state['inf1_local']
 
+            # ── Filtro de plato ───────────────────────────────────
+            _platos_disp = df_inf1.apply(
+                lambda r: f"{r['sku_producto']} — {r['nombre_producto']}",
+                axis=1
+            ).tolist()
+            _platos_sel = st.multiselect(
+                "🔍 Filtrar por plato (dejar vacío = todos)",
+                _platos_disp,
+                key='inf1_platos_sel',
+                placeholder="Busca por SKU o nombre..."
+            )
+            if _platos_sel:
+                _skus_sel = [p.split(' — ')[0].strip() for p in _platos_sel]
+                df_inf1 = df_inf1[df_inf1['sku_producto'].isin(_skus_sel)].reset_index(drop=True)
+
             venta_total  = df_inf1['venta'].sum()
             cmv_total    = df_inf1['cmv_total'].sum() if 'cmv_total' in df_inf1.columns else df_inf1['costo_total_teorico'].sum()
             mc_total     = df_inf1['mc_total'].sum()  if 'mc_total'  in df_inf1.columns else (venta_total - cmv_total)
