@@ -1037,10 +1037,18 @@ def calcular_cmv_con_opciones(fecha_i, fecha_f, local):
     ba_costeables_sql = "', '".join(BA_COSTEABLES)
     filtro_v = filtro_local.replace("AND UPPER(p.local)", "AND UPPER(local)")
 
+    _plates_2_scoops_sql = 'POS-002'
+    _plates_3_scoops_sql = 'POS-008'
+
     q_opciones = f"""
         WITH padres AS (
             SELECT id_orden, ab_categoria, sku_producto AS sku_padre,
-                   SUM(cantidad_vendida) AS cant_padre
+                   SUM(cantidad_vendida) AS cant_padre,
+                   CASE
+                       WHEN sku_producto = '{_plates_3_scoops_sql}' THEN 3
+                       WHEN sku_producto = '{_plates_2_scoops_sql}' THEN 2
+                       ELSE 1
+                   END AS scoops_por_unidad
             FROM ventas
             WHERE fecha_venta BETWEEN :i AND :f
               AND es_opcion = false
@@ -1053,7 +1061,7 @@ def calcular_cmv_con_opciones(fecha_i, fecha_f, local):
             FROM padres
             GROUP BY id_orden, ab_categoria
         ),
-        opciones AS (
+        opciones_raw AS (
             SELECT id_orden, ab_categoria, sku_producto AS sku_opcion,
                    SUM(cantidad_vendida) AS cant_opcion
             FROM ventas
@@ -1062,6 +1070,36 @@ def calcular_cmv_con_opciones(fecha_i, fecha_f, local):
               AND ba_opcion IN ('{ba_costeables_sql}')
               {filtro_v}
             GROUP BY id_orden, ab_categoria, sku_producto
+        ),
+        -- Cap total options per (order, ab_categoria) to expected scoops
+        opciones_cap AS (
+            SELECT
+                o.id_orden,
+                o.ab_categoria,
+                o.sku_opcion,
+                o.cant_opcion,
+                SUM(o.cant_opcion) OVER (PARTITION BY o.id_orden, o.ab_categoria) AS total_opciones,
+                SUM(p.cant_padre * p.scoops_por_unidad) AS total_esperado
+            FROM opciones_raw o
+            JOIN (
+                SELECT id_orden, ab_categoria,
+                       SUM(cant_padre * scoops_por_unidad) AS cant_padre,
+                       SUM(cant_padre * scoops_por_unidad) AS scoops_por_unidad
+                FROM padres
+                GROUP BY id_orden, ab_categoria
+            ) p ON p.id_orden = o.id_orden AND p.ab_categoria = o.ab_categoria
+            GROUP BY o.id_orden, o.ab_categoria, o.sku_opcion, o.cant_opcion
+        ),
+        opciones AS (
+            SELECT
+                id_orden, ab_categoria, sku_opcion,
+                -- Scale down cant_opcion if total options exceed expected scoops
+                CASE
+                    WHEN total_opciones > total_esperado AND total_opciones > 0
+                    THEN cant_opcion * total_esperado::float / total_opciones::float
+                    ELSE cant_opcion
+                END AS cant_opcion
+            FROM opciones_cap
         )
         SELECT
             p.sku_padre,
