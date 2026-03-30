@@ -4830,12 +4830,19 @@ elif modulo.startswith("📊"):
         )
         _skus_filtro = [p.split(' — ')[0].strip() for p in _platos_sel] if _platos_sel else []
 
-        if st.button("▶ Generar Informe 1"):
+        _btn1, _btn2 = st.columns([2, 1])
+        with _btn1:
+            _gen_completo = st.button("▶ Generar Informe completo", key='inf1_gen_full')
+        with _btn2:
+            _gen_plato = st.button("🔍 Buscar plato seleccionado", key='inf1_gen_plato',
+                                   disabled=not _skus_filtro)
+
+        if _gen_completo or _gen_plato:
             with st.spinner("Calculando rentabilidad..."):
                 df_inf1 = informe_rentabilidad(f_inicio, f_fin, f_local)
 
-                # Aplicar filtro de platos si está activo
-                if _skus_filtro and not df_inf1.empty:
+                # Aplicar filtro solo si viene del botón individual
+                if _gen_plato and _skus_filtro and not df_inf1.empty:
                     df_inf1 = df_inf1[df_inf1['sku_producto'].isin(_skus_filtro)].reset_index(drop=True)
 
                 # Detectar qué AB tienen opciones en el período
