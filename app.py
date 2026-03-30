@@ -880,13 +880,25 @@ def calcular_costo_platos(fecha_i, fecha_f, local):
     NO se aplica factor_um: el MUC ya está expresado en la unidad base del SKU
     ($/g para carnes/verduras, $/un para panes, etc.), que coincide con cant_real/cant_efic.
     """
-    # MUC último precio — solo SKUs que están en recetas
+    # MUC último precio — resuelve equivalencias: si el SKU de receta no está en compras,
+    # busca via sku_equivalencias el sku_compra que sí tiene precio
     precio_sql = """
+        SELECT DISTINCT ON (sku_receta) sku_receta AS sku,
+               costo_realfinal / NULLIF(cant_conv * NULLIF(formato,0), 0) AS precio_unitario
+        FROM compras c
+        JOIN sku_equivalencias e ON c.sku = e.sku_compra
+        WHERE c.cant_conv > 0 AND c.costo_realfinal > 0 AND c.formato > 0
+          AND e.sku_receta IN (SELECT DISTINCT sku_ingrediente FROM recetas WHERE sku_ingrediente IS NOT NULL)
+        ORDER BY sku_receta, c.fecha_dte DESC
+
+        UNION
+
         SELECT DISTINCT ON (sku) sku,
-               costo_realfinal / NULLIF(cant_conv * NULLIF(formato,0), 0) as precio_unitario
+               costo_realfinal / NULLIF(cant_conv * NULLIF(formato,0), 0) AS precio_unitario
         FROM compras
         WHERE cant_conv > 0 AND costo_realfinal > 0 AND formato > 0
           AND sku IN (SELECT DISTINCT sku_ingrediente FROM recetas WHERE sku_ingrediente IS NOT NULL)
+          AND sku NOT IN (SELECT sku_receta FROM sku_equivalencias)
         ORDER BY sku, fecha_dte DESC
     """
     df_precio = run_query(precio_sql)
