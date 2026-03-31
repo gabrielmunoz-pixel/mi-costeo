@@ -973,15 +973,53 @@ def calcular_costo_platos(fecha_i, fecha_f, local):
     dir_compra['precio_unitario'] = pd.to_numeric(dir_compra['precio_unitario'], errors='coerce').fillna(0)
     dir_compra['costo_parcial']   = dir_compra['cant_real'] * dir_compra['precio_unitario']
 
-    # es_opcion=6: flavor options — cost = average across all flavors in the recipe (1 scoop per plate)
+    # es_opcion=6: flavor options — weighted average cost using actual MODX sales distribution
     _es_op_dir = pd.to_numeric(dir_compra['es_opcion'], errors='coerce')
     dir_op6    = dir_compra[_es_op_dir == 6].copy()
     dir_normal = dir_compra[_es_op_dir != 6].copy()
 
     if not dir_op6.empty:
-        # Average costo_parcial across all flavor options per plate
-        dir_op6_avg = dir_op6.groupby('codigo_venta')['costo_parcial'].mean().reset_index()
-        dir_op6_avg.columns = ['codigo_venta', 'costo_parcial']
+        # Get MODX sales distribution for the period
+        _filtro_local_w = f"AND UPPER(local) = UPPER('{local}')" if local != "Todos" else ""
+        _q_modx = f"""
+            SELECT sku_producto, SUM(cantidad_vendida) AS ventas
+            FROM ventas
+            WHERE fecha_venta BETWEEN '{fecha_i}' AND '{fecha_f}'
+              AND es_opcion = true
+              AND ba_opcion IN ('BA.140','BA.230','BA.240')
+              {_filtro_local_w}
+            GROUP BY sku_producto
+        """
+        df_modx = run_query(_q_modx)
+
+        if not df_modx.empty:
+            _total_modx = df_modx['ventas'].sum()
+            df_modx['peso'] = df_modx['ventas'] / _total_modx if _total_modx > 0 else 1 / len(df_modx)
+
+            # Map MODX sku → ingredient sku
+            _modx_map = {
+                'MODX-013': 'AL-PO-001',
+                'MODX-014': 'AL-PO-014',
+                'MODX-015': 'AL-PO-012',
+                'MODX-016': 'AL-PO-013',
+            }
+            df_modx['sku_ingrediente'] = df_modx['sku_producto'].map(_modx_map)
+            df_modx = df_modx.dropna(subset=['sku_ingrediente'])
+
+            # Merge weights into dir_op6
+            dir_op6 = pd.merge(dir_op6, df_modx[['sku_ingrediente','peso']],
+                               on='sku_ingrediente', how='left')
+            dir_op6['peso'] = dir_op6['peso'].fillna(0)
+
+            # Weighted cost per plate = SUM(costo_parcial × peso)
+            dir_op6['costo_ponderado'] = dir_op6['costo_parcial'] * dir_op6['peso']
+            dir_op6_avg = dir_op6.groupby('codigo_venta')['costo_ponderado'].sum().reset_index()
+            dir_op6_avg.columns = ['codigo_venta', 'costo_parcial']
+        else:
+            # Fallback: simple average if no MODX sales data
+            dir_op6_avg = dir_op6.groupby('codigo_venta')['costo_parcial'].mean().reset_index()
+            dir_op6_avg.columns = ['codigo_venta', 'costo_parcial']
+
         dir_compra = pd.concat([dir_normal[['codigo_venta','costo_parcial']],
                                 dir_op6_avg], ignore_index=True)
     else:
