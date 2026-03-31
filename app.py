@@ -922,7 +922,7 @@ def calcular_costo_platos(fecha_i, fecha_f, local):
     df_proc = df_rec[df_rec['codigo_venta'].astype(str).str.startswith('PRO-')].copy()
     df_dir  = df_rec[
         ~df_rec['codigo_venta'].astype(str).str.startswith('PRO-') &
-        (_es_op.isna() | (_es_op == 0))
+        (_es_op.isna() | (_es_op == 0) | (_es_op == 6))
     ].copy()
     # Los PRO- tienen sus propios ingredientes directos en la tabla recetas
     # con es_procesado=True. Usamos cant_efic × MUC para cada ingrediente del PRO-.
@@ -973,6 +973,20 @@ def calcular_costo_platos(fecha_i, fecha_f, local):
     dir_compra['precio_unitario'] = pd.to_numeric(dir_compra['precio_unitario'], errors='coerce').fillna(0)
     dir_compra['costo_parcial']   = dir_compra['cant_real'] * dir_compra['precio_unitario']
 
+    # es_opcion=6: flavor options — cost = average across all flavors in the recipe (1 scoop per plate)
+    _es_op_dir = pd.to_numeric(dir_compra['es_opcion'], errors='coerce')
+    dir_op6    = dir_compra[_es_op_dir == 6].copy()
+    dir_normal = dir_compra[_es_op_dir != 6].copy()
+
+    if not dir_op6.empty:
+        # Average costo_parcial across all flavor options per plate
+        dir_op6_avg = dir_op6.groupby('codigo_venta')['costo_parcial'].mean().reset_index()
+        dir_op6_avg.columns = ['codigo_venta', 'costo_parcial']
+        dir_compra = pd.concat([dir_normal[['codigo_venta','costo_parcial']],
+                                dir_op6_avg], ignore_index=True)
+    else:
+        dir_compra = dir_normal[['codigo_venta','costo_parcial']]
+
     # Directos PRO-: cant_real × costo_unitario_pro (calculado arriba)
     dir_pro = pd.merge(
         dir_pro, costo_pro,
@@ -982,8 +996,9 @@ def calcular_costo_platos(fecha_i, fecha_f, local):
     dir_pro['costo_parcial']      = dir_pro['cant_real'] * dir_pro['costo_unitario_pro']
 
     # Consolidar todo
-    costo_total  = pd.concat(
-        [dir_compra[['codigo_venta','costo_parcial']],
+    costo_total = pd.concat(
+        [dir_compra if isinstance(dir_compra, pd.DataFrame) and 'costo_parcial' in dir_compra.columns
+         else dir_compra[['codigo_venta','costo_parcial']],
          dir_pro[['codigo_venta','costo_parcial']]],
         ignore_index=True
     )
