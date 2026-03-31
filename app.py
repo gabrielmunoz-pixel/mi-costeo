@@ -910,25 +910,27 @@ def calcular_costo_platos(fecha_i, fecha_f, local):
             UNION ALL
 
             -- Fallback: último precio histórico (directo)
-            SELECT DISTINCT ON (sku) sku, 
-                   costo_realfinal / NULLIF(cant_conv * NULLIF(formato,0), 0) AS precio_unitario,
-                   3 AS prioridad
-            FROM compras
-            WHERE cant_conv > 0 AND costo_realfinal > 0 AND formato > 0
-              AND sku IN (SELECT DISTINCT sku_ingrediente FROM recetas WHERE sku_ingrediente IS NOT NULL)
-            ORDER BY sku, fecha_dte DESC
+            SELECT sku, precio_unitario, 3 AS prioridad FROM (
+                SELECT DISTINCT ON (sku) sku,
+                       costo_realfinal / NULLIF(cant_conv * NULLIF(formato,0), 0) AS precio_unitario
+                FROM compras
+                WHERE cant_conv > 0 AND costo_realfinal > 0 AND formato > 0
+                  AND sku IN (SELECT DISTINCT sku_ingrediente FROM recetas WHERE sku_ingrediente IS NOT NULL)
+                ORDER BY sku, fecha_dte DESC
+            ) fb1
 
             UNION ALL
 
             -- Fallback: último precio histórico (via equivalencia)
-            SELECT DISTINCT ON (e.sku_receta) e.sku_receta AS sku,
-                   c.costo_realfinal / NULLIF(c.cant_conv * NULLIF(c.formato,0), 0) AS precio_unitario,
-                   4 AS prioridad
-            FROM compras c
-            JOIN sku_equivalencias e ON c.sku = e.sku_compra
-            WHERE c.cant_conv > 0 AND c.costo_realfinal > 0 AND c.formato > 0
-              AND e.sku_receta IN (SELECT DISTINCT sku_ingrediente FROM recetas WHERE sku_ingrediente IS NOT NULL)
-            ORDER BY e.sku_receta, c.fecha_dte DESC
+            SELECT sku, precio_unitario, 4 AS prioridad FROM (
+                SELECT DISTINCT ON (e.sku_receta) e.sku_receta AS sku,
+                       c.costo_realfinal / NULLIF(c.cant_conv * NULLIF(c.formato,0), 0) AS precio_unitario
+                FROM compras c
+                JOIN sku_equivalencias e ON c.sku = e.sku_compra
+                WHERE c.cant_conv > 0 AND c.costo_realfinal > 0 AND c.formato > 0
+                  AND e.sku_receta IN (SELECT DISTINCT sku_ingrediente FROM recetas WHERE sku_ingrediente IS NOT NULL)
+                ORDER BY e.sku_receta, c.fecha_dte DESC
+            ) fb2
         ) combined
         WHERE precio_unitario IS NOT NULL AND precio_unitario > 0
         ORDER BY sku, prioridad
