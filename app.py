@@ -5468,6 +5468,12 @@ elif modulo.startswith("📊"):
                     st.markdown("<br>", unsafe_allow_html=True)
 
                     _orden_cuad = ["⭐ Estrella", "🚦 Tráfico", "😴 Dormidos", "💀 Peso Muerto"]
+                    _sort_cuad  = {
+                        "⭐ Estrella":     ('venta',      False),  # best sellers first
+                        "🚦 Tráfico":     ('venta',      False),  # highest volume first
+                        "😴 Dormidos":    ('margen_pct', False),  # highest margin first
+                        "💀 Peso Muerto": ('margen_pct', True),   # worst margin first
+                    }
                     _hs_cuad = 'padding:7px 10px;font-size:0.66rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
 
                     for _cq in _orden_cuad:
@@ -5477,7 +5483,8 @@ elif modulo.startswith("📊"):
                         if _df_cq.empty:
                             continue
 
-                        _df_cq = _df_cq.nlargest(int(_top_n), 'venta').reset_index(drop=True)
+                        _sort_col, _sort_asc = _sort_cuad[_cq]
+                        _df_cq = _df_cq.sort_values(_sort_col, ascending=_sort_asc).head(int(_top_n)).reset_index(drop=True)
 
                         st.markdown(
                             f'<div style="margin:1.2rem 0 0.4rem;padding:10px 16px;border-radius:10px;'
