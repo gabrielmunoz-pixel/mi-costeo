@@ -880,35 +880,63 @@ def calcular_costo_platos(fecha_i, fecha_f, local):
     NO se aplica factor_um: el MUC ya está expresado en la unidad base del SKU
     ($/g para carnes/verduras, $/un para panes, etc.), que coincide con cant_real/cant_efic.
     """
-    # MUC último precio — resuelve equivalencias.
-    # Prioridad: precio directo en compras > precio via equivalencia
-    precio_sql = """
-        SELECT DISTINCT ON (sku) sku, precio_unitario
-        FROM (
-            SELECT
-                sku,
-                costo_realfinal / NULLIF(cant_conv * NULLIF(formato,0), 0) AS precio_unitario,
-                fecha_dte,
-                1 AS prioridad
+    # MUC ponderado del período — promedio ponderado por gasto.
+    # Fallback al último precio histórico si no hay compras en el período.
+    precio_sql = f"""
+        SELECT sku, precio_unitario FROM (
+            -- Precio ponderado del período (directo)
+            SELECT sku,
+                   SUM(costo_realfinal) / NULLIF(SUM(cant_conv * NULLIF(formato,0)), 0) AS precio_unitario,
+                   1 AS prioridad
             FROM compras
             WHERE cant_conv > 0 AND costo_realfinal > 0 AND formato > 0
+              AND fecha_dte::date BETWEEN '{fecha_i}' AND '{fecha_f}'
               AND sku IN (SELECT DISTINCT sku_ingrediente FROM recetas WHERE sku_ingrediente IS NOT NULL)
+            GROUP BY sku
 
             UNION ALL
 
-            SELECT
-                e.sku_receta AS sku,
-                c.costo_realfinal / NULLIF(c.cant_conv * NULLIF(c.formato,0), 0) AS precio_unitario,
-                c.fecha_dte,
-                2 AS prioridad
+            -- Precio ponderado del período (via equivalencia)
+            SELECT e.sku_receta AS sku,
+                   SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv * NULLIF(c.formato,0)), 0) AS precio_unitario,
+                   2 AS prioridad
+            FROM compras c
+            JOIN sku_equivalencias e ON c.sku = e.sku_compra
+            WHERE c.cant_conv > 0 AND c.costo_realfinal > 0 AND c.formato > 0
+              AND c.fecha_dte::date BETWEEN '{fecha_i}' AND '{fecha_f}'
+              AND e.sku_receta IN (SELECT DISTINCT sku_ingrediente FROM recetas WHERE sku_ingrediente IS NOT NULL)
+            GROUP BY e.sku_receta
+
+            UNION ALL
+
+            -- Fallback: último precio histórico (directo)
+            SELECT DISTINCT ON (sku) sku, 
+                   costo_realfinal / NULLIF(cant_conv * NULLIF(formato,0), 0) AS precio_unitario,
+                   3 AS prioridad
+            FROM compras
+            WHERE cant_conv > 0 AND costo_realfinal > 0 AND formato > 0
+              AND sku IN (SELECT DISTINCT sku_ingrediente FROM recetas WHERE sku_ingrediente IS NOT NULL)
+            ORDER BY sku, fecha_dte DESC
+
+            UNION ALL
+
+            -- Fallback: último precio histórico (via equivalencia)
+            SELECT DISTINCT ON (e.sku_receta) e.sku_receta AS sku,
+                   c.costo_realfinal / NULLIF(c.cant_conv * NULLIF(c.formato,0), 0) AS precio_unitario,
+                   4 AS prioridad
             FROM compras c
             JOIN sku_equivalencias e ON c.sku = e.sku_compra
             WHERE c.cant_conv > 0 AND c.costo_realfinal > 0 AND c.formato > 0
               AND e.sku_receta IN (SELECT DISTINCT sku_ingrediente FROM recetas WHERE sku_ingrediente IS NOT NULL)
+            ORDER BY e.sku_receta, c.fecha_dte DESC
         ) combined
-        ORDER BY sku, prioridad, fecha_dte DESC
+        WHERE precio_unitario IS NOT NULL AND precio_unitario > 0
+        ORDER BY sku, prioridad
     """
-    df_precio = run_query(precio_sql)
+    df_precio_raw = run_query(precio_sql)
+    # Keep only first (lowest prioridad) price per SKU
+    df_precio = df_precio_raw.drop_duplicates(subset='sku', keep='first').reset_index(drop=True) if not df_precio_raw.empty else pd.DataFrame()
+
     if df_precio.empty:
         return pd.DataFrame()
 
@@ -917,7 +945,6 @@ def calcular_costo_platos(fecha_i, fecha_f, local):
         return pd.DataFrame()
 
     _es_op  = pd.to_numeric(df_rec["es_opcion"], errors="coerce")
-    # df_proc = recipes that DEFINE a PRO- (codigo_venta starts with PRO-)
     # df_dir  = recipes for sale plates (everything else), excluding pure options
     df_proc = df_rec[df_rec['codigo_venta'].astype(str).str.startswith('PRO-')].copy()
     df_dir  = df_rec[
