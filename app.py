@@ -5445,6 +5445,9 @@ elif modulo.startswith("📊"):
                 else:
                     # ── Recalcular cuadrantes sobre datos filtrados ──
                     # Eje vertical: margen_pct (media global del conjunto filtrado)
+                    # Excluir platos sin ventas
+                    df_cuad = df_cuad[df_cuad['venta'] > 0].copy()
+
                     # Eje horizontal: venta total (media global del conjunto filtrado)
                     _mean_margen = df_cuad['margen_pct'].mean()
                     _mean_venta  = df_cuad['venta'].mean()
@@ -5452,7 +5455,7 @@ elif modulo.startswith("📊"):
                     def _clasificar(r):
                         alto_margen = r['margen_pct'] >= _mean_margen
                         alto_venta  = r['venta']      >= _mean_venta
-                        if alto_venta  and alto_margen:  return "⭐ Estrella"
+                        if alto_venta  and alto_margen:     return "⭐ Estrella"
                         if alto_venta  and not alto_margen: return "🚦 Tráfico"
                         if not alto_venta and alto_margen:  return "😴 Dormidos"
                         return "💀 Peso Muerto"
