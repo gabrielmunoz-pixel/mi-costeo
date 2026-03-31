@@ -1235,6 +1235,8 @@ def informe_rentabilidad(fecha_i, fecha_f, local):
         FROM ventas
         WHERE fecha_venta BETWEEN :i AND :f
           AND es_opcion = false
+          AND sku_producto NOT LIKE 'CP%'
+          AND sku_producto NOT LIKE 'MEJ%'
           {filtro_local_r}
         GROUP BY sku_producto
     """
