@@ -4995,13 +4995,13 @@ elif modulo.startswith("📊"):
                 abs_con_opciones = set(df_ab_con_opciones['ab_categoria'].tolist()) if not df_ab_con_opciones.empty else set()
 
             if not df_inf1.empty:
-                st.session_state['inf1_data']        = df_inf1
-                st.session_state['inf1_abs_opciones'] = abs_con_opciones
-                st.session_state['inf1_fi']           = f_inicio
-                st.session_state['inf1_ff']           = f_fin
-                st.session_state['inf1_local']        = f_local
-                st.session_state['inf1_gen_plato']    = _gen_plato
-                st.session_state['inf1_skus_filtro']  = _skus_filtro
+                st.session_state['inf1_data']         = df_inf1
+                st.session_state['inf1_abs_opciones']  = abs_con_opciones
+                st.session_state['inf1_fi']            = f_inicio
+                st.session_state['inf1_ff']            = f_fin
+                st.session_state['inf1_local']         = f_local
+                st.session_state['inf1_was_plato']     = _gen_plato
+                st.session_state['inf1_skus_filtro']   = _skus_filtro
 
         if 'inf1_data' in st.session_state:
             df_inf1         = st.session_state['inf1_data']
@@ -5009,7 +5009,7 @@ elif modulo.startswith("📊"):
             fi_             = st.session_state['inf1_fi']
             ff_             = st.session_state['inf1_ff']
             local_          = st.session_state['inf1_local']
-            _was_plato      = st.session_state.get('inf1_gen_plato', False)
+            _was_plato      = st.session_state.get('inf1_was_plato', False)
             _skus_debug     = st.session_state.get('inf1_skus_filtro', [])
 
             # ── Debug de costos (solo cuando se buscó un plato específico) ───
