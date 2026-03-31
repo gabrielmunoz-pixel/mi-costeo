@@ -5406,40 +5406,68 @@ elif modulo.startswith("📊"):
             with _tab_rent2:
                 st.markdown("<br>", unsafe_allow_html=True)
 
-                # Renombrar cuadrantes al esquema del negocio
                 _map_cuad = {
                     "⭐ Estrella":     "⭐ Estrella",
-                    "🐄 Vaca":         "🚦 Tráfico",
-                    "❓ Interrogante": "😴 Dormidos",
-                    "🐶 Perro":        "💀 Peso Muerto",
+                    "🚦 Tráfico":     "🚦 Tráfico",
+                    "😴 Dormidos":    "😴 Dormidos",
+                    "💀 Peso Muerto": "💀 Peso Muerto",
                 }
                 _colors_cuad = {
-                    "⭐ Estrella":   ("#d4a853", "#1a1500"),
-                    "🚦 Tráfico":   ("#5b8dd9", "#0a1525"),
-                    "😴 Dormidos":  ("#4caf7d", "#0a1e14"),
-                    "💀 Peso Muerto": ("#888",   "#111"),
+                    "⭐ Estrella":     ("#d4a853", "#1a1500"),
+                    "🚦 Tráfico":     ("#5b8dd9", "#0a1525"),
+                    "😴 Dormidos":    ("#4caf7d", "#0a1e14"),
+                    "💀 Peso Muerto": ("#888",    "#111"),
                 }
                 _desc_cuad = {
-                    "⭐ Estrella":   "Alto volumen · Alta rentabilidad",
-                    "🚦 Tráfico":   "Alto volumen · Baja rentabilidad",
-                    "😴 Dormidos":  "Bajo volumen · Alta rentabilidad",
+                    "⭐ Estrella":     "Alto volumen · Alta rentabilidad",
+                    "🚦 Tráfico":     "Alto volumen · Baja rentabilidad",
+                    "😴 Dormidos":    "Bajo volumen · Alta rentabilidad",
                     "💀 Peso Muerto": "Bajo volumen · Baja rentabilidad",
                 }
 
-                df_cuad = df_inf1.copy()
-
-                if 'cuadrante' not in df_cuad.columns:
-                    st.info("El informe no contiene datos de cuadrante. Regenera el informe.")
-                else:
-                    df_cuad['cuadrante_neg'] = df_cuad['cuadrante'].map(_map_cuad).fillna(df_cuad['cuadrante'])
-
-                    _cats_cuad = sorted(df_cuad['categoria_menu'].dropna().unique().tolist())
+                # ── Filtros del cuadrante ─────────────────────────
+                _cq_f1, _cq_f2 = st.columns([3, 1])
+                with _cq_f1:
+                    _cats_cuad = sorted(df_inf1['categoria_menu'].dropna().unique().tolist())
                     _cat_cuad_sel = st.selectbox("Filtrar por categoría", ["Todas"] + _cats_cuad, key='cuad_cat')
-                    if _cat_cuad_sel != "Todas":
-                        df_cuad = df_cuad[df_cuad['categoria_menu'] == _cat_cuad_sel]
+                with _cq_f2:
+                    _top_n = st.number_input("Top N por cuadrante", min_value=5, max_value=50, value=15, step=5, key='cuad_topn')
+
+                # ── Aplicar filtro de categoría ───────────────────
+                df_cuad = df_inf1.copy()
+                if _cat_cuad_sel != "Todas":
+                    df_cuad = df_cuad[df_cuad['categoria_menu'] == _cat_cuad_sel].copy()
+
+                if df_cuad.empty:
+                    st.info("Sin datos para los filtros seleccionados.")
+                elif 'margen_pct' not in df_cuad.columns or 'venta' not in df_cuad.columns:
+                    st.info("Regenera el informe para ver los cuadrantes.")
+                else:
+                    # ── Recalcular cuadrantes sobre datos filtrados ──
+                    # Eje vertical: margen_pct (media global del conjunto filtrado)
+                    # Eje horizontal: venta total (media global del conjunto filtrado)
+                    _mean_margen = df_cuad['margen_pct'].mean()
+                    _mean_venta  = df_cuad['venta'].mean()
+
+                    def _clasificar(r):
+                        alto_margen = r['margen_pct'] >= _mean_margen
+                        alto_venta  = r['venta']      >= _mean_venta
+                        if alto_venta  and alto_margen:  return "⭐ Estrella"
+                        if alto_venta  and not alto_margen: return "🚦 Tráfico"
+                        if not alto_venta and alto_margen:  return "😴 Dormidos"
+                        return "💀 Peso Muerto"
+
+                    df_cuad['cuadrante_neg'] = df_cuad.apply(_clasificar, axis=1)
+
+                    # ── KPIs de referencia ────────────────────────
+                    _k1, _k2, _k3, _k4 = st.columns(4)
+                    _k1.metric("Productos", len(df_cuad))
+                    _k2.metric("Margen medio", f"{_mean_margen:.1f}%")
+                    _k3.metric("Venta media", f"${_mean_venta:,.0f}")
+                    _k4.metric("Venta total", f"${df_cuad['venta'].sum():,.0f}")
+                    st.markdown("<br>", unsafe_allow_html=True)
 
                     _orden_cuad = ["⭐ Estrella", "🚦 Tráfico", "😴 Dormidos", "💀 Peso Muerto"]
-
                     _hs_cuad = 'padding:7px 10px;font-size:0.66rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
 
                     for _cq in _orden_cuad:
@@ -5449,8 +5477,7 @@ elif modulo.startswith("📊"):
                         if _df_cq.empty:
                             continue
 
-                        # Top 15 por venta dentro del cuadrante
-                        _df_cq = _df_cq.nlargest(15, 'venta').reset_index(drop=True)
+                        _df_cq = _df_cq.nlargest(int(_top_n), 'venta').reset_index(drop=True)
 
                         st.markdown(
                             f'<div style="margin:1.2rem 0 0.4rem;padding:10px 16px;border-radius:10px;'
@@ -5470,20 +5497,21 @@ elif modulo.startswith("📊"):
                             _cnt = int(_rc.get('cant', 0) or 0)
                             _mgu = float(_rc.get('mc_unitario', 0) or 0)
                             _mg_color = '#4caf7d' if _mg >= 40 else '#e89c45' if _mg >= 20 else '#e84545'
+                            _vt_color = '#4caf7d' if _vt >= _mean_venta else '#888'
                             _rows_cq += (
                                 f'<tr style="border-bottom:1px solid #1a1a1a">'
                                 f'<td style="padding:8px 10px;color:#555;font-size:0.72rem;text-align:right;width:28px">{_rk+1}</td>'
                                 f'<td style="padding:8px 10px;font-weight:500;color:#e8e4de;font-size:0.8rem">{str(_rc.get("nombre_producto",""))[:40]}</td>'
                                 f'<td style="padding:8px 10px;color:#666;font-size:0.72rem">{_rc.get("categoria_menu","")}</td>'
                                 f'<td style="padding:8px 10px;text-align:right;color:#aaa">{_cnt:,}</td>'
-                                f'<td style="padding:8px 10px;text-align:right;color:#aaa">${_vt:,.0f}</td>'
+                                f'<td style="padding:8px 10px;text-align:right;color:{_vt_color};font-weight:600">${_vt:,.0f}</td>'
                                 f'<td style="padding:8px 10px;text-align:right;color:#aaa">${_mgu:,.0f}</td>'
                                 f'<td style="padding:8px 10px;text-align:right;color:{_mg_color};font-weight:600">{_mg:.1f}%</td>'
                                 f'<td style="padding:8px 10px;text-align:right">{fmt_mc(_mc)}</td>'
                                 f'</tr>'
                             )
 
-                        _hdrs_cq = ['#', 'Producto', 'Categoría', 'Und.', 'Venta', 'MC/u', 'Margen', 'MC Total']
+                        _hdrs_cq = ['#', 'Producto', 'Categoría', 'Und.', 'Venta', 'MC/u', 'Margen%', 'MC Total']
                         st.markdown(
                             '<div style="overflow-x:auto;border-radius:10px;border:1px solid #1e1e1e;background:#0d0d0d;margin-bottom:0.5rem">'
                             '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
