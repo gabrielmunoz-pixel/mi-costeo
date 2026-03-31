@@ -3503,6 +3503,7 @@ if modulo.startswith("📦"):
                             WHERE UPPER(sku) = UPPER('{sku_inspect}')
                               AND muc > 0 AND costo_realfinal > 0 AND monto_real > 0
                               AND ROUND(muc::numeric, 1) > 0
+                              {_filtro_fecha_audit}
                             GROUP BY ROUND(muc::numeric, 1)
                             ORDER BY ROUND(muc::numeric, 1)
                         """
