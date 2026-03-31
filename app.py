@@ -3497,8 +3497,9 @@ if modulo.startswith("📦"):
                                 ROUND(AVG(monto_real / NULLIF(cantidad, 0))::numeric, 2) AS precio_factura,
                                 MAX(conversion)                                           AS conversion,
                                 MAX(formato)                                              AS formato,
-                                MODE() WITHIN GROUP (ORDER BY nombre_producto)                                      AS nombre_producto,
-                                MAX(categoria_producto)                                   AS categoria
+                                MODE() WITHIN GROUP (ORDER BY nombre_producto)            AS nombre_producto,
+                                MAX(categoria_producto)                                   AS categoria,
+                                MODE() WITHIN GROUP (ORDER BY nombre_proveedor)           AS proveedor
                             FROM compras
                             WHERE UPPER(sku) = UPPER('{sku_inspect}')
                               AND muc > 0 AND costo_realfinal > 0 AND monto_real > 0
@@ -3544,7 +3545,7 @@ if modulo.startswith("📦"):
                                     f'<tr style="border-bottom:1px solid #1e1e1e">'
                                     f'<td style="padding:9px 12px;color:#666;font-family:monospace;font-size:0.72rem">{sku_inspect.upper()}</td>'
                                     f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de;font-size:0.8rem">{r.get("nombre_producto","")}</td>'
-                                    f'<td style="padding:9px 12px;color:#666;font-size:0.75rem">{r.get("categoria","")}</td>'
+                                    f'<td style="padding:9px 12px;color:#666;font-size:0.75rem">{r.get("proveedor","")}</td>'
                                     f'<td style="padding:9px 12px;text-align:right;color:#888">{r["conversion"]}</td>'
                                     f'<td style="padding:9px 12px;text-align:right;color:#888">{r["formato"]}</td>'
                                     f'<td style="padding:9px 12px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">${precio_i:,.2f}</td>'
@@ -3553,7 +3554,7 @@ if modulo.startswith("📦"):
                                     f'<td style="padding:9px 12px;text-align:center;color:{sc};font-weight:600">{sl}</td>'
                                     f'</tr>'
                                 )
-                            hdrs_i = ['SKU','Producto','Categoría','Conv.','Formato','Neto Fact/u','MUC','# Reg.','Dispersión']
+                            hdrs_i = ['SKU','Producto','Proveedor','Conv.','Formato','Neto Fact/u','MUC','# Reg.','Dispersión']
                             st.markdown(
                                 '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
                                 '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
@@ -3754,9 +3755,8 @@ if modulo.startswith("📦"):
                     rows_html += (
                         f'<tr style="border-bottom:1px solid #1e1e1e">'
                         f'<td style="padding:9px 12px;color:#666;font-family:monospace;font-size:0.72rem;width:8%">{sku_r}</td>'
-                        f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de;font-size:0.8rem;width:20%">{nombre_r}</td>'
-                        f'<td style="padding:9px 12px;color:#666;font-size:0.75rem;width:9%">{r.get("categoria","")}</td>'
-                        f'<td style="padding:9px 12px;color:#777;font-size:0.75rem;width:13%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{r.get("proveedor","")}</td>'
+                        f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de;font-size:0.8rem;width:22%">{nombre_r}</td>'
+                        f'<td style="padding:9px 12px;color:#777;font-size:0.75rem;width:18%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{r.get("proveedor","")}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#888;width:6%">{r.get("conversion","")}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#888;width:7%">{r.get("formato","")}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#aaa;width:10%">${precio:,.2f}</td>'
@@ -3771,8 +3771,8 @@ if modulo.startswith("📦"):
                     '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
                     '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
                     '<thead><tr style="background:#111">'
-                    + ''.join([f'<th style="{hs_a};text-align:{"left" if i<4 else "right" if i<9 else "center"}">{h}</th>'
-                               for i, h in enumerate(['SKU','Producto','Categoría','Proveedor','Conv.','Formato','Neto Fact/u','MUC','# Reg.','Dispersión'])])
+                    + ''.join([f'<th style="{hs_a};text-align:{"left" if i<3 else "right" if i<8 else "center"}">{h}</th>'
+                               for i, h in enumerate(['SKU','Producto','Proveedor','Conv.','Formato','Neto Fact/u','MUC','# Reg.','Dispersión'])])
                     + f'</tr></thead><tbody>{rows_html}</tbody></table></div>'
                 )
                 st.markdown(tabla_html, unsafe_allow_html=True)
