@@ -2721,7 +2721,7 @@ if modulo.startswith("📦"):
                     _nuevo_cr   = st.number_input("cant_real", min_value=0.0, step=0.1, key='rec_nuevo_cr')
                     _nuevo_ce   = st.number_input("cant_efic", min_value=0.0, step=0.1, key='rec_nuevo_ce')
                     _nuevo_proc = st.selectbox("es_procesado", [False, True], key='rec_nuevo_proc')
-                    _nuevo_op   = st.selectbox("es_opcion", [None, 0, 1, 2, 3], key='rec_nuevo_op',
+                    _nuevo_op   = st.selectbox("es_opcion", [None, 0, 1, 2, 3, 6], key='rec_nuevo_op',
                                                format_func=lambda x: "null" if x is None else str(x))
 
                 if st.button("💾 Guardar ingrediente", key='rec_nuevo_save', type='primary'):
@@ -2809,7 +2809,7 @@ if modulo.startswith("📦"):
                                                  index=1 if _mod_proc_cur else 0, key='rec_mod_proc')
                     with _m4:
                         _mod_op_cur = _ing_row.get('es_opcion')
-                        _op_opts = [None, 0, 1, 2, 3]
+                        _op_opts = [None, 0, 1, 2, 3, 6]
                         _op_idx_cur = _op_opts.index(_mod_op_cur) if _mod_op_cur in _op_opts else 0
                         _mod_op = st.selectbox("es_opcion", _op_opts, index=_op_idx_cur, key='rec_mod_op',
                                                format_func=lambda x: "null" if x is None else str(x))
@@ -2844,7 +2844,7 @@ if modulo.startswith("📦"):
                     with _a2:
                         _add_ce   = st.number_input("cant_efic", min_value=0.0, step=0.1, key='rec_add_ce')
                         _add_proc = st.selectbox("es_procesado", [False, True], key='rec_add_proc')
-                        _add_op   = st.selectbox("es_opcion", [None, 0, 1, 2, 3], key='rec_add_op',
+                        _add_op   = st.selectbox("es_opcion", [None, 0, 1, 2, 3, 6], key='rec_add_op',
                                                  format_func=lambda x: "null" if x is None else str(x))
 
                     if st.button("➕ Agregar ingrediente", key='rec_add_save', type='primary'):
