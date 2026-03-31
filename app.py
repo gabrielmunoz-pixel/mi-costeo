@@ -3308,6 +3308,20 @@ if modulo.startswith("📦"):
         st.markdown("<div class='info-box'>Detecta inconsistencias en <b>conversion</b> y <b>formato</b> comparando el MUC de cada registro contra la mediana histórica del SKU. Un MUC muy alejado de la mediana indica que el precio, conversion o formato están mal configurados.</div>", unsafe_allow_html=True)
 
         # Controles
+        ac0a, ac0b = st.columns(2)
+        with ac0a:
+            audit_fecha_i = st.date_input("Desde", value=None, key='audit_fi', help="Dejar vacío para todo el historial")
+        with ac0b:
+            audit_fecha_f = st.date_input("Hasta", value=None, key='audit_ff')
+
+        _filtro_fecha_audit = ""
+        if audit_fecha_i and audit_fecha_f:
+            _filtro_fecha_audit = f"AND fecha_dte::date BETWEEN '{audit_fecha_i}' AND '{audit_fecha_f}'"
+        elif audit_fecha_i:
+            _filtro_fecha_audit = f"AND fecha_dte::date >= '{audit_fecha_i}'"
+        elif audit_fecha_f:
+            _filtro_fecha_audit = f"AND fecha_dte::date <= '{audit_fecha_f}'"
+
         ac1, ac2 = st.columns([2, 2])
         with ac1:
             umbral_audit = st.slider("Umbral de alerta (× esperado)", min_value=2.0, max_value=20.0, value=5.0, step=0.5,
@@ -3367,6 +3381,7 @@ if modulo.startswith("📦"):
                       AND UPPER(subcat) NOT LIKE '%COLACION%'
                       AND UPPER(subcat) NOT LIKE '%COLACIÓN%'
                       {filtro_cat_audit}
+                      {_filtro_fecha_audit}
                     GROUP BY sku, ROUND(muc::numeric, 1)
                     HAVING ROUND(muc::numeric, 1) > 0
                 ),
@@ -4980,12 +4995,13 @@ elif modulo.startswith("📊"):
                 abs_con_opciones = set(df_ab_con_opciones['ab_categoria'].tolist()) if not df_ab_con_opciones.empty else set()
 
             if not df_inf1.empty:
-
                 st.session_state['inf1_data']        = df_inf1
                 st.session_state['inf1_abs_opciones'] = abs_con_opciones
                 st.session_state['inf1_fi']           = f_inicio
                 st.session_state['inf1_ff']           = f_fin
                 st.session_state['inf1_local']        = f_local
+                st.session_state['inf1_gen_plato']    = _gen_plato
+                st.session_state['inf1_skus_filtro']  = _skus_filtro
 
         if 'inf1_data' in st.session_state:
             df_inf1         = st.session_state['inf1_data']
@@ -4993,6 +5009,77 @@ elif modulo.startswith("📊"):
             fi_             = st.session_state['inf1_fi']
             ff_             = st.session_state['inf1_ff']
             local_          = st.session_state['inf1_local']
+            _was_plato      = st.session_state.get('inf1_gen_plato', False)
+            _skus_debug     = st.session_state.get('inf1_skus_filtro', [])
+
+            # ── Debug de costos (solo cuando se buscó un plato específico) ───
+            if _was_plato and _skus_debug:
+                for _sku_dbg in _skus_debug:
+                    with st.expander(f"🔬 Desglose de costo — {_sku_dbg}", expanded=True):
+                        _df_rec_dbg = get_recetas()
+                        _df_rec_dbg = _df_rec_dbg[_df_rec_dbg['codigo_venta'] == _sku_dbg].copy()
+
+                        if _df_rec_dbg.empty:
+                            st.warning("Sin receta registrada.")
+                        else:
+                            # Get prices
+                            _df_precio_dbg = run_query("""
+                                SELECT DISTINCT ON (sku) sku, precio_unitario
+                                FROM (
+                                    SELECT sku,
+                                           costo_realfinal / NULLIF(cant_conv * NULLIF(formato,0), 0) AS precio_unitario,
+                                           fecha_dte, 1 AS prioridad
+                                    FROM compras
+                                    WHERE cant_conv > 0 AND costo_realfinal > 0 AND formato > 0
+                                    UNION ALL
+                                    SELECT e.sku_receta AS sku,
+                                           c.costo_realfinal / NULLIF(c.cant_conv * NULLIF(c.formato,0), 0) AS precio_unitario,
+                                           c.fecha_dte, 2 AS prioridad
+                                    FROM compras c
+                                    JOIN sku_equivalencias e ON c.sku = e.sku_compra
+                                    WHERE c.cant_conv > 0 AND c.costo_realfinal > 0 AND c.formato > 0
+                                ) combined
+                                ORDER BY sku, prioridad, fecha_dte DESC
+                            """)
+                            _precio_map = dict(zip(_df_precio_dbg['sku'], _df_precio_dbg['precio_unitario'])) if not _df_precio_dbg.empty else {}
+
+                            _dbg_rows = []
+                            for _, _ri in _df_rec_dbg.iterrows():
+                                _sku_ing  = str(_ri.get('sku_ingrediente',''))
+                                _nom_ing  = str(_ri.get('nombre_ingrediente',''))
+                                _cant     = float(_ri.get('cant_real', 0) or 0)
+                                _cant_e   = float(_ri.get('cant_efic', 0) or 0)
+                                _es_op    = _ri.get('es_opcion')
+                                _precio   = float(_precio_map.get(_sku_ing, 0) or 0)
+                                _costo    = _cant * _precio
+                                _flag     = '🍦 promedio' if str(_es_op) == '6' else ('PRO' if str(_ri.get('es_procesado','')) == 'True' else '')
+                                _dbg_rows.append({
+                                    'SKU': _sku_ing,
+                                    'Ingrediente': _nom_ing,
+                                    'cant_real': _cant,
+                                    'cant_efic': _cant_e,
+                                    'Precio/u': _precio,
+                                    'Costo parcial': _costo,
+                                    'Flag': _flag
+                                })
+
+                            _df_dbg = pd.DataFrame(_dbg_rows)
+                            _df_dbg['Precio/u'] = _df_dbg['Precio/u'].apply(lambda x: f"${x:,.4f}")
+                            _df_dbg['Costo parcial'] = _df_dbg['Costo parcial'].apply(lambda x: f"${x:,.2f}")
+                            st.dataframe(_df_dbg, use_container_width=True, hide_index=True)
+
+                            # CMV from report
+                            _row_inf = df_inf1[df_inf1['sku_producto'] == _sku_dbg]
+                            if not _row_inf.empty:
+                                _cmv_base = float(_row_inf['cmv_base'].iloc[0] or 0)
+                                _cmv_op   = float(_row_inf['cmv_opciones'].iloc[0] or 0)
+                                _cmv_tot  = float(_row_inf['cmv_unitario'].iloc[0] or 0)
+                                st.markdown(
+                                    f"**CMV base:** ${_cmv_base:,.2f} &nbsp;|&nbsp; "
+                                    f"**CMV opciones:** ${_cmv_op:,.2f} &nbsp;|&nbsp; "
+                                    f"**CMV unitario total:** ${_cmv_tot:,.2f}"
+                                )
+
 
             venta_total  = df_inf1['venta'].sum()
             cmv_total    = df_inf1['cmv_total'].sum() if 'cmv_total' in df_inf1.columns else df_inf1['costo_total_teorico'].sum()
