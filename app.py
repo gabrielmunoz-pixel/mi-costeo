@@ -1016,7 +1016,7 @@ def calcular_cmv_con_opciones(fecha_i, fecha_f, local):
 
     cant_padre se obtiene en query separada para evitar inflación por el JOIN con opciones.
     """
-    filtro_local = "AND UPPER(p.local) = UPPER(:l)" if local != "Todos" else ""
+    filtro_local = "AND UPPER(local) = UPPER(:l)" if local != "Todos" else ""
     params_loc = {'i': str(fecha_i), 'f': str(fecha_f)}
     if local != "Todos": params_loc['l'] = local
 
@@ -1050,7 +1050,7 @@ def calcular_cmv_con_opciones(fecha_i, fecha_f, local):
     # Si hay 2 unidades del MISMO plato (mismo sku_padre), la cantidad de
     # opciones se divide por la cantidad del padre en ese pedido.
     ba_costeables_sql = "', '".join(BA_COSTEABLES)
-    filtro_v = filtro_local.replace("AND UPPER(p.local)", "AND UPPER(local)")
+    filtro_v = filtro_local
 
     _plates_2_scoops_sql = 'POS-002'
     _plates_3_scoops_sql = 'POS-008'
