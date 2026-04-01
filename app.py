@@ -2927,14 +2927,20 @@ if modulo.startswith("📦"):
                             _pro_precio_map = dict(
                                 _df_pro_precio.drop_duplicates('sku').set_index('sku')['precio_unitario']
                             )
-                        # Calculate PRO- unit cost = SUM(cant_efic × precio)
+                        # Calculate PRO- unit cost considering porcion
+                        _pro_porcion   = int(_df_pro_ing['porcion'].iloc[0] or 0) if 'porcion' in _df_pro_ing.columns else 0
+                        _pro_cant_lote = float(_df_pro_ing['cant_real'].apply(pd.to_numeric, errors='coerce').fillna(0).sum())
                         _pro_costo = 0.0
                         for _, _pi in _df_pro_ing.iterrows():
                             _pi_sku    = str(_pi.get('sku_ingrediente',''))
                             _pi_efic   = float(_pi.get('cant_efic', 0) or 0)
                             _pi_precio = float(_pro_precio_map.get(_pi_sku, 0) or 0)
                             _pro_costo += _pi_efic * _pi_precio
-                        # Store as price per unit (cant_real=1 in parent recipe)
+                        # porcion=1: cost is already per unit
+                        # porcion=0: cost is total batch → divide by batch size
+                        if _pro_porcion == 0 and _pro_cant_lote > 0:
+                            _pro_costo = _pro_costo / _pro_cant_lote
+                        # Store as price per unit
                         _precio_rec_map[_pro_sku] = _pro_costo
 
                 _hs_e = 'padding:7px 10px;font-size:0.67rem;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
