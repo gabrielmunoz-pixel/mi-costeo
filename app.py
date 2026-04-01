@@ -2849,9 +2849,14 @@ if modulo.startswith("📦"):
                 # ── Tabla de ingredientes actuales ────────────────
                 # Fetch weighted average prices for the selected period
                 _skus_rec = _df_ed['sku_ingrediente'].dropna().tolist()
+                _skus_directo = [s for s in _skus_rec if not str(s).startswith('PRO-')]
+                _skus_pro     = [s for s in _skus_rec if str(s).startswith('PRO-')]
+
                 _precio_rec_map = {}
-                if _skus_rec:
-                    _skus_in = "', '".join(_skus_rec)
+
+                # Prices for direct ingredients
+                if _skus_directo:
+                    _skus_in = "', '".join(_skus_directo)
                     _q_rec_precio = f"""
                         SELECT sku, precio_unitario FROM (
                             SELECT sku,
@@ -2880,6 +2885,57 @@ if modulo.startswith("📦"):
                         _precio_rec_map = dict(
                             _df_rec_precio.drop_duplicates('sku').set_index('sku')['precio_unitario']
                         )
+
+                # Cost for PRO- ingredients
+                if _skus_pro:
+                    _df_all_rec = get_recetas()
+                    for _pro_sku in _skus_pro:
+                        _df_pro_ing = _df_all_rec[_df_all_rec['codigo_venta'] == _pro_sku].copy()
+                        if _df_pro_ing.empty:
+                            continue
+                        # Get prices for PRO- sub-ingredients
+                        _pro_sub_skus = _df_pro_ing['sku_ingrediente'].dropna().tolist()
+                        if not _pro_sub_skus:
+                            continue
+                        _pro_skus_in = "', '".join(_pro_sub_skus)
+                        _q_pro_precio = f"""
+                            SELECT sku, precio_unitario FROM (
+                                SELECT sku,
+                                       SUM(costo_realfinal) / NULLIF(SUM(cant_conv * NULLIF(formato,0)), 0) AS precio_unitario,
+                                       1 AS prioridad
+                                FROM compras
+                                WHERE cant_conv > 0 AND costo_realfinal > 0 AND formato > 0
+                                  AND fecha_dte::date BETWEEN '{_rec_fi}' AND '{_rec_ff}'
+                                  AND sku IN ('{_pro_skus_in}')
+                                GROUP BY sku
+                                UNION ALL
+                                SELECT sku, precio_unitario, 2 AS prioridad FROM (
+                                    SELECT DISTINCT ON (sku) sku,
+                                           costo_realfinal / NULLIF(cant_conv * NULLIF(formato,0), 0) AS precio_unitario
+                                    FROM compras
+                                    WHERE cant_conv > 0 AND costo_realfinal > 0 AND formato > 0
+                                      AND sku IN ('{_pro_skus_in}')
+                                    ORDER BY sku, fecha_dte DESC
+                                ) fb
+                            ) combined
+                            WHERE precio_unitario IS NOT NULL AND precio_unitario > 0
+                            ORDER BY sku, prioridad
+                        """
+                        _df_pro_precio = run_query(_q_pro_precio)
+                        _pro_precio_map = {}
+                        if not _df_pro_precio.empty:
+                            _pro_precio_map = dict(
+                                _df_pro_precio.drop_duplicates('sku').set_index('sku')['precio_unitario']
+                            )
+                        # Calculate PRO- unit cost = SUM(cant_efic × precio)
+                        _pro_costo = 0.0
+                        for _, _pi in _df_pro_ing.iterrows():
+                            _pi_sku    = str(_pi.get('sku_ingrediente',''))
+                            _pi_efic   = float(_pi.get('cant_efic', 0) or 0)
+                            _pi_precio = float(_pro_precio_map.get(_pi_sku, 0) or 0)
+                            _pro_costo += _pi_efic * _pi_precio
+                        # Store as price per unit (cant_real=1 in parent recipe)
+                        _precio_rec_map[_pro_sku] = _pro_costo
 
                 _hs_e = 'padding:7px 10px;font-size:0.67rem;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
                 _rows_e = ''
