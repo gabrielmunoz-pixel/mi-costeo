@@ -2752,7 +2752,7 @@ if modulo.startswith("📦"):
     </div>
     """, unsafe_allow_html=True)
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs(["📖 Recetario", "🛒 Compras", "📈 Ventas", "🔀 Equivalencias SKU", "🔍 Auditoría Compras", "📦 Inventario / Uso", "🗂️ Clasificación", "🧮 Explosión MRP", "🏷️ Auditoría Categorías"])
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs(["📖 Recetario", "🛒 Compras", "📈 Ventas", "🔀 Equivalencias SKU", "🔍 Auditoría Compras", "📦 Inventario / Uso", "🗂️ Clasificación", "🏷️ Tracker Clasificaciones", "🏷️ Auditoría Categorías"])
 
     with tab1:
         _rt1, _rt2 = st.tabs(["📥 Carga Masiva", "✏️ Editor de Recetas"])
@@ -4675,28 +4675,152 @@ if modulo.startswith("📦"):
                 st.dataframe(df_cc_bd, use_container_width=True, hide_index=True)
 
     with tab8:
-        st.markdown("<div class='info-box'>Sube el Excel con las hojas <b>Ventas</b>, <b>Directos</b> y <b>Procesados</b>. La lógica de cálculo es la versión validada.</div>", unsafe_allow_html=True)
-        file_mrp = st.file_uploader("Archivo Excel MRP (.xlsx)", type="xlsx", key="mrp_file")
-        if file_mrp:
-            try:
-                xls = pd.ExcelFile(file_mrp)
-                res = process_bom(
-                    pd.read_excel(xls, 'Ventas'),
-                    pd.read_excel(xls, 'Directos'),
-                    pd.read_excel(xls, 'Procesados')
-                )
-                col_a, col_b, col_c = st.columns(3)
-                col_a.metric("Insumos únicos", len(res))
-                col_b.metric("Registros explotados", len(res))
-                st.markdown("#### 📋 Resultado de la explosión")
-                st.dataframe(res.style.format({"Total Kg/L/Un": "{:,.3f}"}), use_container_width=True, hide_index=True)
-                buf = io.BytesIO()
-                with pd.ExcelWriter(buf, engine='openpyxl') as w:
-                    res.to_excel(w, index=False)
-                st.download_button("📥 Descargar MRP (.xlsx)", buf.getvalue(), "MRP_Explosion.xlsx",
-                                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-            except Exception as e:
-                st.error(f"Error al procesar: {e}")
+        st.markdown("<div class='info-box'>Busca y revisa la clasificación de cada SKU — <b>subcat</b>, <b>categoría</b>, <b>conversión</b> y <b>formato</b>. Filtra por subcat o categoría. Haz clic en un SKU para ver los productos asociados.</div>", unsafe_allow_html=True)
+
+        # ── Filtros ────────────────────────────────────────────
+        _cl1, _cl2, _cl3 = st.columns([2, 2, 3])
+        with _cl1:
+            _subcats_q = run_query("SELECT DISTINCT subcat FROM compras WHERE subcat IS NOT NULL ORDER BY 1")
+            _subcats   = _subcats_q['subcat'].tolist() if not _subcats_q.empty else []
+            _subcat_sel = st.selectbox("Subcat", ["Todas"] + _subcats, key='clas_subcat')
+        with _cl2:
+            _cats_clas = get_categorias_compras()
+            _cat_clas_sel = st.selectbox("Categoría", ["Todas"] + _cats_clas, key='clas_cat')
+        with _cl3:
+            _busq_clas = st.text_input("🔍 Buscar SKU / nombre", key='clas_busq', placeholder='ej: AL-CA-002, vacuno...')
+
+        if st.button("▶ Ejecutar", key='clas_run'):
+            st.session_state.pop('clas_df', None)
+
+        if 'clas_df' not in st.session_state:
+            _f_subcat = '' if _subcat_sel == 'Todas' else f"AND UPPER(subcat) = UPPER('{_subcat_sel}')"
+            _f_cat    = '' if _cat_clas_sel == 'Todas' else f"AND UPPER(categoria_producto) = UPPER('{_cat_clas_sel}')"
+            _f_busq   = '' if not _busq_clas else f"AND (UPPER(sku) LIKE UPPER('%{_busq_clas}%') OR UPPER(nombre_producto) LIKE UPPER('%{_busq_clas}%'))"
+            _q_clas = f"""
+                SELECT
+                    sku,
+                    MODE() WITHIN GROUP (ORDER BY nombre_producto)    AS nombre_producto,
+                    MODE() WITHIN GROUP (ORDER BY subcat)             AS subcat,
+                    MODE() WITHIN GROUP (ORDER BY categoria_producto) AS categoria_producto,
+                    MODE() WITHIN GROUP (ORDER BY conversion::text)   AS conversion,
+                    MODE() WITHIN GROUP (ORDER BY formato::text)      AS formato,
+                    ROUND(AVG(muc)::numeric, 2)                       AS muc_prom,
+                    COUNT(*)                                          AS n_registros
+                FROM compras
+                WHERE muc > 0
+                  AND costo_realfinal > 0
+                  AND UPPER(sku) NOT IN ('N. CREDITO', 'NCR', 'COLACION')
+                  AND id NOT IN (SELECT compra_id FROM compras_excluidas)
+                  {_f_subcat}
+                  {_f_cat}
+                  {_f_busq}
+                GROUP BY sku
+                ORDER BY subcat, categoria_producto, sku
+                LIMIT 800
+            """
+            _df_clas = run_query(_q_clas)
+            if not _df_clas.empty:
+                _df_clas['conversion'] = pd.to_numeric(_df_clas['conversion'], errors='coerce').fillna(1)
+                _df_clas['formato']    = pd.to_numeric(_df_clas['formato'],    errors='coerce').fillna(1)
+                _df_clas['muc_prom']   = pd.to_numeric(_df_clas['muc_prom'],   errors='coerce').fillna(0)
+                _df_clas['n_registros']= pd.to_numeric(_df_clas['n_registros'],errors='coerce').fillna(0).astype(int)
+            st.session_state['clas_df'] = _df_clas
+
+        if 'clas_df' in st.session_state:
+            _df_clas = st.session_state['clas_df'].copy()
+
+            if _df_clas.empty:
+                st.info("Sin resultados para los filtros seleccionados.")
+            else:
+                # ── Métricas ──────────────────────────────────────
+                _cm1, _cm2, _cm3 = st.columns(3)
+                _cm1.metric("SKUs únicos",    len(_df_clas))
+                _cm2.metric("Categorías",     _df_clas['categoria_producto'].nunique())
+                _cm3.metric("Total registros", int(_df_clas['n_registros'].sum()))
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                # ── Una fila por SKU con expander ─────────────────
+                for _, _rs in _df_clas.iterrows():
+                    _sku_c  = str(_rs.get('sku',''))
+                    _nom_c  = str(_rs.get('nombre_producto',''))
+                    _sub_c  = str(_rs.get('subcat',''))
+                    _cat_c  = str(_rs.get('categoria_producto',''))
+                    _conv_c = float(_rs.get('conversion', 1) or 1)
+                    _fmt_c  = float(_rs.get('formato', 1) or 1)
+                    _muc_c  = float(_rs.get('muc_prom', 0) or 0)
+                    _nreg_c = int(_rs.get('n_registros', 0) or 0)
+
+                    with st.expander(f"**{_sku_c}** — {_nom_c[:50]}  |  {_sub_c}  ·  {_cat_c}  ·  conv {_conv_c:.3g}  ·  fmt {_fmt_c:.3g}"):
+                        # ── Clasificación actual ───────────────────
+                        _e1, _e2, _e3, _e4 = st.columns(4)
+                        _e1.markdown(f"**Subcat:** `{_sub_c}`")
+                        _e2.markdown(f"**Categoría:** `{_cat_c}`")
+                        _e3.markdown(f"**Conversión:** `{_conv_c:.4g}`")
+                        _e4.markdown(f"**Formato:** `{_fmt_c:.4g}`")
+
+                        st.caption(f"MUC prom: ${_muc_c:,.4f} · {_nreg_c} registros")
+
+                        # ── Productos asociados al SKU ─────────────
+                        _q_prods = f"""
+                            SELECT DISTINCT nombre_producto, nombre_proveedor,
+                                   conversion, formato, muc,
+                                   fecha_dte
+                            FROM compras
+                            WHERE sku = '{_sku_c}'
+                              AND costo_realfinal > 0
+                            ORDER BY fecha_dte DESC
+                            LIMIT 20
+                        """
+                        _df_prods = run_query(_q_prods)
+                        if not _df_prods.empty:
+                            st.dataframe(_df_prods, use_container_width=True, hide_index=True)
+
+                        # ── Edición inline ─────────────────────────
+                        st.markdown("**✏️ Modificar clasificación:**")
+                        _ee1, _ee2, _ee3, _ee4, _ee5 = st.columns([2, 2, 1, 1, 1])
+                        with _ee1:
+                            _cats_edit = get_categorias_compras()
+                            _cat_idx   = _cats_edit.index(_cat_c) if _cat_c in _cats_edit else 0
+                            _nueva_cat = st.selectbox("Categoría", _cats_edit, index=_cat_idx, key=f'clas_cat_{_sku_c}')
+                        with _ee2:
+                            _subcats_edit = _subcats
+                            _sub_idx      = _subcats_edit.index(_sub_c) if _sub_c in _subcats_edit else 0
+                            _nueva_sub    = st.selectbox("Subcat", _subcats_edit, index=_sub_idx, key=f'clas_sub_{_sku_c}')
+                        with _ee3:
+                            _nueva_conv = st.number_input("Conv.", value=_conv_c, min_value=0.001, step=0.1, key=f'clas_conv_{_sku_c}')
+                        with _ee4:
+                            _nueva_fmt  = st.number_input("Formato", value=_fmt_c, min_value=0.001, step=1.0, key=f'clas_fmt_{_sku_c}')
+                        with _ee5:
+                            st.markdown("<br>", unsafe_allow_html=True)
+                            if st.button("💾 Aplicar", key=f'clas_save_{_sku_c}', type='primary'):
+                                try:
+                                    _eng_c = get_engine()
+                                    with _eng_c.connect() as _conn_c:
+                                        _conn_c.execute(text("""
+                                            UPDATE compras SET
+                                                categoria_producto = :cat,
+                                                subcat             = :sub,
+                                                conversion         = :conv,
+                                                formato            = :fmt,
+                                                cant_conv          = cantidad * :conv,
+                                                muc                = CASE WHEN :fmt = 1
+                                                                     THEN costo_realfinal / NULLIF(cantidad * :conv, 0)
+                                                                     ELSE costo_realfinal / NULLIF(cantidad * :conv * :fmt, 0) END
+                                            WHERE sku = :sku
+                                        """), {
+                                            'cat':  _nueva_cat,
+                                            'sub':  _nueva_sub,
+                                            'conv': _nueva_conv,
+                                            'fmt':  _nueva_fmt,
+                                            'sku':  _sku_c
+                                        })
+                                        _conn_c.commit()
+                                    st.success(f"✅ {_sku_c} actualizado")
+                                    st.session_state.pop('clas_df', None)
+                                    st.cache_data.clear()
+                                    st.rerun()
+                                except Exception as _ec:
+                                    st.error(f"Error: {_ec}")
 
     # ══════════════════════════════════════════════════════════
     # TAB 9 — AUDITORÍA DE CATEGORÍAS
