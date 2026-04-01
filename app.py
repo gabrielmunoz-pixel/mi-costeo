@@ -2779,6 +2779,13 @@ if modulo.startswith("📦"):
         with _rt2:
             st.markdown("<div class='info-box'>Busca un plato por código de venta para ver, editar, agregar o eliminar sus ingredientes. También puedes crear una receta nueva.</div>", unsafe_allow_html=True)
 
+            # ── Filtro de fechas para precios ─────────────────────
+            _re_d1, _re_d2 = st.columns(2)
+            with _re_d1:
+                _rec_fi = st.date_input("Precio desde", value=date(datetime.now().year, datetime.now().month, 1), key='rec_ed_fi')
+            with _re_d2:
+                _rec_ff = st.date_input("Precio hasta", value=date.today(), key='rec_ed_ff')
+
             # ── Selector de plato ─────────────────────────────────
             _df_platos = get_recetas()
             _platos_unicos = sorted(_df_platos['codigo_venta'].dropna().unique().tolist()) if not _df_platos.empty else []
@@ -2840,18 +2847,60 @@ if modulo.startswith("📦"):
                 st.markdown(f"#### 📋 {_sku_sel} — {_nombre_plato} &nbsp; <span style='color:#666;font-size:0.8rem'>({len(_df_ed)} ingredientes)</span>", unsafe_allow_html=True)
 
                 # ── Tabla de ingredientes actuales ────────────────
+                # Fetch weighted average prices for the selected period
+                _skus_rec = _df_ed['sku_ingrediente'].dropna().tolist()
+                _precio_rec_map = {}
+                if _skus_rec:
+                    _skus_in = "', '".join(_skus_rec)
+                    _q_rec_precio = f"""
+                        SELECT sku, precio_unitario FROM (
+                            SELECT sku,
+                                   SUM(costo_realfinal) / NULLIF(SUM(cant_conv * NULLIF(formato,0)), 0) AS precio_unitario,
+                                   1 AS prioridad
+                            FROM compras
+                            WHERE cant_conv > 0 AND costo_realfinal > 0 AND formato > 0
+                              AND fecha_dte::date BETWEEN '{_rec_fi}' AND '{_rec_ff}'
+                              AND sku IN ('{_skus_in}')
+                            GROUP BY sku
+                            UNION ALL
+                            SELECT sku, precio_unitario, 2 AS prioridad FROM (
+                                SELECT DISTINCT ON (sku) sku,
+                                       costo_realfinal / NULLIF(cant_conv * NULLIF(formato,0), 0) AS precio_unitario
+                                FROM compras
+                                WHERE cant_conv > 0 AND costo_realfinal > 0 AND formato > 0
+                                  AND sku IN ('{_skus_in}')
+                                ORDER BY sku, fecha_dte DESC
+                            ) fb
+                        ) combined
+                        WHERE precio_unitario IS NOT NULL AND precio_unitario > 0
+                        ORDER BY sku, prioridad
+                    """
+                    _df_rec_precio = run_query(_q_rec_precio)
+                    if not _df_rec_precio.empty:
+                        _precio_rec_map = dict(
+                            _df_rec_precio.drop_duplicates('sku').set_index('sku')['precio_unitario']
+                        )
+
                 _hs_e = 'padding:7px 10px;font-size:0.67rem;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
                 _rows_e = ''
                 for _i, _r in _df_ed.iterrows():
                     _proc_badge = '<span style="color:#d4a853;font-size:0.7rem">PRO</span>' if _r.get('es_procesado') else ''
                     _op_val = _r.get('es_opcion')
                     _op_badge = f'<span style="color:#5b8dd9;font-size:0.7rem">OP {_op_val}</span>' if _op_val not in (None, 0, '0', '') else ''
+                    _sku_ing = str(_r.get('sku_ingrediente',''))
+                    _cant_r  = float(_r.get('cant_real', 0) or 0)
+                    _precio  = float(_precio_rec_map.get(_sku_ing, 0) or 0)
+                    _costo   = _cant_r * _precio
+                    _precio_str = f'${_precio:,.4f}' if _precio > 0 else '—'
+                    _costo_str  = f'${_costo:,.2f}'  if _precio > 0 else '—'
                     _rows_e += (
                         f'<tr style="border-bottom:1px solid #1a1a1a">'
-                        f'<td style="padding:8px 10px;color:#666;font-family:monospace;font-size:0.72rem">{_r.get("sku_ingrediente","")}</td>'
+                        f'<td style="padding:8px 10px;color:#666;font-family:monospace;font-size:0.72rem">{_sku_ing}</td>'
                         f'<td style="padding:8px 10px;color:#e8e4de;font-size:0.8rem">{_r.get("nombre_ingrediente","")}</td>'
-                        f'<td style="padding:8px 10px;text-align:right;color:#aaa">{float(_r.get("cant_real",0) or 0):,.4g}</td>'
+                        f'<td style="padding:8px 10px;text-align:right;color:#aaa">{_cant_r:,.4g}</td>'
                         f'<td style="padding:8px 10px;text-align:right;color:#666">{float(_r.get("cant_efic",0) or 0):,.4g}</td>'
+                        f'<td style="padding:8px 10px;text-align:right;color:#888">{_precio_str}</td>'
+                        f'<td style="padding:8px 10px;text-align:right;color:#d4a853">{_costo_str}</td>'
                         f'<td style="padding:8px 10px;text-align:center">{_proc_badge} {_op_badge}</td>'
                         f'</tr>'
                     )
@@ -2863,6 +2912,8 @@ if modulo.startswith("📦"):
                     f'<th style="{_hs_e};text-align:left">Ingrediente</th>'
                     f'<th style="{_hs_e};text-align:right">cant_real</th>'
                     f'<th style="{_hs_e};text-align:right">cant_efic</th>'
+                    f'<th style="{_hs_e};text-align:right">Precio/u</th>'
+                    f'<th style="{_hs_e};text-align:right">Costo</th>'
                     f'<th style="{_hs_e};text-align:center">Flags</th>'
                     f'</tr></thead><tbody>{_rows_e}</tbody></table></div>',
                     unsafe_allow_html=True
