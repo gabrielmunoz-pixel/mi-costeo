@@ -4739,6 +4739,31 @@ if modulo.startswith("📦"):
                 _cm3.metric("Total registros", int(_df_clas['n_registros'].sum()))
                 st.markdown("<br>", unsafe_allow_html=True)
 
+                # ── Load all products for all SKUs in one query ───
+                _all_skus_str = "', '".join(_df_clas['sku'].tolist())
+                _q_all_prods = f"""
+                    SELECT
+                        sku,
+                        TRIM(nombre_producto)                               AS nombre_producto,
+                        MODE() WITHIN GROUP (ORDER BY nombre_proveedor)     AS proveedor,
+                        MODE() WITHIN GROUP (ORDER BY subcat)               AS subcat,
+                        MODE() WITHIN GROUP (ORDER BY categoria_producto)   AS categoria_producto,
+                        MODE() WITHIN GROUP (ORDER BY conversion::text)     AS conversion,
+                        MODE() WITHIN GROUP (ORDER BY formato::text)        AS formato,
+                        ROUND(AVG(muc)::numeric, 4)                         AS muc_prom,
+                        COUNT(*)                                            AS n_registros,
+                        MAX(fecha_dte)                                      AS ultima_compra
+                    FROM compras
+                    WHERE sku IN ('{_all_skus_str}')
+                      AND costo_realfinal > 0
+                    GROUP BY sku, TRIM(nombre_producto)
+                    ORDER BY sku, nombre_producto
+                """
+                _df_all_prods = run_query(_q_all_prods)
+                if not _df_all_prods.empty:
+                    _df_all_prods['conversion'] = pd.to_numeric(_df_all_prods['conversion'], errors='coerce').fillna(1)
+                    _df_all_prods['formato']    = pd.to_numeric(_df_all_prods['formato'],    errors='coerce').fillna(1)
+
                 # ── Una fila por SKU con expander ─────────────────
                 for _, _rs in _df_clas.iterrows():
                     _sku_c  = str(_rs.get('sku',''))
@@ -4750,34 +4775,16 @@ if modulo.startswith("📦"):
                     _muc_c  = float(_rs.get('muc_prom', 0) or 0)
                     _nreg_c = int(_rs.get('n_registros', 0) or 0)
 
+                    # Filter products for this SKU from preloaded data
+                    _df_prods = _df_all_prods[_df_all_prods['sku'] == _sku_c].reset_index(drop=True) if not _df_all_prods.empty else pd.DataFrame()
+
                     with st.expander(f"**{_sku_c}** — {_nom_c[:50]}  |  {_sub_c}  ·  {_cat_c}  ·  conv {_conv_c:.3g}  ·  fmt {_fmt_c:.3g}"):
-                        # ── Clasificación actual del SKU ───────────
                         _e1, _e2, _e3, _e4 = st.columns(4)
                         _e1.markdown(f"**Subcat:** `{_sub_c}`")
                         _e2.markdown(f"**Categoría:** `{_cat_c}`")
                         _e3.markdown(f"**Conversión:** `{_conv_c:.4g}`")
                         _e4.markdown(f"**Formato:** `{_fmt_c:.4g}`")
                         st.caption(f"MUC prom: ${_muc_c:,.4f} · {_nreg_c} registros")
-
-                        # ── Productos únicos dentro del SKU ────────
-                        _q_prods = f"""
-                            SELECT
-                                TRIM(nombre_producto)                               AS nombre_producto,
-                                MODE() WITHIN GROUP (ORDER BY nombre_proveedor)     AS proveedor,
-                                MODE() WITHIN GROUP (ORDER BY subcat)               AS subcat,
-                                MODE() WITHIN GROUP (ORDER BY categoria_producto)   AS categoria_producto,
-                                MODE() WITHIN GROUP (ORDER BY conversion::text)     AS conversion,
-                                MODE() WITHIN GROUP (ORDER BY formato::text)        AS formato,
-                                ROUND(AVG(muc)::numeric, 4)                         AS muc_prom,
-                                COUNT(*)                                            AS n_registros,
-                                MAX(fecha_dte)                                      AS ultima_compra
-                            FROM compras
-                            WHERE sku = '{_sku_c}'
-                              AND costo_realfinal > 0
-                            GROUP BY TRIM(nombre_producto)
-                            ORDER BY nombre_producto
-                        """
-                        _df_prods = run_query(_q_prods)
 
                         if _df_prods.empty:
                             st.info("Sin productos registrados.")
