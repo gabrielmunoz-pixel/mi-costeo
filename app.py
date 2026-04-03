@@ -5799,7 +5799,33 @@ elif modulo.startswith("📊"):
             st.markdown("<br>", unsafe_allow_html=True)
             st.markdown("### 📑 Informe Ejecutivo de Rentabilidad")
 
-            # ── Cargar snapshots disponibles ──────────────────────
+            # ── Grupos predefinidos ───────────────────────────────
+            _GRUPOS_EXEC = {
+                "🍽️ Food": {
+                    "cats": ["Para Compartir","Sandwich Clasicos","Platos Alemanes","Platos Clasicos",
+                             "Hot Dog","Ave Clasica","Ensaladas Y Otros","Ninos","Acompañamientos","Agregados"],
+                    "excluir_matriz": ["Acompañamientos","Agregados"]
+                },
+                "🍷 Bar": {
+                    "cats": ["Vinos","Cervezas","Espumantes","Piscos","Ron","Tequila",
+                             "Vodka","Whisky","Cocteles","Bajativos","Tragos Sin Alcohol"],
+                    "excluir_matriz": []
+                },
+                "☕ Cafetería": {
+                    "cats": ["Cafeteria","Jugos Naturales","Limonadas","Bebidas"],
+                    "excluir_matriz": []
+                },
+                "🍮 Postres": {
+                    "cats": ["Postres"],
+                    "excluir_matriz": []
+                },
+                "🎁 Otros": {
+                    "cats": ["Cortesia","Seleccionados P"],
+                    "excluir_matriz": []
+                },
+            }
+
+            # ── Cargar snapshots disponibles ─────────────────────
             _df_snaps_exec = run_query("""
                 SELECT DISTINCT periodo_inicio, periodo_fin, nota,
                        COUNT(DISTINCT local) as n_locales
@@ -5816,24 +5842,20 @@ elif modulo.startswith("📊"):
                     axis=1
                 ).tolist()
 
-                _exc1, _exc2, _exc3 = st.columns([2, 2, 1])
+                _exc1, _exc2 = st.columns(2)
                 with _exc1:
                     _ex_snap_a = st.selectbox("📅 Período a analizar", _snap_labels_ex, key='ex_snap_a')
                 with _exc2:
                     _ex_snap_b = st.selectbox("📅 Período comparación (opcional)", [None] + _snap_labels_ex,
                                               format_func=lambda x: "— Sin comparación —" if x is None else x,
                                               key='ex_snap_b')
-                with _exc3:
-                    _ex_cats_q = run_query("SELECT DISTINCT categoria_menu FROM rentabilidad_snapshots WHERE categoria_menu IS NOT NULL ORDER BY 1")
-                    _ex_cats   = _ex_cats_q['categoria_menu'].tolist() if not _ex_cats_q.empty else []
-                    _ex_cat    = st.selectbox("Categoría", ["Todas"] + _ex_cats, key='ex_cat')
 
                 _ex_row_a = _df_snaps_exec.iloc[_snap_labels_ex.index(_ex_snap_a)]
                 _ex_pi = str(_ex_row_a['periodo_inicio'])[:10]
                 _ex_pf = str(_ex_row_a['periodo_fin'])[:10]
-                _ex_fcat = f"AND categoria_menu = '{_ex_cat}'" if _ex_cat != "Todas" else ""
 
-                _df_ex = run_query(f"""
+                # Load full snapshot A
+                _df_ex_full = run_query(f"""
                     SELECT sku_producto, nombre_producto, categoria_menu,
                            SUM(cant) as cant, SUM(venta) as venta,
                            SUM(cmv_total) as cmv_total, SUM(mc_total) as mc_total,
@@ -5841,284 +5863,226 @@ elif modulo.startswith("📊"):
                            AVG(margen_pct) as margen_pct, AVG(cmv_pct) as cmv_pct
                     FROM rentabilidad_snapshots
                     WHERE periodo_inicio = '{_ex_pi}' AND periodo_fin = '{_ex_pf}'
-                    {_ex_fcat}
                     GROUP BY sku_producto, nombre_producto, categoria_menu
                     ORDER BY venta DESC
                 """)
 
-                if _df_ex.empty:
+                # Load snapshot B
+                _df_ex_b_full = pd.DataFrame()
+                if _ex_snap_b:
+                    _ex_row_b = _df_snaps_exec.iloc[_snap_labels_ex.index(_ex_snap_b)]
+                    _ex_pi_b  = str(_ex_row_b['periodo_inicio'])[:10]
+                    _ex_pf_b  = str(_ex_row_b['periodo_fin'])[:10]
+                    _df_ex_b_full = run_query(f"""
+                        SELECT sku_producto,
+                               SUM(cant) as cant, SUM(venta) as venta,
+                               SUM(cmv_total) as cmv_total, SUM(mc_total) as mc_total,
+                               AVG(margen_pct) as margen_pct
+                        FROM rentabilidad_snapshots
+                        WHERE periodo_inicio = '{_ex_pi_b}' AND periodo_fin = '{_ex_pf_b}'
+                        GROUP BY sku_producto
+                    """)
+
+                if _df_ex_full.empty:
                     st.warning("Sin datos para el período seleccionado.")
                 else:
                     for _col in ['cant','venta','cmv_total','mc_total','cmv_unitario','mc_unitario','margen_pct','cmv_pct']:
-                        _df_ex[_col] = pd.to_numeric(_df_ex[_col], errors='coerce').fillna(0)
-
-                    # Load period B if selected
-                    _df_ex_b = pd.DataFrame()
-                    if _ex_snap_b:
-                        _ex_row_b = _df_snaps_exec.iloc[_snap_labels_ex.index(_ex_snap_b)]
-                        _ex_pi_b  = str(_ex_row_b['periodo_inicio'])[:10]
-                        _ex_pf_b  = str(_ex_row_b['periodo_fin'])[:10]
-                        _df_ex_b  = run_query(f"""
-                            SELECT sku_producto,
-                                   SUM(cant) as cant, SUM(venta) as venta,
-                                   SUM(cmv_total) as cmv_total, SUM(mc_total) as mc_total,
-                                   AVG(margen_pct) as margen_pct
-                            FROM rentabilidad_snapshots
-                            WHERE periodo_inicio = '{_ex_pi_b}' AND periodo_fin = '{_ex_pf_b}'
-                            {_ex_fcat}
-                            GROUP BY sku_producto
-                        """)
-                        if not _df_ex_b.empty:
-                            for _col in ['cant','venta','cmv_total','mc_total','margen_pct']:
-                                _df_ex_b[_col] = pd.to_numeric(_df_ex_b[_col], errors='coerce').fillna(0)
-
-                    # ── 1. KPIs EJECUTIVOS ────────────────────────
-                    st.markdown("---")
-                    _vt   = _df_ex['venta'].sum()
-                    _cmvt = _df_ex['cmv_total'].sum()
-                    _mct  = _df_ex['mc_total'].sum()
-                    _mg   = _mct / _vt * 100 if _vt > 0 else 0
-                    _cmvp = _cmvt / _vt * 100 if _vt > 0 else 0
-                    _n_pl = len(_df_ex)
-                    _mc_pax = _mct / _df_ex['cant'].sum() if _df_ex['cant'].sum() > 0 else 0
-
-                    _kc = ['#d4a853','#e84545','#4caf7d','#4caf7d','#5b8dd9','#888']
-                    _k1,_k2,_k3,_k4,_k5,_k6 = st.columns(6)
-                    _k1.metric("Venta Total", f"${_vt:,.0f}")
-                    _k2.metric("Food Cost %", f"{_cmvp:.1f}%")
-                    _k3.metric("Margen %", f"{_mg:.1f}%")
-                    _k4.metric("MC Total", f"${_mct:,.0f}")
-                    _k5.metric("MC Promedio / Cubierto", f"${_mc_pax:,.0f}")
-                    _k6.metric("Platos analizados", _n_pl)
-
-                    if not _df_ex_b.empty:
-                        _vt_b  = _df_ex_b['venta'].sum()
-                        _mct_b = _df_ex_b['mc_total'].sum()
-                        _mg_b  = _mct_b / _vt_b * 100 if _vt_b > 0 else 0
-                        _dv = (_vt-_vt_b)/_vt_b*100 if _vt_b > 0 else 0
-                        _dm = _mg - _mg_b
-                        _dc = ((_mct/_df_ex['cant'].sum()) - (_mct_b/_df_ex_b['cant'].sum())) if _df_ex_b['cant'].sum() > 0 else 0
-                        st.markdown(
-                            f'<div style="background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px;padding:10px 16px;margin:8px 0;font-size:0.82rem">'
-                            f'<span style="color:#555">vs período anterior:</span>&nbsp;&nbsp;'
-                            f'<span style="color:{"#4caf7d" if _dv>=0 else "#e84545"};font-weight:600">Venta {"▲" if _dv>=0 else "▼"} {abs(_dv):.1f}%</span>&nbsp;·&nbsp;'
-                            f'<span style="color:{"#4caf7d" if _dm>=0 else "#e84545"};font-weight:600">Margen {"▲" if _dm>=0 else "▼"} {abs(_dm):.1f}pp</span>&nbsp;·&nbsp;'
-                            f'<span style="color:{"#4caf7d" if _dc>=0 else "#e84545"};font-weight:600">MC/Cubierto {"▲" if _dc>=0 else "▼"} ${abs(_dc):,.0f}</span>'
-                            f'</div>', unsafe_allow_html=True
-                        )
-
-                    # ── 2. MENU ENGINEERING MATRIX ────────────────
-                    st.markdown("---")
-                    st.markdown("### 🔲 Matriz de Ingeniería de Menú")
-                    st.caption(f"Umbral margen: **{_mg:.1f}%** (media del período) · Umbral venta: **${_vt/_n_pl:,.0f}** (venta media por plato)")
-
-                    _df_ex['_cuad'] = _df_ex.apply(
-                        lambda r: '⭐ Estrella' if r['venta'] >= _vt/_n_pl and r['margen_pct'] >= _mg
-                        else '🐎 Caballo de Batalla' if r['venta'] >= _vt/_n_pl
-                        else '🧩 Enigma' if r['margen_pct'] >= _mg
-                        else '💀 Perro', axis=1
-                    )
-
-                    _cuad_cfg = {
-                        '⭐ Estrella':           ('#d4a853', '#1a1500', 'Alto margen · Alto volumen',
-                            'Mantener consistencia y calidad. No alterar receta sin justificación. Asegurar disponibilidad permanente de insumos críticos.',
-                            ['Destacar en carta', 'Proteger food cost', 'Contratos con proveedores clave', 'Capacitar a todo el equipo en preparación']),
-                        '🐎 Caballo de Batalla': ('#5b8dd9', '#0a1525', 'Bajo margen · Alto volumen',
-                            'Generan volumen pero "filtran" margen. Aplicar micro-ingeniería de receta para mejorar rentabilidad sin perder demanda.',
-                            ['Revisar gramajes de ingredientes caros', 'Evaluar alza de precio (+$500-1.000)', 'Sustituir insumos secundarios', 'Negociar precios con proveedor']),
-                        '🧩 Enigma':             ('#4caf7d', '#0a1e14', 'Alto margen · Bajo volumen',
-                            'Alto potencial sin explotar. El problema es de visibilidad y comunicación, no de producto.',
-                            ['Reposicionar en carta (posición premium)', 'Incentivo económico a meseros por venta', 'Incluir en menú del día o sugerencia', 'Fotografía profesional para digital']),
-                        '💀 Perro':              ('#888',    '#111',    'Bajo margen · Bajo volumen',
-                            'Ocupan inventario, tiempo y espacio sin retorno. Candidatos a eliminación o reinvención completa.',
-                            ['Evaluar eliminación inmediata', 'Auditoría completa de receta', 'Cambio de precio o presentación radical', 'Plazo máximo: 60 días para demostrar mejora']),
-                    }
-
-                    _hs_me = 'padding:7px 10px;font-size:0.66rem;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
-
-                    for _cq, (_color, _bg, _desc, _detalle, _acciones_list) in _cuad_cfg.items():
-                        _df_cq = _df_ex[_df_ex['_cuad'] == _cq].sort_values(
-                            'venta' if 'Estrella' in _cq or 'Caballo' in _cq else 'margen_pct',
-                            ascending=False if 'Perro' not in _cq else True
-                        ).head(10)
-                        if _df_cq.empty:
-                            continue
-
-                        st.markdown(
-                            f'<div style="margin:1.2rem 0 0.3rem;padding:10px 16px;border-radius:10px;background:{_bg};border-left:3px solid {_color}">'
-                            f'<span style="font-size:1rem;font-weight:700;color:{_color}">{_cq}</span>'
-                            f'<span style="font-size:0.75rem;color:#666;margin-left:10px">{_desc}</span>'
-                            f'<span style="font-size:0.72rem;color:#555;float:right">{len(_df_cq)} plato(s)</span>'
-                            f'</div>', unsafe_allow_html=True
-                        )
-                        st.caption(_detalle)
-
-                        # Acciones recomendadas
-                        _acc_html = ''.join([f'<span style="background:#1a1a1a;color:{_color};padding:3px 10px;border-radius:12px;font-size:0.72rem;margin:2px;display:inline-block;border:1px solid {_color}44">{a}</span>' for a in _acciones_list])
-                        st.markdown(f'<div style="margin-bottom:8px">{_acc_html}</div>', unsafe_allow_html=True)
-
-                        # Tabla de platos del cuadrante
-                        _rows_me = ''
-                        for _, _mr in _df_cq.iterrows():
-                            _mg_c = '#4caf7d' if _mr['margen_pct'] >= 40 else '#e89c45' if _mr['margen_pct'] >= 20 else '#e84545'
-                            # Compare vs period B
-                            _delta_str = ''
-                            if not _df_ex_b.empty:
-                                _b_row = _df_ex_b[_df_ex_b['sku_producto'] == _mr['sku_producto']]
-                                if not _b_row.empty:
-                                    _dm_sku = _mr['margen_pct'] - float(_b_row['margen_pct'].iloc[0])
-                                    _dv_sku = (_mr['venta'] - float(_b_row['venta'].iloc[0])) / float(_b_row['venta'].iloc[0]) * 100 if float(_b_row['venta'].iloc[0]) > 0 else 0
-                                    _delta_str = f'<span style="color:{"#4caf7d" if _dm_sku>=0 else "#e84545"};font-size:0.7rem">{"▲" if _dm_sku>=0 else "▼"}{abs(_dm_sku):.1f}pp</span>'
-                            _rows_me += (
-                                f'<tr style="border-bottom:1px solid #1a1a1a">'
-                                f'<td style="padding:7px 10px;font-weight:500;color:#e8e4de;font-size:0.8rem">{str(_mr["nombre_producto"])[:38]}</td>'
-                                f'<td style="padding:7px 10px;color:#666;font-size:0.7rem">{_mr["categoria_menu"]}</td>'
-                                f'<td style="padding:7px 10px;text-align:right;color:#aaa">{int(_mr["cant"]):,}</td>'
-                                f'<td style="padding:7px 10px;text-align:right;color:#d4a853;font-weight:600">${_mr["venta"]:,.0f}</td>'
-                                f'<td style="padding:7px 10px;text-align:right;color:#aaa">${_mr["cmv_unitario"]:,.0f}</td>'
-                                f'<td style="padding:7px 10px;text-align:right;color:#aaa">${_mr["mc_unitario"]:,.0f}</td>'
-                                f'<td style="padding:7px 10px;text-align:right;color:{_mg_c};font-weight:600">{_mr["margen_pct"]:.1f}% {_delta_str}</td>'
-                                f'<td style="padding:7px 10px;text-align:right;color:#4caf7d">${_mr["mc_total"]:,.0f}</td>'
-                                f'</tr>'
-                            )
-                        st.markdown(
-                            '<div style="overflow-x:auto;border-radius:8px;border:1px solid #1e1e1e;background:#0d0d0d;margin-bottom:0.5rem">'
-                            '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
-                            '<thead><tr style="background:#111">'
-                            + ''.join([f'<th style="{_hs_me};text-align:{"left" if i<2 else "right"}">{h}</th>'
-                                       for i, h in enumerate(['Plato','Categoría','Uds','Venta','CMV/u','MC/u','Margen%','MC Total'])])
-                            + f'</tr></thead><tbody>{_rows_me}</tbody></table></div>',
-                            unsafe_allow_html=True
-                        )
-
-                    # ── 3. MARGEN PONDERADO PROMEDIO ──────────────
-                    st.markdown("---")
-                    st.markdown("### 💰 Margen de Contribución Ponderado")
-                    _df_ex['_peso'] = _df_ex['cant'] / _df_ex['cant'].sum()
-                    _df_ex['_mc_pond'] = _df_ex['mc_unitario'] * _df_ex['_peso']
-                    _mc_pond_menu = _df_ex['_mc_pond'].sum()
-                    _df_ex['_cmv_pond'] = _df_ex['cmv_unitario'] * _df_ex['_peso']
-                    _cmv_pond_menu = _df_ex['_cmv_pond'].sum()
-
-                    _mp1, _mp2, _mp3 = st.columns(3)
-                    _mp1.metric("MC Ponderado del Menú", f"${_mc_pond_menu:,.0f}",
-                                help="Por cada cubierto vendido, el menú deja en promedio este monto de contribución marginal")
-                    _mp2.metric("Food Cost Ponderado", f"${_cmv_pond_menu:,.0f}",
-                                help="Costo ponderado por mix de ventas real")
-                    _mp3.metric("Food Cost % Ponderado", f"{_cmv_pond_menu/(_mc_pond_menu+_cmv_pond_menu)*100:.1f}%" if (_mc_pond_menu+_cmv_pond_menu) > 0 else "—")
-
-                    # Top contribuidores al MC ponderado
-                    st.markdown("**Top 10 contribuidores al MC ponderado del menú:**")
-                    _df_pond_top = _df_ex.nlargest(10, '_mc_pond')[['nombre_producto','cant','mc_unitario','_peso','_mc_pond']].copy()
-                    _df_pond_top.columns = ['Plato','Uds vendidas','MC/u','Mix %','Aporte MC pond.']
-                    _df_pond_top['Mix %'] = (_df_pond_top['Mix %'] * 100).round(1).astype(str) + '%'
-                    _df_pond_top['MC/u'] = _df_pond_top['MC/u'].apply(lambda x: f"${x:,.0f}")
-                    _df_pond_top['Aporte MC pond.'] = _df_pond_top['Aporte MC pond.'].apply(lambda x: f"${x:,.2f}")
-                    st.dataframe(_df_pond_top, use_container_width=True, hide_index=True)
-
-                    # ── 4. ANÁLISIS DE SENSIBILIDAD ───────────────
-                    st.markdown("---")
-                    st.markdown("### 📊 Análisis de Sensibilidad de Ingredientes")
-                    st.caption("Impacto teórico de un alza del 15% en el costo de cada ingrediente clave sobre el food cost % del menú.")
+                        _df_ex_full[_col] = pd.to_numeric(_df_ex_full[_col], errors='coerce').fillna(0)
+                    if not _df_ex_b_full.empty:
+                        for _col in ['cant','venta','cmv_total','mc_total','margen_pct']:
+                            _df_ex_b_full[_col] = pd.to_numeric(_df_ex_b_full[_col], errors='coerce').fillna(0)
 
                     _df_rec_sens = get_recetas()
-                    if not _df_rec_sens.empty:
-                        _skus_en_menu = _df_ex['sku_producto'].tolist()
-                        _df_rec_menu  = _df_rec_sens[_df_rec_sens['codigo_venta'].isin(_skus_en_menu)]
-                        _ing_count    = _df_rec_menu.groupby('sku_ingrediente')['codigo_venta'].nunique().reset_index()
-                        _ing_count.columns = ['sku_ingrediente', 'platos_afectados']
-                        _ing_count = _ing_count.sort_values('platos_afectados', ascending=False).head(10)
 
-                        _df_precio_sens = run_query(f"""
-                            SELECT sku, precio_unitario FROM (
-                                SELECT sku,
-                                       SUM(costo_realfinal)/NULLIF(SUM(cant_conv*NULLIF(formato,0)),0) AS precio_unitario,
-                                       1 AS p
-                                FROM compras
-                                WHERE cant_conv>0 AND costo_realfinal>0 AND formato>0
-                                  AND fecha_dte::date BETWEEN '{_ex_pi}' AND '{_ex_pf}'
-                                  AND sku IN (SELECT DISTINCT sku_ingrediente FROM recetas)
-                                GROUP BY sku
-                                UNION ALL
-                                SELECT sku, precio_unitario, 2 AS p FROM (
-                                    SELECT DISTINCT ON (sku) sku,
-                                           costo_realfinal/NULLIF(cant_conv*NULLIF(formato,0),0) AS precio_unitario
-                                    FROM compras WHERE cant_conv>0 AND costo_realfinal>0 AND formato>0
-                                      AND sku IN (SELECT DISTINCT sku_ingrediente FROM recetas)
-                                    ORDER BY sku, fecha_dte DESC
-                                ) fb
-                            ) x ORDER BY sku, p
-                        """)
-                        _precio_sens_map = {}
-                        if not _df_precio_sens.empty:
-                            _precio_sens_map = dict(_df_precio_sens.drop_duplicates('sku').set_index('sku')['precio_unitario'])
+                    _cuad_cfg = {
+                        '⭐ Estrella':           ('#d4a853','#1a1500','Alto margen · Alto volumen',
+                            'Mantener consistencia y calidad. No alterar receta sin justificación. Asegurar disponibilidad permanente de insumos críticos.',
+                            ['Destacar en carta','Proteger food cost','Contratos con proveedores clave','Capacitar al equipo']),
+                        '🐎 Caballo de Batalla': ('#5b8dd9','#0a1525','Bajo margen · Alto volumen',
+                            'Generan volumen pero filtran margen. Aplicar micro-ingeniería de receta.',
+                            ['Revisar gramajes de ingredientes caros','Evaluar alza de precio','Sustituir insumos secundarios','Negociar con proveedor']),
+                        '🧩 Enigma':             ('#4caf7d','#0a1e14','Alto margen · Bajo volumen',
+                            'Alto potencial sin explotar. El problema es de visibilidad, no de producto.',
+                            ['Reposicionar en carta','Incentivo a meseros por venta','Incluir en sugerencia del día','Fotografía profesional']),
+                        '💀 Perro':              ('#888','#111','Bajo margen · Bajo volumen',
+                            'Candidatos a eliminación o reinvención completa.',
+                            ['Evaluar eliminación inmediata','Auditoría de receta','Cambio de precio o presentación','Plazo máximo: 60 días']),
+                    }
+                    _hs_me = 'padding:7px 10px;font-size:0.66rem;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
 
-                        _sens_rows = []
-                        for _, _si in _ing_count.iterrows():
-                            _sku_s = str(_si['sku_ingrediente'])
-                            _precio_s = float(_precio_sens_map.get(_sku_s, 0) or 0)
-                            _n_platos_s = int(_si['platos_afectados'])
-                            # Estimate impact: 15% price increase on CMV
-                            _df_ings_platos = _df_rec_menu[_df_rec_menu['sku_ingrediente'] == _sku_s]
-                            _impacto_cmv = 0.0
-                            for _, _ip in _df_ings_platos.iterrows():
-                                _cv = str(_ip.get('codigo_venta',''))
-                                _cant_r = float(_ip.get('cant_real',0) or 0)
-                                _venta_plato = float(_df_ex[_df_ex['sku_producto']==_cv]['venta'].sum() or 0)
-                                _impacto_cmv += _cant_r * _precio_s * 0.15 * float(_df_ex[_df_ex['sku_producto']==_cv]['cant'].sum() or 0)
-                            _impacto_pct = _impacto_cmv / _vt * 100 if _vt > 0 else 0
-                            _nombre_ing = str(_df_rec_menu[_df_rec_menu['sku_ingrediente']==_sku_s]['nombre_ingrediente'].iloc[0]) if not _df_rec_menu[_df_rec_menu['sku_ingrediente']==_sku_s].empty else _sku_s
-                            _sens_rows.append({
-                                'SKU': _sku_s,
-                                'Ingrediente': _nombre_ing[:35],
-                                'Platos afectados': _n_platos_s,
-                                'Precio/u actual': f"${_precio_s:,.4f}",
-                                'Impacto +15% en Food Cost': f"+{_impacto_pct:.2f}pp"
-                            })
-                        if _sens_rows:
-                            st.dataframe(pd.DataFrame(_sens_rows), use_container_width=True, hide_index=True)
+                    def _render_grupo(df_g, df_b, grupo_cfg, df_rec):
+                        """Render full executive report for one group."""
+                        cats_excluir = grupo_cfg.get('excluir_matriz', [])
 
-                    # ── 5. RESUMEN EJECUTIVO / CALL TO ACTION ─────
-                    st.markdown("---")
-                    st.markdown("### 📋 Resumen Ejecutivo — Plan de Acción")
+                        # KPIs del grupo (incluye Acompañamientos/Agregados en totales)
+                        _vt   = df_g['venta'].sum()
+                        _cmvt = df_g['cmv_total'].sum()
+                        _mct  = df_g['mc_total'].sum()
+                        _mg   = _mct / _vt * 100 if _vt > 0 else 0
+                        _cmvp = _cmvt / _vt * 100 if _vt > 0 else 0
+                        _cant_t = df_g['cant'].sum()
+                        _mc_pax = _mct / _cant_t if _cant_t > 0 else 0
 
-                    _precio_medio = _df_ex.apply(lambda r: r['venta']/r['cant'] if r['cant']>0 else 0, axis=1).mean()
-                    _df_ex['precio_venta'] = _df_ex.apply(lambda r: r['venta']/r['cant'] if r['cant']>0 else 0, axis=1)
+                        _k1,_k2,_k3,_k4,_k5 = st.columns(5)
+                        _k1.metric("Venta", f"${_vt:,.0f}")
+                        _k2.metric("Food Cost %", f"{_cmvp:.1f}%")
+                        _k3.metric("Margen %", f"{_mg:.1f}%")
+                        _k4.metric("MC Total", f"${_mct:,.0f}")
+                        _k5.metric("MC / Cubierto", f"${_mc_pax:,.0f}")
 
-                    _estrellas  = _df_ex[_df_ex['_cuad']=='⭐ Estrella']
-                    _caballos   = _df_ex[_df_ex['_cuad']=='🐎 Caballo de Batalla']
-                    _enigmas    = _df_ex[_df_ex['_cuad']=='🧩 Enigma']
-                    _perros     = _df_ex[_df_ex['_cuad']=='💀 Perro']
+                        if not df_b.empty:
+                            _vt_b = df_b['venta'].sum()
+                            _mct_b = df_b['mc_total'].sum()
+                            _mg_b = _mct_b / _vt_b * 100 if _vt_b > 0 else 0
+                            _dv = (_vt-_vt_b)/_vt_b*100 if _vt_b > 0 else 0
+                            _dm = _mg - _mg_b
+                            st.markdown(
+                                f'<div style="background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px;padding:8px 16px;margin:6px 0;font-size:0.8rem">'
+                                f'vs período anterior: '
+                                f'<span style="color:{"#4caf7d" if _dv>=0 else "#e84545"};font-weight:600">Venta {"▲" if _dv>=0 else "▼"} {abs(_dv):.1f}%</span>'
+                                f'&nbsp;·&nbsp;<span style="color:{"#4caf7d" if _dm>=0 else "#e84545"};font-weight:600">Margen {"▲" if _dm>=0 else "▼"} {abs(_dm):.1f}pp</span>'
+                                f'</div>', unsafe_allow_html=True
+                            )
 
-                    _subvalorados = _estrellas[_estrellas['precio_venta'] < _precio_medio * 0.85]
+                        # Matriz de ingeniería (excluye complementos)
+                        st.markdown("#### 🔲 Ingeniería de Menú")
+                        df_matriz = df_g[~df_g['categoria_menu'].isin(cats_excluir)].copy()
 
-                    _cta_sections = [
-                        ("💲 Ajuste de Precios",
-                         f"{len(_subvalorados)} plato(s) Estrella están por debajo del 85% del precio medio del menú (${_precio_medio:,.0f}). Candidatos a incremento de precio sin riesgo de demanda.",
-                         [str(r['nombre_producto'])[:40] for _, r in _subvalorados.iterrows()]),
-                        ("📖 Posicionamiento en Carta",
-                         f"{len(_enigmas)} Enigma(s) requieren mejor visibilidad. Deben ocupar posiciones estratégicas en la carta (zona superior derecha, recuadros destacados).",
-                         [str(r['nombre_producto'])[:40] for _, r in _enigmas.iterrows()]),
-                        ("🔬 Auditoría de Receta",
-                         f"{len(_caballos)} Caballo(s) de Batalla necesitan micro-ingeniería. Reducir gramaje de insumos secundarios o revisar precio de venta.",
-                         [str(r['nombre_producto'])[:40] for _, r in _caballos.iterrows()]),
-                        ("❌ Eliminación / Reinvención",
-                         f"{len(_perros)} Perro(s) candidatos a retiro inmediato o reformulación completa. Evaluar en los próximos 60 días.",
-                         [str(r['nombre_producto'])[:40] for _, r in _perros.iterrows()]),
-                        ("🔒 Asegurar Insumos Clave",
-                         f"Los ingredientes de mayor presencia en platos Estrella deben tener contratos o acuerdos de precio con proveedores para proteger la rentabilidad.",
-                         list(set([str(r['nombre_ingrediente'])[:35] for _, r in _df_rec_sens[_df_rec_sens['codigo_venta'].isin(_estrellas['sku_producto'].tolist())].iterrows()][:5])) if not _df_rec_sens.empty else []),
-                    ]
+                        if cats_excluir:
+                            st.caption(f"⚠️ Excluidos de la matriz (son complementos): {', '.join(cats_excluir)}")
 
-                    for _title, _desc, _items in _cta_sections:
-                        st.markdown(
-                            f'<div style="margin:0.8rem 0;padding:12px 16px;border-radius:8px;background:#0d0d0d;border:1px solid #2a2a2a">'
-                            f'<div style="font-weight:700;color:#e8e4de;margin-bottom:4px">{_title}</div>'
-                            f'<div style="color:#888;font-size:0.8rem;margin-bottom:6px">{_desc}</div>'
-                            + (f'<div style="color:#666;font-size:0.75rem">{" · ".join(_items)}</div>' if _items else '')
-                            + '</div>',
-                            unsafe_allow_html=True
+                        if df_matriz.empty:
+                            st.info("Sin platos para clasificar.")
+                            return
+
+                        _n_pl = len(df_matriz)
+                        _mg_mat = _mct / _vt * 100 if _vt > 0 else 0
+                        _vt_mean = df_matriz['venta'].mean()
+                        _mg_mean = df_matriz['margen_pct'].mean()
+
+                        st.caption(f"Umbral margen: **{_mg_mean:.1f}%** · Umbral venta: **${_vt_mean:,.0f}**")
+
+                        df_matriz['precio_venta'] = df_matriz.apply(lambda r: r['venta']/r['cant'] if r['cant']>0 else 0, axis=1)
+                        df_matriz['_cuad'] = df_matriz.apply(
+                            lambda r: '⭐ Estrella' if r['venta'] >= _vt_mean and r['margen_pct'] >= _mg_mean
+                            else '🐎 Caballo de Batalla' if r['venta'] >= _vt_mean
+                            else '🧩 Enigma' if r['margen_pct'] >= _mg_mean
+                            else '💀 Perro', axis=1
                         )
+
+                        for _cq, (_color, _bg, _desc, _detalle, _acc_list) in _cuad_cfg.items():
+                            _df_cq = df_matriz[df_matriz['_cuad'] == _cq].sort_values(
+                                'venta' if 'Estrella' in _cq or 'Caballo' in _cq else 'margen_pct',
+                                ascending='Perro' in _cq
+                            ).head(10)
+                            if _df_cq.empty:
+                                continue
+
+                            st.markdown(
+                                f'<div style="margin:1rem 0 0.3rem;padding:10px 16px;border-radius:10px;background:{_bg};border-left:3px solid {_color}">'
+                                f'<span style="font-size:1rem;font-weight:700;color:{_color}">{_cq}</span>'
+                                f'<span style="font-size:0.75rem;color:#666;margin-left:10px">{_desc}</span>'
+                                f'<span style="font-size:0.72rem;color:#555;float:right">{len(_df_cq)} plato(s)</span>'
+                                f'</div>', unsafe_allow_html=True
+                            )
+                            st.caption(_detalle)
+                            _acc_html = ''.join([f'<span style="background:#1a1a1a;color:{_color};padding:3px 10px;border-radius:12px;font-size:0.72rem;margin:2px;display:inline-block;border:1px solid {_color}44">{a}</span>' for a in _acc_list])
+                            st.markdown(f'<div style="margin-bottom:8px">{_acc_html}</div>', unsafe_allow_html=True)
+
+                            _rows_me = ''
+                            for _, _mr in _df_cq.iterrows():
+                                _mg_c = '#4caf7d' if _mr['margen_pct'] >= 40 else '#e89c45' if _mr['margen_pct'] >= 20 else '#e84545'
+                                _delta_str = ''
+                                if not df_b.empty:
+                                    _b_row = df_b[df_b['sku_producto'] == _mr['sku_producto']]
+                                    if not _b_row.empty:
+                                        _dm_sku = _mr['margen_pct'] - float(_b_row['margen_pct'].iloc[0])
+                                        _delta_str = f'<span style="color:{"#4caf7d" if _dm_sku>=0 else "#e84545"};font-size:0.7rem">{"▲" if _dm_sku>=0 else "▼"}{abs(_dm_sku):.1f}pp</span>'
+                                _rows_me += (
+                                    f'<tr style="border-bottom:1px solid #1a1a1a">'
+                                    f'<td style="padding:7px 10px;font-weight:500;color:#e8e4de;font-size:0.8rem">{str(_mr["nombre_producto"])[:38]}</td>'
+                                    f'<td style="padding:7px 10px;color:#666;font-size:0.7rem">{_mr["categoria_menu"]}</td>'
+                                    f'<td style="padding:7px 10px;text-align:right;color:#aaa">{int(_mr["cant"]):,}</td>'
+                                    f'<td style="padding:7px 10px;text-align:right;color:#d4a853;font-weight:600">${_mr["venta"]:,.0f}</td>'
+                                    f'<td style="padding:7px 10px;text-align:right;color:#aaa">${_mr["cmv_unitario"]:,.0f}</td>'
+                                    f'<td style="padding:7px 10px;text-align:right;color:#aaa">${_mr["mc_unitario"]:,.0f}</td>'
+                                    f'<td style="padding:7px 10px;text-align:right;color:{_mg_c};font-weight:600">{_mr["margen_pct"]:.1f}% {_delta_str}</td>'
+                                    f'<td style="padding:7px 10px;text-align:right;color:#4caf7d">${_mr["mc_total"]:,.0f}</td>'
+                                    f'</tr>'
+                                )
+                            st.markdown(
+                                '<div style="overflow-x:auto;border-radius:8px;border:1px solid #1e1e1e;background:#0d0d0d;margin-bottom:0.5rem">'
+                                '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
+                                '<thead><tr style="background:#111">'
+                                + ''.join([f'<th style="{_hs_me};text-align:{"left" if i<2 else "right"}">{h}</th>'
+                                           for i, h in enumerate(['Plato','Categoría','Uds','Venta','CMV/u','MC/u','Margen%','MC Total'])])
+                                + f'</tr></thead><tbody>{_rows_me}</tbody></table></div>',
+                                unsafe_allow_html=True
+                            )
+
+                        # MC Ponderado
+                        st.markdown("#### 💰 MC Ponderado del Grupo")
+                        df_matriz['_peso']     = df_matriz['cant'] / df_matriz['cant'].sum()
+                        df_matriz['_mc_pond']  = df_matriz['mc_unitario'] * df_matriz['_peso']
+                        df_matriz['_cmv_pond'] = df_matriz['cmv_unitario'] * df_matriz['_peso']
+                        _mc_pond  = df_matriz['_mc_pond'].sum()
+                        _cmv_pond = df_matriz['_cmv_pond'].sum()
+                        _mp1,_mp2,_mp3 = st.columns(3)
+                        _mp1.metric("MC Ponderado / Cubierto", f"${_mc_pond:,.0f}")
+                        _mp2.metric("Food Cost Ponderado / Cubierto", f"${_cmv_pond:,.0f}")
+                        _mp3.metric("Food Cost % Ponderado", f"{_cmv_pond/(_mc_pond+_cmv_pond)*100:.1f}%" if (_mc_pond+_cmv_pond)>0 else "—")
+
+                        # Call to action
+                        st.markdown("#### 📋 Plan de Acción")
+                        _estrellas_g = df_matriz[df_matriz['_cuad']=='⭐ Estrella']
+                        _caballos_g  = df_matriz[df_matriz['_cuad']=='🐎 Caballo de Batalla']
+                        _enigmas_g   = df_matriz[df_matriz['_cuad']=='🧩 Enigma']
+                        _perros_g    = df_matriz[df_matriz['_cuad']=='💀 Perro']
+                        _precio_medio_g = df_matriz['precio_venta'].mean()
+                        _subval_g = _estrellas_g[_estrellas_g['precio_venta'] < _precio_medio_g * 0.85]
+
+                        _cta = [
+                            ("💲 Ajuste de Precios",
+                             f"{len(_subval_g)} Estrella(s) con precio por debajo del 85% del precio medio (${_precio_medio_g:,.0f}).",
+                             [str(r['nombre_producto'])[:40] for _, r in _subval_g.iterrows()]),
+                            ("📖 Visibilidad en Carta",
+                             f"{len(_enigmas_g)} Enigma(s) necesitan reposicionamiento estratégico en carta.",
+                             [str(r['nombre_producto'])[:40] for _, r in _enigmas_g.iterrows()]),
+                            ("🔬 Auditoría de Receta",
+                             f"{len(_caballos_g)} Caballo(s) requieren micro-ingeniería para mejorar margen.",
+                             [str(r['nombre_producto'])[:40] for _, r in _caballos_g.iterrows()]),
+                            ("❌ Eliminación / Reinvención",
+                             f"{len(_perros_g)} Perro(s) candidatos a retiro o reformulación completa.",
+                             [str(r['nombre_producto'])[:40] for _, r in _perros_g.iterrows()]),
+                        ]
+                        for _title, _desc, _items in _cta:
+                            if not _items:
+                                continue
+                            st.markdown(
+                                f'<div style="margin:0.5rem 0;padding:10px 16px;border-radius:8px;background:#0d0d0d;border:1px solid #2a2a2a">'
+                                f'<div style="font-weight:700;color:#e8e4de;margin-bottom:4px">{_title}</div>'
+                                f'<div style="color:#888;font-size:0.8rem;margin-bottom:4px">{_desc}</div>'
+                                f'<div style="color:#666;font-size:0.75rem">{" · ".join(_items)}</div>'
+                                f'</div>', unsafe_allow_html=True
+                            )
+
+                    # ── Render tabs por grupo ─────────────────────
+                    _grupo_names = list(_GRUPOS_EXEC.keys())
+                    _grupo_tabs  = st.tabs(_grupo_names)
+
+                    for _gti, _gtab in enumerate(_grupo_tabs):
+                        _gname = _grupo_names[_gti]
+                        _gcfg  = _GRUPOS_EXEC[_gname]
+                        _gcats = _gcfg['cats']
+
+                        with _gtab:
+                            _df_g = _df_ex_full[_df_ex_full['categoria_menu'].isin(_gcats)].copy()
+                            _df_b = _df_ex_b_full[_df_ex_b_full['sku_producto'].isin(_df_g['sku_producto'].tolist())].copy() if not _df_ex_b_full.empty else pd.DataFrame()
+
+                            if _df_g.empty:
+                                st.info(f"Sin datos para {_gname} en este período.")
+                            else:
+                                _render_grupo(_df_g, _df_b, _gcfg, _df_rec_sens)
 
 
 
