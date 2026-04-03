@@ -5140,140 +5140,15 @@ elif modulo.startswith("📊"):
             _was_plato      = st.session_state.get('inf1_was_plato', False)
             _skus_debug     = st.session_state.get('inf1_skus_filtro', [])
 
-            # ── KPIs ejecutivos ──────────────────────────────────
+            # Pre-calculate KPIs and category list for use inside tabs
             venta_total  = df_inf1['venta'].sum()
             cmv_total    = df_inf1['cmv_total'].sum() if 'cmv_total' in df_inf1.columns else df_inf1['costo_total_teorico'].sum()
             mc_total     = df_inf1['mc_total'].sum()  if 'mc_total'  in df_inf1.columns else (venta_total - cmv_total)
             margen_gral  = mc_total / venta_total * 100 if venta_total > 0 else 0
             cmv_pct_gral = cmv_total / venta_total * 100 if venta_total > 0 else 0
-
-            _alerta1 = "alerta" if cmv_pct_gral > 35 else ""
-            st.markdown(f"""
-            <div class="kpi-grid">
-                <div class="kpi-box">
-                    <div class="k-label">Venta total</div>
-                    <div class="k-value">${venta_total:,.0f}</div>
-                </div>
-                <div class="kpi-box {_alerta1}">
-                    <div class="k-label">CMV total</div>
-                    <div class="k-value">${cmv_total:,.0f}</div>
-                    <div class="k-delta">{cmv_pct_gral:.1f}% de venta</div>
-                </div>
-                <div class="kpi-box">
-                    <div class="k-label">Margen contribución</div>
-                    <div class="k-value">${mc_total:,.0f}</div>
-                </div>
-                <div class="kpi-box">
-                    <div class="k-label">Margen %</div>
-                    <div class="k-value">{margen_gral:.2f}%</div>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-
-            st.markdown("<br>", unsafe_allow_html=True)
-
-            # ── Filtros: Categoría whitelist + Ordenar ──────────
-            _cats_rent = sorted(df_inf1['categoria_menu'].dropna().unique().tolist())
-            _fc1, _fc2 = st.columns(2)
-            with _fc1:
-                _cats_sel = st.multiselect(
-                    "Categorías a mostrar (dejar vacío = todas)",
-                    _cats_rent,
-                    default=_cats_rent,
-                    key='inf1_cat_filter'
-                )
-            with _fc2:
-                _ord_rent_sel = st.selectbox("Ordenar por", [
-                    'Venta (mayor a menor)', 'Rentabilidad % (mayor a menor)',
-                    'Volumen (mayor a menor)', 'Venta (menor a mayor)',
-                    'Rentabilidad % (menor a mayor)', 'Volumen (menor a mayor)'
-                ], key='inf1_ord')
-
-            # Aplicar whitelist de categorías
-            _df_inf1_view = df_inf1.copy()
-            if _cats_sel:
-                _df_inf1_view = _df_inf1_view[_df_inf1_view['categoria_menu'].isin(_cats_sel)]
-
-            # Aplicar ordenamiento
-            _ord_map_rent = {
-                'Venta (mayor a menor)':           ('venta',      False),
-                'Rentabilidad % (mayor a menor)':  ('margen_pct', False),
-                'Volumen (mayor a menor)':         ('cant',       False),
-                'Venta (menor a mayor)':           ('venta',      True),
-                'Rentabilidad % (menor a mayor)':  ('margen_pct', True),
-                'Volumen (menor a mayor)':         ('cant',       True),
-            }
-            _ocol, _oasc = _ord_map_rent.get(_ord_rent_sel, ('venta', False))
-            _df_inf1_view = _df_inf1_view.sort_values(_ocol, ascending=_oasc, na_position='last')
-
-            # ── Debug de costos (solo cuando se buscó un plato específico) ───
-            if _was_plato and _skus_debug:
-                for _sku_dbg in _skus_debug:
-                    with st.expander(f"🔬 Desglose de costo — {_sku_dbg}", expanded=True):
-                        _df_rec_dbg = get_recetas()
-                        _df_rec_dbg = _df_rec_dbg[_df_rec_dbg['codigo_venta'] == _sku_dbg].copy()
-
-                        if _df_rec_dbg.empty:
-                            st.warning("Sin receta registrada.")
-                        else:
-                            # Get prices
-                            _df_precio_dbg = run_query("""
-                                SELECT DISTINCT ON (sku) sku, precio_unitario
-                                FROM (
-                                    SELECT sku,
-                                           costo_realfinal / NULLIF(cant_conv * NULLIF(formato,0), 0) AS precio_unitario,
-                                           fecha_dte, 1 AS prioridad
-                                    FROM compras
-                                    WHERE cant_conv > 0 AND costo_realfinal > 0 AND formato > 0
-                                    UNION ALL
-                                    SELECT e.sku_receta AS sku,
-                                           c.costo_realfinal / NULLIF(c.cant_conv * NULLIF(c.formato,0), 0) AS precio_unitario,
-                                           c.fecha_dte, 2 AS prioridad
-                                    FROM compras c
-                                    JOIN sku_equivalencias e ON c.sku = e.sku_compra
-                                    WHERE c.cant_conv > 0 AND c.costo_realfinal > 0 AND c.formato > 0
-                                ) combined
-                                ORDER BY sku, prioridad, fecha_dte DESC
-                            """)
-                            _precio_map = dict(zip(_df_precio_dbg['sku'], _df_precio_dbg['precio_unitario'])) if not _df_precio_dbg.empty else {}
-
-                            _dbg_rows = []
-                            for _, _ri in _df_rec_dbg.iterrows():
-                                _sku_ing  = str(_ri.get('sku_ingrediente',''))
-                                _nom_ing  = str(_ri.get('nombre_ingrediente',''))
-                                _cant     = float(_ri.get('cant_real', 0) or 0)
-                                _cant_e   = float(_ri.get('cant_efic', 0) or 0)
-                                _es_op    = _ri.get('es_opcion')
-                                _precio   = float(_precio_map.get(_sku_ing, 0) or 0)
-                                _costo    = _cant * _precio
-                                _flag     = '🍦 promedio' if str(_es_op) == '6' else ('PRO' if str(_ri.get('es_procesado','')) == 'True' else '')
-                                _dbg_rows.append({
-                                    'SKU': _sku_ing,
-                                    'Ingrediente': _nom_ing,
-                                    'cant_real': _cant,
-                                    'cant_efic': _cant_e,
-                                    'Precio/u': _precio,
-                                    'Costo parcial': _costo,
-                                    'Flag': _flag
-                                })
-
-                            _df_dbg = pd.DataFrame(_dbg_rows)
-                            _df_dbg['Precio/u'] = _df_dbg['Precio/u'].apply(lambda x: f"${x:,.4f}")
-                            _df_dbg['Costo parcial'] = _df_dbg['Costo parcial'].apply(lambda x: f"${x:,.2f}")
-                            st.dataframe(_df_dbg, use_container_width=True, hide_index=True)
-
-                            # CMV from report
-                            _row_inf = df_inf1[df_inf1['sku_producto'] == _sku_dbg]
-                            if not _row_inf.empty:
-                                _cmv_base = float(_row_inf['cmv_base'].iloc[0] or 0)
-                                _cmv_op   = float(_row_inf['cmv_opciones'].iloc[0] or 0)
-                                _cmv_tot  = float(_row_inf['cmv_unitario'].iloc[0] or 0)
-                                st.markdown(
-                                    f"**CMV base:** ${_cmv_base:,.2f} &nbsp;|&nbsp; "
-                                    f"**CMV opciones:** ${_cmv_op:,.2f} &nbsp;|&nbsp; "
-                                    f"**CMV unitario total:** ${_cmv_tot:,.2f}"
-                                )
-
+            _alerta1     = "alerta" if cmv_pct_gral > 35 else ""
+            _cats_rent   = sorted(df_inf1['categoria_menu'].dropna().unique().tolist())
+            _df_inf1_view = df_inf1.copy()  # default, overwritten inside tab
 
             def badge_margen(val):
                 if pd.isna(val): return '<span style="color:#555">—</span>'
@@ -5293,6 +5168,108 @@ elif modulo.startswith("📊"):
             hs  = 'padding:10px 12px;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
 
             with _tab_rent1:
+                # ── KPIs ejecutivos ──────────────────────────────
+                st.markdown(f"""
+                <div class="kpi-grid">
+                    <div class="kpi-box">
+                        <div class="k-label">Venta total</div>
+                        <div class="k-value">${venta_total:,.0f}</div>
+                    </div>
+                    <div class="kpi-box {_alerta1}">
+                        <div class="k-label">CMV total</div>
+                        <div class="k-value">${cmv_total:,.0f}</div>
+                        <div class="k-delta">{cmv_pct_gral:.1f}% de venta</div>
+                    </div>
+                    <div class="kpi-box">
+                        <div class="k-label">Margen contribución</div>
+                        <div class="k-value">${mc_total:,.0f}</div>
+                    </div>
+                    <div class="kpi-box">
+                        <div class="k-label">Margen %</div>
+                        <div class="k-value">{margen_gral:.2f}%</div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                # ── Filtros ──────────────────────────────────────
+                _fc1, _fc2 = st.columns(2)
+                with _fc1:
+                    _cats_sel2 = st.multiselect(
+                        "Categorías a mostrar (dejar vacío = todas)",
+                        _cats_rent,
+                        default=_cats_rent,
+                        key='inf1_cat_filter2'
+                    )
+                with _fc2:
+                    _ord_rent_sel2 = st.selectbox("Ordenar por", [
+                        'Venta (mayor a menor)', 'Rentabilidad % (mayor a menor)',
+                        'Volumen (mayor a menor)', 'Venta (menor a mayor)',
+                        'Rentabilidad % (menor a mayor)', 'Volumen (menor a mayor)'
+                    ], key='inf1_ord2')
+
+                _df_view2 = df_inf1.copy()
+                if _cats_sel2:
+                    _df_view2 = _df_view2[_df_view2['categoria_menu'].isin(_cats_sel2)]
+                _ocol2, _oasc2 = {
+                    'Venta (mayor a menor)':('venta',False),'Rentabilidad % (mayor a menor)':('margen_pct',False),
+                    'Volumen (mayor a menor)':('cant',False),'Venta (menor a mayor)':('venta',True),
+                    'Rentabilidad % (menor a mayor)':('margen_pct',True),'Volumen (menor a mayor)':('cant',True),
+                }.get(_ord_rent_sel2, ('venta',False))
+                _df_inf1_view = _df_view2.sort_values(_ocol2, ascending=_oasc2, na_position='last')
+
+                # ── Debug de costos (solo cuando se buscó un plato específico) ──
+                if _was_plato and _skus_debug:
+                    for _sku_dbg in _skus_debug:
+                        with st.expander(f"🔬 Desglose de costo — {_sku_dbg}", expanded=True):
+                            _df_rec_dbg = get_recetas()
+                            _df_rec_dbg = _df_rec_dbg[_df_rec_dbg['codigo_venta'] == _sku_dbg].copy()
+                            if _df_rec_dbg.empty:
+                                st.warning("Sin receta registrada.")
+                            else:
+                                _df_precio_dbg = run_query("""
+                                    SELECT DISTINCT ON (sku) sku, precio_unitario
+                                    FROM (
+                                        SELECT sku,
+                                               costo_realfinal / NULLIF(cant_conv * NULLIF(formato,0), 0) AS precio_unitario,
+                                               fecha_dte, 1 AS prioridad
+                                        FROM compras
+                                        WHERE cant_conv > 0 AND costo_realfinal > 0 AND formato > 0
+                                        UNION ALL
+                                        SELECT e.sku_receta AS sku,
+                                               c.costo_realfinal / NULLIF(c.cant_conv * NULLIF(c.formato,0), 0) AS precio_unitario,
+                                               c.fecha_dte, 2 AS prioridad
+                                        FROM compras c
+                                        JOIN sku_equivalencias e ON c.sku = e.sku_compra
+                                        WHERE c.cant_conv > 0 AND c.costo_realfinal > 0 AND c.formato > 0
+                                    ) combined
+                                    ORDER BY sku, prioridad, fecha_dte DESC
+                                """)
+                                _precio_map = dict(zip(_df_precio_dbg['sku'], _df_precio_dbg['precio_unitario'])) if not _df_precio_dbg.empty else {}
+                                _dbg_rows = []
+                                for _, _ri in _df_rec_dbg.iterrows():
+                                    _sku_ing = str(_ri.get('sku_ingrediente',''))
+                                    _cant    = float(_ri.get('cant_real', 0) or 0)
+                                    _precio  = float(_precio_map.get(_sku_ing, 0) or 0)
+                                    _es_op   = _ri.get('es_opcion')
+                                    _dbg_rows.append({
+                                        'SKU': _sku_ing,
+                                        'Ingrediente': str(_ri.get('nombre_ingrediente','')),
+                                        'cant_real': _cant,
+                                        'cant_efic': float(_ri.get('cant_efic', 0) or 0),
+                                        'Precio/u': f"${_precio:,.4f}",
+                                        'Costo parcial': f"${_cant*_precio:,.2f}",
+                                        'Flag': '🍦' if str(_es_op)=='6' else ('PRO' if str(_ri.get('es_procesado',''))=='True' else '')
+                                    })
+                                st.dataframe(pd.DataFrame(_dbg_rows), use_container_width=True, hide_index=True)
+                                _row_inf = df_inf1[df_inf1['sku_producto'] == _sku_dbg]
+                                if not _row_inf.empty:
+                                    st.markdown(
+                                        f"**CMV base:** ${float(_row_inf['cmv_base'].iloc[0] or 0):,.2f} &nbsp;|&nbsp;"
+                                        f"**CMV opciones:** ${float(_row_inf['cmv_opciones'].iloc[0] or 0):,.2f} &nbsp;|&nbsp;"
+                                        f"**CMV unitario total:** ${float(_row_inf['cmv_unitario'].iloc[0] or 0):,.2f}"
+                                    )
+
                 if "Interempresa" in vista:
                     st.markdown('<div class="section-label">Detalle por Producto</div>', unsafe_allow_html=True)
 
