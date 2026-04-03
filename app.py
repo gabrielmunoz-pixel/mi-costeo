@@ -5217,8 +5217,7 @@ elif modulo.startswith("📊"):
                     'Rentabilidad % (menor a mayor)':('margen_pct',True),'Volumen (menor a mayor)':('cant',True),
                 }.get(_ord_rent_sel2, ('venta',False))
                 _df_inf1_view = _df_view2.sort_values(_ocol2, ascending=_oasc2, na_position='last')
-
-                # ── Debug de costos (solo cuando se buscó un plato específico) ──
+                st.session_state['inf1_cats_sel'] = _cats_sel2
                 if _was_plato and _skus_debug:
                     for _sku_dbg in _skus_debug:
                         with st.expander(f"🔬 Desglose de costo — {_sku_dbg}", expanded=True):
@@ -5637,8 +5636,9 @@ elif modulo.startswith("📊"):
                             if _df_loc.empty:
                                 continue
                             # Apply same category whitelist
-                            if _cats_sel:
-                                _df_loc = _df_loc[_df_loc['categoria_menu'].isin(_cats_sel)]
+                            _cats_snap = st.session_state.get('inf1_cats_sel', [])
+                            if _cats_snap:
+                                _df_loc = _df_loc[_df_loc['categoria_menu'].isin(_cats_snap)]
                             for _, _sr in _df_loc.iterrows():
                                 _snap_rows.append({
                                     'periodo_inicio': str(fi_),
