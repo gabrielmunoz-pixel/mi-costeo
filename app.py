@@ -5283,7 +5283,7 @@ elif modulo.startswith("📊"):
             _ocol, _oasc = _ord_map_rent.get(_ord_rent_sel, ('venta', False))
             _df_inf1_view = _df_inf1_view.sort_values(_ocol, ascending=_oasc, na_position='last')
 
-            _tab_rent1, _tab_rent2, _tab_rent3 = st.tabs(["📊 Detalle por Producto", "🔲 Cuadrantes", "📸 Snapshots"])
+            _tab_rent1, _tab_rent2, _tab_rent3, _tab_rent4 = st.tabs(["📊 Detalle por Producto", "🔲 Cuadrantes", "📸 Snapshots", "📑 Informe Ejecutivo"])
 
             with _tab_rent1:
                 if "Interempresa" in vista:
@@ -5794,8 +5794,284 @@ elif modulo.startswith("📊"):
                                 except Exception as _ed:
                                     st.error(f"Error: {_ed}")
 
+            with _tab_rent4:
+                st.markdown("<br>", unsafe_allow_html=True)
+                st.markdown("### 📑 Informe Ejecutivo de Rentabilidad")
 
-    elif "Informe 2" in informe_sel:
+                # ── Selector de snapshot(s) ───────────────────────
+                _df_snaps_exec = run_query("""
+                    SELECT DISTINCT periodo_inicio, periodo_fin, nota,
+                           COUNT(DISTINCT local) as n_locales,
+                           COUNT(*) as n_filas
+                    FROM rentabilidad_snapshots
+                    GROUP BY periodo_inicio, periodo_fin, nota
+                    ORDER BY periodo_inicio DESC
+                """)
+
+                if _df_snaps_exec.empty:
+                    st.info("No hay snapshots guardados. Ve a la pestaña 📸 Snapshots y guarda un informe primero.")
+                else:
+                    _snap_labels = _df_snaps_exec.apply(
+                        lambda r: f"{str(r['periodo_inicio'])[:10]} → {str(r['periodo_fin'])[:10]} | {int(r['n_locales'])} locales{' · ' + str(r['nota']) if r['nota'] else ''}",
+                        axis=1
+                    ).tolist()
+
+                    _ex1, _ex2 = st.columns(2)
+                    with _ex1:
+                        _snap_a_sel = st.selectbox("📅 Período principal", _snap_labels, key='exec_snap_a')
+                    with _ex2:
+                        _snap_b_sel = st.selectbox("📅 Período comparación (opcional)", [None] + _snap_labels,
+                                                   format_func=lambda x: "— Sin comparación —" if x is None else x,
+                                                   key='exec_snap_b')
+
+                    _snap_a_row = _df_snaps_exec.iloc[_snap_labels.index(_snap_a_sel)]
+                    _pa_i = str(_snap_a_row['periodo_inicio'])[:10]
+                    _pa_f = str(_snap_a_row['periodo_fin'])[:10]
+
+                    # Load snapshot A
+                    _df_exec_a = run_query(f"""
+                        SELECT local, sku_producto, nombre_producto, categoria_menu,
+                               cant, venta, cmv_total, cmv_pct, mc_total, mc_unitario, margen_pct, cuadrante
+                        FROM rentabilidad_snapshots
+                        WHERE periodo_inicio = '{_pa_i}' AND periodo_fin = '{_pa_f}'
+                        ORDER BY local, venta DESC
+                    """)
+
+                    if _df_exec_a.empty:
+                        st.warning("Sin datos para el período seleccionado.")
+                    else:
+                        for col in ['cant','venta','cmv_total','cmv_pct','mc_total','mc_unitario','margen_pct']:
+                            _df_exec_a[col] = pd.to_numeric(_df_exec_a[col], errors='coerce').fillna(0)
+
+                        # Load snapshot B if selected
+                        _df_exec_b = pd.DataFrame()
+                        if _snap_b_sel:
+                            _snap_b_row = _df_snaps_exec.iloc[_snap_labels.index(_snap_b_sel)]
+                            _pb_i = str(_snap_b_row['periodo_inicio'])[:10]
+                            _pb_f = str(_snap_b_row['periodo_fin'])[:10]
+                            _df_exec_b = run_query(f"""
+                                SELECT local, sku_producto, venta, cmv_total, mc_total, margen_pct, cant
+                                FROM rentabilidad_snapshots
+                                WHERE periodo_inicio = '{_pb_i}' AND periodo_fin = '{_pb_f}'
+                            """)
+                            if not _df_exec_b.empty:
+                                for col in ['cant','venta','cmv_total','mc_total','margen_pct']:
+                                    _df_exec_b[col] = pd.to_numeric(_df_exec_b[col], errors='coerce').fillna(0)
+
+                        # ── VISTA GLOBAL ──────────────────────────
+                        st.markdown("---")
+                        st.markdown("## 🌐 Vista Consolidada — Todos los Locales")
+                        st.caption(f"Período: **{_pa_i}** → **{_pa_f}**")
+
+                        _vt_g  = _df_exec_a['venta'].sum()
+                        _cmv_g = _df_exec_a['cmv_total'].sum()
+                        _mc_g  = _df_exec_a['mc_total'].sum()
+                        _mg_g  = _mc_g / _vt_g * 100 if _vt_g > 0 else 0
+                        _cmvp_g = _cmv_g / _vt_g * 100 if _vt_g > 0 else 0
+
+                        # KPIs globales
+                        _gk1, _gk2, _gk3, _gk4, _gk5 = st.columns(5)
+                        _gk1.metric("Venta Total", f"${_vt_g:,.0f}")
+                        _gk2.metric("CMV Total", f"${_cmv_g:,.0f}")
+                        _gk3.metric("CMV %", f"{_cmvp_g:.1f}%")
+                        _gk4.metric("Margen Contribución", f"${_mc_g:,.0f}")
+                        _gk5.metric("Margen %", f"{_mg_g:.1f}%")
+
+                        # Comparación vs período B
+                        if not _df_exec_b.empty:
+                            _vt_b  = _df_exec_b['venta'].sum()
+                            _mc_b  = _df_exec_b['mc_total'].sum()
+                            _mg_b  = _mc_b / _vt_b * 100 if _vt_b > 0 else 0
+                            st.markdown(f"""
+                            <div style='background:#111;border:1px solid #2a2a2a;border-radius:10px;padding:12px 20px;margin:8px 0'>
+                            <span style='color:#666;font-size:0.78rem'>vs período anterior:</span>
+                            &nbsp;&nbsp;
+                            <span style='color:{"#4caf7d" if _vt_g >= _vt_b else "#e84545"};font-weight:600'>
+                                Venta {"▲" if _vt_g >= _vt_b else "▼"} {abs((_vt_g-_vt_b)/_vt_b*100):.1f}%
+                            </span>
+                            &nbsp;&nbsp;·&nbsp;&nbsp;
+                            <span style='color:{"#4caf7d" if _mg_g >= _mg_b else "#e84545"};font-weight:600'>
+                                Margen {"▲" if _mg_g >= _mg_b else "▼"} {abs(_mg_g-_mg_b):.1f}pp
+                            </span>
+                            </div>
+                            """, unsafe_allow_html=True)
+
+                        # Top 10 global por venta
+                        st.markdown("#### 🏆 Top 10 Platos — Red Completa")
+                        _df_top10_g = _df_exec_a.groupby(['sku_producto','nombre_producto','categoria_menu']).agg(
+                            venta=('venta','sum'), cant=('cant','sum'),
+                            cmv=('cmv_total','sum'), mc=('mc_total','sum')
+                        ).reset_index()
+                        _df_top10_g['margen_pct'] = (_df_top10_g['mc'] / _df_top10_g['venta'] * 100).round(1)
+                        _df_top10_g = _df_top10_g.nlargest(10, 'venta').reset_index(drop=True)
+
+                        _hs_ex = 'padding:7px 10px;font-size:0.66rem;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
+                        _rows_top = ''
+                        for _ti, _tr in _df_top10_g.iterrows():
+                            _mg_c = '#4caf7d' if _tr['margen_pct'] >= 40 else '#e89c45' if _tr['margen_pct'] >= 20 else '#e84545'
+                            _rows_top += (
+                                f'<tr style="border-bottom:1px solid #1a1a1a">'
+                                f'<td style="padding:8px 10px;color:#555;font-size:0.72rem;text-align:right">{_ti+1}</td>'
+                                f'<td style="padding:8px 10px;font-weight:500;color:#e8e4de">{str(_tr["nombre_producto"])[:40]}</td>'
+                                f'<td style="padding:8px 10px;color:#666;font-size:0.72rem">{_tr["categoria_menu"]}</td>'
+                                f'<td style="padding:8px 10px;text-align:right;color:#aaa">{int(_tr["cant"]):,}</td>'
+                                f'<td style="padding:8px 10px;text-align:right;color:#d4a853;font-weight:600">${_tr["venta"]:,.0f}</td>'
+                                f'<td style="padding:8px 10px;text-align:right;color:#aaa">${_tr["cmv"]:,.0f}</td>'
+                                f'<td style="padding:8px 10px;text-align:right;color:{_mg_c};font-weight:600">{_tr["margen_pct"]:.1f}%</td>'
+                                f'<td style="padding:8px 10px;text-align:right;color:#4caf7d">${_tr["mc"]:,.0f}</td>'
+                                f'</tr>'
+                            )
+                        st.markdown(
+                            '<div style="overflow-x:auto;border-radius:10px;border:1px solid #1e1e1e;background:#0d0d0d">'
+                            '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
+                            '<thead><tr style="background:#111">'
+                            + ''.join([f'<th style="{_hs_ex};text-align:{"left" if i in (1,2) else "right"}">{h}</th>'
+                                       for i, h in enumerate(['#','Plato','Categoría','Uds','Venta','CMV','Margen%','MC'])])
+                            + f'</tr></thead><tbody>{_rows_top}</tbody></table></div>',
+                            unsafe_allow_html=True
+                        )
+
+                        # Ingeniería de menú global
+                        st.markdown("#### 🔲 Ingeniería de Menú — Red Completa")
+                        _df_ing_g = _df_top10_g.copy()
+                        _mean_venta_g  = _df_exec_a.groupby('sku_producto')['venta'].sum().mean()
+                        _mean_margen_g = _df_exec_a.groupby('sku_producto')['margen_pct'].mean().mean()
+
+                        def _cuad_exec(r):
+                            if r['venta'] >= _mean_venta_g and r['margen_pct'] >= _mean_margen_g: return '⭐ Estrella'
+                            if r['venta'] >= _mean_venta_g and r['margen_pct'] < _mean_margen_g:  return '🚦 Tráfico'
+                            if r['venta'] < _mean_venta_g  and r['margen_pct'] >= _mean_margen_g: return '😴 Dormidos'
+                            return '💀 Peso Muerto'
+
+                        _df_ing_g['cuadrante'] = _df_ing_g.apply(_cuad_exec, axis=1)
+
+                        _acciones = {
+                            '⭐ Estrella':     ('Promover activamente', 'Destacar en carta, ofrecer en sugerencias del día, incluir en menú digital prominente. Proteger la receta y controlar el food cost estrictamente.', '#d4a853'),
+                            '🚦 Tráfico':     ('Auditar receta y costos', 'Alto volumen pero margen bajo. Revisar receta en busca de ingredientes sustituibles, renegociar precios con proveedor o ajustar precio de venta.', '#5b8dd9'),
+                            '😴 Dormidos':    ('Aumentar visibilidad', 'Buena rentabilidad pero bajo volumen. Reposicionar en carta, capacitar a meseros para sugerirlo, evaluar promoción temporal.', '#4caf7d'),
+                            '💀 Peso Muerto': ('Revisar permanencia en carta', 'Bajo volumen y baja rentabilidad. Evaluar eliminación, reformulación completa o reposicionamiento de precio.', '#e84545'),
+                        }
+
+                        for _cq, (_accion, _detalle, _color) in _acciones.items():
+                            _df_cq_g = _df_ing_g[_df_ing_g['cuadrante'] == _cq]
+                            if _df_cq_g.empty:
+                                continue
+                            st.markdown(
+                                f'<div style="margin:1rem 0 0.3rem;padding:10px 16px;border-radius:8px;background:#0d0d0d;border-left:3px solid {_color}">'
+                                f'<span style="color:{_color};font-weight:700;font-size:0.95rem">{_cq}</span>'
+                                f'<span style="color:#888;font-size:0.75rem;margin-left:10px">Acción: {_accion}</span>'
+                                f'</div>',
+                                unsafe_allow_html=True
+                            )
+                            st.caption(_detalle)
+                            _platos_cq = ', '.join([f"**{r['nombre_producto'][:30]}** ({r['margen_pct']:.1f}%)" for _, r in _df_cq_g.iterrows()])
+                            st.markdown(_platos_cq)
+
+                        # ── VISTA POR LOCAL ───────────────────────
+                        st.markdown("---")
+                        st.markdown("## 📍 Análisis por Local")
+
+                        _locales_exec = sorted(_df_exec_a['local'].dropna().unique().tolist())
+                        _local_tabs   = st.tabs([f"📍 {l}" for l in _locales_exec])
+
+                        for _lti, _ltab in enumerate(_local_tabs):
+                            _loc_name = _locales_exec[_lti]
+                            _df_loc_e = _df_exec_a[_df_exec_a['local'] == _loc_name].copy()
+
+                            with _ltab:
+                                if _df_loc_e.empty:
+                                    st.info(f"Sin datos para {_loc_name}.")
+                                    continue
+
+                                _vt_l  = _df_loc_e['venta'].sum()
+                                _cmv_l = _df_loc_e['cmv_total'].sum()
+                                _mc_l  = _df_loc_e['mc_total'].sum()
+                                _mg_l  = _mc_l / _vt_l * 100 if _vt_l > 0 else 0
+                                _cmvp_l = _cmv_l / _vt_l * 100 if _vt_l > 0 else 0
+
+                                # KPIs del local
+                                _lk1, _lk2, _lk3, _lk4 = st.columns(4)
+                                _lk1.metric("Venta", f"${_vt_l:,.0f}")
+                                _lk2.metric("CMV %", f"{_cmvp_l:.1f}%")
+                                _lk3.metric("Margen %", f"${_mg_l:.1f}%")
+                                _lk4.metric("MC Total", f"${_mc_l:,.0f}")
+
+                                # Comparación vs red
+                                _part_red = _vt_l / _vt_g * 100 if _vt_g > 0 else 0
+                                st.caption(f"Participación en la red: **{_part_red:.1f}%** de la venta total")
+
+                                # Comparación vs período B por local
+                                if not _df_exec_b.empty:
+                                    _df_loc_b = _df_exec_b[_df_exec_b['local'] == _loc_name]
+                                    if not _df_loc_b.empty:
+                                        _vt_lb = _df_loc_b['venta'].sum()
+                                        _mg_lb = (_df_loc_b['mc_total'].sum() / _vt_lb * 100) if _vt_lb > 0 else 0
+                                        _delta_v = (_vt_l - _vt_lb) / _vt_lb * 100 if _vt_lb > 0 else 0
+                                        _delta_m = _mg_l - _mg_lb
+                                        st.markdown(
+                                            f'<div style="background:#111;border:1px solid #2a2a2a;border-radius:8px;padding:8px 16px;margin:4px 0;font-size:0.8rem">'
+                                            f'vs período anterior: '
+                                            f'<span style="color:{"#4caf7d" if _delta_v >= 0 else "#e84545"};font-weight:600">Venta {"▲" if _delta_v >= 0 else "▼"}{abs(_delta_v):.1f}%</span>'
+                                            f'&nbsp;·&nbsp;'
+                                            f'<span style="color:{"#4caf7d" if _delta_m >= 0 else "#e84545"};font-weight:600">Margen {"▲" if _delta_m >= 0 else "▼"}{abs(_delta_m):.1f}pp</span>'
+                                            f'</div>',
+                                            unsafe_allow_html=True
+                                        )
+
+                                # Top 10 por local
+                                st.markdown(f"**Top 10 platos — {_loc_name}**")
+                                _df_top10_l = _df_loc_e.nlargest(10, 'venta').reset_index(drop=True)
+                                _rows_tl = ''
+                                for _ti, _tr in _df_top10_l.iterrows():
+                                    _mg_c = '#4caf7d' if _tr['margen_pct'] >= 40 else '#e89c45' if _tr['margen_pct'] >= 20 else '#e84545'
+                                    _rows_tl += (
+                                        f'<tr style="border-bottom:1px solid #1a1a1a">'
+                                        f'<td style="padding:7px 10px;color:#555;font-size:0.7rem;text-align:right">{_ti+1}</td>'
+                                        f'<td style="padding:7px 10px;font-weight:500;color:#e8e4de;font-size:0.78rem">{str(_tr["nombre_producto"])[:38]}</td>'
+                                        f'<td style="padding:7px 10px;color:#666;font-size:0.7rem">{_tr["categoria_menu"]}</td>'
+                                        f'<td style="padding:7px 10px;text-align:right;color:#aaa">{int(_tr["cant"]):,}</td>'
+                                        f'<td style="padding:7px 10px;text-align:right;color:#d4a853;font-weight:600">${_tr["venta"]:,.0f}</td>'
+                                        f'<td style="padding:7px 10px;text-align:right;color:{_mg_c};font-weight:600">{_tr["margen_pct"]:.1f}%</td>'
+                                        f'<td style="padding:7px 10px;text-align:right;color:#4caf7d">${_tr["mc_total"]:,.0f}</td>'
+                                        f'</tr>'
+                                    )
+                                st.markdown(
+                                    '<div style="overflow-x:auto;border-radius:8px;border:1px solid #1e1e1e;background:#0d0d0d">'
+                                    '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.8rem">'
+                                    '<thead><tr style="background:#111">'
+                                    + ''.join([f'<th style="{_hs_ex};text-align:{"left" if i in (1,2) else "right"}">{h}</th>'
+                                               for i, h in enumerate(['#','Plato','Categoría','Uds','Venta','Margen%','MC'])])
+                                    + f'</tr></thead><tbody>{_rows_tl}</tbody></table></div>',
+                                    unsafe_allow_html=True
+                                )
+
+                                # Ingeniería de menú por local
+                                st.markdown(f"**Ingeniería de menú — {_loc_name}**")
+                                _mean_v_l  = _df_loc_e['venta'].mean()
+                                _mean_m_l  = _df_loc_e['margen_pct'].mean()
+                                _df_loc_e  = _df_loc_e.copy()
+                                _df_loc_e['cuadrante_local'] = _df_loc_e.apply(
+                                    lambda r: '⭐ Estrella' if r['venta'] >= _mean_v_l and r['margen_pct'] >= _mean_m_l
+                                    else '🚦 Tráfico' if r['venta'] >= _mean_v_l
+                                    else '😴 Dormidos' if r['margen_pct'] >= _mean_m_l
+                                    else '💀 Peso Muerto', axis=1
+                                )
+
+                                for _cq, (_accion, _detalle, _color) in _acciones.items():
+                                    _df_cql = _df_loc_e[_df_loc_e['cuadrante_local'] == _cq].nlargest(5, 'venta')
+                                    if _df_cql.empty:
+                                        continue
+                                    st.markdown(
+                                        f'<div style="margin:0.6rem 0 0.2rem;padding:7px 14px;border-radius:6px;background:#0d0d0d;border-left:2px solid {_color}">'
+                                        f'<span style="color:{_color};font-weight:600;font-size:0.85rem">{_cq}</span>'
+                                        f'<span style="color:#666;font-size:0.72rem;margin-left:8px">{_accion}</span>'
+                                        f'</div>',
+                                        unsafe_allow_html=True
+                                    )
+                                    _platos_l = ' · '.join([f"{r['nombre_producto'][:28]} ({r['margen_pct']:.1f}%)" for _, r in _df_cql.iterrows()])
+                                    st.caption(_platos_l)
+
+
         st.markdown("### 📉 Informe de Desviación")
         st.markdown(f"<div class='info-box'>Período: <b>{f_inicio}</b> → <b>{f_fin}</b> · Local: <b>{f_local}</b><br>Consumo teórico = ventas × CantReal. Comprado real = cant_conv de facturas. Variación % = (Comprado - Teórico) / Teórico × 100.</div>", unsafe_allow_html=True)
 
