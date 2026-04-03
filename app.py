@@ -5140,6 +5140,72 @@ elif modulo.startswith("📊"):
             _was_plato      = st.session_state.get('inf1_was_plato', False)
             _skus_debug     = st.session_state.get('inf1_skus_filtro', [])
 
+            # ── KPIs ejecutivos ──────────────────────────────────
+            venta_total  = df_inf1['venta'].sum()
+            cmv_total    = df_inf1['cmv_total'].sum() if 'cmv_total' in df_inf1.columns else df_inf1['costo_total_teorico'].sum()
+            mc_total     = df_inf1['mc_total'].sum()  if 'mc_total'  in df_inf1.columns else (venta_total - cmv_total)
+            margen_gral  = mc_total / venta_total * 100 if venta_total > 0 else 0
+            cmv_pct_gral = cmv_total / venta_total * 100 if venta_total > 0 else 0
+
+            _alerta1 = "alerta" if cmv_pct_gral > 35 else ""
+            st.markdown(f"""
+            <div class="kpi-grid">
+                <div class="kpi-box">
+                    <div class="k-label">Venta total</div>
+                    <div class="k-value">${venta_total:,.0f}</div>
+                </div>
+                <div class="kpi-box {_alerta1}">
+                    <div class="k-label">CMV total</div>
+                    <div class="k-value">${cmv_total:,.0f}</div>
+                    <div class="k-delta">{cmv_pct_gral:.1f}% de venta</div>
+                </div>
+                <div class="kpi-box">
+                    <div class="k-label">Margen contribución</div>
+                    <div class="k-value">${mc_total:,.0f}</div>
+                </div>
+                <div class="kpi-box">
+                    <div class="k-label">Margen %</div>
+                    <div class="k-value">{margen_gral:.2f}%</div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            # ── Filtros: Categoría whitelist + Ordenar ──────────
+            _cats_rent = sorted(df_inf1['categoria_menu'].dropna().unique().tolist())
+            _fc1, _fc2 = st.columns(2)
+            with _fc1:
+                _cats_sel = st.multiselect(
+                    "Categorías a mostrar (dejar vacío = todas)",
+                    _cats_rent,
+                    default=_cats_rent,
+                    key='inf1_cat_filter'
+                )
+            with _fc2:
+                _ord_rent_sel = st.selectbox("Ordenar por", [
+                    'Venta (mayor a menor)', 'Rentabilidad % (mayor a menor)',
+                    'Volumen (mayor a menor)', 'Venta (menor a mayor)',
+                    'Rentabilidad % (menor a mayor)', 'Volumen (menor a mayor)'
+                ], key='inf1_ord')
+
+            # Aplicar whitelist de categorías
+            _df_inf1_view = df_inf1.copy()
+            if _cats_sel:
+                _df_inf1_view = _df_inf1_view[_df_inf1_view['categoria_menu'].isin(_cats_sel)]
+
+            # Aplicar ordenamiento
+            _ord_map_rent = {
+                'Venta (mayor a menor)':           ('venta',      False),
+                'Rentabilidad % (mayor a menor)':  ('margen_pct', False),
+                'Volumen (mayor a menor)':         ('cant',       False),
+                'Venta (menor a mayor)':           ('venta',      True),
+                'Rentabilidad % (menor a mayor)':  ('margen_pct', True),
+                'Volumen (menor a mayor)':         ('cant',       True),
+            }
+            _ocol, _oasc = _ord_map_rent.get(_ord_rent_sel, ('venta', False))
+            _df_inf1_view = _df_inf1_view.sort_values(_ocol, ascending=_oasc, na_position='last')
+
             # ── Debug de costos (solo cuando se buscó un plato específico) ───
             if _was_plato and _skus_debug:
                 for _sku_dbg in _skus_debug:
@@ -5209,37 +5275,6 @@ elif modulo.startswith("📊"):
                                 )
 
 
-            venta_total  = df_inf1['venta'].sum()
-            cmv_total    = df_inf1['cmv_total'].sum() if 'cmv_total' in df_inf1.columns else df_inf1['costo_total_teorico'].sum()
-            mc_total     = df_inf1['mc_total'].sum()  if 'mc_total'  in df_inf1.columns else (venta_total - cmv_total)
-            margen_gral  = mc_total / venta_total * 100 if venta_total > 0 else 0
-            cmv_pct_gral = cmv_total / venta_total * 100 if venta_total > 0 else 0
-
-            _alerta1 = "alerta" if cmv_pct_gral > 35 else ""
-            st.markdown(f"""
-            <div class="kpi-grid">
-                <div class="kpi-box">
-                    <div class="k-label">Venta total</div>
-                    <div class="k-value">${venta_total:,.0f}</div>
-                </div>
-                <div class="kpi-box {_alerta1}">
-                    <div class="k-label">CMV total</div>
-                    <div class="k-value">${cmv_total:,.0f}</div>
-                    <div class="k-delta">{cmv_pct_gral:.1f}% de venta</div>
-                </div>
-                <div class="kpi-box">
-                    <div class="k-label">Margen contribución</div>
-                    <div class="k-value">${mc_total:,.0f}</div>
-                </div>
-                <div class="kpi-box">
-                    <div class="k-label">Margen %</div>
-                    <div class="k-value">{margen_gral:.2f}%</div>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-
-            st.markdown("<br>", unsafe_allow_html=True)
-
             def badge_margen(val):
                 if pd.isna(val): return '<span style="color:#555">—</span>'
                 if val >= 60:   return f'<span style="background:#1a3a2a;color:#4caf7d;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:.2f}%</span>'
@@ -5256,40 +5291,6 @@ elif modulo.startswith("📊"):
                 return f'<span style="color:#e84545;font-weight:600">${val:,.0f}</span>'
 
             hs  = 'padding:10px 12px;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
-
-            # ── Filtros: Categoría whitelist + Ordenar ──────────
-            _cats_rent = sorted(df_inf1['categoria_menu'].dropna().unique().tolist())
-            _fc1, _fc2 = st.columns(2)
-            with _fc1:
-                _cats_sel = st.multiselect(
-                    "Categorías a mostrar (dejar vacío = todas)",
-                    _cats_rent,
-                    default=_cats_rent,
-                    key='inf1_cat_filter'
-                )
-            with _fc2:
-                _ord_rent_sel = st.selectbox("Ordenar por", [
-                    'Venta (mayor a menor)', 'Rentabilidad % (mayor a menor)',
-                    'Volumen (mayor a menor)', 'Venta (menor a mayor)',
-                    'Rentabilidad % (menor a mayor)', 'Volumen (menor a mayor)'
-                ], key='inf1_ord')
-
-            # Aplicar whitelist de categorías
-            _df_inf1_view = df_inf1.copy()
-            if _cats_sel:
-                _df_inf1_view = _df_inf1_view[_df_inf1_view['categoria_menu'].isin(_cats_sel)]
-
-            # Aplicar ordenamiento
-            _ord_map_rent = {
-                'Venta (mayor a menor)':           ('venta',      False),
-                'Rentabilidad % (mayor a menor)':  ('margen_pct', False),
-                'Volumen (mayor a menor)':         ('cant',       False),
-                'Venta (menor a mayor)':           ('venta',      True),
-                'Rentabilidad % (menor a mayor)':  ('margen_pct', True),
-                'Volumen (menor a mayor)':         ('cant',       True),
-            }
-            _ocol, _oasc = _ord_map_rent.get(_ord_rent_sel, ('venta', False))
-            _df_inf1_view = _df_inf1_view.sort_values(_ocol, ascending=_oasc, na_position='last')
 
             with _tab_rent1:
                 if "Interempresa" in vista:
@@ -6091,6 +6092,7 @@ elif modulo.startswith("📊"):
 
 
 
+    elif "Informe 2" in informe_sel:
         st.markdown("### 📉 Informe de Desviación")
         st.markdown(f"<div class='info-box'>Período: <b>{f_inicio}</b> → <b>{f_fin}</b> · Local: <b>{f_local}</b><br>Consumo teórico = ventas × CantReal. Comprado real = cant_conv de facturas. Variación % = (Comprado - Teórico) / Teórico × 100.</div>", unsafe_allow_html=True)
 
