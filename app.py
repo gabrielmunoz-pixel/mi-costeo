@@ -5940,7 +5940,7 @@ elif modulo.startswith("📊"):
                         _df_cq = _df_ex[_df_ex['_cuad'] == _cq].sort_values(
                             'venta' if 'Estrella' in _cq or 'Caballo' in _cq else 'margen_pct',
                             ascending=False if 'Perro' not in _cq else True
-                        )
+                        ).head(10)
                         if _df_cq.empty:
                             continue
 
@@ -6040,12 +6040,13 @@ elif modulo.startswith("📊"):
                                   AND sku IN (SELECT DISTINCT sku_ingrediente FROM recetas)
                                 GROUP BY sku
                                 UNION ALL
-                                SELECT DISTINCT ON (sku) sku,
-                                       costo_realfinal/NULLIF(cant_conv*NULLIF(formato,0),0) AS precio_unitario,
-                                       2 AS p
-                                FROM compras WHERE cant_conv>0 AND costo_realfinal>0 AND formato>0
-                                  AND sku IN (SELECT DISTINCT sku_ingrediente FROM recetas)
-                                ORDER BY sku, fecha_dte DESC
+                                SELECT sku, precio_unitario, 2 AS p FROM (
+                                    SELECT DISTINCT ON (sku) sku,
+                                           costo_realfinal/NULLIF(cant_conv*NULLIF(formato,0),0) AS precio_unitario
+                                    FROM compras WHERE cant_conv>0 AND costo_realfinal>0 AND formato>0
+                                      AND sku IN (SELECT DISTINCT sku_ingrediente FROM recetas)
+                                    ORDER BY sku, fecha_dte DESC
+                                ) fb
                             ) x ORDER BY sku, p
                         """)
                         _precio_sens_map = {}
@@ -6081,14 +6082,14 @@ elif modulo.startswith("📊"):
                     st.markdown("---")
                     st.markdown("### 📋 Resumen Ejecutivo — Plan de Acción")
 
+                    _precio_medio = _df_ex.apply(lambda r: r['venta']/r['cant'] if r['cant']>0 else 0, axis=1).mean()
+                    _df_ex['precio_venta'] = _df_ex.apply(lambda r: r['venta']/r['cant'] if r['cant']>0 else 0, axis=1)
+
                     _estrellas  = _df_ex[_df_ex['_cuad']=='⭐ Estrella']
                     _caballos   = _df_ex[_df_ex['_cuad']=='🐎 Caballo de Batalla']
                     _enigmas    = _df_ex[_df_ex['_cuad']=='🧩 Enigma']
                     _perros     = _df_ex[_df_ex['_cuad']=='💀 Perro']
 
-                    # Ajuste de precios: Estrellas con bajo precio relativo
-                    _precio_medio = _df_ex.apply(lambda r: r['venta']/r['cant'] if r['cant']>0 else 0, axis=1).mean()
-                    _df_ex['precio_venta'] = _df_ex.apply(lambda r: r['venta']/r['cant'] if r['cant']>0 else 0, axis=1)
                     _subvalorados = _estrellas[_estrellas['precio_venta'] < _precio_medio * 0.85]
 
                     _cta_sections = [
