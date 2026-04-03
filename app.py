@@ -2815,7 +2815,6 @@ if modulo.startswith("📦"):
                 with _nc2:
                     _nuevo_cr   = st.number_input("cant_real", min_value=0.0, step=0.1, key='rec_nuevo_cr')
                     _nuevo_ce   = st.number_input("cant_efic", min_value=0.0, step=0.1, key='rec_nuevo_ce')
-                    _nuevo_proc = st.selectbox("es_procesado", [False, True], key='rec_nuevo_proc')
                     _nuevo_op   = st.selectbox("es_opcion", [None, 0, 1, 2, 3, 6], key='rec_nuevo_op',
                                                format_func=lambda x: "null" if x is None else str(x))
 
@@ -2823,6 +2822,7 @@ if modulo.startswith("📦"):
                     if not _nuevo_cv or not _nuevo_sku:
                         st.error("Código de venta y SKU ingrediente son obligatorios.")
                     else:
+                        _nuevo_proc = _nuevo_sku.startswith('PRO-')
                         try:
                             _eng = get_engine()
                             with _eng.connect() as _conn:
@@ -2838,7 +2838,7 @@ if modulo.startswith("📦"):
                                     'proc': _nuevo_proc, 'op': _nuevo_op
                                 })
                                 _conn.commit()
-                            st.success(f"✅ Ingrediente agregado a {_nuevo_cv}")
+                            st.success(f"✅ Ingrediente agregado a {_nuevo_cv} · es_procesado={_nuevo_proc}")
                             st.cache_data.clear()
                             st.rerun()
                         except Exception as _e:
@@ -3005,15 +3005,15 @@ if modulo.startswith("📦"):
                         _mod_ce = st.number_input("cant_efic", value=float(_ing_row.get('cant_efic',0) or 0),
                                                   min_value=0.0, step=0.01, key='rec_mod_ce', format="%.4f")
                     with _m3:
-                        _mod_proc_cur = bool(_ing_row.get('es_procesado', False))
-                        _mod_proc = st.selectbox("es_procesado", [False, True],
-                                                 index=1 if _mod_proc_cur else 0, key='rec_mod_proc')
-                    with _m4:
                         _mod_op_cur = _ing_row.get('es_opcion')
                         _op_opts = [None, 0, 1, 2, 3, 6]
                         _op_idx_cur = _op_opts.index(_mod_op_cur) if _mod_op_cur in _op_opts else 0
                         _mod_op = st.selectbox("es_opcion", _op_opts, index=_op_idx_cur, key='rec_mod_op',
                                                format_func=lambda x: "null" if x is None else str(x))
+                    with _m4:
+                        _mod_proc = _ing_sku_mod.startswith('PRO-')
+                        st.markdown(f"**es_procesado:** `{'True' if _mod_proc else 'False'}`")
+                        st.caption("Auto-derivado del SKU")
 
                     if st.button("💾 Aplicar cambios", key='rec_mod_save', type='primary'):
                         try:
@@ -3044,14 +3044,19 @@ if modulo.startswith("📦"):
                         _add_cr  = st.number_input("cant_real", min_value=0.0, step=0.1, key='rec_add_cr')
                     with _a2:
                         _add_ce   = st.number_input("cant_efic", min_value=0.0, step=0.1, key='rec_add_ce')
-                        _add_proc = st.selectbox("es_procesado", [False, True], key='rec_add_proc')
                         _add_op   = st.selectbox("es_opcion", [None, 0, 1, 2, 3, 6], key='rec_add_op',
                                                  format_func=lambda x: "null" if x is None else str(x))
+                        if _add_sku:
+                            _add_proc = _add_sku.startswith('PRO-')
+                            st.caption(f"es_procesado: `{'True' if _add_proc else 'False'}` (auto)")
+                        else:
+                            _add_proc = False
 
                     if st.button("➕ Agregar ingrediente", key='rec_add_save', type='primary'):
                         if not _add_sku:
                             st.error("SKU ingrediente es obligatorio.")
                         else:
+                            _add_proc = _add_sku.startswith('PRO-')
                             try:
                                 _eng = get_engine()
                                 with _eng.connect() as _conn:
@@ -3067,7 +3072,7 @@ if modulo.startswith("📦"):
                                         'proc': _add_proc, 'op': _add_op
                                     })
                                     _conn.commit()
-                                st.success(f"✅ {_add_sku} agregado a {_sku_sel}")
+                                st.success(f"✅ {_add_sku} agregado a {_sku_sel} · es_procesado={_add_proc}")
                                 st.cache_data.clear()
                                 st.rerun()
                             except Exception as _e:
