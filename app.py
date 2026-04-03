@@ -5245,11 +5245,16 @@ elif modulo.startswith("📊"):
 
             hs  = 'padding:10px 12px;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
 
-            # ── Filtros: Categoría + Ordenar ────────────────────────
+            # ── Filtros: Categoría whitelist + Ordenar ──────────
             _cats_rent = sorted(df_inf1['categoria_menu'].dropna().unique().tolist())
             _fc1, _fc2 = st.columns(2)
             with _fc1:
-                _cat_rent_sel = st.selectbox("Categoría", ["Todas"] + _cats_rent, key='inf1_cat_filter')
+                _cats_sel = st.multiselect(
+                    "Categorías a mostrar (dejar vacío = todas)",
+                    _cats_rent,
+                    default=_cats_rent,
+                    key='inf1_cat_filter'
+                )
             with _fc2:
                 _ord_rent_sel = st.selectbox("Ordenar por", [
                     'Venta (mayor a menor)', 'Rentabilidad % (mayor a menor)',
@@ -5257,10 +5262,10 @@ elif modulo.startswith("📊"):
                     'Rentabilidad % (menor a mayor)', 'Volumen (menor a mayor)'
                 ], key='inf1_ord')
 
-            # Aplicar filtro de categoría
+            # Aplicar whitelist de categorías
             _df_inf1_view = df_inf1.copy()
-            if _cat_rent_sel != "Todas":
-                _df_inf1_view = _df_inf1_view[_df_inf1_view['categoria_menu'] == _cat_rent_sel]
+            if _cats_sel:
+                _df_inf1_view = _df_inf1_view[_df_inf1_view['categoria_menu'].isin(_cats_sel)]
 
             # Aplicar ordenamiento
             _ord_map_rent = {
@@ -5274,7 +5279,7 @@ elif modulo.startswith("📊"):
             _ocol, _oasc = _ord_map_rent.get(_ord_rent_sel, ('venta', False))
             _df_inf1_view = _df_inf1_view.sort_values(_ocol, ascending=_oasc, na_position='last')
 
-            _tab_rent1, _tab_rent2 = st.tabs(["📊 Detalle por Producto", "🔲 Cuadrantes"])
+            _tab_rent1, _tab_rent2, _tab_rent3 = st.tabs(["📊 Detalle por Producto", "🔲 Cuadrantes", "📸 Snapshots"])
 
             with _tab_rent1:
                 if "Interempresa" in vista:
@@ -5618,9 +5623,152 @@ elif modulo.startswith("📊"):
                             unsafe_allow_html=True
                         )
 
-    # ----------------------------------------------------------
-    # INFORME 2
-    # ----------------------------------------------------------
+            with _tab_rent3:
+                st.markdown("<br>", unsafe_allow_html=True)
+                st.markdown("<div class='info-box'>Guarda el estado actual del informe como snapshot para comparar en el futuro. Los snapshots se guardan con el período y local seleccionados.</div>", unsafe_allow_html=True)
+
+                # ── Guardar snapshot ──────────────────────────────
+                _sn1, _sn2 = st.columns([3, 1])
+                with _sn1:
+                    _snap_nota = st.text_input("Nota del snapshot (opcional)", key='snap_nota',
+                                               placeholder='ej: Cierre Marzo, revisión precios, etc.')
+                with _sn2:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    _save_snap = st.button("💾 Guardar snapshot completo", key='snap_save', type='primary')
+
+                if _save_snap:
+                    try:
+                        _eng_sn = get_engine()
+                        _snap_rows = []
+                        for _, _sr in _df_inf1_view.iterrows():
+                            _snap_rows.append({
+                                'periodo_inicio': str(fi_),
+                                'periodo_fin':    str(ff_),
+                                'local':          str(local_),
+                                'sku_producto':   str(_sr.get('sku_producto','')),
+                                'nombre_producto':str(_sr.get('nombre_producto','')),
+                                'categoria_menu': str(_sr.get('categoria_menu','')),
+                                'cant':           float(_sr.get('cant', 0) or 0),
+                                'venta':          float(_sr.get('venta', 0) or 0),
+                                'cmv_base':       float(_sr.get('cmv_base', 0) or 0),
+                                'cmv_opciones':   float(_sr.get('cmv_opciones', 0) or 0),
+                                'cmv_unitario':   float(_sr.get('cmv_unitario', 0) or 0),
+                                'cmv_total':      float(_sr.get('cmv_total', 0) or 0),
+                                'cmv_pct':        float(_sr.get('cmv_pct', 0) or 0),
+                                'mc_unitario':    float(_sr.get('mc_unitario', 0) or 0),
+                                'mc_total':       float(_sr.get('mc_total', 0) or 0),
+                                'margen_pct':     float(_sr.get('margen_pct', 0) or 0),
+                                'cuadrante':      str(_sr.get('cuadrante', '') or ''),
+                                'nota':           _snap_nota or None,
+                            })
+                        with _eng_sn.connect() as _conn_sn:
+                            _conn_sn.execute(text("""
+                                INSERT INTO rentabilidad_snapshots
+                                    (periodo_inicio, periodo_fin, local, sku_producto, nombre_producto,
+                                     categoria_menu, cant, venta, cmv_base, cmv_opciones, cmv_unitario,
+                                     cmv_total, cmv_pct, mc_unitario, mc_total, margen_pct, cuadrante, nota)
+                                VALUES
+                                    (:periodo_inicio, :periodo_fin, :local, :sku_producto, :nombre_producto,
+                                     :categoria_menu, :cant, :venta, :cmv_base, :cmv_opciones, :cmv_unitario,
+                                     :cmv_total, :cmv_pct, :mc_unitario, :mc_total, :margen_pct, :cuadrante, :nota)
+                            """), _snap_rows)
+                            _conn_sn.commit()
+                        st.success(f"✅ Snapshot guardado — {len(_snap_rows)} platos · {fi_} → {ff_} · {local_}")
+                    except Exception as _esn:
+                        st.error(f"Error al guardar snapshot: {_esn}")
+
+                st.markdown("---")
+
+                # ── Ver snapshots guardados ───────────────────────
+                st.markdown("#### 📋 Snapshots guardados")
+                _df_snaps = run_query("""
+                    SELECT id, created_at, periodo_inicio, periodo_fin, local,
+                           COUNT(*) as n_platos,
+                           ROUND(SUM(venta)::numeric, 0) as venta_total,
+                           ROUND(AVG(margen_pct)::numeric, 1) as margen_medio,
+                           nota
+                    FROM rentabilidad_snapshots
+                    GROUP BY id, created_at, periodo_inicio, periodo_fin, local, nota
+                    ORDER BY created_at DESC
+                    LIMIT 50
+                """)
+
+                if _df_snaps.empty:
+                    st.info("No hay snapshots guardados aún.")
+                else:
+                    # ── Selector de snapshot para drill-down ─────
+                    _snap_opts = _df_snaps.apply(
+                        lambda r: f"#{int(r['id'])} · {str(r['periodo_inicio'])[:10]} → {str(r['periodo_fin'])[:10]} · {r['local']} · {int(r['n_platos'])} platos · {r['nota'] or ''}",
+                        axis=1
+                    ).tolist()
+                    _snap_sel = st.selectbox("Ver detalle de snapshot", [None] + _snap_opts,
+                                             format_func=lambda x: "— Selecciona —" if x is None else x,
+                                             key='snap_sel')
+
+                    # Summary table
+                    _df_snaps_disp = _df_snaps.copy()
+                    _df_snaps_disp['created_at']   = _df_snaps_disp['created_at'].astype(str).str[:16]
+                    _df_snaps_disp['venta_total']  = _df_snaps_disp['venta_total'].apply(lambda x: f"${float(x or 0):,.0f}")
+                    _df_snaps_disp['margen_medio'] = _df_snaps_disp['margen_medio'].apply(lambda x: f"{float(x or 0):.1f}%")
+                    st.dataframe(_df_snaps_disp[['id','created_at','periodo_inicio','periodo_fin','local','n_platos','venta_total','margen_medio','nota']],
+                                 use_container_width=True, hide_index=True)
+
+                    # ── Drill-down de snapshot seleccionado ───────
+                    if _snap_sel:
+                        _snap_id = int(_snap_sel.split('·')[0].replace('#','').strip())
+                        _df_snap_det = run_query(f"""
+                            SELECT sku_producto, nombre_producto, categoria_menu,
+                                   cant, venta, cmv_unitario, cmv_total, cmv_pct,
+                                   mc_unitario, mc_total, margen_pct, cuadrante
+                            FROM rentabilidad_snapshots
+                            WHERE id = {_snap_id}
+                            ORDER BY venta DESC
+                        """)
+                        if not _df_snap_det.empty:
+                            st.markdown(f"#### Detalle snapshot #{_snap_id}")
+
+                            # KPIs
+                            _sv  = float(_df_snap_det['venta'].sum())
+                            _sc  = float(_df_snap_det['cmv_total'].sum())
+                            _sm  = float(_df_snap_det['mc_total'].sum())
+                            _smg = _sm / _sv * 100 if _sv > 0 else 0
+                            _sk1, _sk2, _sk3, _sk4 = st.columns(4)
+                            _sk1.metric("Platos", len(_df_snap_det))
+                            _sk2.metric("Venta total", f"${_sv:,.0f}")
+                            _sk3.metric("CMV total", f"${_sc:,.0f} ({_sc/_sv*100:.1f}%)" if _sv > 0 else "—")
+                            _sk4.metric("Margen medio", f"{_smg:.1f}%")
+
+                            # Category breakdown
+                            st.markdown("**Por categoría:**")
+                            _df_snap_cat = _df_snap_det.groupby('categoria_menu').agg(
+                                platos=('sku_producto','count'),
+                                venta=('venta','sum'),
+                                cmv=('cmv_total','sum'),
+                                mc=('mc_total','sum')
+                            ).reset_index()
+                            _df_snap_cat['margen%'] = (_df_snap_cat['mc'] / _df_snap_cat['venta'] * 100).round(1)
+                            _df_snap_cat['venta']   = _df_snap_cat['venta'].apply(lambda x: f"${x:,.0f}")
+                            _df_snap_cat['cmv']     = _df_snap_cat['cmv'].apply(lambda x: f"${x:,.0f}")
+                            _df_snap_cat['mc']      = _df_snap_cat['mc'].apply(lambda x: f"${x:,.0f}")
+                            st.dataframe(_df_snap_cat, use_container_width=True, hide_index=True)
+
+                            # Full detail
+                            with st.expander("📋 Ver todos los platos"):
+                                st.dataframe(_df_snap_det, use_container_width=True, hide_index=True)
+
+                            # Delete button
+                            if st.button(f"🗑️ Eliminar snapshot #{_snap_id}", key='snap_del'):
+                                try:
+                                    _eng_del = get_engine()
+                                    with _eng_del.connect() as _cd:
+                                        _cd.execute(text("DELETE FROM rentabilidad_snapshots WHERE id = :id"), {'id': _snap_id})
+                                        _cd.commit()
+                                    st.success(f"Snapshot #{_snap_id} eliminado.")
+                                    st.rerun()
+                                except Exception as _ed:
+                                    st.error(f"Error: {_ed}")
+
+
     elif "Informe 2" in informe_sel:
         st.markdown("### 📉 Informe de Desviación")
         st.markdown(f"<div class='info-box'>Período: <b>{f_inicio}</b> → <b>{f_fin}</b> · Local: <b>{f_local}</b><br>Consumo teórico = ventas × CantReal. Comprado real = cant_conv de facturas. Variación % = (Comprado - Teórico) / Teórico × 100.</div>", unsafe_allow_html=True)
