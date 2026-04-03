@@ -881,10 +881,12 @@ def calcular_costo_platos(fecha_i, fecha_f, local):
     ($/g para carnes/verduras, $/un para panes, etc.), que coincide con cant_real/cant_efic.
     """
     # MUC ponderado del período — promedio ponderado por gasto.
-    # Fallback al último precio histórico si no hay compras en el período.
+    # Fallback al último precio histórico (global) si no hay compras en el período para ese local.
+    _filtro_local_precio = f"AND UPPER(local) = UPPER('{local}')" if local != "Todos" else ""
+
     precio_sql = f"""
         SELECT sku, precio_unitario FROM (
-            -- Precio ponderado del período (directo)
+            -- Precio ponderado del período (directo, por local)
             SELECT sku,
                    SUM(costo_realfinal) / NULLIF(SUM(cant_conv * NULLIF(formato,0)), 0) AS precio_unitario,
                    1 AS prioridad
@@ -892,11 +894,12 @@ def calcular_costo_platos(fecha_i, fecha_f, local):
             WHERE cant_conv > 0 AND costo_realfinal > 0 AND formato > 0
               AND fecha_dte::date BETWEEN '{fecha_i}' AND '{fecha_f}'
               AND sku IN (SELECT DISTINCT sku_ingrediente FROM recetas WHERE sku_ingrediente IS NOT NULL)
+              {_filtro_local_precio}
             GROUP BY sku
 
             UNION ALL
 
-            -- Precio ponderado del período (via equivalencia)
+            -- Precio ponderado del período (via equivalencia, por local)
             SELECT e.sku_receta AS sku,
                    SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv * NULLIF(c.formato,0)), 0) AS precio_unitario,
                    2 AS prioridad
@@ -905,11 +908,12 @@ def calcular_costo_platos(fecha_i, fecha_f, local):
             WHERE c.cant_conv > 0 AND c.costo_realfinal > 0 AND c.formato > 0
               AND c.fecha_dte::date BETWEEN '{fecha_i}' AND '{fecha_f}'
               AND e.sku_receta IN (SELECT DISTINCT sku_ingrediente FROM recetas WHERE sku_ingrediente IS NOT NULL)
+              {_filtro_local_precio.replace('local', 'c.local')}
             GROUP BY e.sku_receta
 
             UNION ALL
 
-            -- Fallback: último precio histórico (directo)
+            -- Fallback: último precio histórico (directo, global)
             SELECT sku, precio_unitario, 3 AS prioridad FROM (
                 SELECT DISTINCT ON (sku) sku,
                        costo_realfinal / NULLIF(cant_conv * NULLIF(formato,0), 0) AS precio_unitario
@@ -921,7 +925,7 @@ def calcular_costo_platos(fecha_i, fecha_f, local):
 
             UNION ALL
 
-            -- Fallback: último precio histórico (via equivalencia)
+            -- Fallback: último precio histórico (via equivalencia, global)
             SELECT sku, precio_unitario, 4 AS prioridad FROM (
                 SELECT DISTINCT ON (e.sku_receta) e.sku_receta AS sku,
                        c.costo_realfinal / NULLIF(c.cant_conv * NULLIF(c.formato,0), 0) AS precio_unitario
@@ -5634,46 +5638,68 @@ elif modulo.startswith("📊"):
                                                placeholder='ej: Cierre Marzo, revisión precios, etc.')
                 with _sn2:
                     st.markdown("<br>", unsafe_allow_html=True)
-                    _save_snap = st.button("💾 Guardar snapshot completo", key='snap_save', type='primary')
+                    _save_snap = st.button("💾 Guardar snapshot por local", key='snap_save', type='primary')
 
                 if _save_snap:
                     try:
-                        _eng_sn = get_engine()
-                        _snap_rows = []
-                        for _, _sr in _df_inf1_view.iterrows():
-                            _snap_rows.append({
-                                'periodo_inicio': str(fi_),
-                                'periodo_fin':    str(ff_),
-                                'local':          str(local_),
-                                'sku_producto':   str(_sr.get('sku_producto','')),
-                                'nombre_producto':str(_sr.get('nombre_producto','')),
-                                'categoria_menu': str(_sr.get('categoria_menu','')),
-                                'cant':           float(_sr.get('cant', 0) or 0),
-                                'venta':          float(_sr.get('venta', 0) or 0),
-                                'cmv_base':       float(_sr.get('cmv_base', 0) or 0),
-                                'cmv_opciones':   float(_sr.get('cmv_opciones', 0) or 0),
-                                'cmv_unitario':   float(_sr.get('cmv_unitario', 0) or 0),
-                                'cmv_total':      float(_sr.get('cmv_total', 0) or 0),
-                                'cmv_pct':        float(_sr.get('cmv_pct', 0) or 0),
-                                'mc_unitario':    float(_sr.get('mc_unitario', 0) or 0),
-                                'mc_total':       float(_sr.get('mc_total', 0) or 0),
-                                'margen_pct':     float(_sr.get('margen_pct', 0) or 0),
-                                'cuadrante':      str(_sr.get('cuadrante', '') or ''),
-                                'nota':           _snap_nota or None,
-                            })
-                        with _eng_sn.connect() as _conn_sn:
-                            _conn_sn.execute(text("""
-                                INSERT INTO rentabilidad_snapshots
-                                    (periodo_inicio, periodo_fin, local, sku_producto, nombre_producto,
-                                     categoria_menu, cant, venta, cmv_base, cmv_opciones, cmv_unitario,
-                                     cmv_total, cmv_pct, mc_unitario, mc_total, margen_pct, cuadrante, nota)
-                                VALUES
-                                    (:periodo_inicio, :periodo_fin, :local, :sku_producto, :nombre_producto,
-                                     :categoria_menu, :cant, :venta, :cmv_base, :cmv_opciones, :cmv_unitario,
-                                     :cmv_total, :cmv_pct, :mc_unitario, :mc_total, :margen_pct, :cuadrante, :nota)
-                            """), _snap_rows)
-                            _conn_sn.commit()
-                        st.success(f"✅ Snapshot guardado — {len(_snap_rows)} platos · {fi_} → {ff_} · {local_}")
+                        _eng_sn   = get_engine()
+                        _locales_sn = get_locales()
+                        _snap_rows  = []
+                        _progress   = st.progress(0, text="Calculando por local...")
+
+                        for _li, _loc in enumerate(_locales_sn):
+                            _progress.progress((_li + 1) / len(_locales_sn), text=f"Calculando {_loc}...")
+                            _df_loc = informe_rentabilidad(fi_, ff_, _loc)
+                            if _df_loc.empty:
+                                continue
+                            # Apply same category whitelist
+                            if _cats_sel:
+                                _df_loc = _df_loc[_df_loc['categoria_menu'].isin(_cats_sel)]
+                            for _, _sr in _df_loc.iterrows():
+                                _snap_rows.append({
+                                    'periodo_inicio': str(fi_),
+                                    'periodo_fin':    str(ff_),
+                                    'local':          _loc,
+                                    'sku_producto':   str(_sr.get('sku_producto','')),
+                                    'nombre_producto':str(_sr.get('nombre_producto','')),
+                                    'categoria_menu': str(_sr.get('categoria_menu','')),
+                                    'cant':           float(_sr.get('cant', 0) or 0),
+                                    'venta':          float(_sr.get('venta', 0) or 0),
+                                    'cmv_base':       float(_sr.get('cmv_base', 0) or 0),
+                                    'cmv_opciones':   float(_sr.get('cmv_opciones', 0) or 0),
+                                    'cmv_unitario':   float(_sr.get('cmv_unitario', 0) or 0),
+                                    'cmv_total':      float(_sr.get('cmv_total', 0) or 0),
+                                    'cmv_pct':        float(_sr.get('cmv_pct', 0) or 0),
+                                    'mc_unitario':    float(_sr.get('mc_unitario', 0) or 0),
+                                    'mc_total':       float(_sr.get('mc_total', 0) or 0),
+                                    'margen_pct':     float(_sr.get('margen_pct', 0) or 0),
+                                    'cuadrante':      str(_sr.get('cuadrante', '') or ''),
+                                    'nota':           _snap_nota or None,
+                                })
+
+                        _progress.empty()
+
+                        if _snap_rows:
+                            with _eng_sn.connect() as _conn_sn:
+                                # Delete existing rows for the same period before inserting
+                                _conn_sn.execute(text("""
+                                    DELETE FROM rentabilidad_snapshots
+                                    WHERE periodo_inicio = :i AND periodo_fin = :f
+                                """), {'i': str(fi_), 'f': str(ff_)})
+                                _conn_sn.execute(text("""
+                                    INSERT INTO rentabilidad_snapshots
+                                        (periodo_inicio, periodo_fin, local, sku_producto, nombre_producto,
+                                         categoria_menu, cant, venta, cmv_base, cmv_opciones, cmv_unitario,
+                                         cmv_total, cmv_pct, mc_unitario, mc_total, margen_pct, cuadrante, nota)
+                                    VALUES
+                                        (:periodo_inicio, :periodo_fin, :local, :sku_producto, :nombre_producto,
+                                         :categoria_menu, :cant, :venta, :cmv_base, :cmv_opciones, :cmv_unitario,
+                                         :cmv_total, :cmv_pct, :mc_unitario, :mc_total, :margen_pct, :cuadrante, :nota)
+                                """), _snap_rows)
+                                _conn_sn.commit()
+                            st.success(f"✅ Snapshot guardado — {len(_snap_rows)} filas · {len(_locales_sn)} locales · {fi_} → {ff_}")
+                        else:
+                            st.warning("Sin datos para guardar.")
                     except Exception as _esn:
                         st.error(f"Error al guardar snapshot: {_esn}")
 
