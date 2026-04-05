@@ -8156,57 +8156,78 @@ elif modulo.startswith("📊"):
                 if not df_uso.empty:
                     _uso_loc = filt(df_uso)
                     _ckr_loc = filt(df_ckr)
+                    _ini_loc = filt(df_ini)
+                    _fin_loc = filt(df_fin)
+                    _nr_loc  = filt(df_nr)
 
                     if not _uso_loc.empty:
-                        # Only products defined in cat_labels
                         _prods_control = [p for prods in cat_labels.values() for p in prods]
 
-                        _uso_loc['kg'] = pd.to_numeric(_uso_loc['kg'], errors='coerce').fillna(0)
-                        _uso_agg = _uso_loc.groupby('producto_control')['kg'].sum().reset_index()
-                        _uso_agg.columns = ['producto_control', 'uso_real']
-                        _uso_agg = _uso_agg[_uso_agg['producto_control'].isin(_prods_control)]
+                        def _getkg_d(df, prod):
+                            if df is None or df.empty or 'producto_control' not in df.columns: return 0.0
+                            r = df[df['producto_control'].str.upper().str.strip() == prod.upper().strip()]
+                            return float(r['kg'].sum()) if not r.empty else 0.0
 
-                        if not _ckr_loc.empty:
-                            _ckr_loc['kg'] = pd.to_numeric(_ckr_loc['kg'], errors='coerce').fillna(0)
-                            _ckr_agg = _ckr_loc.groupby('producto_control')['kg'].sum().reset_index()
-                            _ckr_agg.columns = ['producto_control', 'comprado']
-                            _ckr_agg = _ckr_agg[_ckr_agg['producto_control'].isin(_prods_control)]
+                        _desv_rows = []
+                        for _prod in _prods_control:
+                            _ini_kg  = _getkg_d(_ini_loc, _prod)
+                            _fin_kg  = _getkg_d(_fin_loc, _prod)
+                            _uso_kg  = _getkg_d(_uso_loc, _prod)
+                            _nr_kg   = _getkg_d(_nr_loc,  _prod)
+                            _comp_kg = _getkg_d(_ckr_loc, _prod)
+
+                            if _comp_kg == 0:
+                                _comp_kg = max(0.0, _fin_kg - _ini_kg + _uso_kg - _nr_kg)
+
+                            _real_ut = _ini_kg + _comp_kg + _nr_kg - _fin_kg
+                            _desv_kg = _real_ut - _uso_kg
+                            _desv_pct = (_desv_kg / _uso_kg * 100) if _uso_kg > 0 else 0.0
+
+                            if _ini_kg == 0 and _fin_kg == 0 and _uso_kg == 0 and _comp_kg == 0:
+                                continue
+                            _desv_rows.append({
+                                'producto_control': _prod,
+                                'uso_real': _uso_kg,
+                                'comprado': _comp_kg,
+                                'real_ut':  _real_ut,
+                                'desviacion_kg':  round(_desv_kg, 2),
+                                'desviacion_pct': round(_desv_pct, 1),
+                            })
+
+                        if not _desv_rows:
+                            st.info("Sin datos de productos de control para este local.")
                         else:
-                            _ckr_agg = pd.DataFrame(columns=['producto_control','comprado'])
+                            _desv_df = pd.DataFrame(_desv_rows)
+                            _desv_df = _desv_df.reindex(_desv_df['desviacion_pct'].abs().sort_values(ascending=False).index)
+                            _desv_top = _desv_df.head(15).reset_index(drop=True)
 
-                        _desv = pd.merge(_uso_agg, _ckr_agg, on='producto_control', how='outer').fillna(0)
-                        _desv = _desv[_desv['uso_real'] > 0]
-                        _desv['desviacion_pct'] = ((_desv['comprado'] - _desv['uso_real']) / _desv['uso_real'] * 100).round(1)
-                        _desv['desviacion_kg']  = (_desv['comprado'] - _desv['uso_real']).round(2)
-                        _desv = _desv.reindex(_desv['desviacion_pct'].abs().sort_values(ascending=False).index)
-                        _desv_top = _desv.head(15).reset_index(drop=True)
-
-                        _hs_d = 'padding:7px 10px;font-size:0.66rem;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
-                        _rows_d = ''
-                        for _, _dr in _desv_top.iterrows():
-                            _pct = float(_dr['desviacion_pct'])
-                            _alerta = _pct > 10 or _pct < -10
-                            _pc = '#e84545' if _pct > 10 else '#4caf7d' if _pct < -10 else '#aaa'
-                            _badge = ' <span style="background:#3a1a1a;color:#e84545;padding:1px 6px;border-radius:8px;font-size:0.68rem">⚠️ Revisar</span>' if _alerta else ''
-                            _rows_d += (
-                                f'<tr style="border-bottom:1px solid #1a1a1a">'
-                                f'<td style="padding:7px 10px;color:#e8e4de;font-size:0.8rem">{_dr["producto_control"]}{_badge}</td>'
-                                f'<td style="padding:7px 10px;text-align:right;color:#aaa">{_dr["uso_real"]:,.2f}</td>'
-                                f'<td style="padding:7px 10px;text-align:right;color:#aaa">{_dr["comprado"]:,.2f}</td>'
-                                f'<td style="padding:7px 10px;text-align:right;color:#aaa">{_dr["desviacion_kg"]:+,.2f}</td>'
-                                f'<td style="padding:7px 10px;text-align:right;color:{_pc};font-weight:600">{_pct:+.1f}%</td>'
-                                f'</tr>'
+                            _hs_d = 'padding:7px 10px;font-size:0.66rem;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
+                            _rows_d = ''
+                            for _, _dr in _desv_top.iterrows():
+                                _pct = float(_dr['desviacion_pct'])
+                                _alerta = abs(_pct) > 10
+                                _pc = '#e84545' if _pct > 10 else '#4caf7d' if _pct < -10 else '#aaa'
+                                _badge = ' <span style="background:#3a1a1a;color:#e84545;padding:1px 6px;border-radius:8px;font-size:0.68rem">⚠️ Revisar</span>' if _alerta else ''
+                                _rows_d += (
+                                    f'<tr style="border-bottom:1px solid #1a1a1a">'
+                                    f'<td style="padding:7px 10px;color:#e8e4de;font-size:0.8rem">{_dr["producto_control"]}{_badge}</td>'
+                                    f'<td style="padding:7px 10px;text-align:right;color:#aaa">{_dr["uso_real"]:,.2f}</td>'
+                                    f'<td style="padding:7px 10px;text-align:right;color:#aaa">{_dr["comprado"]:,.2f}</td>'
+                                    f'<td style="padding:7px 10px;text-align:right;color:#aaa">{_dr["real_ut"]:,.2f}</td>'
+                                    f'<td style="padding:7px 10px;text-align:right;color:#aaa">{_dr["desviacion_kg"]:+,.2f}</td>'
+                                    f'<td style="padding:7px 10px;text-align:right;color:{_pc};font-weight:600">{_pct:+.1f}%</td>'
+                                    f'</tr>'
+                                )
+                            st.markdown(
+                                '<div style="overflow-x:auto;border-radius:10px;border:1px solid #1e1e1e;background:#0d0d0d">'
+                                '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
+                                '<thead><tr style="background:#111">'
+                                + ''.join([f'<th style="{_hs_d};text-align:{"left" if i==0 else "right"}">{h}</th>'
+                                           for i, h in enumerate(['Producto','Uso Receta','Comprado','Real Utilizado','Δ kg','Δ %'])])
+                                + f'</tr></thead><tbody>{_rows_d}</tbody></table></div>',
+                                unsafe_allow_html=True
                             )
-                        st.markdown(
-                            '<div style="overflow-x:auto;border-radius:10px;border:1px solid #1e1e1e;background:#0d0d0d">'
-                            '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
-                            '<thead><tr style="background:#111">'
-                            + ''.join([f'<th style="{_hs_d};text-align:{"left" if i==0 else "right"}">{h}</th>'
-                                       for i, h in enumerate(['Producto','Uso Real (kg)','Comprado (kg)','Δ kg','Δ %'])])
-                            + f'</tr></thead><tbody>{_rows_d}</tbody></table></div>',
-                            unsafe_allow_html=True
-                        )
-                        st.caption("⚠️ Alerta: desviación > ±10%")
+                            st.caption("⚠️ Alerta: desviación > ±10% · Real Utilizado = Inv.Ini + Compras + No Reg - Inv.Fin")
                     else:
                         st.info("Sin datos de uso para este local.")
                 else:
