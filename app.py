@@ -5904,11 +5904,19 @@ elif modulo.startswith("📊"):
             st.markdown("### 📑 Informe Ejecutivo de Rentabilidad")
 
             # ── Grupos predefinidos ───────────────────────────────
+            _EXCLUIR_MATRIZ_GLOBAL = [
+                'Descorche',
+                'Cerveza Cristal Lata 470cc (Produccion)',
+                'Copa Espumante',
+                "Jackdaniel's Honey ML (Produccion)",
+            ]
+            _EXCLUIR_NINOS_CATS = ['Ninos']
+
             _GRUPOS_EXEC = {
                 "🍽️ Food": {
                     "cats": ["Para Compartir","Sandwich Clasicos","Platos Alemanes","Platos Clasicos",
                              "Hot Dog","Ave Clasica","Ensaladas Y Otros","Ninos","Acompañamientos","Agregados"],
-                    "excluir_matriz": ["Acompañamientos","Agregados"]
+                    "excluir_matriz": ["Acompañamientos","Agregados","Ninos"]
                 },
                 "🍷 Bar": {
                     "cats": ["Vinos","Cervezas","Espumantes","Piscos","Ron","Tequila",
@@ -5923,9 +5931,10 @@ elif modulo.startswith("📊"):
                     "cats": ["Postres"],
                     "excluir_matriz": []
                 },
-                "🎁 Otros": {
-                    "cats": ["Cortesia","Seleccionados P"],
-                    "excluir_matriz": []
+                "🔴 Venta 0": {
+                    "cats": [],   # populated dynamically
+                    "excluir_matriz": [],
+                    "venta_cero": True
                 },
             }
 
@@ -6014,25 +6023,54 @@ elif modulo.startswith("📊"):
                     }
                     _hs_me = 'padding:7px 10px;font-size:0.66rem;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
 
-                    def _render_grupo(df_g, df_b, grupo_cfg, df_rec):
+                    def _render_grupo(df_g, df_b, grupo_cfg, df_rec, vt_total, mct_total, cmvp_total, mg_total):
                         """Render full executive report for one group."""
                         cats_excluir = grupo_cfg.get('excluir_matriz', [])
+                        es_venta_cero = grupo_cfg.get('venta_cero', False)
 
-                        # KPIs del grupo (incluye Acompañamientos/Agregados en totales)
+                        # KPIs del grupo
                         _vt   = df_g['venta'].sum()
                         _cmvt = df_g['cmv_total'].sum()
                         _mct  = df_g['mc_total'].sum()
                         _mg   = _mct / _vt * 100 if _vt > 0 else 0
                         _cmvp = _cmvt / _vt * 100 if _vt > 0 else 0
                         _cant_t = df_g['cant'].sum()
-                        _mc_pax = _mct / _cant_t if _cant_t > 0 else 0
 
-                        _k1,_k2,_k3,_k4,_k5 = st.columns(5)
-                        _k1.metric("Venta", f"${_vt:,.0f}")
-                        _k2.metric("Food Cost %", f"{_cmvp:.1f}%")
-                        _k3.metric("Margen %", f"{_mg:.1f}%")
-                        _k4.metric("MC Total", f"${_mct:,.0f}")
-                        _k5.metric("MC / Cubierto", f"${_mc_pax:,.0f}")
+                        # Participaciones vs total
+                        _part_v  = _vt  / vt_total  * 100 if vt_total  > 0 else 0
+                        _part_mc = _mct / mct_total * 100 if mct_total > 0 else 0
+                        _delta_cmvp = _cmvp - cmvp_total
+                        _delta_mg   = _mg   - mg_total
+
+                        if es_venta_cero:
+                            # Special KPIs for Venta 0 tab
+                            _costo_total = df_g['cmv_total'].sum()
+                            _part_costo  = _costo_total / cmvp_total * 100 if cmvp_total > 0 else 0
+                            _k1,_k2,_k3,_k4 = st.columns(4)
+                            _k1.metric("Productos", len(df_g))
+                            _k2.metric("Costo Total", f"${_costo_total:,.0f}")
+                            _k3.metric("% sobre costo total red", f"{_costo_total/vt_total*100:.1f}%" if vt_total > 0 else "—")
+                            _k4.metric("Platos sin receta (costo=0)", int((df_g['cmv_total'] == 0).sum()))
+                            return
+
+                        # ── KPIs totales (siempre visibles) ──────────
+                        st.markdown('<div style="font-size:0.72rem;color:#555;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:4px">Red completa</div>', unsafe_allow_html=True)
+                        _tk1,_tk2,_tk3,_tk4 = st.columns(4)
+                        _tk1.metric("Venta Total Red", f"${vt_total:,.0f}")
+                        _tk2.metric("MC Total Red",    f"${mct_total:,.0f}")
+                        _tk3.metric("Margen % Red",    f"{mg_total:.1f}%")
+                        _tk4.metric("Food Cost % Red", f"{cmvp_total:.1f}%")
+
+                        st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+
+                        # ── KPIs del grupo con participaciones ────────
+                        st.markdown('<div style="font-size:0.72rem;color:#d4a853;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:4px">Este grupo</div>', unsafe_allow_html=True)
+                        _gk1,_gk2,_gk3,_gk4 = st.columns(4)
+                        _gk1.metric("Venta",      f"${_vt:,.0f}",   delta=f"{_part_v:.1f}% del total")
+                        _gk2.metric("MC Total",   f"${_mct:,.0f}",  delta=f"{_part_mc:.1f}% del total")
+                        _gk3.metric("Margen %",   f"{_mg:.1f}%",    delta=f"{_delta_mg:+.1f}pp vs total")
+                        _gk4.metric("Food Cost %",f"{_cmvp:.1f}%",  delta=f"{_delta_cmvp:+.1f}pp vs total",
+                                    delta_color="inverse")
 
                         if not df_b.empty:
                             _vt_b = df_b['venta'].sum()
@@ -6048,22 +6086,27 @@ elif modulo.startswith("📊"):
                                 f'</div>', unsafe_allow_html=True
                             )
 
-                        # Matriz de ingeniería (excluye complementos)
+                        # Matriz de ingeniería
                         st.markdown("#### 🔲 Ingeniería de Menú")
-                        df_matriz = df_g[~df_g['categoria_menu'].isin(cats_excluir)].copy()
+                        # Exclude: category exclusions + global product exclusions + venta 0
+                        df_matriz = df_g[
+                            (~df_g['categoria_menu'].isin(cats_excluir)) &
+                            (~df_g['nombre_producto'].isin(_EXCLUIR_MATRIZ_GLOBAL)) &
+                            (df_g['venta'] > 0)
+                        ].copy()
 
-                        if cats_excluir:
-                            st.caption(f"⚠️ Excluidos de la matriz (son complementos): {', '.join(cats_excluir)}")
+                        excluidos_info = []
+                        if cats_excluir: excluidos_info.append(f"categorías: {', '.join(cats_excluir)}")
+                        excluidos_info.append("venta $0")
+                        excluidos_info.append("productos especiales")
+                        st.caption(f"Excluidos: {' · '.join(excluidos_info)}")
 
                         if df_matriz.empty:
                             st.info("Sin platos para clasificar.")
                             return
 
-                        _n_pl = len(df_matriz)
-                        _mg_mat = _mct / _vt * 100 if _vt > 0 else 0
                         _vt_mean = df_matriz['venta'].mean()
                         _mg_mean = df_matriz['margen_pct'].mean()
-
                         st.caption(f"Umbral margen: **{_mg_mean:.1f}%** · Umbral venta: **${_vt_mean:,.0f}**")
 
                         df_matriz['precio_venta'] = df_matriz.apply(lambda r: r['venta']/r['cant'] if r['cant']>0 else 0, axis=1)
@@ -6170,6 +6213,13 @@ elif modulo.startswith("📊"):
                                 f'</div>', unsafe_allow_html=True
                             )
 
+                    # ── Totales globales para KPIs ────────────────
+                    _vt_total   = _df_ex_full['venta'].sum()
+                    _mct_total  = _df_ex_full['mc_total'].sum()
+                    _cmvt_total = _df_ex_full['cmv_total'].sum()
+                    _cmvp_total = _cmvt_total / _vt_total * 100 if _vt_total > 0 else 0
+                    _mg_total   = _mct_total / _vt_total * 100 if _vt_total > 0 else 0
+
                     # ── Render tabs por grupo ─────────────────────
                     _grupo_names = list(_GRUPOS_EXEC.keys())
                     _grupo_tabs  = st.tabs(_grupo_names)
@@ -6178,15 +6228,22 @@ elif modulo.startswith("📊"):
                         _gname = _grupo_names[_gti]
                         _gcfg  = _GRUPOS_EXEC[_gname]
                         _gcats = _gcfg['cats']
+                        _es_v0 = _gcfg.get('venta_cero', False)
 
                         with _gtab:
-                            _df_g = _df_ex_full[_df_ex_full['categoria_menu'].isin(_gcats)].copy()
+                            if _es_v0:
+                                # Venta 0 tab: products with venta=0
+                                _df_g = _df_ex_full[_df_ex_full['venta'] == 0].copy()
+                            else:
+                                _df_g = _df_ex_full[_df_ex_full['categoria_menu'].isin(_gcats)].copy()
+
                             _df_b = _df_ex_b_full[_df_ex_b_full['sku_producto'].isin(_df_g['sku_producto'].tolist())].copy() if not _df_ex_b_full.empty else pd.DataFrame()
 
                             if _df_g.empty:
                                 st.info(f"Sin datos para {_gname} en este período.")
                             else:
-                                _render_grupo(_df_g, _df_b, _gcfg, _df_rec_sens)
+                                _render_grupo(_df_g, _df_b, _gcfg, _df_rec_sens,
+                                              _vt_total, _mct_total, _cmvp_total, _mg_total)
 
 
 
