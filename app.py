@@ -9995,15 +9995,74 @@ elif modulo.startswith("📋 Notas de Crédito"):
             _nc_local = _user_local_nc
             st.markdown(f"**Local:** `{_nc_local}`")
 
+        # ── Cargar catálogo de proveedores y productos ────────
+        _df_provs = run_query("""
+            SELECT DISTINCT rut_proveedor, nombre_proveedor
+            FROM compras
+            WHERE rut_proveedor IS NOT NULL AND nombre_proveedor IS NOT NULL
+            ORDER BY nombre_proveedor
+        """)
+        _df_prods_nc = run_query("""
+            SELECT DISTINCT nombre_producto, sku
+            FROM compras
+            WHERE nombre_producto IS NOT NULL AND sku IS NOT NULL
+              AND subcat NOT IN ('ADMINISTRACION','Administración')
+            ORDER BY nombre_producto
+        """)
+
         _nc1, _nc2 = st.columns(2)
         with _nc1:
-            _nc_folio     = st.text_input("Folio factura original", key="nc_folio", placeholder="Ej: 12345")
-            _nc_rut       = st.text_input("RUT proveedor", key="nc_rut", placeholder="Ej: 76.123.456-7")
-            _nc_prov      = st.text_input("Nombre proveedor", key="nc_prov")
+            _nc_folio = st.text_input("Folio factura original", key="nc_folio", placeholder="Ej: 12345")
+
+            # Búsqueda proveedor por nombre o RUT (solo números)
+            _busq_prov = st.text_input("Buscar proveedor (nombre o RUT sin puntos/guión)", key="nc_busq_prov", placeholder="Ej: sanopan o 76123456")
+            if not _df_provs.empty and _busq_prov.strip():
+                _busq_norm = ''.join(filter(str.isdigit, _busq_prov))
+                if _busq_norm:
+                    # Search by numeric RUT
+                    _mask_prov = _df_provs['rut_proveedor'].astype(str).apply(
+                        lambda r: _busq_norm in ''.join(filter(str.isdigit, r))
+                    )
+                else:
+                    # Search by name
+                    _mask_prov = _df_provs['nombre_proveedor'].str.upper().str.contains(
+                        _busq_prov.strip().upper(), na=False
+                    )
+                _df_prov_fil = _df_provs[_mask_prov]
+            else:
+                _df_prov_fil = _df_provs
+
+            if not _df_prov_fil.empty:
+                _prov_opts = [f"{r['nombre_proveedor']} | {r['rut_proveedor']}" for _, r in _df_prov_fil.iterrows()]
+                _prov_sel  = st.selectbox("Proveedor", _prov_opts, key="nc_prov_sel")
+                _nc_prov   = _prov_sel.split(" | ")[0] if _prov_sel else ""
+                _nc_rut    = _prov_sel.split(" | ")[1] if _prov_sel and " | " in _prov_sel else ""
+            else:
+                st.caption("Sin resultados.")
+                _nc_prov, _nc_rut = "", ""
+
             _nc_fecha_dte = st.date_input("Fecha factura original", key="nc_fecha_dte", value=None)
+
         with _nc2:
-            _nc_prod  = st.text_input("Producto / descripción", key="nc_prod")
-            _nc_sku   = st.text_input("SKU (opcional)", key="nc_sku", placeholder="Ej: AL-AF-004")
+            # Búsqueda producto
+            _busq_prod = st.text_input("Buscar producto", key="nc_busq_prod", placeholder="Ej: plateada")
+            if not _df_prods_nc.empty and _busq_prod.strip():
+                _mask_prod = _df_prods_nc['nombre_producto'].str.upper().str.contains(
+                    _busq_prod.strip().upper(), na=False
+                )
+                _df_prod_fil = _df_prods_nc[_mask_prod]
+            else:
+                _df_prod_fil = _df_prods_nc
+
+            if not _df_prod_fil.empty:
+                _prod_opts = [f"{r['nombre_producto']} | {r['sku']}" for _, r in _df_prod_fil.iterrows()]
+                _prod_sel  = st.selectbox("Producto", _prod_opts, key="nc_prod_sel")
+                _nc_prod   = _prod_sel.split(" | ")[0] if _prod_sel else ""
+                _nc_sku    = _prod_sel.split(" | ")[1] if _prod_sel and " | " in _prod_sel else ""
+            else:
+                st.caption("Sin resultados.")
+                _nc_prod, _nc_sku = "", ""
+
             _nc_monto = st.number_input("Monto NC ($)", min_value=0.0, step=1000.0, key="nc_monto")
             _nc_periodo = st.text_input("Período del informe", key="nc_periodo",
                                          placeholder="Ej: 1-7 Abr 2026",
