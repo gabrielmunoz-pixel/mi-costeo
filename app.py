@@ -8296,50 +8296,24 @@ elif modulo.startswith("📊"):
                 """
                 _df_col_c = run_query(_q_col_c)
 
-                # Costo teórico por receta
-                _df_rec_col = get_recetas()
-                _df_precio_col = run_query(f"""
-                    SELECT sku, precio_unitario FROM (
-                        SELECT sku,
-                               SUM(costo_realfinal)/NULLIF(SUM(cant_conv*NULLIF(formato,0)),0) AS precio_unitario,
-                               1 AS p
-                        FROM compras
-                        WHERE cant_conv>0 AND costo_realfinal>0 AND formato>0
-                          AND fecha_dte::date BETWEEN '{_fi_ic}' AND '{_ff_ic}'
-                          AND sku IN (SELECT DISTINCT sku_ingrediente FROM recetas)
-                        GROUP BY sku
-                        UNION ALL
-                        SELECT sku, precio_unitario, 2 AS p FROM (
-                            SELECT DISTINCT ON (sku) sku,
-                                   costo_realfinal/NULLIF(cant_conv*NULLIF(formato,0),0) AS precio_unitario
-                            FROM compras WHERE cant_conv>0 AND costo_realfinal>0 AND formato>0
-                              AND sku IN (SELECT DISTINCT sku_ingrediente FROM recetas)
-                            ORDER BY sku, fecha_dte DESC
-                        ) fb
-                    ) x ORDER BY sku, p
-                """)
-                _precio_col_map = {}
-                if not _df_precio_col.empty:
-                    _precio_col_map = dict(_df_precio_col.drop_duplicates('sku').set_index('sku')['precio_unitario'])
+                # Costo teórico por receta — usar calcular_costo_platos que ya maneja PRO-
+                _df_costos_col = calcular_costo_platos(_fi_ic, _ff_ic, local_show)
+                _costos_col_map = {}
+                if not _df_costos_col.empty:
+                    _costos_col_map = dict(_df_costos_col.set_index('sku_producto')['cmv_base'])
 
                 if not _df_col_v.empty:
                     _df_col_v['cant_vendida'] = pd.to_numeric(_df_col_v['cant_vendida'], errors='coerce').fillna(0)
                     _col_rows = []
                     for _, _cv in _df_col_v.iterrows():
-                        _sku_c = str(_cv['sku_producto'])
+                        _sku_c  = str(_cv['sku_producto'])
                         _cant_c = float(_cv['cant_vendida'])
-                        _rec_c = _df_rec_col[_df_rec_col['codigo_venta'] == _sku_c] if not _df_rec_col.empty else pd.DataFrame()
-                        _costo_teo = 0.0
-                        if not _rec_c.empty:
-                            for _, _ri in _rec_c.iterrows():
-                                _cant_r = float(_ri.get('cant_real', 0) or 0)
-                                _precio_r = float(_precio_col_map.get(str(_ri.get('sku_ingrediente','')), 0) or 0)
-                                _costo_teo += _cant_r * _precio_r
+                        _costo_unit = float(_costos_col_map.get(_sku_c, 0) or 0)
                         _col_rows.append({
                             'SKU': _sku_c,
                             'Nombre': str(_cv['nombre'])[:40],
                             'Cantidad': int(_cant_c),
-                            'Costo por receta': _costo_teo * _cant_c,
+                            'Costo por receta': _costo_unit * _cant_c,
                         })
 
                     _df_col_out = pd.DataFrame(_col_rows)
