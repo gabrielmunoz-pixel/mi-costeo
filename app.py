@@ -8210,14 +8210,16 @@ elif modulo.startswith("📊"):
             # ── 2. NO VENDIBLES ───────────────────────────────
             with _v2:
                 _q_nv = f"""
-                    SELECT sku,
-                           MIN(nombre_producto) as nombre_producto,
-                           SUM(costo_realfinal) as total_compra
-                    FROM compras
-                    WHERE fecha_dte::date BETWEEN '{_fi_ic}' AND '{_ff_ic}'
-                      AND subcat = 'No Vendible'
-                      {_lf_ic}
-                    GROUP BY sku
+                    SELECT 
+                        c.sku,
+                        COALESCE(nvc.categoria, MIN(c.nombre_producto)) as nombre_producto,
+                        SUM(c.costo_realfinal) as total_compra
+                    FROM compras c
+                    LEFT JOIN no_vendibles_categorias nvc ON c.sku = nvc.sku
+                    WHERE c.fecha_dte::date BETWEEN '{_fi_ic}' AND '{_ff_ic}'
+                      AND c.subcat = 'No Vendible'
+                      {_lf_ic.replace('local', 'c.local')}
+                    GROUP BY c.sku, nvc.categoria
                     ORDER BY total_compra DESC
                 """
                 _df_nv = run_query(_q_nv)
@@ -8227,8 +8229,11 @@ elif modulo.startswith("📊"):
                     st.info("Sin compras No Vendible en el período.")
                 else:
                     _df_nv['total_compra'] = pd.to_numeric(_df_nv['total_compra'], errors='coerce').fillna(0)
-                    _df_nv['pct_venta'] = (_df_nv['total_compra'] / _vt_ic * 100).round(1) if _vt_ic > 0 else 0
-                    _total_nv = _df_nv['total_compra'].sum()
+                    # Group by categoria
+                    _df_nv_cat = _df_nv.groupby('nombre_producto')['total_compra'].sum().reset_index()
+                    _df_nv_cat = _df_nv_cat.sort_values('total_compra', ascending=False)
+                    _df_nv_cat['pct_venta'] = (_df_nv_cat['total_compra'] / _vt_ic * 100).round(1) if _vt_ic > 0 else 0
+                    _total_nv = _df_nv_cat['total_compra'].sum()
                     _pct_nv   = _total_nv / _vt_ic * 100 if _vt_ic > 0 else 0
 
                     _nv1, _nv2 = st.columns(2)
@@ -8237,10 +8242,9 @@ elif modulo.startswith("📊"):
 
                     _hs_nv = 'padding:7px 10px;font-size:0.66rem;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
                     _rows_nv = ''
-                    for _, _nr in _df_nv.iterrows():
+                    for _, _nr in _df_nv_cat.iterrows():
                         _rows_nv += (
                             f'<tr style="border-bottom:1px solid #1a1a1a">'
-                            f'<td style="padding:7px 10px;color:#666;font-family:monospace;font-size:0.72rem">{_nr["sku"]}</td>'
                             f'<td style="padding:7px 10px;color:#e8e4de;font-size:0.8rem">{_nr["nombre_producto"]}</td>'
                             f'<td style="padding:7px 10px;text-align:right;color:#d4a853;font-weight:600">${float(_nr["total_compra"]):,.0f}</td>'
                             f'<td style="padding:7px 10px;text-align:right;color:#888">{float(_nr["pct_venta"]):.1f}%</td>'
@@ -8248,7 +8252,7 @@ elif modulo.startswith("📊"):
                         )
                     _rows_nv += (
                         f'<tr style="border-top:2px solid #2a2a2a;background:#111">'
-                        f'<td colspan="2" style="padding:7px 10px;color:#e8e4de;font-weight:700">TOTAL</td>'
+                        f'<td style="padding:7px 10px;color:#e8e4de;font-weight:700">TOTAL</td>'
                         f'<td style="padding:7px 10px;text-align:right;color:#d4a853;font-weight:700">${_total_nv:,.0f}</td>'
                         f'<td style="padding:7px 10px;text-align:right;color:#d4a853;font-weight:700">{_pct_nv:.1f}%</td>'
                         f'</tr>'
@@ -8257,8 +8261,8 @@ elif modulo.startswith("📊"):
                         '<div style="overflow-x:auto;border-radius:10px;border:1px solid #1e1e1e;background:#0d0d0d">'
                         '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
                         '<thead><tr style="background:#111">'
-                        + ''.join([f'<th style="{_hs_nv};text-align:{"left" if i<2 else "right"}">{h}</th>'
-                                   for i, h in enumerate(['SKU','Producto','Total Compra','% Venta Total'])])
+                        + ''.join([f'<th style="{_hs_nv};text-align:{"left" if i==0 else "right"}">{h}</th>'
+                                   for i, h in enumerate(['Categoría','Total Compra','% Venta Total'])])
                         + f'</tr></thead><tbody>{_rows_nv}</tbody></table></div>',
                         unsafe_allow_html=True
                     )
