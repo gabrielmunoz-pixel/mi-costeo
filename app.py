@@ -80,10 +80,10 @@ _TODOS_MODULOS = [
 
 def _get_users():
     try:
-        df = run_query("SELECT * FROM app_usuarios ORDER BY username")
+        df = run_query("SELECT id, username, password_hash, permisos, local FROM app_usuarios ORDER BY username")
         return df
     except:
-        return pd.DataFrame(columns=["username","password_hash","permisos"])
+        return pd.DataFrame(columns=["id","username","password_hash","permisos","local"])
 
 def _ensure_users_table():
     engine = get_engine()
@@ -120,7 +120,7 @@ def _ensure_sessions_table():
     except Exception:
         pass
 
-def _create_session(username, role, permisos):
+def _create_session(username, role, permisos, local=None):
     """Crea sesión en BD y retorna token."""
     engine = get_engine()
     if engine is None: return None
@@ -128,22 +128,22 @@ def _create_session(username, role, permisos):
     try:
         with engine.connect() as conn:
             conn.execute(text(
-                "INSERT INTO app_sesiones (token, username, role, permisos, last_activity) "
-                "VALUES (:t, :u, :r, :p, NOW())"
-            ), {"t": token, "u": username, "r": role, "p": permisos})
+                "INSERT INTO app_sesiones (token, username, role, permisos, local, last_activity) "
+                "VALUES (:t, :u, :r, :p, :l, NOW())"
+            ), {"t": token, "u": username, "r": role, "p": permisos, "l": local})
             conn.commit()
         return token
     except Exception:
         return None
 
 def _validate_session(token):
-    """Valida token y actualiza actividad. Retorna (username, role, permisos) o None."""
+    """Valida token y actualiza actividad. Retorna (username, role, permisos, local) o None."""
     engine = get_engine()
     if engine is None or not token: return None
     try:
         with engine.connect() as conn:
             df = pd.read_sql(text(
-                "SELECT username, role, permisos, last_activity FROM app_sesiones WHERE token=:t"
+                "SELECT username, role, permisos, local, last_activity FROM app_sesiones WHERE token=:t"
             ), conn, params={"t": token})
             if df.empty: return None
             last = pd.to_datetime(df['last_activity'].iloc[0])
@@ -153,7 +153,8 @@ def _validate_session(token):
                 return None
             conn.execute(text("UPDATE app_sesiones SET last_activity=NOW() WHERE token=:t"), {"t": token})
             conn.commit()
-            return (df['username'].iloc[0], df['role'].iloc[0], df['permisos'].iloc[0])
+            _local = df['local'].iloc[0] if 'local' in df.columns else None
+            return (df['username'].iloc[0], df['role'].iloc[0], df['permisos'].iloc[0], _local)
     except Exception:
         return None
 
@@ -183,7 +184,7 @@ def _cleanup_expired_sessions():
 def _check_login(username, password):
     # Admin login: no requiere BD
     if username == ADMIN_USER and _hash_pw(password) == ADMIN_HASH:
-        return "admin"
+        return ("admin", None)
     # Usuarios normales: consulta BD con manejo de error explícito
     try:
         engine = get_engine()
@@ -191,11 +192,12 @@ def _check_login(username, password):
             return None
         with engine.connect() as conn:
             df = pd.read_sql(
-                text("SELECT password_hash, permisos FROM app_usuarios WHERE username=:u"),
+                text("SELECT password_hash, permisos, local FROM app_usuarios WHERE username=:u"),
                 conn, params={"u": username}
             )
         if not df.empty and df["password_hash"].iloc[0] == _hash_pw(password):
-            return df["permisos"].iloc[0]
+            _local = df["local"].iloc[0] if "local" in df.columns else None
+            return (df["permisos"].iloc[0], _local)
     except Exception:
         pass
     return None
@@ -218,17 +220,18 @@ def _render_login():
         if st.button("Ingresar", use_container_width=True, type="primary"):
             result = _check_login(username, password)
             if result is not None:
+                permisos_raw, user_local = result
                 role = "admin" if username == ADMIN_USER else "user"
-                permisos = result if result != "admin" else "admin"
-                # Crear sesión persistente en BD
-                token = _create_session(username, role, permisos)
+                permisos = permisos_raw if permisos_raw != "admin" else "admin"
+                token = _create_session(username, role, permisos, local=user_local)
                 if token:
                     st.query_params["s"] = token
-                st.session_state["logged_in"] = True
-                st.session_state["current_user"] = username
-                st.session_state["user_role"] = role
-                st.session_state["user_permisos"] = permisos
-                st.session_state["session_token"] = token
+                st.session_state["logged_in"]      = True
+                st.session_state["current_user"]   = username
+                st.session_state["user_role"]      = role
+                st.session_state["user_permisos"]  = permisos
+                st.session_state["user_local"]     = user_local
+                st.session_state["session_token"]  = token
                 st.rerun()
             else:
                 st.error("Usuario o contraseña incorrectos.")
@@ -258,9 +261,9 @@ def _render_gestion_usuarios():
             st.info("No hay usuarios registrados.")
         else:
             for _, row in df_users.iterrows():
-                with st.expander(f"👤 {row['username']}"):
+                with st.expander(f"👤 {row['username']} {('· ' + str(row.get('local','')) ) if row.get('local') else ''}"):
                     permisos_act = row['permisos'] if row['permisos'] else ""
-                    opciones_mod = ["📦 Gestión de Datos", "📊 Informes"]
+                    opciones_mod = ["📦 Gestión de Datos", "📊 Informes", "📋 Notas de Crédito"]
                     sel = st.multiselect(
                         "Módulos habilitados",
                         opciones_mod,
@@ -268,6 +271,15 @@ def _render_gestion_usuarios():
                         key=f"perm_{row['username']}"
                     )
                     nuevos_permisos = ",".join(sel)
+
+                    # Local assignment
+                    _locales_adm = run_query("SELECT DISTINCT local FROM compras WHERE local IS NOT NULL ORDER BY local")
+                    _locales_adm_list = ["— Sin restricción —"] + (_locales_adm['local'].tolist() if not _locales_adm.empty else [])
+                    _local_actual = str(row.get('local') or '')
+                    _local_idx = _locales_adm_list.index(_local_actual) if _local_actual in _locales_adm_list else 0
+                    nuevo_local = st.selectbox("Local asignado", _locales_adm_list,
+                                               index=_local_idx, key=f"loc_{row['username']}")
+                    nuevo_local_val = None if nuevo_local == "— Sin restricción —" else nuevo_local
 
                     col_a, col_b, col_c = st.columns(3)
                     with col_a:
@@ -280,12 +292,12 @@ def _render_gestion_usuarios():
                                 with engine.connect() as conn:
                                     if nueva_pw.strip():
                                         conn.execute(text(
-                                            "UPDATE app_usuarios SET permisos=:p, password_hash=:h WHERE username=:u"),
-                                            {"p": nuevos_permisos, "h": _hash_pw(nueva_pw), "u": row["username"]})
+                                            "UPDATE app_usuarios SET permisos=:p, password_hash=:h, local=:l WHERE username=:u"),
+                                            {"p": nuevos_permisos, "h": _hash_pw(nueva_pw), "l": nuevo_local_val, "u": row["username"]})
                                     else:
                                         conn.execute(text(
-                                            "UPDATE app_usuarios SET permisos=:p WHERE username=:u"),
-                                            {"p": nuevos_permisos, "u": row["username"]})
+                                            "UPDATE app_usuarios SET permisos=:p, local=:l WHERE username=:u"),
+                                            {"p": nuevos_permisos, "l": nuevo_local_val, "u": row["username"]})
                                     conn.commit()
                                 st.success("✅ Guardado")
                             except Exception as e:
@@ -307,8 +319,12 @@ def _render_gestion_usuarios():
         st.markdown("#### Nuevo Usuario")
         nu_user = st.text_input("Usuario", key="nu_user")
         nu_pw   = st.text_input("Contraseña", type="password", key="nu_pw")
-        opciones_mod2 = ["📦 Gestión de Datos", "📊 Informes"]
+        opciones_mod2 = ["📦 Gestión de Datos", "📊 Informes", "📋 Notas de Crédito"]
         nu_perm = st.multiselect("Módulos habilitados", opciones_mod2, key="nu_perm")
+        _locales_nu = run_query("SELECT DISTINCT local FROM compras WHERE local IS NOT NULL ORDER BY local")
+        _locales_nu_list = ["— Sin restricción —"] + (_locales_nu['local'].tolist() if not _locales_nu.empty else [])
+        nu_local = st.selectbox("Local asignado", _locales_nu_list, key="nu_local")
+        nu_local_val = None if nu_local == "— Sin restricción —" else nu_local
         if st.button("➕ Crear Usuario", key="btn_crear_user"):
             if not nu_user.strip() or not nu_pw.strip():
                 st.warning("Completa usuario y contraseña.")
@@ -317,8 +333,8 @@ def _render_gestion_usuarios():
                     engine = get_engine()
                     with engine.connect() as conn:
                         conn.execute(text(
-                            "INSERT INTO app_usuarios (username, password_hash, permisos) VALUES (:u,:h,:p)"),
-                            {"u": nu_user.strip(), "h": _hash_pw(nu_pw), "p": ",".join(nu_perm)})
+                            "INSERT INTO app_usuarios (username, password_hash, permisos, local) VALUES (:u,:h,:p,:l)"),
+                            {"u": nu_user.strip(), "h": _hash_pw(nu_pw), "p": ",".join(nu_perm), "l": nu_local_val})
                         conn.commit()
                     st.success(f"✅ Usuario {nu_user} creado.")
                     st.rerun()
@@ -2325,10 +2341,11 @@ if not st.session_state.get("logged_in"):
     if _token_from_url:
         _sess = _validate_session(_token_from_url)
         if _sess:
-            st.session_state["logged_in"] = True
-            st.session_state["current_user"] = _sess[0]
-            st.session_state["user_role"] = _sess[1]
+            st.session_state["logged_in"]     = True
+            st.session_state["current_user"]  = _sess[0]
+            st.session_state["user_role"]     = _sess[1]
             st.session_state["user_permisos"] = _sess[2]
+            st.session_state["user_local"]    = _sess[3] if len(_sess) > 3 else None
             st.session_state["session_token"] = _token_from_url
         else:
             # Token expirado o inválido: limpiar URL
@@ -2373,6 +2390,8 @@ with st.sidebar:
         menu_items["📦 Gestión de Datos"] = []
     if _user_puede("📊 Informes"):
         menu_items["📊 Informes"] = ["Rentabilidad", "Desviación", "Variación Precio Compras", "Informe de Costos", "Auditor Categorías", "Tendencias Bar", "Cuentas Casa"]
+    if _is_admin or _user_puede("📋 Notas de Crédito"):
+        menu_items["📋 Notas de Crédito"] = []
     if _is_admin:
         menu_items["👥 Gestión de Usuarios"] = []
 
@@ -5909,6 +5928,7 @@ elif modulo.startswith("📊"):
                 'Cerveza Cristal Lata 470cc (Produccion)',
                 'Copa Espumante',
                 "Jackdaniel's Honey ML (Produccion)",
+                'Servicio de Cumpleaños',
             ]
             _EXCLUIR_NINOS_CATS = ['Ninos']
 
@@ -7829,6 +7849,16 @@ elif modulo.startswith("📊"):
                     'BAR':                ['SCHOP','JUGOS'],
                 }
 
+                # Cargar NCs pendientes del período (estado Pendiente o Emitida)
+                df_nc_periodo = run_query("""
+                    SELECT id, local, folio_factura, nombre_producto, sku,
+                           monto, estado, observacion, registrado_por, fecha_registro
+                    FROM notas_credito
+                    WHERE periodo = :p
+                      AND estado IN ('Pendiente', 'Emitida')
+                    ORDER BY local, nombre_producto
+                """, {'p': periodo_ic})
+
                 st.session_state['ic_data'] = {
                     'periodo': periodo_ic,
                     'locales': locales_sel,
@@ -7845,6 +7875,7 @@ elif modulo.startswith("📊"):
                     'fecha_f': fecha_ic_f,
                     'fecha_acum_i': fecha_acum_i,
                     'fecha_acum_f': fecha_acum_f,
+                    'df_nc': df_nc_periodo,
                 }
 
             st.success(f"✅ Datos cargados para {len(locales_sel)} local(es) — período {periodo_ic}")
@@ -7857,6 +7888,7 @@ elif modulo.startswith("📊"):
             df_bv  = d['df_bar_ven']
             df_nr  = d.get('df_no_reg', pd.DataFrame())
             df_ckr = d.get('df_compras_kg', pd.DataFrame())
+            df_nc  = d.get('df_nc', pd.DataFrame())
             cat_labels = d.get('cat_labels', {})
             df_ini = d['df_inv_ini']
             df_fin = d['df_inv_fin']
@@ -8120,6 +8152,16 @@ elif modulo.startswith("📊"):
                         if costo_u == 0:
                             costo_u = _getcosto(uso, prod)
 
+                        # Descontar NCs del período para este producto
+                        if not df_nc.empty:
+                            _nc_prod = df_nc[
+                                (df_nc['local'].str.upper().str.strip() == local_rpt.upper().strip()) &
+                                (df_nc['nombre_producto'].str.upper().str.strip() == prod.upper().strip())
+                            ]
+                            if not _nc_prod.empty:
+                                _nc_desc = float(_nc_prod['monto'].sum())
+                                costo_u  = max(0.0, costo_u - _nc_desc)
+
                         # Real Utilizado = Inv.Ini + Compras + No Reg - Inv.Fin
                         real_ut  = ini_kg + comp_kg + nr_kg - fin_kg
 
@@ -8199,6 +8241,44 @@ elif modulo.startswith("📊"):
                         f'</tr></thead><tbody>{ctrl_rows}</tbody></table></div></div>',
                         unsafe_allow_html=True)
 
+
+            # ── NOTAS DE CRÉDITO DEL PERÍODO ─────────────────
+            _nc_local_filt = df_nc[df_nc['local'].str.upper().str.strip() == local_show.upper().strip()].copy() if not df_nc.empty else pd.DataFrame()
+            _nc_total = float(_nc_local_filt['monto'].sum()) if not _nc_local_filt.empty else 0.0
+
+            if not _nc_local_filt.empty:
+                st.markdown(f"#### 📋 Notas de Crédito pendientes — {len(_nc_local_filt)} registro(s) · ${_nc_total:,.0f}")
+                _hs_nc = 'padding:6px 10px;font-size:0.66rem;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
+                _rows_nc = ''
+                for _, _ncr in _nc_local_filt.iterrows():
+                    _est_c = {'Pendiente':'#d4a853','Emitida':'#5b8dd9','Considerada':'#4caf7d'}.get(str(_ncr['estado']),'#888')
+                    _rows_nc += (
+                        f'<tr style="border-bottom:1px solid #1a1a1a">'
+                        f'<td style="padding:6px 10px;color:#666;font-family:monospace;font-size:0.72rem">{_ncr["folio_factura"]}</td>'
+                        f'<td style="padding:6px 10px;color:#e8e4de;font-size:0.8rem">{_ncr["nombre_producto"]}</td>'
+                        f'<td style="padding:6px 10px;color:#666;font-size:0.75rem">{_ncr["sku"] or "—"}</td>'
+                        f'<td style="padding:6px 10px;text-align:right;color:#e84545;font-weight:600">-${float(_ncr["monto"]):,.0f}</td>'
+                        f'<td style="padding:6px 10px;text-align:center"><span style="background:#111;color:{_est_c};padding:2px 8px;border-radius:8px;font-size:0.7rem;border:1px solid {_est_c}44">{_ncr["estado"]}</span></td>'
+                        f'<td style="padding:6px 10px;color:#555;font-size:0.72rem">{_ncr["registrado_por"] or "—"}</td>'
+                        f'</tr>'
+                    )
+                _rows_nc += (
+                    f'<tr style="border-top:2px solid #2a2a2a;background:#111">'
+                    f'<td colspan="3" style="padding:6px 10px;color:#e8e4de;font-weight:700">TOTAL NC A DESCONTAR</td>'
+                    f'<td style="padding:6px 10px;text-align:right;color:#e84545;font-weight:700">-${_nc_total:,.0f}</td>'
+                    f'<td colspan="2"></td>'
+                    f'</tr>'
+                )
+                st.markdown(
+                    '<div style="overflow-x:auto;border-radius:10px;border:1px solid #2a1a1a;background:#0d0d0d;margin-bottom:0.8rem">'
+                    '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
+                    '<thead><tr style="background:#1a0d0d">'
+                    + ''.join([f'<th style="{_hs_nc};text-align:{"right" if i==3 else "center" if i==4 else "left"}">{h}</th>'
+                               for i, h in enumerate(['Folio','Producto','SKU','Monto NC','Estado','Registrado por'])])
+                    + f'</tr></thead><tbody>{_rows_nc}</tbody></table></div>',
+                    unsafe_allow_html=True
+                )
+                st.caption("⚠️ Estas NCs se descuentan del costo en el período. Actualiza su estado en el módulo 📋 Notas de Crédito una vez emitida la NC formal.")
 
             # ── VISTAS ADICIONALES ────────────────────────────
             _fi_ic = d['fecha_i']
@@ -9879,6 +9959,167 @@ elif informe_sel == "CuentasCasa":
                         f'<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif">'
                         f'<thead><tr>{hdr4}</tr></thead><tbody>{rows4_html}</tbody></table></div>',
                         unsafe_allow_html=True)
+
+# ============================================================
+# MÓDULO: NOTAS DE CRÉDITO
+# ============================================================
+elif modulo.startswith("📋 Notas de Crédito"):
+    _is_admin_nc = st.session_state.get("user_role") == "admin"
+    _uname_nc    = st.session_state.get("current_user", "")
+
+    st.markdown("""
+    <div style="margin-bottom:1.5rem">
+        <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#555;margin-bottom:4px">Operaciones</div>
+        <div style="font-family:'DM Serif Display',serif;font-size:2rem;color:#f0ede8;letter-spacing:-0.02em;line-height:1.1">
+            📋 Notas de Crédito
+        </div>
+        <div style="font-size:0.8rem;color:#888;margin-top:4px">Registro · Seguimiento · Trazabilidad</div>
+        <div style="width:40px;height:2px;background:#d4a853;margin-top:8px;border-radius:2px"></div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    _nc_tab1, _nc_tab2 = st.tabs(["➕ Registrar NC", "📋 Historial"])
+
+    # ── Registrar NC ──────────────────────────────────────────
+    with _nc_tab1:
+        st.markdown("<div class='info-box'>Registra una nota de crédito pendiente de emisión. Se considerará automáticamente en el Informe de Costos del período correspondiente mientras el estado sea <b>Pendiente</b>.</div>", unsafe_allow_html=True)
+
+        _locales_nc = run_query("SELECT DISTINCT local FROM compras WHERE local IS NOT NULL ORDER BY local")
+        _locales_nc_list = _locales_nc['local'].tolist() if not _locales_nc.empty else []
+        _user_local_nc = st.session_state.get("user_local")
+
+        # Local: admin elige, usuario ve el suyo fijo
+        if _is_admin_nc or not _user_local_nc:
+            _nc_local = st.selectbox("Local", _locales_nc_list, key="nc_local")
+        else:
+            _nc_local = _user_local_nc
+            st.markdown(f"**Local:** `{_nc_local}`")
+
+        _nc1, _nc2 = st.columns(2)
+        with _nc1:
+            _nc_folio     = st.text_input("Folio factura original", key="nc_folio", placeholder="Ej: 12345")
+            _nc_rut       = st.text_input("RUT proveedor", key="nc_rut", placeholder="Ej: 76.123.456-7")
+            _nc_prov      = st.text_input("Nombre proveedor", key="nc_prov")
+            _nc_fecha_dte = st.date_input("Fecha factura original", key="nc_fecha_dte", value=None)
+        with _nc2:
+            _nc_prod  = st.text_input("Producto / descripción", key="nc_prod")
+            _nc_sku   = st.text_input("SKU (opcional)", key="nc_sku", placeholder="Ej: AL-AF-004")
+            _nc_monto = st.number_input("Monto NC ($)", min_value=0.0, step=1000.0, key="nc_monto")
+            _nc_periodo = st.text_input("Período del informe", key="nc_periodo",
+                                         placeholder="Ej: 1-7 Abr 2026",
+                                         help="Debe coincidir exactamente con el período del Informe de Costos")
+
+        _nc_obs = st.text_area("Observación", key="nc_obs", placeholder="Descripción del error / motivo de la NC")
+
+        if st.button("💾 Registrar Nota de Crédito", type="primary", key="btn_nc_reg"):
+            if not _nc_local or not _nc_folio or not _nc_monto or not _nc_prod:
+                st.error("Local, folio, producto y monto son obligatorios.")
+            else:
+                try:
+                    _eng_nc = get_engine()
+                    with _eng_nc.connect() as _conn_nc:
+                        _conn_nc.execute(text("""
+                            INSERT INTO notas_credito
+                                (local, folio_factura, rut_proveedor, nombre_proveedor,
+                                 nombre_producto, sku, monto, periodo, fecha_dte,
+                                 estado, observacion, registrado_por)
+                            VALUES
+                                (:local, :folio, :rut, :prov,
+                                 :prod, :sku, :monto, :periodo, :fecha_dte,
+                                 'Pendiente', :obs, :reg_por)
+                        """), {
+                            "local":    _nc_local,
+                            "folio":    _nc_folio.strip(),
+                            "rut":      _nc_rut.strip(),
+                            "prov":     _nc_prov.strip(),
+                            "prod":     _nc_prod.strip(),
+                            "sku":      _nc_sku.strip() or None,
+                            "monto":    _nc_monto,
+                            "periodo":  _nc_periodo.strip() or None,
+                            "fecha_dte": str(_nc_fecha_dte) if _nc_fecha_dte else None,
+                            "obs":      _nc_obs.strip() or None,
+                            "reg_por":  _uname_nc,
+                        })
+                        _conn_nc.commit()
+                    st.success("✅ Nota de crédito registrada.")
+                    st.rerun()
+                except Exception as _enc:
+                    st.error(f"Error: {_enc}")
+
+    # ── Historial ─────────────────────────────────────────────
+    with _nc_tab2:
+        _df_nc_hist = run_query("""
+            SELECT id, fecha_registro, local, folio_factura, nombre_proveedor,
+                   nombre_producto, sku, monto, periodo, fecha_dte,
+                   estado, observacion, registrado_por
+            FROM notas_credito
+            ORDER BY fecha_registro DESC
+        """)
+
+        if _df_nc_hist.empty:
+            st.info("Sin notas de crédito registradas.")
+        else:
+            # Filtros
+            _hf1, _hf2, _hf3 = st.columns(3)
+            with _hf1:
+                _nc_f_local = st.selectbox("Local", ["Todos"] + sorted(_df_nc_hist['local'].dropna().unique().tolist()), key="nc_hist_local")
+            with _hf2:
+                _nc_f_estado = st.selectbox("Estado", ["Todos", "Pendiente", "Emitida", "Considerada"], key="nc_hist_estado")
+            with _hf3:
+                _nc_f_periodo = st.selectbox("Período", ["Todos"] + sorted(_df_nc_hist['periodo'].dropna().unique().tolist()), key="nc_hist_periodo")
+
+            _df_nc_v = _df_nc_hist.copy()
+            if _nc_f_local   != "Todos": _df_nc_v = _df_nc_v[_df_nc_v['local']   == _nc_f_local]
+            if _nc_f_estado  != "Todos": _df_nc_v = _df_nc_v[_df_nc_v['estado']  == _nc_f_estado]
+            if _nc_f_periodo != "Todos": _df_nc_v = _df_nc_v[_df_nc_v['periodo'] == _nc_f_periodo]
+
+            # KPIs
+            _nc_k1, _nc_k2, _nc_k3 = st.columns(3)
+            _nc_k1.metric("Total registradas", len(_df_nc_v))
+            _nc_k2.metric("Monto pendiente", f"${_df_nc_v[_df_nc_v['estado']=='Pendiente']['monto'].sum():,.0f}")
+            _nc_k3.metric("Monto emitido", f"${_df_nc_v[_df_nc_v['estado']=='Emitida']['monto'].sum():,.0f}")
+
+            # Table with estado update
+            for _, _nc_row in _df_nc_v.iterrows():
+                _nc_id = int(_nc_row['id'])
+                _est_color = {'Pendiente': '#d4a853', 'Emitida': '#5b8dd9', 'Considerada': '#4caf7d'}.get(str(_nc_row['estado']), '#888')
+                with st.expander(
+                    f"[{_nc_row['local']}] {_nc_row['nombre_producto']} · ${float(_nc_row['monto']):,.0f} · "
+                    f"Folio {_nc_row['folio_factura']} · {str(_nc_row['periodo'] or '')} · "
+                    f"**:{_est_color}[{_nc_row['estado']}]**",
+                    expanded=False
+                ):
+                    _dc1, _dc2 = st.columns(2)
+                    _dc1.markdown(f"**Proveedor:** {_nc_row['nombre_proveedor']} `{_nc_row['rut_proveedor']}`")
+                    _dc1.markdown(f"**SKU:** `{_nc_row['sku'] or '—'}`")
+                    _dc1.markdown(f"**Fecha factura:** {str(_nc_row['fecha_dte'] or '—')[:10]}")
+                    _dc2.markdown(f"**Registrado por:** {_nc_row['registrado_por']}")
+                    _dc2.markdown(f"**Fecha registro:** {str(_nc_row['fecha_registro'])[:16]}")
+                    _dc2.markdown(f"**Observación:** {_nc_row['observacion'] or '—'}")
+
+                    if _is_admin_nc:
+                        _ns1, _ns2 = st.columns(2)
+                        with _ns1:
+                            _nuevo_estado = st.selectbox(
+                                "Cambiar estado",
+                                ["Pendiente", "Emitida", "Considerada"],
+                                index=["Pendiente","Emitida","Considerada"].index(str(_nc_row['estado'])),
+                                key=f"nc_est_{_nc_id}"
+                            )
+                        with _ns2:
+                            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                            if st.button("💾 Actualizar", key=f"nc_upd_{_nc_id}"):
+                                try:
+                                    _eng_upd = get_engine()
+                                    with _eng_upd.connect() as _cu:
+                                        _cu.execute(text(
+                                            "UPDATE notas_credito SET estado=:e WHERE id=:id"
+                                        ), {"e": _nuevo_estado, "id": _nc_id})
+                                        _cu.commit()
+                                    st.success("✅ Estado actualizado.")
+                                    st.rerun()
+                                except Exception as _eu:
+                                    st.error(f"Error: {_eu}")
 
 # ============================================================
 # MÓDULO: GESTIÓN DE USUARIOS
