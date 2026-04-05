@@ -8158,14 +8158,19 @@ elif modulo.startswith("📊"):
                     _ckr_loc = filt(df_ckr)
 
                     if not _uso_loc.empty:
+                        # Only products defined in cat_labels
+                        _prods_control = [p for prods in cat_labels.values() for p in prods]
+
                         _uso_loc['kg'] = pd.to_numeric(_uso_loc['kg'], errors='coerce').fillna(0)
                         _uso_agg = _uso_loc.groupby('producto_control')['kg'].sum().reset_index()
                         _uso_agg.columns = ['producto_control', 'uso_real']
+                        _uso_agg = _uso_agg[_uso_agg['producto_control'].isin(_prods_control)]
 
                         if not _ckr_loc.empty:
                             _ckr_loc['kg'] = pd.to_numeric(_ckr_loc['kg'], errors='coerce').fillna(0)
                             _ckr_agg = _ckr_loc.groupby('producto_control')['kg'].sum().reset_index()
                             _ckr_agg.columns = ['producto_control', 'comprado']
+                            _ckr_agg = _ckr_agg[_ckr_agg['producto_control'].isin(_prods_control)]
                         else:
                             _ckr_agg = pd.DataFrame(columns=['producto_control','comprado'])
 
@@ -8322,9 +8327,7 @@ elif modulo.startswith("📊"):
                     _hs_col = 'padding:7px 10px;font-size:0.66rem;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
 
                     # Summary + expander for recipe cost
-                    _ce1, _ce2 = st.columns(2)
-                    _ce1.metric("Platos colación vendidos", len(_df_col_out))
-                    _ce2.metric("Costo total por receta", f"${_total_teo:,.0f}")
+                    st.metric("Costo total por receta", f"${_total_teo:,.0f}")
                     with st.expander(f"📋 Ver detalle por receta — {len(_df_col_out)} platos", expanded=False):
                         _rows_col = ''
                         for _, _cr in _df_col_out.iterrows():
