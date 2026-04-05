@@ -10005,39 +10005,28 @@ elif modulo.startswith("📋 Notas de Crédito"):
             SELECT DISTINCT nombre_producto, sku
             FROM compras
             WHERE nombre_producto IS NOT NULL AND sku IS NOT NULL
-              AND subcat NOT IN ('ADMINISTRACION','Administración')
+              AND LOWER(COALESCE(subcat,'')) NOT LIKE '%admin%'
+              AND LOWER(COALESCE(categoria_producto,'')) NOT LIKE '%admin%'
+              AND sku NOT LIKE 'ADM%'
             ORDER BY nombre_producto
         """)
 
         _nc1, _nc2 = st.columns(2)
         with _nc1:
             _nc_folio = st.text_input("Folio factura original", key="nc_folio",
-                                       placeholder="Ej: 12345", label_visibility="visible")
+                                       placeholder="Ej: 12345")
 
-            # Proveedor — búsqueda integrada en un solo campo
-            _busq_prov = st.text_input("Proveedor (nombre o RUT)", key="nc_busq_prov",
-                                        placeholder="Escribe para buscar...")
+            # Proveedor — selectbox único con búsqueda nativa
             _nc_prov, _nc_rut = "", ""
-            if not _df_provs.empty and _busq_prov.strip():
-                _busq_num = ''.join(filter(str.isdigit, _busq_prov))
-                if _busq_num:
-                    _mask_prov = _df_provs['rut_proveedor'].astype(str).apply(
-                        lambda r: _busq_num in ''.join(filter(str.isdigit, r))
-                    )
-                else:
-                    _mask_prov = _df_provs['nombre_proveedor'].str.upper().str.contains(
-                        _busq_prov.strip().upper(), na=False
-                    )
-                _df_prov_fil = _df_provs[_mask_prov].head(20)
-                if not _df_prov_fil.empty:
-                    _prov_opts = [f"{r['nombre_proveedor']} | {r['rut_proveedor']}"
-                                  for _, r in _df_prov_fil.iterrows()]
-                    _prov_sel = st.selectbox("Seleccionar proveedor", _prov_opts,
-                                              key="nc_prov_sel", label_visibility="collapsed")
+            if not _df_provs.empty:
+                _prov_opts_all = [""] + [f"{r['nombre_proveedor']} | {r['rut_proveedor']}"
+                                          for _, r in _df_provs.iterrows()]
+                _prov_sel = st.selectbox("Proveedor (escribe para buscar)", _prov_opts_all,
+                                          key="nc_prov_sel", index=0,
+                                          format_func=lambda x: "Escribe para buscar..." if x == "" else x)
+                if _prov_sel:
                     _nc_prov = _prov_sel.split(" | ")[0]
                     _nc_rut  = _prov_sel.split(" | ")[1] if " | " in _prov_sel else ""
-                else:
-                    st.caption("Sin coincidencias.")
 
             _nc_fecha_dte = st.date_input("Fecha factura original", key="nc_fecha_dte", value=None)
 
@@ -10047,7 +10036,7 @@ elif modulo.startswith("📋 Notas de Crédito"):
                 from datetime import timedelta
                 _MESES_NC = {1:'Ene',2:'Feb',3:'Mar',4:'Abr',5:'May',6:'Jun',
                              7:'Jul',8:'Ago',9:'Sep',10:'Oct',11:'Nov',12:'Dic'}
-                _lunes = _nc_fecha_dte - timedelta(days=_nc_fecha_dte.weekday())
+                _lunes   = _nc_fecha_dte - timedelta(days=_nc_fecha_dte.weekday())
                 _domingo = _lunes + timedelta(days=6)
                 if _lunes.month == _domingo.month:
                     _nc_periodo = f"{_lunes.day}-{_domingo.day} {_MESES_NC[_lunes.month]} {_lunes.year}"
@@ -10056,24 +10045,17 @@ elif modulo.startswith("📋 Notas de Crédito"):
                 st.caption(f"Período asignado: **{_nc_periodo}**")
 
         with _nc2:
-            # Producto — búsqueda integrada en un solo campo
-            _busq_prod = st.text_input("Producto", key="nc_busq_prod",
-                                        placeholder="Escribe para buscar...")
+            # Producto — selectbox único con búsqueda nativa
             _nc_prod, _nc_sku = "", ""
-            if not _df_prods_nc.empty and _busq_prod.strip():
-                _mask_prod = _df_prods_nc['nombre_producto'].str.upper().str.contains(
-                    _busq_prod.strip().upper(), na=False
-                )
-                _df_prod_fil = _df_prods_nc[_mask_prod].head(20)
-                if not _df_prod_fil.empty:
-                    _prod_opts = [f"{r['nombre_producto']} | {r['sku']}"
-                                  for _, r in _df_prod_fil.iterrows()]
-                    _prod_sel = st.selectbox("Seleccionar producto", _prod_opts,
-                                              key="nc_prod_sel", label_visibility="collapsed")
+            if not _df_prods_nc.empty:
+                _prod_opts_all = [""] + [f"{r['nombre_producto']} | {r['sku']}"
+                                          for _, r in _df_prods_nc.iterrows()]
+                _prod_sel = st.selectbox("Producto (escribe para buscar)", _prod_opts_all,
+                                          key="nc_prod_sel", index=0,
+                                          format_func=lambda x: "Escribe para buscar..." if x == "" else x)
+                if _prod_sel:
                     _nc_prod = _prod_sel.split(" | ")[0]
                     _nc_sku  = _prod_sel.split(" | ")[1] if " | " in _prod_sel else ""
-                else:
-                    st.caption("Sin coincidencias.")
 
             _nc_monto = st.number_input("Monto NC ($)", min_value=0.0, step=1000.0,
                                          key="nc_monto", value=None,
