@@ -8256,7 +8256,14 @@ elif modulo.startswith("📊"):
                         # Desviación = Real - Recetario
                         desv_kg  = real_ut - uso_kg
                         desv_pct = desv_kg / uso_kg if uso_kg > 0 else 0
-                        precio_u = costo_u / max(comp_kg, 0.001)
+                        # precio_u: costo por KG. Solo calculable si hubo compras reales.
+                        # Si comp_kg=0 usamos costo_u/real_ut como estimado; si ambos 0, precio_u=0
+                        if comp_kg > 0:
+                            precio_u = costo_u / comp_kg
+                        elif real_ut > 0:
+                            precio_u = costo_u / real_ut
+                        else:
+                            precio_u = 0.0
                         costo_desv = desv_kg * precio_u
 
                         if ini_kg == 0 and fin_kg == 0 and uso_kg == 0 and comp_kg == 0:
