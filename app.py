@@ -10019,11 +10019,11 @@ elif modulo.startswith("📋 Notas de Crédito"):
             # Proveedor — selectbox único con búsqueda nativa
             _nc_prov, _nc_rut = "", ""
             if not _df_provs.empty:
-                _prov_opts_all = [""] + [f"{r['nombre_proveedor']} | {r['rut_proveedor']}"
-                                          for _, r in _df_provs.iterrows()]
-                _prov_sel = st.selectbox("Proveedor (escribe para buscar)", _prov_opts_all,
-                                          key="nc_prov_sel", index=0,
-                                          format_func=lambda x: "Escribe para buscar..." if x == "" else x)
+                _prov_opts_all = [f"{r['nombre_proveedor']} | {r['rut_proveedor']}"
+                                   for _, r in _df_provs.iterrows()]
+                _prov_sel = st.selectbox("Proveedor", _prov_opts_all,
+                                          key="nc_prov_sel", index=None,
+                                          placeholder="Escribe para buscar...")
                 if _prov_sel:
                     _nc_prov = _prov_sel.split(" | ")[0]
                     _nc_rut  = _prov_sel.split(" | ")[1] if " | " in _prov_sel else ""
@@ -10048,11 +10048,11 @@ elif modulo.startswith("📋 Notas de Crédito"):
             # Producto — selectbox único con búsqueda nativa
             _nc_prod, _nc_sku = "", ""
             if not _df_prods_nc.empty:
-                _prod_opts_all = [""] + [f"{r['nombre_producto']} | {r['sku']}"
-                                          for _, r in _df_prods_nc.iterrows()]
-                _prod_sel = st.selectbox("Producto (escribe para buscar)", _prod_opts_all,
-                                          key="nc_prod_sel", index=0,
-                                          format_func=lambda x: "Escribe para buscar..." if x == "" else x)
+                _prod_opts_all = [f"{r['nombre_producto']} | {r['sku']}"
+                                   for _, r in _df_prods_nc.iterrows()]
+                _prod_sel = st.selectbox("Producto", _prod_opts_all,
+                                          key="nc_prod_sel", index=None,
+                                          placeholder="Escribe para buscar...")
                 if _prod_sel:
                     _nc_prod = _prod_sel.split(" | ")[0]
                     _nc_sku  = _prod_sel.split(" | ")[1] if " | " in _prod_sel else ""
