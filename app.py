@@ -9988,14 +9988,13 @@ elif modulo.startswith("📋 Notas de Crédito"):
         _locales_nc_list = _locales_nc['local'].tolist() if not _locales_nc.empty else []
         _user_local_nc = st.session_state.get("user_local")
 
-        # Local: admin elige, usuario ve el suyo fijo
         if _is_admin_nc or not _user_local_nc:
             _nc_local = st.selectbox("Local", _locales_nc_list, key="nc_local")
         else:
             _nc_local = _user_local_nc
             st.markdown(f"**Local:** `{_nc_local}`")
 
-        # ── Cargar catálogo de proveedores y productos ────────
+        # ── Catálogos ─────────────────────────────────────────
         _df_provs = run_query("""
             SELECT DISTINCT rut_proveedor, nombre_proveedor
             FROM compras
@@ -10012,67 +10011,84 @@ elif modulo.startswith("📋 Notas de Crédito"):
 
         _nc1, _nc2 = st.columns(2)
         with _nc1:
-            _nc_folio = st.text_input("Folio factura original", key="nc_folio", placeholder="Ej: 12345")
+            _nc_folio = st.text_input("Folio factura original", key="nc_folio",
+                                       placeholder="Ej: 12345", label_visibility="visible")
 
-            # Búsqueda proveedor por nombre o RUT (solo números)
-            _busq_prov = st.text_input("Buscar proveedor (nombre o RUT sin puntos/guión)", key="nc_busq_prov", placeholder="Ej: sanopan o 76123456")
+            # Proveedor — búsqueda integrada en un solo campo
+            _busq_prov = st.text_input("Proveedor (nombre o RUT)", key="nc_busq_prov",
+                                        placeholder="Escribe para buscar...")
+            _nc_prov, _nc_rut = "", ""
             if not _df_provs.empty and _busq_prov.strip():
-                _busq_norm = ''.join(filter(str.isdigit, _busq_prov))
-                if _busq_norm:
-                    # Search by numeric RUT
+                _busq_num = ''.join(filter(str.isdigit, _busq_prov))
+                if _busq_num:
                     _mask_prov = _df_provs['rut_proveedor'].astype(str).apply(
-                        lambda r: _busq_norm in ''.join(filter(str.isdigit, r))
+                        lambda r: _busq_num in ''.join(filter(str.isdigit, r))
                     )
                 else:
-                    # Search by name
                     _mask_prov = _df_provs['nombre_proveedor'].str.upper().str.contains(
                         _busq_prov.strip().upper(), na=False
                     )
-                _df_prov_fil = _df_provs[_mask_prov]
-            else:
-                _df_prov_fil = _df_provs
-
-            if not _df_prov_fil.empty:
-                _prov_opts = [f"{r['nombre_proveedor']} | {r['rut_proveedor']}" for _, r in _df_prov_fil.iterrows()]
-                _prov_sel  = st.selectbox("Proveedor", _prov_opts, key="nc_prov_sel")
-                _nc_prov   = _prov_sel.split(" | ")[0] if _prov_sel else ""
-                _nc_rut    = _prov_sel.split(" | ")[1] if _prov_sel and " | " in _prov_sel else ""
-            else:
-                st.caption("Sin resultados.")
-                _nc_prov, _nc_rut = "", ""
+                _df_prov_fil = _df_provs[_mask_prov].head(20)
+                if not _df_prov_fil.empty:
+                    _prov_opts = [f"{r['nombre_proveedor']} | {r['rut_proveedor']}"
+                                  for _, r in _df_prov_fil.iterrows()]
+                    _prov_sel = st.selectbox("Seleccionar proveedor", _prov_opts,
+                                              key="nc_prov_sel", label_visibility="collapsed")
+                    _nc_prov = _prov_sel.split(" | ")[0]
+                    _nc_rut  = _prov_sel.split(" | ")[1] if " | " in _prov_sel else ""
+                else:
+                    st.caption("Sin coincidencias.")
 
             _nc_fecha_dte = st.date_input("Fecha factura original", key="nc_fecha_dte", value=None)
 
+            # Auto-calcular período lunes-domingo
+            _nc_periodo = ""
+            if _nc_fecha_dte:
+                from datetime import timedelta
+                _MESES_NC = {1:'Ene',2:'Feb',3:'Mar',4:'Abr',5:'May',6:'Jun',
+                             7:'Jul',8:'Ago',9:'Sep',10:'Oct',11:'Nov',12:'Dic'}
+                _lunes = _nc_fecha_dte - timedelta(days=_nc_fecha_dte.weekday())
+                _domingo = _lunes + timedelta(days=6)
+                if _lunes.month == _domingo.month:
+                    _nc_periodo = f"{_lunes.day}-{_domingo.day} {_MESES_NC[_lunes.month]} {_lunes.year}"
+                else:
+                    _nc_periodo = f"{_lunes.day} {_MESES_NC[_lunes.month]}-{_domingo.day} {_MESES_NC[_domingo.month]} {_lunes.year}"
+                st.caption(f"Período asignado: **{_nc_periodo}**")
+
         with _nc2:
-            # Búsqueda producto
-            _busq_prod = st.text_input("Buscar producto", key="nc_busq_prod", placeholder="Ej: plateada")
+            # Producto — búsqueda integrada en un solo campo
+            _busq_prod = st.text_input("Producto", key="nc_busq_prod",
+                                        placeholder="Escribe para buscar...")
+            _nc_prod, _nc_sku = "", ""
             if not _df_prods_nc.empty and _busq_prod.strip():
                 _mask_prod = _df_prods_nc['nombre_producto'].str.upper().str.contains(
                     _busq_prod.strip().upper(), na=False
                 )
-                _df_prod_fil = _df_prods_nc[_mask_prod]
-            else:
-                _df_prod_fil = _df_prods_nc
+                _df_prod_fil = _df_prods_nc[_mask_prod].head(20)
+                if not _df_prod_fil.empty:
+                    _prod_opts = [f"{r['nombre_producto']} | {r['sku']}"
+                                  for _, r in _df_prod_fil.iterrows()]
+                    _prod_sel = st.selectbox("Seleccionar producto", _prod_opts,
+                                              key="nc_prod_sel", label_visibility="collapsed")
+                    _nc_prod = _prod_sel.split(" | ")[0]
+                    _nc_sku  = _prod_sel.split(" | ")[1] if " | " in _prod_sel else ""
+                else:
+                    st.caption("Sin coincidencias.")
 
-            if not _df_prod_fil.empty:
-                _prod_opts = [f"{r['nombre_producto']} | {r['sku']}" for _, r in _df_prod_fil.iterrows()]
-                _prod_sel  = st.selectbox("Producto", _prod_opts, key="nc_prod_sel")
-                _nc_prod   = _prod_sel.split(" | ")[0] if _prod_sel else ""
-                _nc_sku    = _prod_sel.split(" | ")[1] if _prod_sel and " | " in _prod_sel else ""
-            else:
-                st.caption("Sin resultados.")
-                _nc_prod, _nc_sku = "", ""
+            _nc_monto = st.number_input("Monto NC ($)", min_value=0.0, step=1000.0,
+                                         key="nc_monto", value=None,
+                                         placeholder="Ingresa el monto")
 
-            _nc_monto = st.number_input("Monto NC ($)", min_value=0.0, step=1000.0, key="nc_monto")
-            _nc_periodo = st.text_input("Período del informe", key="nc_periodo",
-                                         placeholder="Ej: 1-7 Abr 2026",
-                                         help="Debe coincidir exactamente con el período del Informe de Costos")
-
-        _nc_obs = st.text_area("Observación", key="nc_obs", placeholder="Descripción del error / motivo de la NC")
+        _nc_obs = st.text_area("Observación", key="nc_obs",
+                                placeholder="Descripción del error / motivo de la NC")
 
         if st.button("💾 Registrar Nota de Crédito", type="primary", key="btn_nc_reg"):
             if not _nc_local or not _nc_folio or not _nc_monto or not _nc_prod:
                 st.error("Local, folio, producto y monto son obligatorios.")
+            elif not _nc_fecha_dte:
+                st.error("La fecha de la factura es obligatoria para calcular el período.")
+            elif not _nc_prov:
+                st.error("Selecciona un proveedor de la lista.")
             else:
                 try:
                     _eng_nc = get_engine()
