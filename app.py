@@ -8210,13 +8210,14 @@ elif modulo.startswith("📊"):
             # ── 2. NO VENDIBLES ───────────────────────────────
             with _v2:
                 _q_nv = f"""
-                    SELECT nombre_producto,
+                    SELECT sku,
+                           MIN(nombre_producto) as nombre_producto,
                            SUM(costo_realfinal) as total_compra
                     FROM compras
                     WHERE fecha_dte::date BETWEEN '{_fi_ic}' AND '{_ff_ic}'
                       AND subcat = 'No Vendible'
                       {_lf_ic}
-                    GROUP BY nombre_producto
+                    GROUP BY sku
                     ORDER BY total_compra DESC
                 """
                 _df_nv = run_query(_q_nv)
@@ -8239,6 +8240,7 @@ elif modulo.startswith("📊"):
                     for _, _nr in _df_nv.iterrows():
                         _rows_nv += (
                             f'<tr style="border-bottom:1px solid #1a1a1a">'
+                            f'<td style="padding:7px 10px;color:#666;font-family:monospace;font-size:0.72rem">{_nr["sku"]}</td>'
                             f'<td style="padding:7px 10px;color:#e8e4de;font-size:0.8rem">{_nr["nombre_producto"]}</td>'
                             f'<td style="padding:7px 10px;text-align:right;color:#d4a853;font-weight:600">${float(_nr["total_compra"]):,.0f}</td>'
                             f'<td style="padding:7px 10px;text-align:right;color:#888">{float(_nr["pct_venta"]):.1f}%</td>'
@@ -8246,7 +8248,7 @@ elif modulo.startswith("📊"):
                         )
                     _rows_nv += (
                         f'<tr style="border-top:2px solid #2a2a2a;background:#111">'
-                        f'<td style="padding:7px 10px;color:#e8e4de;font-weight:700">TOTAL</td>'
+                        f'<td colspan="2" style="padding:7px 10px;color:#e8e4de;font-weight:700">TOTAL</td>'
                         f'<td style="padding:7px 10px;text-align:right;color:#d4a853;font-weight:700">${_total_nv:,.0f}</td>'
                         f'<td style="padding:7px 10px;text-align:right;color:#d4a853;font-weight:700">{_pct_nv:.1f}%</td>'
                         f'</tr>'
@@ -8255,8 +8257,8 @@ elif modulo.startswith("📊"):
                         '<div style="overflow-x:auto;border-radius:10px;border:1px solid #1e1e1e;background:#0d0d0d">'
                         '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
                         '<thead><tr style="background:#111">'
-                        + ''.join([f'<th style="{_hs_nv};text-align:{"left" if i==0 else "right"}">{h}</th>'
-                                   for i, h in enumerate(['Producto','Total Compra','% Venta Total'])])
+                        + ''.join([f'<th style="{_hs_nv};text-align:{"left" if i<2 else "right"}">{h}</th>'
+                                   for i, h in enumerate(['SKU','Producto','Total Compra','% Venta Total'])])
                         + f'</tr></thead><tbody>{_rows_nv}</tbody></table></div>',
                         unsafe_allow_html=True
                     )
@@ -8340,31 +8342,37 @@ elif modulo.startswith("📊"):
                     _total_teo = _df_col_out['Costo por receta'].sum()
 
                     _hs_col = 'padding:7px 10px;font-size:0.66rem;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
-                    _rows_col = ''
-                    for _, _cr in _df_col_out.iterrows():
+
+                    # Summary + expander for recipe cost
+                    _ce1, _ce2 = st.columns(2)
+                    _ce1.metric("Platos colación vendidos", len(_df_col_out))
+                    _ce2.metric("Costo total por receta", f"${_total_teo:,.0f}")
+                    with st.expander(f"📋 Ver detalle por receta — {len(_df_col_out)} platos", expanded=False):
+                        _rows_col = ''
+                        for _, _cr in _df_col_out.iterrows():
+                            _rows_col += (
+                                f'<tr style="border-bottom:1px solid #1a1a1a">'
+                                f'<td style="padding:7px 10px;color:#666;font-family:monospace;font-size:0.72rem">{_cr["SKU"]}</td>'
+                                f'<td style="padding:7px 10px;color:#e8e4de;font-size:0.8rem">{_cr["Nombre"]}</td>'
+                                f'<td style="padding:7px 10px;text-align:right;color:#aaa">{_cr["Cantidad"]:,}</td>'
+                                f'<td style="padding:7px 10px;text-align:right;color:#d4a853">${float(_cr["Costo por receta"]):,.0f}</td>'
+                                f'</tr>'
+                            )
                         _rows_col += (
-                            f'<tr style="border-bottom:1px solid #1a1a1a">'
-                            f'<td style="padding:7px 10px;color:#666;font-family:monospace;font-size:0.72rem">{_cr["SKU"]}</td>'
-                            f'<td style="padding:7px 10px;color:#e8e4de;font-size:0.8rem">{_cr["Nombre"]}</td>'
-                            f'<td style="padding:7px 10px;text-align:right;color:#aaa">{_cr["Cantidad"]:,}</td>'
-                            f'<td style="padding:7px 10px;text-align:right;color:#d4a853">${float(_cr["Costo por receta"]):,.0f}</td>'
+                            f'<tr style="border-top:2px solid #2a2a2a;background:#111">'
+                            f'<td colspan="3" style="padding:7px 10px;color:#e8e4de;font-weight:700">TOTAL RECETA</td>'
+                            f'<td style="padding:7px 10px;text-align:right;color:#d4a853;font-weight:700">${_total_teo:,.0f}</td>'
                             f'</tr>'
                         )
-                    _rows_col += (
-                        f'<tr style="border-top:2px solid #2a2a2a;background:#111">'
-                        f'<td colspan="3" style="padding:7px 10px;color:#e8e4de;font-weight:700">TOTAL RECETA</td>'
-                        f'<td style="padding:7px 10px;text-align:right;color:#d4a853;font-weight:700">${_total_teo:,.0f}</td>'
-                        f'</tr>'
-                    )
-                    st.markdown(
-                        '<div style="overflow-x:auto;border-radius:10px;border:1px solid #1e1e1e;background:#0d0d0d;margin-bottom:0.8rem">'
-                        '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
-                        '<thead><tr style="background:#111">'
-                        + ''.join([f'<th style="{_hs_col};text-align:{"left" if i<2 else "right"}">{h}</th>'
-                                   for i, h in enumerate(['SKU','Plato','Cantidad','Costo Receta'])])
-                        + f'</tr></thead><tbody>{_rows_col}</tbody></table></div>',
-                        unsafe_allow_html=True
-                    )
+                        st.markdown(
+                            '<div style="overflow-x:auto;border-radius:10px;border:1px solid #1e1e1e;background:#0d0d0d;margin-bottom:0.8rem">'
+                            '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
+                            '<thead><tr style="background:#111">'
+                            + ''.join([f'<th style="{_hs_col};text-align:{"left" if i<2 else "right"}">{h}</th>'
+                                       for i, h in enumerate(['SKU','Plato','Cantidad','Costo Receta'])])
+                            + f'</tr></thead><tbody>{_rows_col}</tbody></table></div>',
+                            unsafe_allow_html=True
+                        )
                 else:
                     st.info("Sin ventas de colación (MEJ-/CP-) en el período.")
 
@@ -8372,42 +8380,37 @@ elif modulo.startswith("📊"):
                 if not _df_col_c.empty:
                     _df_col_c['costo_comprado'] = pd.to_numeric(_df_col_c['costo_comprado'], errors='coerce').fillna(0)
                     _total_comp_col = _df_col_c['costo_comprado'].sum()
-                    st.markdown("**Comprado (subcat Colacion):**")
-                    _rows_comp = ''
-                    for _, _cc in _df_col_c.iterrows():
+
+                    # Summary + expander for purchased
+                    _cp1, _cp2 = st.columns(2)
+                    _cp1.metric("Productos comprados (Colacion)", len(_df_col_c))
+                    _cp2.metric("Costo total comprado", f"${_total_comp_col:,.0f}")
+                    with st.expander(f"🛒 Ver detalle compras colación — {len(_df_col_c)} productos", expanded=False):
+                        _rows_comp = ''
+                        for _, _cc in _df_col_c.iterrows():
+                            _rows_comp += (
+                                f'<tr style="border-bottom:1px solid #1a1a1a">'
+                                f'<td style="padding:7px 10px;color:#e8e4de;font-size:0.8rem">{_cc["nombre_producto"]}</td>'
+                                f'<td style="padding:7px 10px;text-align:right;color:#5b8dd9;font-weight:600">${float(_cc["costo_comprado"]):,.0f}</td>'
+                                f'</tr>'
+                            )
                         _rows_comp += (
-                            f'<tr style="border-bottom:1px solid #1a1a1a">'
-                            f'<td style="padding:7px 10px;color:#e8e4de;font-size:0.8rem">{_cc["nombre_producto"]}</td>'
-                            f'<td style="padding:7px 10px;text-align:right;color:#5b8dd9;font-weight:600">${float(_cc["costo_comprado"]):,.0f}</td>'
+                            f'<tr style="border-top:2px solid #2a2a2a;background:#111">'
+                            f'<td style="padding:7px 10px;color:#e8e4de;font-weight:700">TOTAL COMPRADO</td>'
+                            f'<td style="padding:7px 10px;text-align:right;color:#5b8dd9;font-weight:700">${_total_comp_col:,.0f}</td>'
                             f'</tr>'
                         )
-                    _rows_comp += (
-                        f'<tr style="border-top:2px solid #2a2a2a;background:#111">'
-                        f'<td style="padding:7px 10px;color:#e8e4de;font-weight:700">TOTAL COMPRADO</td>'
-                        f'<td style="padding:7px 10px;text-align:right;color:#5b8dd9;font-weight:700">${_total_comp_col:,.0f}</td>'
-                        f'</tr>'
-                    )
-                    st.markdown(
-                        '<div style="overflow-x:auto;border-radius:10px;border:1px solid #1e1e1e;background:#0d0d0d">'
-                        '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
-                        '<thead><tr style="background:#111">'
-                        + ''.join([f'<th style="{_hs_col};text-align:{"left" if i==0 else "right"}">{h}</th>'
-                                   for i, h in enumerate(['Producto','Costo Comprado'])])
-                        + f'</tr></thead><tbody>{_rows_comp}</tbody></table></div>',
-                        unsafe_allow_html=True
-                    )
+                        st.markdown(
+                            '<div style="overflow-x:auto;border-radius:10px;border:1px solid #1e1e1e;background:#0d0d0d">'
+                            '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
+                            '<thead><tr style="background:#111">'
+                            + ''.join([f'<th style="{_hs_col};text-align:{"left" if i==0 else "right"}">{h}</th>'
+                                       for i, h in enumerate(['Producto','Costo Comprado'])])
+                            + f'</tr></thead><tbody>{_rows_comp}</tbody></table></div>',
+                            unsafe_allow_html=True
+                        )
                 else:
                     st.info("Sin compras de colación en el período.")
-
-            st.markdown("<br>", unsafe_allow_html=True)
-            st.markdown(
-                f'<a href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}" '
-                f'download="{nombre_file}" '
-                f'style="display:inline-block;background:#d4a853;color:#0f0f0f;padding:10px 24px;'
-                f'border-radius:8px;font-weight:700;text-decoration:none;font-size:0.9rem;margin-top:8px">'
-                f'⬇ Descargar {nombre_file}</a>',
-                unsafe_allow_html=True
-            )
 
             # ── Botón imprimir ────────────────────────────────
             st.markdown("---")
