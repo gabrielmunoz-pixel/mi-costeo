@@ -8142,8 +8142,275 @@ elif modulo.startswith("📊"):
                         f'</tr></thead><tbody>{ctrl_rows}</tbody></table></div></div>',
                         unsafe_allow_html=True)
 
-                # ── Botón imprimir ────────────────────────────────
-                st.markdown("---")
+
+            # ── VISTAS ADICIONALES ────────────────────────────
+            _fi_ic = d['fecha_i']
+            _ff_ic = d['fecha_f']
+            _lf_ic = f"AND UPPER(local) = UPPER('{local_show}')" if local_show != 'TODOS' else ""
+            _lf_ic2 = f"AND UPPER(c.local) = UPPER('{local_show}')" if local_show != 'TODOS' else ""
+
+            _v1, _v2, _v3 = st.tabs(["📊 Mayores Desviaciones", "🚫 No Vendibles", "🍽️ Colaciones"])
+
+            # ── 1. MAYORES DESVIACIONES ───────────────────────
+            with _v1:
+                if not df_uso.empty:
+                    _uso_loc = filt(df_uso)
+                    _ckr_loc = filt(df_ckr)
+
+                    if not _uso_loc.empty:
+                        _uso_loc['kg'] = pd.to_numeric(_uso_loc['kg'], errors='coerce').fillna(0)
+                        _uso_agg = _uso_loc.groupby('producto_control')['kg'].sum().reset_index()
+                        _uso_agg.columns = ['producto_control', 'uso_real']
+
+                        if not _ckr_loc.empty:
+                            _ckr_loc['kg'] = pd.to_numeric(_ckr_loc['kg'], errors='coerce').fillna(0)
+                            _ckr_agg = _ckr_loc.groupby('producto_control')['kg'].sum().reset_index()
+                            _ckr_agg.columns = ['producto_control', 'comprado']
+                        else:
+                            _ckr_agg = pd.DataFrame(columns=['producto_control','comprado'])
+
+                        _desv = pd.merge(_uso_agg, _ckr_agg, on='producto_control', how='outer').fillna(0)
+                        _desv = _desv[_desv['uso_real'] > 0]
+                        _desv['desviacion_pct'] = ((_desv['comprado'] - _desv['uso_real']) / _desv['uso_real'] * 100).round(1)
+                        _desv['desviacion_kg']  = (_desv['comprado'] - _desv['uso_real']).round(2)
+                        _desv = _desv.reindex(_desv['desviacion_pct'].abs().sort_values(ascending=False).index)
+                        _desv_top = _desv.head(15).reset_index(drop=True)
+
+                        _hs_d = 'padding:7px 10px;font-size:0.66rem;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
+                        _rows_d = ''
+                        for _, _dr in _desv_top.iterrows():
+                            _pct = float(_dr['desviacion_pct'])
+                            _alerta = _pct > 10 or _pct < -10
+                            _pc = '#e84545' if _pct > 10 else '#4caf7d' if _pct < -10 else '#aaa'
+                            _badge = ' <span style="background:#3a1a1a;color:#e84545;padding:1px 6px;border-radius:8px;font-size:0.68rem">⚠️ Revisar</span>' if _alerta else ''
+                            _rows_d += (
+                                f'<tr style="border-bottom:1px solid #1a1a1a">'
+                                f'<td style="padding:7px 10px;color:#e8e4de;font-size:0.8rem">{_dr["producto_control"]}{_badge}</td>'
+                                f'<td style="padding:7px 10px;text-align:right;color:#aaa">{_dr["uso_real"]:,.2f}</td>'
+                                f'<td style="padding:7px 10px;text-align:right;color:#aaa">{_dr["comprado"]:,.2f}</td>'
+                                f'<td style="padding:7px 10px;text-align:right;color:#aaa">{_dr["desviacion_kg"]:+,.2f}</td>'
+                                f'<td style="padding:7px 10px;text-align:right;color:{_pc};font-weight:600">{_pct:+.1f}%</td>'
+                                f'</tr>'
+                            )
+                        st.markdown(
+                            '<div style="overflow-x:auto;border-radius:10px;border:1px solid #1e1e1e;background:#0d0d0d">'
+                            '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
+                            '<thead><tr style="background:#111">'
+                            + ''.join([f'<th style="{_hs_d};text-align:{"left" if i==0 else "right"}">{h}</th>'
+                                       for i, h in enumerate(['Producto','Uso Real (kg)','Comprado (kg)','Δ kg','Δ %'])])
+                            + f'</tr></thead><tbody>{_rows_d}</tbody></table></div>',
+                            unsafe_allow_html=True
+                        )
+                        st.caption("⚠️ Alerta: desviación > ±10%")
+                    else:
+                        st.info("Sin datos de uso para este local.")
+                else:
+                    st.info("Sin datos de uso cargados.")
+
+            # ── 2. NO VENDIBLES ───────────────────────────────
+            with _v2:
+                _q_nv = f"""
+                    SELECT nombre_producto,
+                           SUM(costo_realfinal) as total_compra
+                    FROM compras
+                    WHERE fecha_dte::date BETWEEN '{_fi_ic}' AND '{_ff_ic}'
+                      AND subcat = 'No Vendible'
+                      {_lf_ic}
+                    GROUP BY nombre_producto
+                    ORDER BY total_compra DESC
+                """
+                _df_nv = run_query(_q_nv)
+                _vt_ic = float(filt(df_v, 'local')['venta_total'].sum()) if not df_v.empty and 'venta_total' in df_v.columns else 0
+
+                if _df_nv.empty:
+                    st.info("Sin compras No Vendible en el período.")
+                else:
+                    _df_nv['total_compra'] = pd.to_numeric(_df_nv['total_compra'], errors='coerce').fillna(0)
+                    _df_nv['pct_venta'] = (_df_nv['total_compra'] / _vt_ic * 100).round(1) if _vt_ic > 0 else 0
+                    _total_nv = _df_nv['total_compra'].sum()
+                    _pct_nv   = _total_nv / _vt_ic * 100 if _vt_ic > 0 else 0
+
+                    _nv1, _nv2 = st.columns(2)
+                    _nv1.metric("Total No Vendible", f"${_total_nv:,.0f}")
+                    _nv2.metric("% sobre venta total", f"{_pct_nv:.1f}%")
+
+                    _hs_nv = 'padding:7px 10px;font-size:0.66rem;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
+                    _rows_nv = ''
+                    for _, _nr in _df_nv.iterrows():
+                        _rows_nv += (
+                            f'<tr style="border-bottom:1px solid #1a1a1a">'
+                            f'<td style="padding:7px 10px;color:#e8e4de;font-size:0.8rem">{_nr["nombre_producto"]}</td>'
+                            f'<td style="padding:7px 10px;text-align:right;color:#d4a853;font-weight:600">${float(_nr["total_compra"]):,.0f}</td>'
+                            f'<td style="padding:7px 10px;text-align:right;color:#888">{float(_nr["pct_venta"]):.1f}%</td>'
+                            f'</tr>'
+                        )
+                    _rows_nv += (
+                        f'<tr style="border-top:2px solid #2a2a2a;background:#111">'
+                        f'<td style="padding:7px 10px;color:#e8e4de;font-weight:700">TOTAL</td>'
+                        f'<td style="padding:7px 10px;text-align:right;color:#d4a853;font-weight:700">${_total_nv:,.0f}</td>'
+                        f'<td style="padding:7px 10px;text-align:right;color:#d4a853;font-weight:700">{_pct_nv:.1f}%</td>'
+                        f'</tr>'
+                    )
+                    st.markdown(
+                        '<div style="overflow-x:auto;border-radius:10px;border:1px solid #1e1e1e;background:#0d0d0d">'
+                        '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
+                        '<thead><tr style="background:#111">'
+                        + ''.join([f'<th style="{_hs_nv};text-align:{"left" if i==0 else "right"}">{h}</th>'
+                                   for i, h in enumerate(['Producto','Total Compra','% Venta Total'])])
+                        + f'</tr></thead><tbody>{_rows_nv}</tbody></table></div>',
+                        unsafe_allow_html=True
+                    )
+
+            # ── 3. COLACIONES ─────────────────────────────────
+            with _v3:
+                # Ventas MEJ-XXX y CP-XXX
+                _q_col_v = f"""
+                    SELECT sku_producto, MAX(nombre_producto) as nombre,
+                           SUM(cantidad_vendida) as cant_vendida
+                    FROM ventas
+                    WHERE fecha_venta BETWEEN '{_fi_ic}' AND '{_ff_ic}'
+                      AND es_opcion = false
+                      AND (sku_producto LIKE 'MEJ-%' OR sku_producto LIKE 'CP%')
+                      {_lf_ic}
+                    GROUP BY sku_producto
+                    ORDER BY cant_vendida DESC
+                """
+                _df_col_v = run_query(_q_col_v)
+
+                # Comprado subcat Colacion
+                _q_col_c = f"""
+                    SELECT nombre_producto,
+                           SUM(costo_realfinal) as costo_comprado
+                    FROM compras
+                    WHERE fecha_dte::date BETWEEN '{_fi_ic}' AND '{_ff_ic}'
+                      AND subcat = 'Colacion'
+                      {_lf_ic}
+                    GROUP BY nombre_producto
+                    ORDER BY costo_comprado DESC
+                """
+                _df_col_c = run_query(_q_col_c)
+
+                # Costo teórico por receta
+                _df_rec_col = get_recetas()
+                _df_precio_col = run_query(f"""
+                    SELECT sku, precio_unitario FROM (
+                        SELECT sku,
+                               SUM(costo_realfinal)/NULLIF(SUM(cant_conv*NULLIF(formato,0)),0) AS precio_unitario,
+                               1 AS p
+                        FROM compras
+                        WHERE cant_conv>0 AND costo_realfinal>0 AND formato>0
+                          AND fecha_dte::date BETWEEN '{_fi_ic}' AND '{_ff_ic}'
+                          AND sku IN (SELECT DISTINCT sku_ingrediente FROM recetas)
+                        GROUP BY sku
+                        UNION ALL
+                        SELECT sku, precio_unitario, 2 AS p FROM (
+                            SELECT DISTINCT ON (sku) sku,
+                                   costo_realfinal/NULLIF(cant_conv*NULLIF(formato,0),0) AS precio_unitario
+                            FROM compras WHERE cant_conv>0 AND costo_realfinal>0 AND formato>0
+                              AND sku IN (SELECT DISTINCT sku_ingrediente FROM recetas)
+                            ORDER BY sku, fecha_dte DESC
+                        ) fb
+                    ) x ORDER BY sku, p
+                """)
+                _precio_col_map = {}
+                if not _df_precio_col.empty:
+                    _precio_col_map = dict(_df_precio_col.drop_duplicates('sku').set_index('sku')['precio_unitario'])
+
+                if not _df_col_v.empty:
+                    _df_col_v['cant_vendida'] = pd.to_numeric(_df_col_v['cant_vendida'], errors='coerce').fillna(0)
+                    _col_rows = []
+                    for _, _cv in _df_col_v.iterrows():
+                        _sku_c = str(_cv['sku_producto'])
+                        _cant_c = float(_cv['cant_vendida'])
+                        _rec_c = _df_rec_col[_df_rec_col['codigo_venta'] == _sku_c] if not _df_rec_col.empty else pd.DataFrame()
+                        _costo_teo = 0.0
+                        if not _rec_c.empty:
+                            for _, _ri in _rec_c.iterrows():
+                                _cant_r = float(_ri.get('cant_real', 0) or 0)
+                                _precio_r = float(_precio_col_map.get(str(_ri.get('sku_ingrediente','')), 0) or 0)
+                                _costo_teo += _cant_r * _precio_r
+                        _col_rows.append({
+                            'SKU': _sku_c,
+                            'Nombre': str(_cv['nombre'])[:40],
+                            'Cantidad': int(_cant_c),
+                            'Costo por receta': _costo_teo * _cant_c,
+                        })
+
+                    _df_col_out = pd.DataFrame(_col_rows)
+                    _total_teo = _df_col_out['Costo por receta'].sum()
+
+                    _hs_col = 'padding:7px 10px;font-size:0.66rem;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
+                    _rows_col = ''
+                    for _, _cr in _df_col_out.iterrows():
+                        _rows_col += (
+                            f'<tr style="border-bottom:1px solid #1a1a1a">'
+                            f'<td style="padding:7px 10px;color:#666;font-family:monospace;font-size:0.72rem">{_cr["SKU"]}</td>'
+                            f'<td style="padding:7px 10px;color:#e8e4de;font-size:0.8rem">{_cr["Nombre"]}</td>'
+                            f'<td style="padding:7px 10px;text-align:right;color:#aaa">{_cr["Cantidad"]:,}</td>'
+                            f'<td style="padding:7px 10px;text-align:right;color:#d4a853">${float(_cr["Costo por receta"]):,.0f}</td>'
+                            f'</tr>'
+                        )
+                    _rows_col += (
+                        f'<tr style="border-top:2px solid #2a2a2a;background:#111">'
+                        f'<td colspan="3" style="padding:7px 10px;color:#e8e4de;font-weight:700">TOTAL RECETA</td>'
+                        f'<td style="padding:7px 10px;text-align:right;color:#d4a853;font-weight:700">${_total_teo:,.0f}</td>'
+                        f'</tr>'
+                    )
+                    st.markdown(
+                        '<div style="overflow-x:auto;border-radius:10px;border:1px solid #1e1e1e;background:#0d0d0d;margin-bottom:0.8rem">'
+                        '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
+                        '<thead><tr style="background:#111">'
+                        + ''.join([f'<th style="{_hs_col};text-align:{"left" if i<2 else "right"}">{h}</th>'
+                                   for i, h in enumerate(['SKU','Plato','Cantidad','Costo Receta'])])
+                        + f'</tr></thead><tbody>{_rows_col}</tbody></table></div>',
+                        unsafe_allow_html=True
+                    )
+                else:
+                    st.info("Sin ventas de colación (MEJ-/CP-) en el período.")
+
+                # Comprado colación
+                if not _df_col_c.empty:
+                    _df_col_c['costo_comprado'] = pd.to_numeric(_df_col_c['costo_comprado'], errors='coerce').fillna(0)
+                    _total_comp_col = _df_col_c['costo_comprado'].sum()
+                    st.markdown("**Comprado (subcat Colacion):**")
+                    _rows_comp = ''
+                    for _, _cc in _df_col_c.iterrows():
+                        _rows_comp += (
+                            f'<tr style="border-bottom:1px solid #1a1a1a">'
+                            f'<td style="padding:7px 10px;color:#e8e4de;font-size:0.8rem">{_cc["nombre_producto"]}</td>'
+                            f'<td style="padding:7px 10px;text-align:right;color:#5b8dd9;font-weight:600">${float(_cc["costo_comprado"]):,.0f}</td>'
+                            f'</tr>'
+                        )
+                    _rows_comp += (
+                        f'<tr style="border-top:2px solid #2a2a2a;background:#111">'
+                        f'<td style="padding:7px 10px;color:#e8e4de;font-weight:700">TOTAL COMPRADO</td>'
+                        f'<td style="padding:7px 10px;text-align:right;color:#5b8dd9;font-weight:700">${_total_comp_col:,.0f}</td>'
+                        f'</tr>'
+                    )
+                    st.markdown(
+                        '<div style="overflow-x:auto;border-radius:10px;border:1px solid #1e1e1e;background:#0d0d0d">'
+                        '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
+                        '<thead><tr style="background:#111">'
+                        + ''.join([f'<th style="{_hs_col};text-align:{"left" if i==0 else "right"}">{h}</th>'
+                                   for i, h in enumerate(['Producto','Costo Comprado'])])
+                        + f'</tr></thead><tbody>{_rows_comp}</tbody></table></div>',
+                        unsafe_allow_html=True
+                    )
+                else:
+                    st.info("Sin compras de colación en el período.")
+
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown(
+                f'<a href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}" '
+                f'download="{nombre_file}" '
+                f'style="display:inline-block;background:#d4a853;color:#0f0f0f;padding:10px 24px;'
+                f'border-radius:8px;font-weight:700;text-decoration:none;font-size:0.9rem;margin-top:8px">'
+                f'⬇ Descargar {nombre_file}</a>',
+                unsafe_allow_html=True
+            )
+
+            # ── Botón imprimir ────────────────────────────────
+            st.markdown("---")
 
             # ── Botón: Generar Excel imprimible ───────────────
             st.markdown("---")
@@ -8400,272 +8667,6 @@ elif modulo.startswith("📊"):
                 b64 = base64.b64encode(buf.read()).decode()
                 periodo_safe = d['periodo'].replace(' ','_').replace('/','_')
                 nombre_file  = f"Informe_{local_rpt}_{periodo_safe}.xlsx"
-
-                # ── VISTAS ADICIONALES ────────────────────────────
-                _fi_ic = d['fecha_i']
-                _ff_ic = d['fecha_f']
-                _lf_ic = f"AND UPPER(local) = UPPER('{local_rpt}')" if local_rpt != 'TODOS' else ""
-                _lf_ic2 = f"AND UPPER(c.local) = UPPER('{local_rpt}')" if local_rpt != 'TODOS' else ""
-
-                _v1, _v2, _v3 = st.tabs(["📊 Mayores Desviaciones", "🚫 No Vendibles", "🍽️ Colaciones"])
-
-                # ── 1. MAYORES DESVIACIONES ───────────────────────
-                with _v1:
-                    if not df_uso.empty:
-                        _uso_loc = filt(df_uso)
-                        _ckr_loc = filt(df_ckr)
-
-                        if not _uso_loc.empty:
-                            _uso_loc['kg'] = pd.to_numeric(_uso_loc['kg'], errors='coerce').fillna(0)
-                            _uso_agg = _uso_loc.groupby('producto_control')['kg'].sum().reset_index()
-                            _uso_agg.columns = ['producto_control', 'uso_real']
-
-                            if not _ckr_loc.empty:
-                                _ckr_loc['kg'] = pd.to_numeric(_ckr_loc['kg'], errors='coerce').fillna(0)
-                                _ckr_agg = _ckr_loc.groupby('producto_control')['kg'].sum().reset_index()
-                                _ckr_agg.columns = ['producto_control', 'comprado']
-                            else:
-                                _ckr_agg = pd.DataFrame(columns=['producto_control','comprado'])
-
-                            _desv = pd.merge(_uso_agg, _ckr_agg, on='producto_control', how='outer').fillna(0)
-                            _desv = _desv[_desv['uso_real'] > 0]
-                            _desv['desviacion_pct'] = ((_desv['comprado'] - _desv['uso_real']) / _desv['uso_real'] * 100).round(1)
-                            _desv['desviacion_kg']  = (_desv['comprado'] - _desv['uso_real']).round(2)
-                            _desv = _desv.reindex(_desv['desviacion_pct'].abs().sort_values(ascending=False).index)
-                            _desv_top = _desv.head(15).reset_index(drop=True)
-
-                            _hs_d = 'padding:7px 10px;font-size:0.66rem;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
-                            _rows_d = ''
-                            for _, _dr in _desv_top.iterrows():
-                                _pct = float(_dr['desviacion_pct'])
-                                _alerta = _pct > 10 or _pct < -10
-                                _pc = '#e84545' if _pct > 10 else '#4caf7d' if _pct < -10 else '#aaa'
-                                _badge = ' <span style="background:#3a1a1a;color:#e84545;padding:1px 6px;border-radius:8px;font-size:0.68rem">⚠️ Revisar</span>' if _alerta else ''
-                                _rows_d += (
-                                    f'<tr style="border-bottom:1px solid #1a1a1a">'
-                                    f'<td style="padding:7px 10px;color:#e8e4de;font-size:0.8rem">{_dr["producto_control"]}{_badge}</td>'
-                                    f'<td style="padding:7px 10px;text-align:right;color:#aaa">{_dr["uso_real"]:,.2f}</td>'
-                                    f'<td style="padding:7px 10px;text-align:right;color:#aaa">{_dr["comprado"]:,.2f}</td>'
-                                    f'<td style="padding:7px 10px;text-align:right;color:#aaa">{_dr["desviacion_kg"]:+,.2f}</td>'
-                                    f'<td style="padding:7px 10px;text-align:right;color:{_pc};font-weight:600">{_pct:+.1f}%</td>'
-                                    f'</tr>'
-                                )
-                            st.markdown(
-                                '<div style="overflow-x:auto;border-radius:10px;border:1px solid #1e1e1e;background:#0d0d0d">'
-                                '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
-                                '<thead><tr style="background:#111">'
-                                + ''.join([f'<th style="{_hs_d};text-align:{"left" if i==0 else "right"}">{h}</th>'
-                                           for i, h in enumerate(['Producto','Uso Real (kg)','Comprado (kg)','Δ kg','Δ %'])])
-                                + f'</tr></thead><tbody>{_rows_d}</tbody></table></div>',
-                                unsafe_allow_html=True
-                            )
-                            st.caption("⚠️ Alerta: desviación > ±10%")
-                        else:
-                            st.info("Sin datos de uso para este local.")
-                    else:
-                        st.info("Sin datos de uso cargados.")
-
-                # ── 2. NO VENDIBLES ───────────────────────────────
-                with _v2:
-                    _q_nv = f"""
-                        SELECT nombre_producto,
-                               SUM(costo_realfinal) as total_compra
-                        FROM compras
-                        WHERE fecha_dte::date BETWEEN '{_fi_ic}' AND '{_ff_ic}'
-                          AND subcat = 'No Vendible'
-                          {_lf_ic}
-                        GROUP BY nombre_producto
-                        ORDER BY total_compra DESC
-                    """
-                    _df_nv = run_query(_q_nv)
-                    _vt_ic = float(filt(df_v, 'local')['venta_total'].sum()) if not df_v.empty and 'venta_total' in df_v.columns else 0
-
-                    if _df_nv.empty:
-                        st.info("Sin compras No Vendible en el período.")
-                    else:
-                        _df_nv['total_compra'] = pd.to_numeric(_df_nv['total_compra'], errors='coerce').fillna(0)
-                        _df_nv['pct_venta'] = (_df_nv['total_compra'] / _vt_ic * 100).round(1) if _vt_ic > 0 else 0
-                        _total_nv = _df_nv['total_compra'].sum()
-                        _pct_nv   = _total_nv / _vt_ic * 100 if _vt_ic > 0 else 0
-
-                        _nv1, _nv2 = st.columns(2)
-                        _nv1.metric("Total No Vendible", f"${_total_nv:,.0f}")
-                        _nv2.metric("% sobre venta total", f"{_pct_nv:.1f}%")
-
-                        _hs_nv = 'padding:7px 10px;font-size:0.66rem;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
-                        _rows_nv = ''
-                        for _, _nr in _df_nv.iterrows():
-                            _rows_nv += (
-                                f'<tr style="border-bottom:1px solid #1a1a1a">'
-                                f'<td style="padding:7px 10px;color:#e8e4de;font-size:0.8rem">{_nr["nombre_producto"]}</td>'
-                                f'<td style="padding:7px 10px;text-align:right;color:#d4a853;font-weight:600">${float(_nr["total_compra"]):,.0f}</td>'
-                                f'<td style="padding:7px 10px;text-align:right;color:#888">{float(_nr["pct_venta"]):.1f}%</td>'
-                                f'</tr>'
-                            )
-                        _rows_nv += (
-                            f'<tr style="border-top:2px solid #2a2a2a;background:#111">'
-                            f'<td style="padding:7px 10px;color:#e8e4de;font-weight:700">TOTAL</td>'
-                            f'<td style="padding:7px 10px;text-align:right;color:#d4a853;font-weight:700">${_total_nv:,.0f}</td>'
-                            f'<td style="padding:7px 10px;text-align:right;color:#d4a853;font-weight:700">{_pct_nv:.1f}%</td>'
-                            f'</tr>'
-                        )
-                        st.markdown(
-                            '<div style="overflow-x:auto;border-radius:10px;border:1px solid #1e1e1e;background:#0d0d0d">'
-                            '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
-                            '<thead><tr style="background:#111">'
-                            + ''.join([f'<th style="{_hs_nv};text-align:{"left" if i==0 else "right"}">{h}</th>'
-                                       for i, h in enumerate(['Producto','Total Compra','% Venta Total'])])
-                            + f'</tr></thead><tbody>{_rows_nv}</tbody></table></div>',
-                            unsafe_allow_html=True
-                        )
-
-                # ── 3. COLACIONES ─────────────────────────────────
-                with _v3:
-                    # Ventas MEJ-XXX y CP-XXX
-                    _q_col_v = f"""
-                        SELECT sku_producto, MAX(nombre_producto) as nombre,
-                               SUM(cantidad_vendida) as cant_vendida
-                        FROM ventas
-                        WHERE fecha_venta BETWEEN '{_fi_ic}' AND '{_ff_ic}'
-                          AND es_opcion = false
-                          AND (sku_producto LIKE 'MEJ-%' OR sku_producto LIKE 'CP%')
-                          {_lf_ic}
-                        GROUP BY sku_producto
-                        ORDER BY cant_vendida DESC
-                    """
-                    _df_col_v = run_query(_q_col_v)
-
-                    # Comprado subcat Colacion
-                    _q_col_c = f"""
-                        SELECT nombre_producto,
-                               SUM(costo_realfinal) as costo_comprado
-                        FROM compras
-                        WHERE fecha_dte::date BETWEEN '{_fi_ic}' AND '{_ff_ic}'
-                          AND subcat = 'Colacion'
-                          {_lf_ic}
-                        GROUP BY nombre_producto
-                        ORDER BY costo_comprado DESC
-                    """
-                    _df_col_c = run_query(_q_col_c)
-
-                    # Costo teórico por receta
-                    _df_rec_col = get_recetas()
-                    _df_precio_col = run_query(f"""
-                        SELECT sku, precio_unitario FROM (
-                            SELECT sku,
-                                   SUM(costo_realfinal)/NULLIF(SUM(cant_conv*NULLIF(formato,0)),0) AS precio_unitario,
-                                   1 AS p
-                            FROM compras
-                            WHERE cant_conv>0 AND costo_realfinal>0 AND formato>0
-                              AND fecha_dte::date BETWEEN '{_fi_ic}' AND '{_ff_ic}'
-                              AND sku IN (SELECT DISTINCT sku_ingrediente FROM recetas)
-                            GROUP BY sku
-                            UNION ALL
-                            SELECT sku, precio_unitario, 2 AS p FROM (
-                                SELECT DISTINCT ON (sku) sku,
-                                       costo_realfinal/NULLIF(cant_conv*NULLIF(formato,0),0) AS precio_unitario
-                                FROM compras WHERE cant_conv>0 AND costo_realfinal>0 AND formato>0
-                                  AND sku IN (SELECT DISTINCT sku_ingrediente FROM recetas)
-                                ORDER BY sku, fecha_dte DESC
-                            ) fb
-                        ) x ORDER BY sku, p
-                    """)
-                    _precio_col_map = {}
-                    if not _df_precio_col.empty:
-                        _precio_col_map = dict(_df_precio_col.drop_duplicates('sku').set_index('sku')['precio_unitario'])
-
-                    if not _df_col_v.empty:
-                        _df_col_v['cant_vendida'] = pd.to_numeric(_df_col_v['cant_vendida'], errors='coerce').fillna(0)
-                        _col_rows = []
-                        for _, _cv in _df_col_v.iterrows():
-                            _sku_c = str(_cv['sku_producto'])
-                            _cant_c = float(_cv['cant_vendida'])
-                            _rec_c = _df_rec_col[_df_rec_col['codigo_venta'] == _sku_c] if not _df_rec_col.empty else pd.DataFrame()
-                            _costo_teo = 0.0
-                            if not _rec_c.empty:
-                                for _, _ri in _rec_c.iterrows():
-                                    _cant_r = float(_ri.get('cant_real', 0) or 0)
-                                    _precio_r = float(_precio_col_map.get(str(_ri.get('sku_ingrediente','')), 0) or 0)
-                                    _costo_teo += _cant_r * _precio_r
-                            _col_rows.append({
-                                'SKU': _sku_c,
-                                'Nombre': str(_cv['nombre'])[:40],
-                                'Cantidad': int(_cant_c),
-                                'Costo por receta': _costo_teo * _cant_c,
-                            })
-
-                        _df_col_out = pd.DataFrame(_col_rows)
-                        _total_teo = _df_col_out['Costo por receta'].sum()
-
-                        _hs_col = 'padding:7px 10px;font-size:0.66rem;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
-                        _rows_col = ''
-                        for _, _cr in _df_col_out.iterrows():
-                            _rows_col += (
-                                f'<tr style="border-bottom:1px solid #1a1a1a">'
-                                f'<td style="padding:7px 10px;color:#666;font-family:monospace;font-size:0.72rem">{_cr["SKU"]}</td>'
-                                f'<td style="padding:7px 10px;color:#e8e4de;font-size:0.8rem">{_cr["Nombre"]}</td>'
-                                f'<td style="padding:7px 10px;text-align:right;color:#aaa">{_cr["Cantidad"]:,}</td>'
-                                f'<td style="padding:7px 10px;text-align:right;color:#d4a853">${float(_cr["Costo por receta"]):,.0f}</td>'
-                                f'</tr>'
-                            )
-                        _rows_col += (
-                            f'<tr style="border-top:2px solid #2a2a2a;background:#111">'
-                            f'<td colspan="3" style="padding:7px 10px;color:#e8e4de;font-weight:700">TOTAL RECETA</td>'
-                            f'<td style="padding:7px 10px;text-align:right;color:#d4a853;font-weight:700">${_total_teo:,.0f}</td>'
-                            f'</tr>'
-                        )
-                        st.markdown(
-                            '<div style="overflow-x:auto;border-radius:10px;border:1px solid #1e1e1e;background:#0d0d0d;margin-bottom:0.8rem">'
-                            '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
-                            '<thead><tr style="background:#111">'
-                            + ''.join([f'<th style="{_hs_col};text-align:{"left" if i<2 else "right"}">{h}</th>'
-                                       for i, h in enumerate(['SKU','Plato','Cantidad','Costo Receta'])])
-                            + f'</tr></thead><tbody>{_rows_col}</tbody></table></div>',
-                            unsafe_allow_html=True
-                        )
-                    else:
-                        st.info("Sin ventas de colación (MEJ-/CP-) en el período.")
-
-                    # Comprado colación
-                    if not _df_col_c.empty:
-                        _df_col_c['costo_comprado'] = pd.to_numeric(_df_col_c['costo_comprado'], errors='coerce').fillna(0)
-                        _total_comp_col = _df_col_c['costo_comprado'].sum()
-                        st.markdown("**Comprado (subcat Colacion):**")
-                        _rows_comp = ''
-                        for _, _cc in _df_col_c.iterrows():
-                            _rows_comp += (
-                                f'<tr style="border-bottom:1px solid #1a1a1a">'
-                                f'<td style="padding:7px 10px;color:#e8e4de;font-size:0.8rem">{_cc["nombre_producto"]}</td>'
-                                f'<td style="padding:7px 10px;text-align:right;color:#5b8dd9;font-weight:600">${float(_cc["costo_comprado"]):,.0f}</td>'
-                                f'</tr>'
-                            )
-                        _rows_comp += (
-                            f'<tr style="border-top:2px solid #2a2a2a;background:#111">'
-                            f'<td style="padding:7px 10px;color:#e8e4de;font-weight:700">TOTAL COMPRADO</td>'
-                            f'<td style="padding:7px 10px;text-align:right;color:#5b8dd9;font-weight:700">${_total_comp_col:,.0f}</td>'
-                            f'</tr>'
-                        )
-                        st.markdown(
-                            '<div style="overflow-x:auto;border-radius:10px;border:1px solid #1e1e1e;background:#0d0d0d">'
-                            '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
-                            '<thead><tr style="background:#111">'
-                            + ''.join([f'<th style="{_hs_col};text-align:{"left" if i==0 else "right"}">{h}</th>'
-                                       for i, h in enumerate(['Producto','Costo Comprado'])])
-                            + f'</tr></thead><tbody>{_rows_comp}</tbody></table></div>',
-                            unsafe_allow_html=True
-                        )
-                    else:
-                        st.info("Sin compras de colación en el período.")
-
-                st.markdown("<br>", unsafe_allow_html=True)
-                st.markdown(
-                    f'<a href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}" '
-                    f'download="{nombre_file}" '
-                    f'style="display:inline-block;background:#d4a853;color:#0f0f0f;padding:10px 24px;'
-                    f'border-radius:8px;font-weight:700;text-decoration:none;font-size:0.9rem;margin-top:8px">'
-                    f'⬇ Descargar {nombre_file}</a>',
-                    unsafe_allow_html=True
-                )
 
 # ============================================================
 # MÓDULO: AUDITOR DE CATEGORÍAS
