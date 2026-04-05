@@ -196,6 +196,83 @@ def _check_login(username, password):
         pass
     return None
 
+def _get_login_intentos(username):
+    """Retorna (intentos, bloqueado_hasta) para el username."""
+    try:
+        engine = get_engine()
+        if engine is None: return (0, None)
+        with engine.connect() as conn:
+            df = pd.read_sql(
+                text("SELECT intentos, bloqueado_hasta FROM login_intentos WHERE username=:u"),
+                conn, params={"u": username}
+            )
+        if df.empty: return (0, None)
+        return (int(df['intentos'].iloc[0]), df['bloqueado_hasta'].iloc[0])
+    except Exception:
+        return (0, None)
+
+def _registrar_intento_fallido(username):
+    """Incrementa contador de intentos fallidos. Bloquea 15 min tras 4 intentos."""
+    try:
+        engine = get_engine()
+        if engine is None: return
+        intentos_actuales, _ = _get_login_intentos(username)
+        nuevos_intentos = intentos_actuales + 1
+        bloqueado_hasta = None
+        if nuevos_intentos >= 4:
+            bloqueado_hasta = "NOW() + INTERVAL '15 minutes'"
+        with engine.connect() as conn:
+            if intentos_actuales == 0:
+                conn.execute(text(
+                    "INSERT INTO login_intentos (username, intentos, bloqueado_hasta, ultimo_intento) "
+                    "VALUES (:u, :i, " + (bloqueado_hasta if bloqueado_hasta else "NULL") + ", NOW()) "
+                    "ON CONFLICT (username) DO UPDATE SET intentos=:i, "
+                    "bloqueado_hasta=" + (bloqueado_hasta if bloqueado_hasta else "NULL") + ", ultimo_intento=NOW()"
+                ), {"u": username, "i": nuevos_intentos})
+            else:
+                conn.execute(text(
+                    "UPDATE login_intentos SET intentos=:i, "
+                    "bloqueado_hasta=" + (bloqueado_hasta if bloqueado_hasta else "NULL") + ", "
+                    "ultimo_intento=NOW() WHERE username=:u"
+                ), {"u": username, "i": nuevos_intentos})
+            conn.commit()
+    except Exception:
+        pass
+
+def _resetear_intentos(username):
+    """Resetea contador tras login exitoso."""
+    try:
+        engine = get_engine()
+        if engine is None: return
+        with engine.connect() as conn:
+            conn.execute(text(
+                "UPDATE login_intentos SET intentos=0, bloqueado_hasta=NULL WHERE username=:u"
+            ), {"u": username})
+            conn.commit()
+    except Exception:
+        pass
+
+def _esta_bloqueado(username):
+    """Retorna (bloqueado: bool, segundos_restantes: int)."""
+    try:
+        engine = get_engine()
+        if engine is None: return (False, 0)
+        with engine.connect() as conn:
+            df = pd.read_sql(
+                text("SELECT bloqueado_hasta, NOW() as ahora FROM login_intentos WHERE username=:u"),
+                conn, params={"u": username}
+            )
+        if df.empty or df['bloqueado_hasta'].iloc[0] is None:
+            return (False, 0)
+        bloqueado_hasta = pd.to_datetime(df['bloqueado_hasta'].iloc[0])
+        ahora = pd.to_datetime(df['ahora'].iloc[0])
+        if bloqueado_hasta > ahora:
+            segundos = int((bloqueado_hasta - ahora).total_seconds())
+            return (True, segundos)
+        return (False, 0)
+    except Exception:
+        return (False, 0)
+
 def _render_login():
     st.markdown("""
     <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;
@@ -212,23 +289,40 @@ def _render_login():
         username = st.text_input("Usuario", key="login_user")
         password = st.text_input("Contraseña", type="password", key="login_pw")
         if st.button("Ingresar", use_container_width=True, type="primary"):
-            result = _check_login(username, password)
-            if result is not None:
-                permisos_raw, user_local = result
-                role = "admin" if permisos_raw == "admin" else "user"
-                permisos = permisos_raw
-                token = _create_session(username, role, permisos, local=user_local)
-                if token:
-                    st.query_params["s"] = token
-                st.session_state["logged_in"]      = True
-                st.session_state["current_user"]   = username
-                st.session_state["user_role"]      = role
-                st.session_state["user_permisos"]  = permisos
-                st.session_state["user_local"]     = user_local
-                st.session_state["session_token"]  = token
-                st.rerun()
+            if not username.strip():
+                st.error("Ingresa tu usuario.")
             else:
-                st.error("Usuario o contraseña incorrectos.")
+                bloqueado, segundos = _esta_bloqueado(username.strip())
+                if bloqueado:
+                    minutos = segundos // 60
+                    segs    = segundos % 60
+                    st.error(f"🔒 Usuario bloqueado por demasiados intentos fallidos. Intenta en {minutos}m {segs}s.")
+                else:
+                    result = _check_login(username.strip(), password)
+                    if result is not None:
+                        _resetear_intentos(username.strip())
+                        permisos_raw, user_local = result
+                        role    = "admin" if permisos_raw == "admin" else "user"
+                        permisos = permisos_raw
+                        token   = _create_session(username.strip(), role, permisos, local=user_local)
+                        if token:
+                            st.query_params["s"] = token
+                        st.session_state["logged_in"]     = True
+                        st.session_state["current_user"]  = username.strip()
+                        st.session_state["user_role"]     = role
+                        st.session_state["user_permisos"] = permisos
+                        st.session_state["user_local"]    = user_local
+                        st.session_state["session_token"] = token
+                        st.rerun()
+                    else:
+                        _registrar_intento_fallido(username.strip())
+                        _, segundos_post = _esta_bloqueado(username.strip())
+                        intentos, _ = _get_login_intentos(username.strip())
+                        restantes = max(0, 4 - intentos)
+                        if segundos_post > 0:
+                            st.error("🔒 Demasiados intentos fallidos. Usuario bloqueado por 15 minutos.")
+                        else:
+                            st.error(f"Usuario o contraseña incorrectos. {restantes} intento(s) restante(s) antes del bloqueo.")
 
 def _user_puede(modulo_key):
     """Verifica si el usuario actual tiene permiso para el módulo."""
