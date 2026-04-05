@@ -69,9 +69,6 @@ import hashlib as _hashlib
 def _hash_pw(pw):
     return _hashlib.sha256(pw.encode()).hexdigest()
 
-ADMIN_USER = "Adminae"
-ADMIN_HASH = _hash_pw("AE321123.")
-
 _TODOS_MODULOS = [
     "📦 Gestión de Datos",
     "📊 Informes",
@@ -182,10 +179,6 @@ def _cleanup_expired_sessions():
         pass
 
 def _check_login(username, password):
-    # Admin login: no requiere BD
-    if username == ADMIN_USER and _hash_pw(password) == ADMIN_HASH:
-        return ("admin", None)
-    # Usuarios normales: consulta BD con manejo de error explícito
     try:
         engine = get_engine()
         if engine is None:
@@ -197,7 +190,8 @@ def _check_login(username, password):
             )
         if not df.empty and df["password_hash"].iloc[0] == _hash_pw(password):
             _local = df["local"].iloc[0] if "local" in df.columns else None
-            return (df["permisos"].iloc[0], _local)
+            _permisos = df["permisos"].iloc[0]
+            return (_permisos, _local)
     except Exception:
         pass
     return None
@@ -221,8 +215,8 @@ def _render_login():
             result = _check_login(username, password)
             if result is not None:
                 permisos_raw, user_local = result
-                role = "admin" if username == ADMIN_USER else "user"
-                permisos = permisos_raw if permisos_raw != "admin" else "admin"
+                role = "admin" if permisos_raw == "admin" else "user"
+                permisos = permisos_raw
                 token = _create_session(username, role, permisos, local=user_local)
                 if token:
                     st.query_params["s"] = token
