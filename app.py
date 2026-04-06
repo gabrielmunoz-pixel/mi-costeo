@@ -2277,8 +2277,8 @@ def save_ventas(df_raw):
 
     try:
         fechas    = pd.to_datetime(df_save['fecha_venta'].astype(str), errors='coerce').dropna()
-        fecha_min = fechas.min().date().replace(day=1)
-        fecha_max = (fechas.max().to_period('M').to_timestamp('M')).date()
+        fecha_min = fechas.min().date()
+        fecha_max = fechas.max().date()
         locales   = df_save['local'].dropna().unique().tolist() if 'local' in df_save.columns else []
 
         with engine.connect() as conn:
@@ -2293,7 +2293,7 @@ def save_ventas(df_raw):
             conn.commit()
 
         df_save.to_sql('ventas', engine, if_exists='append', index=False)
-        st.success(f"✅ {len(df_save):,} registros guardados ({fecha_min} → {fecha_max}). Período anterior reemplazado.")
+        st.success(f"✅ {len(df_save):,} registros guardados ({fecha_min} → {fecha_max}). Período reemplazado.")
     except Exception as e:
         st.error(f"Error al guardar ventas: {e}")
         st.exception(e)
