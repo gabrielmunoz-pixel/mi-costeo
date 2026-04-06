@@ -4125,14 +4125,14 @@ if modulo.startswith("📦"):
                 WITH grupos AS (
                     SELECT
                         sku,
-                        ROUND(muc::numeric, 1)                                          AS muc_grupo,
+                        conversion,
+                        formato,
+                        ROUND(muc::numeric, 4)                                          AS muc_grupo,
                         COUNT(*)                                                        AS n_registros,
                         ARRAY_AGG(id)                                                   AS ids,
                         MODE() WITHIN GROUP (ORDER BY nombre_producto)                  AS nombre_producto,
                         MODE() WITHIN GROUP (ORDER BY nombre_proveedor)                 AS proveedor,
                         MAX(categoria_producto)                                         AS categoria,
-                        MAX(conversion)                                                 AS conversion,
-                        MAX(formato)                                                    AS formato,
                         ROUND(AVG(monto_real / NULLIF(cantidad, 0))::numeric, 2)       AS precio_factura
                     FROM compras
                     WHERE muc > 0
@@ -4146,19 +4146,21 @@ if modulo.startswith("📦"):
                       AND UPPER(subcat) NOT LIKE '%COLACIÓN%'
                       {filtro_cat_audit}
                       {_filtro_fecha_audit}
-                    GROUP BY sku, ROUND(muc::numeric, 1)
-                    HAVING ROUND(muc::numeric, 1) > 0
+                    GROUP BY sku, conversion, formato, ROUND(muc::numeric, 4)
+                    HAVING ROUND(muc::numeric, 4) > 0
                 ),
                 dispersos AS (
                     SELECT
                         sku,
+                        conversion,
+                        formato,
                         MAX(muc_grupo)                                                  AS muc_max,
                         MIN(muc_grupo)                                                  AS muc_min,
                         ROUND((MAX(muc_grupo) / NULLIF(MIN(muc_grupo), 0))::numeric, 1) AS dispersion,
                         COUNT(*)                                                        AS n_grupos
                     FROM grupos
                     WHERE muc_grupo > 0
-                    GROUP BY sku
+                    GROUP BY sku, conversion, formato
                     HAVING COUNT(*) >= 2
                        AND MAX(muc_grupo) / NULLIF(MIN(muc_grupo), 0) > {umbral_audit}
                 )
@@ -4178,8 +4180,10 @@ if modulo.startswith("📦"):
                     d.dispersion
                 FROM grupos g
                 JOIN dispersos d ON g.sku = d.sku
+                  AND g.conversion = d.conversion
+                  AND g.formato = d.formato
                   {filtro_cat_audit_c.replace('c.sku', 'g.sku').replace('c.categoria_producto', 'g.categoria')}
-                ORDER BY d.dispersion DESC, g.sku, g.muc_grupo
+                ORDER BY d.dispersion DESC, g.sku, g.conversion, g.formato, g.muc_grupo
                 LIMIT 500
             """
             df_audit = run_query(q_audit)
