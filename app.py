@@ -2176,8 +2176,11 @@ def recalcular_folios(df: pd.DataFrame, folios: list) -> pd.DataFrame:
 
     df.loc[mask, d.columns] = d.values
     return df
+
+
+def save_compras(df: pd.DataFrame):
     """Guarda el DataFrame ya procesado en la tabla compras de Supabase.
-    Elimina previamente los registros del mismo período (mes) y locales
+    Elimina previamente los registros del mismo período y locales
     para evitar duplicados al recargar.
     """
     engine = get_engine()
@@ -2197,8 +2200,8 @@ def recalcular_folios(df: pd.DataFrame, folios: list) -> pd.DataFrame:
         if fechas.empty:
             st.error("No se pudo determinar el período del archivo.")
             return
-        fecha_min = fechas.min().date().replace(day=1)
-        fecha_max = (fechas.max().to_period('M').to_timestamp('M')).date()
+        fecha_min = fechas.min().date()
+        fecha_max = fechas.max().date()
         locales   = df['local'].dropna().unique().tolist() if 'local' in df.columns else []
 
         with engine.connect() as conn:
