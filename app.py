@@ -3744,87 +3744,169 @@ if modulo.startswith("📦"):
             unsafe_allow_html=True
         )
         f_fix = st.file_uploader("Excel con casos corregidos (.xlsx)", type="xlsx", key="comp_fix")
-        if f_fix and st.button("✅ Aplicar correcciones y recalcular en BD", type="primary", key="btn_fix_bd"):
-            try:
-                df_fix = pd.read_excel(f_fix)
-                df_fix.columns = df_fix.columns.str.strip()
-                required_fix = ['rut_proveedor','nombre_producto','sku','conversion','formato','subcat','categoria_producto']
-                missing_fix = [c for c in required_fix if c not in df_fix.columns]
-                if missing_fix:
-                    st.error(f"Faltan columnas: {', '.join(missing_fix)}")
-                else:
-                    df_fix['_key'] = (
-                        df_fix['rut_proveedor'].astype(str).str.strip() + '|' +
-                        df_fix['nombre_producto'].astype(str).str.strip().str.upper()
-                    )
-                    df_fix = df_fix.drop_duplicates('_key')
+        if f_fix:
+            # Botón 1: Solo aplica sku, conversion, formato, subcat, categoria en BD
+            if st.button("1️⃣ Aplicar correcciones en BD", type="primary", key="btn_fix_bd"):
+                try:
+                    df_fix = pd.read_excel(f_fix)
+                    df_fix.columns = df_fix.columns.str.strip()
+                    required_fix = ['rut_proveedor','nombre_producto','sku','conversion','formato','subcat','categoria_producto']
+                    missing_fix = [c for c in required_fix if c not in df_fix.columns]
+                    if missing_fix:
+                        st.error(f"Faltan columnas: {', '.join(missing_fix)}")
+                    else:
+                        df_fix['_key'] = (
+                            df_fix['rut_proveedor'].astype(str).str.strip() + '|' +
+                            df_fix['nombre_producto'].astype(str).str.strip().str.upper()
+                        )
+                        df_fix = df_fix.drop_duplicates('_key')
+                        _ruts  = df_fix['rut_proveedor'].astype(str).str.strip().tolist()
+                        _prods = df_fix['nombre_producto'].astype(str).str.strip().tolist()
 
-                    # Find matching records in BD
-                    _eng_fix = get_engine()
-                    _updated = 0
-                    _errors  = 0
-                    with _eng_fix.connect() as _conn_fix:
-                        for _, _frow in df_fix.iterrows():
-                            try:
-                                _rut  = str(_frow['rut_proveedor']).strip()
-                                _prod = str(_frow['nombre_producto']).strip()
-                                _sku  = str(_frow['sku']).strip()
-                                _conv = float(_frow['conversion'])
-                                _fmt  = float(_frow['formato'])
-                                _sub  = str(_frow.get('subcat','')).strip()
-                                _cat  = str(_frow.get('categoria_producto','')).strip()
+                        # Fetch matching IDs and folios from BD
+                        _df_bd = run_query("""
+                            SELECT id, rut_proveedor, nombre_producto, folio
+                            FROM compras
+                            WHERE rut_proveedor = ANY(:ruts)
+                              AND nombre_producto = ANY(:prods)
+                        """, {'ruts': _ruts, 'prods': _prods})
 
-                                # Get all matching rows to recalculate
-                                _rows = pd.read_sql(text("""
-                                    SELECT id, cantidad, tipo_dte, total_item,
-                                           recargo_global, descuento_global, iva, total,
-                                           codigo_impuesto, folio, rut_proveedor, nombre_producto
-                                    FROM compras
-                                    WHERE rut_proveedor = :rut AND nombre_producto = :prod
-                                """), _conn_fix, params={'rut': _rut, 'prod': _prod})
+                        if _df_bd.empty:
+                            st.warning("No se encontraron registros en BD para los productos del Excel.")
+                        else:
+                            _corr_map = {}
+                            for _, _fr in df_fix.iterrows():
+                                _k = (str(_fr['rut_proveedor']).strip(), str(_fr['nombre_producto']).strip())
+                                _corr_map[_k] = {
+                                    'sku':  str(_fr['sku']).strip(),
+                                    'conv': float(_fr['conversion']),
+                                    'fmt':  float(_fr['formato']),
+                                    'sub':  str(_fr.get('subcat','')).strip(),
+                                    'cat':  str(_fr.get('categoria_producto','')).strip(),
+                                }
 
-                                if _rows.empty:
-                                    continue
-
-                                for _, _r in _rows.iterrows():
-                                    _cantidad  = float(_r.get('cantidad', 1) or 1)
-                                    _cant_conv = _cantidad * _conv
-                                    _ti        = float(_r.get('total_item', 0) or 0)
-                                    _monto     = -_ti if int(_r.get('tipo_dte', 33) or 33) == 61 else _ti
-                                    _denom     = _cant_conv * _fmt if _fmt != 1 else _cant_conv
-                                    # Simplified MUC — full recalc requires folio context
-                                    # Use tootal2 from existing record
-                                    _tootal_r  = pd.read_sql(text(
-                                        "SELECT tootal2 FROM compras WHERE id=:id"
-                                    ), _conn_fix, params={'id': int(_r['id'])})
-                                    _tootal2   = float(_tootal_r['tootal2'].iloc[0]) if not _tootal_r.empty else 0
-                                    _costo     = _tootal2  # despacho distribution kept as-is
-                                    _muc       = _costo / _denom if _denom != 0 else 0
-
-                                    _conn_fix.execute(text("""
+                            _updated = 0
+                            _folios_corregidos = set()
+                            _eng_fix = get_engine()
+                            with _eng_fix.connect() as _conn:
+                                for _, _row in _df_bd.iterrows():
+                                    _k = (str(_row['rut_proveedor']).strip(), str(_row['nombre_producto']).strip())
+                                    if _k not in _corr_map:
+                                        continue
+                                    _c = _corr_map[_k]
+                                    _conn.execute(text("""
                                         UPDATE compras SET
                                             sku=:sku, conversion=:conv, formato=:fmt,
-                                            subcat=:sub, categoria_producto=:cat,
-                                            cant_conv=:cant_conv, muc=:muc
+                                            subcat=:sub, categoria_producto=:cat
                                         WHERE id=:id
                                     """), {
-                                        'sku': _sku, 'conv': _conv, 'fmt': _fmt,
-                                        'sub': _sub, 'cat': _cat,
-                                        'cant_conv': _cant_conv, 'muc': _muc,
-                                        'id': int(_r['id'])
+                                        'sku': _c['sku'], 'conv': _c['conv'], 'fmt': _c['fmt'],
+                                        'sub': _c['sub'], 'cat': _c['cat'],
+                                        'id': int(_row['id'])
                                     })
+                                    _folios_corregidos.add(str(_row['folio']))
                                     _updated += 1
-                            except Exception as _re:
-                                _errors += 1
+                                _conn.commit()
 
-                        _conn_fix.commit()
+                            st.session_state['folios_pendientes_recalculo'] = list(_folios_corregidos)
+                            st.success(f"✅ {_updated} registro(s) actualizados. {len(_folios_corregidos)} folio(s) listos para recalcular.")
+                except Exception as _ef:
+                    st.error(f"Error: {_ef}")
 
-                    if _updated > 0:
-                        st.success(f"✅ {_updated} registro(s) actualizados en BD.")
-                    if _errors > 0:
-                        st.warning(f"⚠️ {_errors} registro(s) con error al actualizar.")
-            except Exception as _ef:
-                st.error(f"Error: {_ef}")
+        # Botón 2: Recalcula todos los registros de los folios afectados
+        _folios_pendientes = st.session_state.get('folios_pendientes_recalculo', [])
+        if _folios_pendientes:
+            st.info(f"📋 {len(_folios_pendientes)} folio(s) pendientes de recalcular: {', '.join(_folios_pendientes[:5])}{'...' if len(_folios_pendientes) > 5 else ''}")
+            if st.button("2️⃣ Recalcular folios en BD", type="primary", key="btn_recalc_bd"):
+                try:
+                    # Fetch all rows of affected folios
+                    _df_folios = run_query("""
+                        SELECT id, folio, rut_proveedor, nombre_producto,
+                               cantidad, conversion, formato, tipo_dte, total_item,
+                               recargo_global, descuento_global, iva, total, codigo_impuesto,
+                               nombre_producto
+                        FROM compras
+                        WHERE folio = ANY(:folios)
+                    """, {'folios': _folios_pendientes})
+
+                    if _df_folios.empty:
+                        st.warning("No se encontraron registros para esos folios.")
+                    else:
+                        # Recalculate using recalcular_folios logic
+                        import numpy as np
+                        _df_calc = _df_folios.copy()
+                        for _col, _def in [('cantidad',1),('conversion',1),('formato',1),
+                                           ('total_item',0),('recargo_global',0),
+                                           ('descuento_global',0),('iva',0),('total',0)]:
+                            _df_calc[_col] = pd.to_numeric(_df_calc[_col], errors='coerce').fillna(_def)
+
+                        _df_calc['cant_conv']  = _df_calc['cantidad'] * _df_calc['conversion']
+                        _df_calc['monto_real'] = np.where(_df_calc['tipo_dte'].astype(str) == '61',
+                                                          -_df_calc['total_item'], _df_calc['total_item'])
+
+                        _df_calc['_tot_folio']   = _df_calc.groupby(['folio','rut_proveedor'])['monto_real'].transform('sum')
+                        _df_calc['_recargo_neto']= _df_calc['recargo_global'] - _df_calc['descuento_global']
+                        _df_calc['_part']        = np.where(_df_calc['_tot_folio'] != 0,
+                                                             _df_calc['monto_real'] / _df_calc['_tot_folio'], 0)
+                        _df_calc['recargo2']     = _df_calc['_part'] * _df_calc['_recargo_neto']
+                        _df_calc['total_neto2']  = _df_calc['monto_real'] + _df_calc['recargo2']
+
+                        _cod = _df_calc.get('codigo_impuesto', pd.Series([''] * len(_df_calc)))
+                        _cod = _cod.fillna('').astype(str).str.strip().str.replace(r'\.0$','',regex=True).str.replace(r'^nan$','',regex=True)
+                        _df_calc['imp_adic'] = _df_calc['monto_real'] * _cod.map(TASAS_IMP_ADIC).fillna(0)
+
+                        _df_calc['_tiene_iva'] = _df_calc.groupby(['folio','rut_proveedor'])['iva'].transform('max') != 0
+                        _df_calc['iva_2']      = np.where(_df_calc['_tiene_iva'], _df_calc['total_neto2'] * 0.19, 0)
+                        _df_calc['tootal2']    = _df_calc['total_neto2'] + _df_calc['imp_adic'] + _df_calc['iva_2']
+
+                        _nom = _df_calc['nombre_producto'].str.lower().fillna('')
+                        _df_calc['_es_desp'] = (_nom.str.contains('despacho',na=False) |
+                                                _nom.str.contains('flete',na=False) |
+                                                _nom.str.contains('distribucion',na=False))
+                        _df_calc['_desp_l']  = np.where(_df_calc['_es_desp'], _df_calc['monto_real']*1.19, 0)
+                        _df_calc['_desp_f']  = _df_calc.groupby(['folio','rut_proveedor'])['_desp_l'].transform('sum')
+                        _df_calc['_sum_t2']  = _df_calc.groupby(['folio','rut_proveedor'])['tootal2'].transform('sum')
+                        _df_calc['_tot_fac'] = _df_calc.groupby(['folio','rut_proveedor'])['total'].transform('max')
+                        _df_calc['_diff']    = _df_calc['_tot_fac'] - _df_calc['_sum_t2']
+                        _df_calc['_dr2']     = _df_calc['_desp_f'] + _df_calc['_diff']
+                        _df_calc['_ml']      = np.where(_df_calc['_es_desp'], 0, _df_calc['monto_real'].abs())
+                        _df_calc['_tl']      = _df_calc.groupby(['folio','rut_proveedor'])['_ml'].transform('sum')
+                        _df_calc['_pi']      = np.where(_df_calc['_tl'] != 0, _df_calc['_ml']/_df_calc['_tl'], 0)
+                        _df_calc['_dd']      = (_df_calc['_pi'] * _df_calc['_dr2']).round(0)
+                        _df_calc['costo_realfinal'] = np.where(_df_calc['_es_desp'], 0, _df_calc['tootal2'] + _df_calc['_dd'])
+                        _denom = np.where(_df_calc['formato']==1, _df_calc['cant_conv'], _df_calc['cant_conv']*_df_calc['formato'])
+                        _df_calc['muc'] = np.where((_denom!=0)&(~_df_calc['_es_desp']), _df_calc['costo_realfinal']/_denom, 0)
+
+                        # UPDATE BD
+                        _recalc = 0
+                        _eng_r = get_engine()
+                        with _eng_r.connect() as _conn_r:
+                            for _, _rr in _df_calc.iterrows():
+                                _conn_r.execute(text("""
+                                    UPDATE compras SET
+                                        cant_conv=:cc, monto_real=:mr, recargo2=:r2,
+                                        total_neto2=:tn2, imp_adic=:ia, iva_2=:iv2,
+                                        tootal2=:t2, costo_realfinal=:cf, muc=:muc
+                                    WHERE id=:id
+                                """), {
+                                    'cc':  float(_rr['cant_conv']),
+                                    'mr':  float(_rr['monto_real']),
+                                    'r2':  float(_rr['recargo2']),
+                                    'tn2': float(_rr['total_neto2']),
+                                    'ia':  float(_rr['imp_adic']),
+                                    'iv2': float(_rr['iva_2']),
+                                    't2':  float(_rr['tootal2']),
+                                    'cf':  float(_rr['costo_realfinal']),
+                                    'muc': float(_rr['muc']),
+                                    'id':  int(_rr['id'])
+                                })
+                                _recalc += 1
+                            _conn_r.commit()
+
+                        st.session_state['folios_pendientes_recalculo'] = []
+                        st.success(f"✅ {_recalc} registro(s) recalculados en {len(_folios_pendientes)} folio(s).")
+                except Exception as _er:
+                    st.error(f"Error: {_er}")
 
     with tab3:
         st.markdown("<div class='info-box'>Carga el historial de ventas exportado desde tu POS. Se añade al historial existente (append).</div>", unsafe_allow_html=True)
