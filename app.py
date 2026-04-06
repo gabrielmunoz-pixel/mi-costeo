@@ -3632,7 +3632,92 @@ if modulo.startswith("📦"):
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         key='dl_unmatched'
                     )
-            else:
+
+            # ── Reimportar Excel corregido ────────────────────────────────
+            with st.expander("📥 Subir Excel con casos corregidos", expanded=False):
+                st.caption("Descarga el Excel sin match, completa sku / conversion / formato / subcat / categoria_producto y súbelo aquí.")
+                f_corr = st.file_uploader("Excel corregido (.xlsx)", type="xlsx", key="comp_corr")
+                if f_corr and st.button("✅ Aplicar y recalcular", key='btn_apply_corr', type='primary'):
+                    try:
+                        df_corr = pd.read_excel(f_corr)
+                        df_corr.columns = df_corr.columns.str.strip()
+                        df_corr['_key'] = (
+                            df_corr['rut_proveedor'].astype(str).str.strip() + '|' +
+                            df_corr['nombre_producto'].astype(str).str.strip().str.upper()
+                        )
+                        corr_map = df_corr.drop_duplicates('_key').set_index('_key')[
+                            ['sku','conversion','formato','subcat','categoria_producto']
+                        ].to_dict('index')
+
+                        _df_upd = st.session_state['df_compras_procesado'].copy()
+                        _unmatched_now = st.session_state.get('df_match_unmatched_idx', [])
+
+                        for _orig_i in _unmatched_now:
+                            _row = _df_upd.iloc[_orig_i]
+                            _k = (str(_row.get('rut_proveedor','')).strip() + '|' +
+                                  str(_row.get('nombre_producto','')).strip().upper())
+                            if _k in corr_map:
+                                _h = corr_map[_k]
+                                for _f in ['sku','subcat','categoria_producto']:
+                                    if pd.notna(_h.get(_f)) and str(_h.get(_f,'')) not in ('','nan'):
+                                        _df_upd.at[_orig_i, _f] = str(_h[_f])
+                                for _f in ['conversion','formato']:
+                                    if pd.notna(_h.get(_f)) and str(_h.get(_f,'')) not in ('','nan'):
+                                        _df_upd.at[_orig_i, _f] = float(_h[_f])
+
+                        _folios = _df_upd.iloc[_unmatched_now]['folio'].unique().tolist()
+                        _df_upd = recalcular_folios(_df_upd, _folios)
+
+                        _ids_bd = st.session_state.get('ids_sin_match_bd', [])
+                        if _ids_bd:
+                            try:
+                                _eng = get_engine()
+                                with _eng.connect() as _conn:
+                                    for _orig_i, _id_bd in zip(_unmatched_now, _ids_bd):
+                                        _r = _df_upd.iloc[_orig_i]
+                                        _conn.execute(text("""
+                                            UPDATE compras SET
+                                                sku=:sku, conversion=:conv, formato=:fmt,
+                                                subcat=:subcat, categoria_producto=:cat,
+                                                cant_conv=:cant_conv, costo_realfinal=:costo,
+                                                muc=:muc, tootal2=:tootal2,
+                                                recargo2=:recargo2, total_neto2=:total_neto2
+                                            WHERE id=:id
+                                        """), {
+                                            'sku':str(_r.get('sku','')),
+                                            'conv':float(_r.get('conversion',1)),
+                                            'fmt':float(_r.get('formato',1)),
+                                            'subcat':str(_r.get('subcat','')),
+                                            'cat':str(_r.get('categoria_producto','')),
+                                            'cant_conv':float(_r.get('cant_conv',0)),
+                                            'costo':float(_r.get('costo_realfinal',0)),
+                                            'muc':float(_r.get('muc',0)),
+                                            'tootal2':float(_r.get('tootal2',0)),
+                                            'recargo2':float(_r.get('recargo2',0)),
+                                            'total_neto2':float(_r.get('total_neto2',0)),
+                                            'id':_id_bd,
+                                        })
+                                    _conn.commit()
+                                st.session_state['ids_sin_match_bd'] = []
+                            except Exception as _eu:
+                                st.error(f"Error actualizando BD: {_eu}")
+
+                        _still = []
+                        for _orig_i in _unmatched_now:
+                            _r = _df_upd.iloc[_orig_i]
+                            if not (pd.notna(_r.get('sku')) and str(_r.get('sku','')) not in ('','nan')
+                                    and float(_r.get('conversion',0)) > 0):
+                                _still.append(_orig_i)
+
+                        st.session_state['df_compras_procesado']   = _df_upd
+                        st.session_state['df_match_unmatched_idx'] = _still
+                        st.session_state['_match_matched']         = len(_df_upd) - len(_still)
+                        st.success(f"✅ {len(_unmatched_now)-len(_still)} corregido(s). {len(_still)} aún sin resolver.")
+                        st.rerun()
+                    except Exception as _ec:
+                        st.error(f"Error: {_ec}")
+
+            if not _unmatched_idx:
                 st.success("✅ Todos los registros hicieron match con el historial.")
 
             st.markdown("---")
