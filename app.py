@@ -3633,9 +3633,10 @@ if modulo.startswith("📦"):
                         key='dl_unmatched'
                     )
 
-            # ── Reimportar Excel corregido ────────────────────────────────
-            with st.expander("📥 Subir Excel con casos corregidos", expanded=False):
-                st.caption("Descarga el Excel sin match, completa sku / conversion / formato / subcat / categoria_producto y súbelo aquí.")
+            # ── Subir Excel corregido — visible si hay sin match ──────────
+            if _unmatched_idx:
+                st.markdown("#### 📥 Subir Excel con casos corregidos")
+                st.caption("Completa sku / conversion / formato / subcat / categoria_producto en el Excel descargado y súbelo aquí.")
                 f_corr = st.file_uploader("Excel corregido (.xlsx)", type="xlsx", key="comp_corr")
                 if f_corr and st.button("✅ Aplicar y recalcular", key='btn_apply_corr', type='primary'):
                     try:
@@ -3716,7 +3717,6 @@ if modulo.startswith("📦"):
                         st.rerun()
                     except Exception as _ec:
                         st.error(f"Error: {_ec}")
-
             if not _unmatched_idx:
                 st.success("✅ Todos los registros hicieron match con el historial.")
 
