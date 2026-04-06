@@ -1993,15 +1993,18 @@ def procesar_compras(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
             warnings.append(f"🔴 Columna crítica **'{col}'** no encontrada → {impacto}")
 
     # ── Tipos básicos ────────────────────────────────────────────────────────
-    df['tipo_dte']        = pd.to_numeric(df.get('tipo_dte', 33), errors='coerce').fillna(33).astype(int)
-    df['total_item']      = pd.to_numeric(df.get('total_item', 0), errors='coerce').fillna(0)
-    df['cantidad']        = pd.to_numeric(df.get('cantidad', 1), errors='coerce').fillna(1)
-    df['conversion']      = pd.to_numeric(df.get('conversion', 1), errors='coerce').fillna(1)
-    df['formato']         = pd.to_numeric(df.get('formato', 1), errors='coerce').fillna(1)
-    df['recargo_global']  = pd.to_numeric(df.get('recargo_global', 0), errors='coerce').fillna(0)
-    df['descuento_global']= pd.to_numeric(df.get('descuento_global', 0), errors='coerce').fillna(0)
-    df['iva']             = pd.to_numeric(df.get('iva', 0), errors='coerce').fillna(0)
-    df['total']           = pd.to_numeric(df.get('total', 0), errors='coerce').fillna(0)
+    def _col(df, col, default):
+        return df[col] if col in df.columns else pd.Series([default] * len(df), index=df.index)
+
+    df['tipo_dte']        = pd.to_numeric(_col(df, 'tipo_dte', 33), errors='coerce').fillna(33).astype(int)
+    df['total_item']      = pd.to_numeric(_col(df, 'total_item', 0), errors='coerce').fillna(0)
+    df['cantidad']        = pd.to_numeric(_col(df, 'cantidad', 1), errors='coerce').fillna(1)
+    df['conversion']      = pd.to_numeric(_col(df, 'conversion', 1), errors='coerce').fillna(1)
+    df['formato']         = pd.to_numeric(_col(df, 'formato', 1), errors='coerce').fillna(1)
+    df['recargo_global']  = pd.to_numeric(_col(df, 'recargo_global', 0), errors='coerce').fillna(0)
+    df['descuento_global']= pd.to_numeric(_col(df, 'descuento_global', 0), errors='coerce').fillna(0)
+    df['iva']             = pd.to_numeric(_col(df, 'iva', 0), errors='coerce').fillna(0)
+    df['total']           = pd.to_numeric(_col(df, 'total', 0), errors='coerce').fillna(0)
 
     # ── PASO 1: cant_conv ────────────────────────────────────────────────────
     df['cant_conv'] = df['cantidad'] * df['conversion']
