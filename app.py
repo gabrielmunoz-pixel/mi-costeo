@@ -2108,7 +2108,74 @@ def procesar_compras(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     return df, warnings
 
 
-def save_compras(df: pd.DataFrame):
+def recalcular_folios(df: pd.DataFrame, folios: list) -> pd.DataFrame:
+    """Re-runs the financial calculation pipeline for specific folios in-place.
+    Used after correcting conversion/formato for unmatched rows.
+    """
+    import numpy as np
+    mask = df['folio'].isin(folios)
+    if not mask.any():
+        return df
+
+    df = df.copy()
+    d = df[mask].copy()
+
+    # Recalculate cant_conv and MUC with corrected conversion/formato
+    d['cantidad']   = pd.to_numeric(d['cantidad'],   errors='coerce').fillna(1)
+    d['conversion'] = pd.to_numeric(d['conversion'], errors='coerce').fillna(1)
+    d['formato']    = pd.to_numeric(d['formato'],    errors='coerce').fillna(1)
+    d['total_item'] = pd.to_numeric(d['total_item'], errors='coerce').fillna(0)
+    d['recargo_global']   = pd.to_numeric(d.get('recargo_global',   pd.Series([0]*len(d))), errors='coerce').fillna(0)
+    d['descuento_global'] = pd.to_numeric(d.get('descuento_global', pd.Series([0]*len(d))), errors='coerce').fillna(0)
+    d['iva']   = pd.to_numeric(d.get('iva',   pd.Series([0]*len(d))), errors='coerce').fillna(0)
+    d['total'] = pd.to_numeric(d.get('total', pd.Series([0]*len(d))), errors='coerce').fillna(0)
+
+    d['cant_conv']  = d['cantidad'] * d['conversion']
+    d['monto_real'] = np.where(d['tipo_dte'] == 61, -d['total_item'], d['total_item'])
+
+    d['_tot_folio']   = d.groupby(['folio','rut_proveedor'])['monto_real'].transform('sum')
+    d['_recargo_neto']= d['recargo_global'] - d['descuento_global']
+    d['_part']        = np.where(d['_tot_folio'] != 0, d['monto_real'] / d['_tot_folio'], 0)
+    d['recargo2']     = d['_part'] * d['_recargo_neto']
+    d['total_neto2']  = d['monto_real'] + d['recargo2']
+
+    cod_str = d.get('codigo_impuesto', pd.Series([''] * len(d))).fillna('').astype(str).str.strip()
+    cod_str = cod_str.str.replace(r'\.0$', '', regex=True).str.replace(r'^nan$', '', regex=True)
+    tasa = cod_str.map(TASAS_IMP_ADIC).fillna(0)
+    d['imp_adic'] = d['monto_real'] * tasa
+
+    d['_tiene_iva'] = d.groupby(['folio','rut_proveedor'])['iva'].transform('max') != 0
+    d['iva_2']   = np.where(d['_tiene_iva'], d['total_neto2'] * 0.19, 0)
+    d['tootal2'] = d['total_neto2'] + d['imp_adic'] + d['iva_2']
+
+    nombre_lower = d['nombre_producto'].str.lower().fillna('')
+    d['_es_despacho'] = (
+        nombre_lower.str.contains('despacho', na=False) |
+        nombre_lower.str.contains('flete',    na=False) |
+        nombre_lower.str.contains('distribucion', na=False)
+    )
+
+    d['_desp_linea']        = np.where(d['_es_despacho'], d['monto_real'] * 1.19, 0)
+    d['_desp_folio']        = d.groupby(['folio','rut_proveedor'])['_desp_linea'].transform('sum')
+    d['_suma_tootal2_folio']= d.groupby(['folio','rut_proveedor'])['tootal2'].transform('sum')
+    d['_total_factura']     = d.groupby(['folio','rut_proveedor'])['total'].transform('max')
+    d['_diferencia']        = d['_total_factura'] - d['_suma_tootal2_folio']
+    d['_desp_red2']         = d['_desp_folio'] + d['_diferencia']
+    d['_monto_limpio']      = np.where(d['_es_despacho'], 0, d['monto_real'].abs())
+    d['_tot_limpio_folio']  = d.groupby(['folio','rut_proveedor'])['_monto_limpio'].transform('sum')
+    d['_part_item']         = np.where(d['_tot_limpio_folio'] != 0, d['_monto_limpio'] / d['_tot_limpio_folio'], 0)
+    d['_dist_desp']         = (d['_part_item'] * d['_desp_red2']).round(0)
+
+    d['costo_realfinal'] = np.where(d['_es_despacho'], 0, d['tootal2'] + d['_dist_desp'])
+
+    denominador = np.where(d['formato'] == 1, d['cant_conv'], d['cant_conv'] * d['formato'])
+    d['muc'] = np.where((denominador != 0) & (~d['_es_despacho']), d['costo_realfinal'] / denominador, 0)
+
+    cols_temp = [c for c in d.columns if c.startswith('_')]
+    d = d.drop(columns=cols_temp)
+
+    df.loc[mask, d.columns] = d.values
+    return df
     """Guarda el DataFrame ya procesado en la tabla compras de Supabase.
     Elimina previamente los registros del mismo período (mes) y locales
     para evitar duplicados al recargar.
@@ -3237,15 +3304,16 @@ if modulo.startswith("📦"):
         f_comp = st.file_uploader("📂 Excel de Compras fuente (.xlsx)", type="xlsx", key="comp")
 
         if f_comp:
-            # ── Leer archivo y ejecutar matching automáticamente ─────────
+            # ── Leer, match y calcular en orden correcto ──────────────────
             if 'df_compras_procesado' not in st.session_state or \
                st.session_state.get('comp_filename') != f_comp.name:
-                with st.spinner("Procesando archivo..."):
-                    df_raw = pd.read_excel(f_comp)
-                    df_proc, warns = procesar_compras(df_raw)
-                    st.session_state['comp_warnings'] = warns
 
-                # ── Matching automático ───────────────────────────────────
+                # PASO 1: Leer y normalizar columnas solamente
+                with st.spinner("Leyendo archivo..."):
+                    df_raw  = pd.read_excel(f_comp)
+                    df_norm = _normalizar_columnas(df_raw)
+
+                # PASO 2: Matching contra BD → asigna conversion, formato, sku, subcat, categoria
                 with st.spinner("Aplicando matching con historial BD..."):
                     _q_hist = """
                         SELECT DISTINCT ON (rut_proveedor, nombre_producto)
@@ -3259,61 +3327,52 @@ if modulo.startswith("📦"):
                           AND formato IS NOT NULL
                         ORDER BY rut_proveedor, nombre_producto, fecha_dte DESC
                     """
-                    _df_hist_auto = run_query(_q_hist)
+                    _df_hist = run_query(_q_hist)
+                    _matched = 0
+                    _unmatched_idx = []
 
-                    if not _df_hist_auto.empty:
-                        _df_hist_auto['_key'] = (
-                            _df_hist_auto['rut_proveedor'].astype(str).str.strip() + '|' +
-                            _df_hist_auto['nombre_producto'].astype(str).str.strip().str.upper()
-                        )
-                        # Deduplicate by key — keep first occurrence (most recent due to ORDER BY)
-                        _df_hist_auto = _df_hist_auto.drop_duplicates(subset='_key', keep='first')
+                    # Ensure columns exist before matching
+                    for _f, _default in [('sku',''),('conversion',1.0),('formato',1.0),('subcat',''),('categoria_producto','')]:
+                        if _f not in df_norm.columns:
+                            df_norm[_f] = _default
 
-                        df_proc['_key'] = (
-                            df_proc['rut_proveedor'].astype(str).str.strip() + '|' +
-                            df_proc['nombre_producto'].astype(str).str.strip().str.upper()
+                    if not _df_hist.empty:
+                        _df_hist['_key'] = (
+                            _df_hist['rut_proveedor'].astype(str).str.strip() + '|' +
+                            _df_hist['nombre_producto'].astype(str).str.strip().str.upper()
                         )
-                        _hist_map_auto = _df_hist_auto.set_index('_key')[
+                        _df_hist = _df_hist.drop_duplicates(subset='_key', keep='first')
+                        _hist_map = _df_hist.set_index('_key')[
                             ['sku','conversion','formato','subcat','categoria_producto']
                         ].to_dict('index')
 
-                        # Ensure target columns exist with correct dtype
-                        for _f, _default, _dtype in [
-                            ('sku', '', object), ('conversion', 1.0, float),
-                            ('formato', 1.0, float), ('subcat', '', object),
-                            ('categoria_producto', '', object)
-                        ]:
-                            if _f not in df_proc.columns:
-                                df_proc[_f] = _default
-                            df_proc[_f] = df_proc[_f].astype(_dtype) if _dtype == object else pd.to_numeric(df_proc[_f], errors='coerce').fillna(_default)
-
-                        _matched_auto = 0
-                        _unmatched_auto = []
-                        for _i, _row in df_proc.iterrows():
+                        df_norm['_key'] = (
+                            df_norm['rut_proveedor'].astype(str).str.strip() + '|' +
+                            df_norm['nombre_producto'].astype(str).str.strip().str.upper()
+                        )
+                        for _i, _row in df_norm.iterrows():
                             _k = _row['_key']
-                            if _k in _hist_map_auto:
-                                _h = _hist_map_auto[_k]
-                                for _f in ['sku','conversion','formato','subcat','categoria_producto']:
-                                    try:
-                                        _val = _h[_f]
-                                        if _f in ('conversion','formato'):
-                                            _val = float(_val) if _val is not None and str(_val) not in ('','nan','None') else df_proc.at[_i, _f]
-                                        df_proc.at[_i, _f] = _val
-                                    except Exception:
-                                        pass
-                                _matched_auto += 1
+                            if _k in _hist_map:
+                                _h = _hist_map[_k]
+                                df_norm.at[_i, 'sku']               = str(_h['sku'])
+                                df_norm.at[_i, 'conversion']        = float(_h['conversion']) if _h['conversion'] else 1.0
+                                df_norm.at[_i, 'formato']           = float(_h['formato']) if _h['formato'] else 1.0
+                                df_norm.at[_i, 'subcat']            = str(_h['subcat']) if _h['subcat'] else ''
+                                df_norm.at[_i, 'categoria_producto']= str(_h['categoria_producto']) if _h['categoria_producto'] else ''
+                                _matched += 1
                             else:
-                                _unmatched_auto.append(_i)
+                                _unmatched_idx.append(_i)
+                        df_norm = df_norm.drop(columns=['_key'])
 
-                        df_proc = df_proc.drop(columns=['_key'])
-                        st.session_state['df_match_unmatched_idx'] = _unmatched_auto
-                        st.session_state['_match_matched'] = _matched_auto
-                    else:
-                        st.session_state['df_match_unmatched_idx'] = list(df_proc.index)
-                        st.session_state['_match_matched'] = 0
+                # PASO 3: Calcular con conversion/formato ya correctos
+                with st.spinner("Calculando campos financieros..."):
+                    df_proc, warns = procesar_compras(df_norm)
 
-                st.session_state['df_compras_procesado'] = df_proc
-                st.session_state['comp_filename'] = f_comp.name
+                st.session_state['df_compras_procesado']    = df_proc
+                st.session_state['comp_warnings']           = warns
+                st.session_state['comp_filename']           = f_comp.name
+                st.session_state['df_match_unmatched_idx'] = _unmatched_idx
+                st.session_state['_match_matched']         = _matched
 
             df_proc = st.session_state['df_compras_procesado']
             warns   = st.session_state.get('comp_warnings', [])
@@ -3425,27 +3484,72 @@ if modulo.startswith("📦"):
 
             # ── Sin match ─────────────────────────────────────────────
             st.markdown("#### 🔗 Resultado del matching automático")
-            st.markdown(
-                "<div class='info-box'>El matching se ejecuta automáticamente al cargar el archivo usando "
-                "<b>rut_proveedor + nombre_producto</b>. Los registros sin match requieren corrección manual.</div>",
-                unsafe_allow_html=True
-            )
-
             _unmatched_idx = st.session_state.get('df_match_unmatched_idx', [])
-            if _unmatched_idx:
-                if st.button("⚠️ Ver registros sin match", key='btn_ver_unmatched'):
-                    _df_proc_cur = st.session_state['df_compras_procesado']
-                    _cols_um = [c for c in ['local','fecha_dte','rut_proveedor','nombre_proveedor',
-                                'nombre_producto','cantidad','sku','conversion','formato',
-                                'subcat','categoria_producto'] if c in _df_proc_cur.columns]
-                    df_unmatched = _df_proc_cur.iloc[_unmatched_idx][_cols_um].copy()
-                    st.dataframe(df_unmatched, use_container_width=True, hide_index=True)
 
+            if _unmatched_idx:
+                st.warning(f"⚠️ {len(_unmatched_idx)} registro(s) sin match — completa los campos faltantes y recalcula.")
+
+                _df_cur = st.session_state['df_compras_procesado']
+                _cols_um = [c for c in ['local','fecha_dte','folio','rut_proveedor','nombre_proveedor',
+                            'nombre_producto','cantidad','sku','conversion','formato',
+                            'subcat','categoria_producto'] if c in _df_cur.columns]
+                df_unmatched_view = _df_cur.iloc[_unmatched_idx][_cols_um].copy()
+
+                # Editable table for corrections
+                df_edited = st.data_editor(
+                    df_unmatched_view,
+                    use_container_width=True,
+                    hide_index=False,
+                    key="unmatched_editor",
+                    column_config={
+                        'conversion': st.column_config.NumberColumn('conversion', min_value=0.0),
+                        'formato':    st.column_config.NumberColumn('formato',    min_value=0.0),
+                        'sku':        st.column_config.TextColumn('sku'),
+                        'subcat':     st.column_config.TextColumn('subcat'),
+                        'categoria_producto': st.column_config.TextColumn('categoria_producto'),
+                    }
+                )
+
+                _c1, _c2 = st.columns(2)
+                with _c1:
+                    if st.button("🔄 Aplicar y recalcular folios afectados", type="primary", key="btn_recalc_unmatched"):
+                        _df_upd = st.session_state['df_compras_procesado'].copy()
+                        # Apply edited values back
+                        for _edit_i, _orig_i in zip(df_edited.index, _unmatched_idx):
+                            for _f in ['sku','conversion','formato','subcat','categoria_producto']:
+                                if _f in df_edited.columns:
+                                    _v = df_edited.at[_edit_i, _f]
+                                    if pd.notna(_v) and str(_v) not in ('','nan'):
+                                        if _f in ('conversion','formato'):
+                                            _v = float(_v)
+                                        _df_upd.at[_orig_i, _f] = _v
+
+                        # Recalculate all folios that had unmatched rows
+                        _folios_afectados = _df_upd.iloc[_unmatched_idx]['folio'].unique().tolist()
+                        _df_upd = recalcular_folios(_df_upd, _folios_afectados)
+
+                        # Check which are now resolved (have sku + conversion + formato)
+                        _still_unmatched = []
+                        for _orig_i in _unmatched_idx:
+                            _row = _df_upd.iloc[_orig_i] if _orig_i < len(_df_upd) else None
+                            if _row is not None:
+                                _has_sku  = pd.notna(_row.get('sku')) and str(_row.get('sku','')) not in ('','nan')
+                                _has_conv = pd.notna(_row.get('conversion')) and float(_row.get('conversion', 0)) > 0
+                                if not (_has_sku and _has_conv):
+                                    _still_unmatched.append(_orig_i)
+
+                        st.session_state['df_compras_procesado']    = _df_upd
+                        st.session_state['df_match_unmatched_idx']  = _still_unmatched
+                        st.session_state['_match_matched']          = len(_df_upd) - len(_still_unmatched)
+                        st.success(f"✅ Recalculados {len(_folios_afectados)} folio(s). {len(_still_unmatched)} registro(s) aún sin resolver.")
+                        st.rerun()
+
+                with _c2:
                     _buf_um = io.BytesIO()
-                    df_unmatched.to_excel(_buf_um, index=False)
+                    df_unmatched_view.to_excel(_buf_um, index=False)
                     _buf_um.seek(0)
                     st.download_button(
-                        "⬇️ Descargar sin match (para corregir)",
+                        "⬇️ Descargar sin match (Excel)",
                         data=_buf_um,
                         file_name="compras_sin_match.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -3453,41 +3557,6 @@ if modulo.startswith("📦"):
                     )
             else:
                 st.success("✅ Todos los registros hicieron match con el historial.")
-
-            # Reimportar corregidos
-            with st.expander("📥 Reimportar corregidos", expanded=False):
-                st.caption("Carga el Excel corregido. Actualiza sku, conversion, formato, subcat y categoria_producto identificando por rut_proveedor + nombre_producto.")
-                f_corr = st.file_uploader("Excel corregido (.xlsx)", type="xlsx", key="comp_corr")
-                if f_corr and st.button("✅ Aplicar correcciones", key='btn_apply_corr', type='primary'):
-                    try:
-                        df_corr = pd.read_excel(f_corr)
-                        df_corr.columns = df_corr.columns.str.strip()
-                        df_corr['_key'] = (
-                            df_corr['rut_proveedor'].astype(str).str.strip() + '|' +
-                            df_corr['nombre_producto'].astype(str).str.strip().str.upper()
-                        )
-                        corr_map = df_corr.set_index('_key')[['sku','conversion','formato','subcat','categoria_producto']].to_dict('index')
-                        df_cur = st.session_state['df_compras_procesado'].copy()
-                        df_cur['_key'] = (
-                            df_cur['rut_proveedor'].astype(str).str.strip() + '|' +
-                            df_cur['nombre_producto'].astype(str).str.strip().str.upper()
-                        )
-                        applied = 0
-                        for i, row in df_cur.iterrows():
-                            k = row['_key']
-                            if k in corr_map:
-                                c = corr_map[k]
-                                for _field in ['sku','conversion','formato','subcat','categoria_producto']:
-                                    if pd.notna(c.get(_field)) and str(c.get(_field,'')) not in ('','nan'):
-                                        df_cur.at[i, _field] = c[_field]
-                                applied += 1
-                        df_cur = df_cur.drop(columns=['_key'])
-                        st.session_state['df_compras_procesado'] = df_cur
-                        st.session_state['df_match_unmatched_idx'] = []
-                        st.success(f"✅ {applied} registro(s) actualizados.")
-                        st.rerun()
-                    except Exception as _ec:
-                        st.error(f"Error: {_ec}")
 
             st.markdown("---")
 
