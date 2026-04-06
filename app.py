@@ -3234,15 +3234,64 @@ if modulo.startswith("📦"):
         f_comp = st.file_uploader("📂 Excel de Compras fuente (.xlsx)", type="xlsx", key="comp")
 
         if f_comp:
-            # ── Leer archivo ─────────────────────────────────────────────
+            # ── Leer archivo y ejecutar matching automáticamente ─────────
             if 'df_compras_procesado' not in st.session_state or \
                st.session_state.get('comp_filename') != f_comp.name:
                 with st.spinner("Procesando archivo..."):
                     df_raw = pd.read_excel(f_comp)
                     df_proc, warns = procesar_compras(df_raw)
-                    st.session_state['df_compras_procesado'] = df_proc
                     st.session_state['comp_warnings'] = warns
-                    st.session_state['comp_filename'] = f_comp.name
+
+                # ── Matching automático ───────────────────────────────────
+                with st.spinner("Aplicando matching con historial BD..."):
+                    _q_hist = """
+                        SELECT DISTINCT ON (rut_proveedor, nombre_producto)
+                            rut_proveedor, nombre_producto,
+                            sku, conversion, formato, subcat, categoria_producto
+                        FROM compras
+                        WHERE rut_proveedor IS NOT NULL
+                          AND nombre_producto IS NOT NULL
+                          AND sku IS NOT NULL
+                          AND conversion IS NOT NULL
+                          AND formato IS NOT NULL
+                        ORDER BY rut_proveedor, nombre_producto, fecha_dte DESC
+                    """
+                    _df_hist_auto = run_query(_q_hist)
+
+                    if not _df_hist_auto.empty:
+                        _df_hist_auto['_key'] = (
+                            _df_hist_auto['rut_proveedor'].astype(str).str.strip() + '|' +
+                            _df_hist_auto['nombre_producto'].astype(str).str.strip().str.upper()
+                        )
+                        df_proc['_key'] = (
+                            df_proc['rut_proveedor'].astype(str).str.strip() + '|' +
+                            df_proc['nombre_producto'].astype(str).str.strip().str.upper()
+                        )
+                        _hist_map_auto = _df_hist_auto.set_index('_key')[
+                            ['sku','conversion','formato','subcat','categoria_producto']
+                        ].to_dict('index')
+
+                        _matched_auto = 0
+                        _unmatched_auto = []
+                        for _i, _row in df_proc.iterrows():
+                            _k = _row['_key']
+                            if _k in _hist_map_auto:
+                                _h = _hist_map_auto[_k]
+                                for _f in ['sku','conversion','formato','subcat','categoria_producto']:
+                                    df_proc.at[_i, _f] = _h[_f]
+                                _matched_auto += 1
+                            else:
+                                _unmatched_auto.append(_i)
+
+                        df_proc = df_proc.drop(columns=['_key'])
+                        st.session_state['df_match_unmatched_idx'] = _unmatched_auto
+                        st.session_state['_match_matched'] = _matched_auto
+                    else:
+                        st.session_state['df_match_unmatched_idx'] = list(df_proc.index)
+                        st.session_state['_match_matched'] = 0
+
+                st.session_state['df_compras_procesado'] = df_proc
+                st.session_state['comp_filename'] = f_comp.name
 
             df_proc = st.session_state['df_compras_procesado']
             warns   = st.session_state.get('comp_warnings', [])
@@ -3252,9 +3301,14 @@ if modulo.startswith("📦"):
                 st.warning(w)
 
             # ── Métricas resumen ─────────────────────────────────────────
-            col1, col2, col3, col4 = st.columns(4)
+            _matched_auto  = st.session_state.get('_match_matched', 0)
+            _unmatched_idx = st.session_state.get('df_match_unmatched_idx', [])
+            _total_auto    = len(df_proc)
+            _pct_auto      = _matched_auto / _total_auto * 100 if _total_auto > 0 else 0
+
+            col1, col2, col3, col4, col5 = st.columns(5)
             with col1:
-                st.metric("Líneas procesadas", f"{len(df_proc):,}")
+                st.metric("Líneas procesadas", f"{_total_auto:,}")
             with col2:
                 n_folios = df_proc['folio'].nunique() if 'folio' in df_proc.columns else 0
                 st.metric("Folios únicos", f"{n_folios:,}")
@@ -3262,9 +3316,9 @@ if modulo.startswith("📦"):
                 tot = df_proc['costo_realfinal'].sum() if 'costo_realfinal' in df_proc.columns else 0
                 st.metric("Costo total procesado", f"${tot:,.0f}")
             with col4:
-                n_desp = df_proc['nombre_producto'].str.lower().str.contains(
-                    'despacho|flete|distribucion', na=False).sum()
-                st.metric("Líneas despacho", f"{n_desp:,}")
+                st.metric("✅ Con match", f"{_matched_auto:,} ({_pct_auto:.1f}%)")
+            with col5:
+                st.metric("⚠️ Sin match", f"{len(_unmatched_idx):,} ({100-_pct_auto:.1f}%)")
 
             st.markdown("---")
 
@@ -3347,89 +3401,36 @@ if modulo.startswith("📦"):
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
-            # ── Matching con historial BD ────────────────────────
-            st.markdown("#### 🔗 Matching con historial")
+            # ── Sin match ─────────────────────────────────────────────
+            st.markdown("#### 🔗 Resultado del matching automático")
             st.markdown(
-                "<div class='info-box'>Compara los registros cargados contra el historial de la BD usando "
-                "<b>rut_proveedor + nombre_producto</b>. Los que hacen match heredan "
-                "<b>sku, conversion, formato, subcat y categoria_producto</b> del registro más reciente. "
-                "Los que no hacen match se exportan para corrección manual.</div>",
+                "<div class='info-box'>El matching se ejecuta automáticamente al cargar el archivo usando "
+                "<b>rut_proveedor + nombre_producto</b>. Los registros sin match requieren corrección manual.</div>",
                 unsafe_allow_html=True
             )
 
-            if st.button("🔗 Ejecutar matching", key='btn_matching'):
-                with st.spinner("Consultando historial..."):
-                    _q_hist = """
-                        SELECT DISTINCT ON (rut_proveedor, nombre_producto)
-                            rut_proveedor, nombre_producto,
-                            sku, conversion, formato, subcat, categoria_producto
-                        FROM compras
-                        WHERE rut_proveedor IS NOT NULL
-                          AND nombre_producto IS NOT NULL
-                          AND sku IS NOT NULL
-                          AND conversion IS NOT NULL
-                          AND formato IS NOT NULL
-                        ORDER BY rut_proveedor, nombre_producto, fecha_dte DESC
-                    """
-                    df_hist = run_query(_q_hist)
-
-                    if df_hist.empty:
-                        st.warning("Sin historial en BD para hacer matching.")
-                    else:
-                        df_hist['_key'] = (
-                            df_hist['rut_proveedor'].astype(str).str.strip() + '|' +
-                            df_hist['nombre_producto'].astype(str).str.strip().str.upper()
-                        )
-                        df_match = df_proc.copy()
-                        df_match['_key'] = (
-                            df_match['rut_proveedor'].astype(str).str.strip() + '|' +
-                            df_match['nombre_producto'].astype(str).str.strip().str.upper()
-                        )
-                        hist_map = df_hist.set_index('_key')[['sku','conversion','formato','subcat','categoria_producto']].to_dict('index')
-
-                        matched = 0
-                        unmatched_idx = []
-                        for i, row in df_match.iterrows():
-                            k = row['_key']
-                            if k in hist_map:
-                                h = hist_map[k]
-                                for _f in ['sku','conversion','formato','subcat','categoria_producto']:
-                                    df_match.at[i, _f] = h[_f]
-                                matched += 1
-                            else:
-                                unmatched_idx.append(i)
-
-                        df_match = df_match.drop(columns=['_key'])
-                        st.session_state['df_compras_procesado'] = df_match
-                        st.session_state['df_match_unmatched_idx'] = unmatched_idx
-
-                        total = len(df_match)
-                        pct   = matched / total * 100 if total > 0 else 0
-                        _m1, _m2, _m3 = st.columns(3)
-                        _m1.metric("Total registros", total)
-                        _m2.metric("✅ Con match", f"{matched} ({pct:.1f}%)")
-                        _m3.metric("⚠️ Sin match", f"{len(unmatched_idx)} ({100-pct:.1f}%)")
-                        if unmatched_idx:
-                            st.warning(f"{len(unmatched_idx)} registro(s) sin match — descarga el Excel, completa los campos y reimporta.")
-
-            # Exportar sin match
             _unmatched_idx = st.session_state.get('df_match_unmatched_idx', [])
             if _unmatched_idx:
-                _df_proc_cur = st.session_state['df_compras_procesado']
-                _cols_um = [c for c in ['local','fecha_dte','rut_proveedor','nombre_proveedor',
-                            'nombre_producto','cantidad','sku','conversion','formato',
-                            'subcat','categoria_producto'] if c in _df_proc_cur.columns]
-                df_unmatched = _df_proc_cur.iloc[_unmatched_idx][_cols_um].copy()
-                _buf_um = io.BytesIO()
-                df_unmatched.to_excel(_buf_um, index=False)
-                _buf_um.seek(0)
-                st.download_button(
-                    "⬇️ Descargar sin match (para corregir)",
-                    data=_buf_um,
-                    file_name="compras_sin_match.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key='dl_unmatched'
-                )
+                if st.button("⚠️ Ver registros sin match", key='btn_ver_unmatched'):
+                    _df_proc_cur = st.session_state['df_compras_procesado']
+                    _cols_um = [c for c in ['local','fecha_dte','rut_proveedor','nombre_proveedor',
+                                'nombre_producto','cantidad','sku','conversion','formato',
+                                'subcat','categoria_producto'] if c in _df_proc_cur.columns]
+                    df_unmatched = _df_proc_cur.iloc[_unmatched_idx][_cols_um].copy()
+                    st.dataframe(df_unmatched, use_container_width=True, hide_index=True)
+
+                    _buf_um = io.BytesIO()
+                    df_unmatched.to_excel(_buf_um, index=False)
+                    _buf_um.seek(0)
+                    st.download_button(
+                        "⬇️ Descargar sin match (para corregir)",
+                        data=_buf_um,
+                        file_name="compras_sin_match.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key='dl_unmatched'
+                    )
+            else:
+                st.success("✅ Todos los registros hicieron match con el historial.")
 
             # Reimportar corregidos
             with st.expander("📥 Reimportar corregidos", expanded=False):
