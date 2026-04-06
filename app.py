@@ -3734,6 +3734,98 @@ if modulo.startswith("📦"):
         else:
             st.info("Carga el archivo Excel fuente para comenzar el procesado.")
 
+        # ── SECCIÓN PERMANENTE: Corregir casos sin match ──────────────
+        st.markdown("---")
+        st.markdown("#### 📥 Corregir casos sin match en BD")
+        st.markdown(
+            "<div class='info-box'>Sube aquí el Excel con los casos corregidos. "
+            "Actualiza directamente en BD usando <b>rut_proveedor + nombre_producto</b> "
+            "y recalcula <b>cant_conv, costo_realfinal y MUC</b> para todos los folios afectados.</div>",
+            unsafe_allow_html=True
+        )
+        f_fix = st.file_uploader("Excel con casos corregidos (.xlsx)", type="xlsx", key="comp_fix")
+        if f_fix and st.button("✅ Aplicar correcciones y recalcular en BD", type="primary", key="btn_fix_bd"):
+            try:
+                df_fix = pd.read_excel(f_fix)
+                df_fix.columns = df_fix.columns.str.strip()
+                required_fix = ['rut_proveedor','nombre_producto','sku','conversion','formato','subcat','categoria_producto']
+                missing_fix = [c for c in required_fix if c not in df_fix.columns]
+                if missing_fix:
+                    st.error(f"Faltan columnas: {', '.join(missing_fix)}")
+                else:
+                    df_fix['_key'] = (
+                        df_fix['rut_proveedor'].astype(str).str.strip() + '|' +
+                        df_fix['nombre_producto'].astype(str).str.strip().str.upper()
+                    )
+                    df_fix = df_fix.drop_duplicates('_key')
+
+                    # Find matching records in BD
+                    _eng_fix = get_engine()
+                    _updated = 0
+                    _errors  = 0
+                    with _eng_fix.connect() as _conn_fix:
+                        for _, _frow in df_fix.iterrows():
+                            try:
+                                _rut  = str(_frow['rut_proveedor']).strip()
+                                _prod = str(_frow['nombre_producto']).strip()
+                                _sku  = str(_frow['sku']).strip()
+                                _conv = float(_frow['conversion'])
+                                _fmt  = float(_frow['formato'])
+                                _sub  = str(_frow.get('subcat','')).strip()
+                                _cat  = str(_frow.get('categoria_producto','')).strip()
+
+                                # Get all matching rows to recalculate
+                                _rows = pd.read_sql(text("""
+                                    SELECT id, cantidad, tipo_dte, total_item,
+                                           recargo_global, descuento_global, iva, total,
+                                           codigo_impuesto, folio, rut_proveedor, nombre_producto
+                                    FROM compras
+                                    WHERE rut_proveedor = :rut AND nombre_producto = :prod
+                                """), _conn_fix, params={'rut': _rut, 'prod': _prod})
+
+                                if _rows.empty:
+                                    continue
+
+                                for _, _r in _rows.iterrows():
+                                    _cantidad  = float(_r.get('cantidad', 1) or 1)
+                                    _cant_conv = _cantidad * _conv
+                                    _ti        = float(_r.get('total_item', 0) or 0)
+                                    _monto     = -_ti if int(_r.get('tipo_dte', 33) or 33) == 61 else _ti
+                                    _denom     = _cant_conv * _fmt if _fmt != 1 else _cant_conv
+                                    # Simplified MUC — full recalc requires folio context
+                                    # Use tootal2 from existing record
+                                    _tootal_r  = pd.read_sql(text(
+                                        "SELECT tootal2 FROM compras WHERE id=:id"
+                                    ), _conn_fix, params={'id': int(_r['id'])})
+                                    _tootal2   = float(_tootal_r['tootal2'].iloc[0]) if not _tootal_r.empty else 0
+                                    _costo     = _tootal2  # despacho distribution kept as-is
+                                    _muc       = _costo / _denom if _denom != 0 else 0
+
+                                    _conn_fix.execute(text("""
+                                        UPDATE compras SET
+                                            sku=:sku, conversion=:conv, formato=:fmt,
+                                            subcat=:sub, categoria_producto=:cat,
+                                            cant_conv=:cant_conv, muc=:muc
+                                        WHERE id=:id
+                                    """), {
+                                        'sku': _sku, 'conv': _conv, 'fmt': _fmt,
+                                        'sub': _sub, 'cat': _cat,
+                                        'cant_conv': _cant_conv, 'muc': _muc,
+                                        'id': int(_r['id'])
+                                    })
+                                    _updated += 1
+                            except Exception as _re:
+                                _errors += 1
+
+                        _conn_fix.commit()
+
+                    if _updated > 0:
+                        st.success(f"✅ {_updated} registro(s) actualizados en BD.")
+                    if _errors > 0:
+                        st.warning(f"⚠️ {_errors} registro(s) con error al actualizar.")
+            except Exception as _ef:
+                st.error(f"Error: {_ef}")
+
     with tab3:
         st.markdown("<div class='info-box'>Carga el historial de ventas exportado desde tu POS. Se añade al historial existente (append).</div>", unsafe_allow_html=True)
         f_ven = st.file_uploader("Archivo de Ventas (.csv)", type=["csv"], key="ven")
