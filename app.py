@@ -4138,6 +4138,7 @@ if modulo.startswith("📦"):
                     WHERE muc > 0
                       AND costo_realfinal > 0
                       AND monto_real > 0
+                      AND cantidad > 0
                       AND UPPER(sku) != 'COLACION'
                       AND UPPER(sku) NOT IN ('N. CREDITO', 'NCR')
                       AND id NOT IN (SELECT compra_id FROM compras_excluidas)
