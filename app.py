@@ -2222,7 +2222,37 @@ def save_compras(df: pd.DataFrame):
         with st.spinner(f"Insertando {total:,} registros..."):
             df[cols_ok].to_sql('compras', engine, if_exists='append',
                                index=False, method='multi', chunksize=500)
-        st.success(f"✅ {total:,} registros guardados ({fecha_min} → {fecha_max}). Período anterior reemplazado.")
+
+        # Recuperar IDs de registros sin match para permitir corrección posterior
+        unmatched_idx = st.session_state.get('df_match_unmatched_idx', [])
+        if unmatched_idx:
+            df_unmatched = df.iloc[unmatched_idx].copy()
+            # Build query to find their IDs in BD
+            ids_sin_match = []
+            with engine.connect() as conn:
+                for _, row in df_unmatched.iterrows():
+                    try:
+                        res = pd.read_sql(text("""
+                            SELECT id FROM compras
+                            WHERE folio = :folio
+                              AND rut_proveedor = :rut
+                              AND nombre_producto = :prod
+                              AND fecha_dte::date = :fecha
+                            LIMIT 1
+                        """), conn, params={
+                            'folio': str(row.get('folio', '')),
+                            'rut':   str(row.get('rut_proveedor', '')),
+                            'prod':  str(row.get('nombre_producto', '')),
+                            'fecha': str(pd.to_datetime(row.get('fecha_dte'), errors='coerce').date())
+                        })
+                        if not res.empty:
+                            ids_sin_match.append(int(res['id'].iloc[0]))
+                    except Exception:
+                        pass
+            st.session_state['ids_sin_match_bd'] = ids_sin_match
+
+        st.success(f"✅ {total:,} registros guardados ({fecha_min} → {fecha_max})."
+                   + (f" ⚠️ {len(unmatched_idx)} sin match — clasifícalos en la sección de sin match." if unmatched_idx else ""))
     except Exception as e:
         st.error(f"Error al guardar compras: {e}")
 
@@ -3540,6 +3570,50 @@ if modulo.startswith("📦"):
                                 _has_conv = pd.notna(_row.get('conversion')) and float(_row.get('conversion', 0)) > 0
                                 if not (_has_sku and _has_conv):
                                     _still_unmatched.append(_orig_i)
+
+                        # UPDATE in BD if records were already saved
+                        _ids_bd = st.session_state.get('ids_sin_match_bd', [])
+                        if _ids_bd:
+                            try:
+                                _engine_upd = get_engine()
+                                with _engine_upd.connect() as _conn_upd:
+                                    for _edit_i, _orig_i, _id_bd in zip(
+                                        df_edited.index, _unmatched_idx,
+                                        _ids_bd[:len(_unmatched_idx)]
+                                    ):
+                                        _row_upd = _df_upd.iloc[_orig_i]
+                                        _conn_upd.execute(text("""
+                                            UPDATE compras SET
+                                                sku               = :sku,
+                                                conversion        = :conv,
+                                                formato           = :fmt,
+                                                subcat            = :subcat,
+                                                categoria_producto= :cat,
+                                                cant_conv         = :cant_conv,
+                                                costo_realfinal   = :costo,
+                                                muc               = :muc,
+                                                tootal2           = :tootal2,
+                                                recargo2          = :recargo2,
+                                                total_neto2       = :total_neto2
+                                            WHERE id = :id
+                                        """), {
+                                            'sku':        str(_row_upd.get('sku', '')),
+                                            'conv':       float(_row_upd.get('conversion', 1)),
+                                            'fmt':        float(_row_upd.get('formato', 1)),
+                                            'subcat':     str(_row_upd.get('subcat', '')),
+                                            'cat':        str(_row_upd.get('categoria_producto', '')),
+                                            'cant_conv':  float(_row_upd.get('cant_conv', 0)),
+                                            'costo':      float(_row_upd.get('costo_realfinal', 0)),
+                                            'muc':        float(_row_upd.get('muc', 0)),
+                                            'tootal2':    float(_row_upd.get('tootal2', 0)),
+                                            'recargo2':   float(_row_upd.get('recargo2', 0)),
+                                            'total_neto2':float(_row_upd.get('total_neto2', 0)),
+                                            'id':         _id_bd,
+                                        })
+                                    _conn_upd.commit()
+                                st.session_state['ids_sin_match_bd'] = []
+                            except Exception as _eu:
+                                st.error(f"Error actualizando BD: {_eu}")
 
                         st.session_state['df_compras_procesado']    = _df_upd
                         st.session_state['df_match_unmatched_idx']  = _still_unmatched
