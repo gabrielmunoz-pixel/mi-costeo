@@ -3266,6 +3266,9 @@ if modulo.startswith("📦"):
                             _df_hist_auto['rut_proveedor'].astype(str).str.strip() + '|' +
                             _df_hist_auto['nombre_producto'].astype(str).str.strip().str.upper()
                         )
+                        # Deduplicate by key — keep first occurrence (most recent due to ORDER BY)
+                        _df_hist_auto = _df_hist_auto.drop_duplicates(subset='_key', keep='first')
+
                         df_proc['_key'] = (
                             df_proc['rut_proveedor'].astype(str).str.strip() + '|' +
                             df_proc['nombre_producto'].astype(str).str.strip().str.upper()
