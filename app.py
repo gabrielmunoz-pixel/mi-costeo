@@ -3819,12 +3819,8 @@ if modulo.startswith("📦"):
             st.info(f"📋 {len(_folios_pendientes)} folio(s) pendientes de recalcular: {', '.join(_folios_pendientes[:5])}{'...' if len(_folios_pendientes) > 5 else ''}")
             if st.button("2️⃣ Recalcular folios en BD", type="primary", key="btn_recalc_bd"):
                 try:
-                    # Fetch all rows of affected folios
                     _df_folios = run_query("""
-                        SELECT id, folio, rut_proveedor, nombre_producto,
-                               cantidad, conversion, formato, tipo_dte, total_item,
-                               recargo_global, descuento_global, iva, total, codigo_impuesto,
-                               nombre_producto
+                        SELECT id, cantidad, conversion, formato, costo_realfinal
                         FROM compras
                         WHERE folio = ANY(:folios)
                     """, {'folios': _folios_pendientes})
@@ -3832,71 +3828,32 @@ if modulo.startswith("📦"):
                     if _df_folios.empty:
                         st.warning("No se encontraron registros para esos folios.")
                     else:
-                        # Recalculate using recalcular_folios logic
                         import numpy as np
-                        _df_calc = _df_folios.copy()
-                        for _col, _def in [('cantidad',1),('conversion',1),('formato',1),
-                                           ('total_item',0),('recargo_global',0),
-                                           ('descuento_global',0),('iva',0),('total',0)]:
-                            _df_calc[_col] = pd.to_numeric(_df_calc[_col], errors='coerce').fillna(_def)
+                        _df_folios['cantidad']        = pd.to_numeric(_df_folios['cantidad'],        errors='coerce').fillna(1)
+                        _df_folios['conversion']      = pd.to_numeric(_df_folios['conversion'],      errors='coerce').fillna(1)
+                        _df_folios['formato']         = pd.to_numeric(_df_folios['formato'],         errors='coerce').fillna(1)
+                        _df_folios['costo_realfinal'] = pd.to_numeric(_df_folios['costo_realfinal'], errors='coerce').fillna(0)
 
-                        _df_calc['cant_conv']  = _df_calc['cantidad'] * _df_calc['conversion']
-                        _df_calc['monto_real'] = np.where(_df_calc['tipo_dte'].astype(str) == '61',
-                                                          -_df_calc['total_item'], _df_calc['total_item'])
+                        _df_folios['cant_conv'] = _df_folios['cantidad'] * _df_folios['conversion']
+                        _denom = np.where(
+                            _df_folios['formato'] == 1,
+                            _df_folios['cant_conv'],
+                            _df_folios['cant_conv'] * _df_folios['formato']
+                        )
+                        _df_folios['muc'] = np.where(
+                            _denom != 0,
+                            _df_folios['costo_realfinal'] / _denom,
+                            0
+                        )
 
-                        _df_calc['_tot_folio']   = _df_calc.groupby(['folio','rut_proveedor'])['monto_real'].transform('sum')
-                        _df_calc['_recargo_neto']= _df_calc['recargo_global'] - _df_calc['descuento_global']
-                        _df_calc['_part']        = np.where(_df_calc['_tot_folio'] != 0,
-                                                             _df_calc['monto_real'] / _df_calc['_tot_folio'], 0)
-                        _df_calc['recargo2']     = _df_calc['_part'] * _df_calc['_recargo_neto']
-                        _df_calc['total_neto2']  = _df_calc['monto_real'] + _df_calc['recargo2']
-
-                        _cod = _df_calc.get('codigo_impuesto', pd.Series([''] * len(_df_calc)))
-                        _cod = _cod.fillna('').astype(str).str.strip().str.replace(r'\.0$','',regex=True).str.replace(r'^nan$','',regex=True)
-                        _df_calc['imp_adic'] = _df_calc['monto_real'] * _cod.map(TASAS_IMP_ADIC).fillna(0)
-
-                        _df_calc['_tiene_iva'] = _df_calc.groupby(['folio','rut_proveedor'])['iva'].transform('max') != 0
-                        _df_calc['iva_2']      = np.where(_df_calc['_tiene_iva'], _df_calc['total_neto2'] * 0.19, 0)
-                        _df_calc['tootal2']    = _df_calc['total_neto2'] + _df_calc['imp_adic'] + _df_calc['iva_2']
-
-                        _nom = _df_calc['nombre_producto'].str.lower().fillna('')
-                        _df_calc['_es_desp'] = (_nom.str.contains('despacho',na=False) |
-                                                _nom.str.contains('flete',na=False) |
-                                                _nom.str.contains('distribucion',na=False))
-                        _df_calc['_desp_l']  = np.where(_df_calc['_es_desp'], _df_calc['monto_real']*1.19, 0)
-                        _df_calc['_desp_f']  = _df_calc.groupby(['folio','rut_proveedor'])['_desp_l'].transform('sum')
-                        _df_calc['_sum_t2']  = _df_calc.groupby(['folio','rut_proveedor'])['tootal2'].transform('sum')
-                        _df_calc['_tot_fac'] = _df_calc.groupby(['folio','rut_proveedor'])['total'].transform('max')
-                        _df_calc['_diff']    = _df_calc['_tot_fac'] - _df_calc['_sum_t2']
-                        _df_calc['_dr2']     = _df_calc['_desp_f'] + _df_calc['_diff']
-                        _df_calc['_ml']      = np.where(_df_calc['_es_desp'], 0, _df_calc['monto_real'].abs())
-                        _df_calc['_tl']      = _df_calc.groupby(['folio','rut_proveedor'])['_ml'].transform('sum')
-                        _df_calc['_pi']      = np.where(_df_calc['_tl'] != 0, _df_calc['_ml']/_df_calc['_tl'], 0)
-                        _df_calc['_dd']      = (_df_calc['_pi'] * _df_calc['_dr2']).round(0)
-                        _df_calc['costo_realfinal'] = np.where(_df_calc['_es_desp'], 0, _df_calc['tootal2'] + _df_calc['_dd'])
-                        _denom = np.where(_df_calc['formato']==1, _df_calc['cant_conv'], _df_calc['cant_conv']*_df_calc['formato'])
-                        _df_calc['muc'] = np.where((_denom!=0)&(~_df_calc['_es_desp']), _df_calc['costo_realfinal']/_denom, 0)
-
-                        # UPDATE BD
                         _recalc = 0
                         _eng_r = get_engine()
                         with _eng_r.connect() as _conn_r:
-                            for _, _rr in _df_calc.iterrows():
+                            for _, _rr in _df_folios.iterrows():
                                 _conn_r.execute(text("""
-                                    UPDATE compras SET
-                                        cant_conv=:cc, monto_real=:mr, recargo2=:r2,
-                                        total_neto2=:tn2, imp_adic=:ia, iva_2=:iv2,
-                                        tootal2=:t2, costo_realfinal=:cf, muc=:muc
-                                    WHERE id=:id
+                                    UPDATE compras SET cant_conv=:cc, muc=:muc WHERE id=:id
                                 """), {
                                     'cc':  float(_rr['cant_conv']),
-                                    'mr':  float(_rr['monto_real']),
-                                    'r2':  float(_rr['recargo2']),
-                                    'tn2': float(_rr['total_neto2']),
-                                    'ia':  float(_rr['imp_adic']),
-                                    'iv2': float(_rr['iva_2']),
-                                    't2':  float(_rr['tootal2']),
-                                    'cf':  float(_rr['costo_realfinal']),
                                     'muc': float(_rr['muc']),
                                     'id':  int(_rr['id'])
                                 })
