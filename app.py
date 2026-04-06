@@ -3277,6 +3277,16 @@ if modulo.startswith("📦"):
                             ['sku','conversion','formato','subcat','categoria_producto']
                         ].to_dict('index')
 
+                        # Ensure target columns exist with correct dtype
+                        for _f, _default, _dtype in [
+                            ('sku', '', object), ('conversion', 1.0, float),
+                            ('formato', 1.0, float), ('subcat', '', object),
+                            ('categoria_producto', '', object)
+                        ]:
+                            if _f not in df_proc.columns:
+                                df_proc[_f] = _default
+                            df_proc[_f] = df_proc[_f].astype(_dtype) if _dtype == object else pd.to_numeric(df_proc[_f], errors='coerce').fillna(_default)
+
                         _matched_auto = 0
                         _unmatched_auto = []
                         for _i, _row in df_proc.iterrows():
@@ -3284,7 +3294,13 @@ if modulo.startswith("📦"):
                             if _k in _hist_map_auto:
                                 _h = _hist_map_auto[_k]
                                 for _f in ['sku','conversion','formato','subcat','categoria_producto']:
-                                    df_proc.at[_i, _f] = _h[_f]
+                                    try:
+                                        _val = _h[_f]
+                                        if _f in ('conversion','formato'):
+                                            _val = float(_val) if _val is not None and str(_val) not in ('','nan','None') else df_proc.at[_i, _f]
+                                        df_proc.at[_i, _f] = _val
+                                    except Exception:
+                                        pass
                                 _matched_auto += 1
                             else:
                                 _unmatched_auto.append(_i)
