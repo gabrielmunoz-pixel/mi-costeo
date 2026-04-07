@@ -4759,15 +4759,13 @@ if modulo.startswith("📦"):
                                 prod   = str(row.get('PRODUCTO','')).strip()
                                 if not prod or prod == 'nan': continue
                                 um     = str(row.get('Unidad de Medida','')).strip()
-                                crudo  = pd.to_numeric(row.get('Crudo',0),     errors='coerce') or 0
-                                prod_  = pd.to_numeric(row.get('Producción',0),errors='coerce') or 0
-                                cocido = pd.to_numeric(row.get('Cocido',0),    errors='coerce') or 0
-                                # Si Total es fórmula o no numérico, calcular desde componentes
-                                _total_raw = row.get('Total', 0)
-                                total = pd.to_numeric(_total_raw, errors='coerce')
-                                if pd.isna(total) or total == 0:
-                                    total = crudo + prod_ + cocido
-                                total = float(total) or 0
+                                crudo  = float(pd.to_numeric(row.get('Crudo',0),      errors='coerce') or 0) if pd.notna(row.get('Crudo'))  else 0.0
+                                prod_  = float(pd.to_numeric(row.get('Producción',0), errors='coerce') or 0) if pd.notna(row.get('Producción')) else 0.0
+                                cocido = float(pd.to_numeric(row.get('Cocido',0),     errors='coerce') or 0) if pd.notna(row.get('Cocido'))     else 0.0
+                                # Si Total es fórmula o NaN, calcular desde componentes
+                                _total_raw = row.get('Total', None)
+                                _total_num = pd.to_numeric(_total_raw, errors='coerce')
+                                total = float(_total_num) if pd.notna(_total_num) and float(_total_num) > 0 else (crudo + prod_ + cocido)
                                 tipo   = str(row.get('TIPO','')).strip()
                                 # Merma: buscar por posición original en df_raw (row_i + 2 por offset de headers)
                                 merma  = _mermas_ali.get(row_i + 2, 0.0)
@@ -4799,15 +4797,16 @@ if modulo.startswith("📦"):
                                 prod  = str(row.get('PRODUCTO','')).strip()
                                 if not prod or prod == 'nan': continue
                                 um    = str(row.get('Unidad de Medida','')).strip()
-                                # Bar tiene Bodega + Camara + Bar — si Total es fórmula, sumar componentes
-                                _total_raw = row.get('Total', 0)
-                                total = pd.to_numeric(_total_raw, errors='coerce')
-                                if pd.isna(total) or total == 0:
-                                    _bodega = pd.to_numeric(row.get('Bodega',0), errors='coerce') or 0
-                                    _camara = pd.to_numeric(row.get('Camara',0), errors='coerce') or 0
-                                    _bar    = pd.to_numeric(row.get('Bar',0),    errors='coerce') or 0
-                                    total   = _bodega + _camara + _bar
-                                total = float(total) or 0
+                                # Bar tiene Bodega + Camara + Bar — si Total es fórmula o NaN, sumar componentes
+                                _total_raw = row.get('Total', None)
+                                _total_num = pd.to_numeric(_total_raw, errors='coerce')
+                                if pd.notna(_total_num) and float(_total_num) > 0:
+                                    total = float(_total_num)
+                                else:
+                                    _bodega = float(pd.to_numeric(row.get('Bodega',0), errors='coerce') or 0) if pd.notna(row.get('Bodega')) else 0.0
+                                    _camara = float(pd.to_numeric(row.get('Camara',0), errors='coerce') or 0) if pd.notna(row.get('Camara')) else 0.0
+                                    _bar_v  = float(pd.to_numeric(row.get('Bar',0),    errors='coerce') or 0) if pd.notna(row.get('Bar'))    else 0.0
+                                    total   = _bodega + _camara + _bar_v
                                 tipo  = str(row.get('TIPO','')).strip().upper()
                                 ctrl  = TIPO_BAR_CONTROL.get(tipo, tipo)
                                 merma = _mermas_bar.get(row_i + 2, 0.0)
