@@ -4381,7 +4381,7 @@ if modulo.startswith("📦"):
             if f_uso and periodo_uso:
                 locales_uso_disponibles = []
                 try:
-                    df_uso_prev = pd.read_excel(f_uso, sheet_name='UsoIngredientes', header=0)
+                    df_uso_prev = pd.read_excel(f_uso, sheet_name=0, header=0)
                     locales_uso_disponibles = sorted(df_uso_prev['Local'].dropna().unique().tolist()) if 'Local' in df_uso_prev.columns else []
                 except: pass
 
@@ -4394,7 +4394,7 @@ if modulo.startswith("📦"):
 
                 if st.button("💾 Cargar Uso de Ingredientes", key="btn_uso"):
                     try:
-                        df_uso = pd.read_excel(f_uso, sheet_name='UsoIngredientes', header=0)
+                        df_uso = pd.read_excel(f_uso, sheet_name=0, header=0)
                         df_uso.columns = df_uso.columns.str.strip()
                         df_uso = df_uso.rename(columns={
                             'Código Ingrediente': 'sku_ingrediente',
