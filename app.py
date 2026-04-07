@@ -3914,21 +3914,18 @@ if modulo.startswith("📦"):
                         dispersion     = ('dispersion', 'max'),
                         n_filas        = ('n_registros', 'sum'),
                     ).reset_index()
-                    # Ordenar: primero los que tienen múltiples combos params, luego por rango MUC
-                    grupos = grupos.sort_values(
-                        ['n_combos_params', 'dispersion'], ascending=[False, False]
-                    ).reset_index(drop=True)
+                    # Ordenar por dispersión DESC
+                    grupos = grupos.sort_values('dispersion', ascending=False).reset_index(drop=True)
                 else:
                     grupos = pd.DataFrame()
 
-                # Buscador: una opción por SKU (no por bin MUC) para filtrar la tabla
-                if not df_audit.empty:
+                # Buscador: una opción por SKU ordenada por dispersión DESC
+                if not grupos.empty:
                     def _muc_label(r):
-                        combos_str = f"⚠️ {int(r['n_combos_params'])} combos params" if int(r.get('n_combos_params',1)) > 1 else ""
-                        rango_str  = f"{float(r['dispersion']):.1f}×" if float(r.get('dispersion',0)) > 1.0 else ""
-                        flags      = " | ".join(filter(None, [combos_str, rango_str]))
-                        return f"{r['sku']} — {r['nombre_producto'][:40]}" + (f" [{flags}]" if flags else "")
-                    opciones_muc = df_audit.drop_duplicates('sku').apply(_muc_label, axis=1).tolist()
+                        d = float(r.get('dispersion', 0) or 0)
+                        dl = f'🔴 {d:.1f}×' if d > 8 else f'🟡 {d:.1f}×' if d > 2 else f'⚪ {d:.1f}×'
+                        return f"{r['sku']} — {r['nombre'][:40]} | {dl}"
+                    opciones_muc = grupos.apply(_muc_label, axis=1).tolist()
                 else:
                     opciones_muc = []
 
@@ -4075,12 +4072,16 @@ if modulo.startswith("📦"):
                 # TABLA CON CHECKBOXES + CONTROLES
                 # ══════════════════════════════════════════════════════════
 
-                # Filtrar tabla según búsqueda
+                # Filtrar tabla según búsqueda — siempre ordenar por dispersión DESC
                 if sku_activo:
-                    df_tabla = df_audit[df_audit['sku'] == sku_activo].reset_index(drop=True)
+                    df_tabla = (df_audit[df_audit['sku'] == sku_activo]
+                                .sort_values('dispersion', ascending=False)
+                                .reset_index(drop=True))
                     sku_fil  = sku_activo
                 else:
-                    df_tabla = df_audit.reset_index(drop=True)
+                    df_tabla = (df_audit
+                                .sort_values('dispersion', ascending=False)
+                                .reset_index(drop=True))
                     sku_fil  = None
 
                 st.caption(f"{'SKU: ' + sku_fil if sku_fil else 'Todos los SKUs'} — {len(df_tabla)} grupos")
