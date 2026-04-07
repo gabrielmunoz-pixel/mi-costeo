@@ -4133,7 +4133,7 @@ if modulo.startswith("📦"):
                         MODE() WITHIN GROUP (ORDER BY nombre_producto)                  AS nombre_producto,
                         MODE() WITHIN GROUP (ORDER BY nombre_proveedor)                 AS proveedor,
                         MAX(categoria_producto)                                         AS categoria,
-                        ROUND(AVG(monto_real / NULLIF(cantidad, 0))::numeric, 2)       AS precio_factura
+                        ROUND((ROUND(muc::numeric, 4) * formato)::numeric, 2)          AS precio_factura
                     FROM compras
                     WHERE muc > 0
                       AND costo_realfinal > 0
