@@ -3743,9 +3743,17 @@ if modulo.startswith("📦"):
 
         if st.button("▶ Ejecutar Auditoría"):
             st.session_state.pop('audit_df', None)
+            st.session_state.pop('audit_df_params', None)
 
-        if 'audit_df' not in st.session_state:
-            cat_sel = st.session_state.get('audit_cat', 'Todas (sin Colación)')
+        # Calcular parámetros actuales
+        _audit_cat_cur    = st.session_state.get('audit_cat', 'Todas (sin Colación)')
+        _audit_fi_cur     = str(st.session_state.get('audit_fi', ''))
+        _audit_ff_cur     = str(st.session_state.get('audit_ff', ''))
+        _audit_params_cur = (_audit_cat_cur, _audit_fi_cur, _audit_ff_cur)
+
+        # Solo re-ejecutar si no hay resultado o si cambiaron los parámetros
+        if 'audit_df' not in st.session_state or            st.session_state.get('audit_df_params') != _audit_params_cur:
+            cat_sel = _audit_cat_cur
             umbral_audit = st.session_state.get('audit_umbral', 5.0)
             if cat_sel in ('Todas (sin Colación)', '── Colación ──'):
                 filtro_cat_audit   = "AND UPPER(categoria_producto) NOT LIKE '%COLACION%' AND UPPER(categoria_producto) NOT LIKE '%COLACIÓN%'"
@@ -3834,7 +3842,7 @@ if modulo.startswith("📦"):
                         COUNT(*)                                                        AS n_bins_muc,
                         MIN(muc_bin)                                                    AS muc_bin_min,
                         MAX(muc_bin)                                                    AS muc_bin_max,
-                        ROUND((MAX(muc_bin) - MIN(muc_bin))::numeric, 2)               AS rango_muc
+                        ROUND((MAX(muc_bin) / NULLIF(MIN(muc_bin), 0))::numeric, 2)   AS dispersion_ratio
                     FROM muc_grupos
                     GROUP BY sku, conversion, formato
                 )
@@ -3853,7 +3861,7 @@ if modulo.startswith("📦"):
                     ROUND((mg.muc_avg * mg.formato)::numeric, 2)                       AS precio_factura,
                     md.muc_bin_min                                                      AS muc_min,
                     md.muc_bin_max                                                      AS muc_max,
-                    md.rango_muc                                                        AS dispersion,
+                    md.dispersion_ratio                                                 AS dispersion,
                     md.n_bins_muc,
                     sc.n_combos_params,
                     sc.n_registros_total
@@ -3872,11 +3880,12 @@ if modulo.startswith("📦"):
                     sc.n_combos_params > 1
                 )
                 {filtro_cat_audit_c}
-                ORDER BY sc.n_combos_params DESC, md.rango_muc DESC, mg.sku, mg.conversion, mg.formato, mg.muc_bin
+                ORDER BY sc.n_combos_params DESC, md.dispersion_ratio DESC, mg.sku, mg.conversion, mg.formato, mg.muc_bin
                 LIMIT 500
             """
             df_audit = run_query(q_audit)
-            st.session_state['audit_df'] = df_audit
+            st.session_state['audit_df']        = df_audit
+            st.session_state['audit_df_params'] = _audit_params_cur
 
         if 'audit_df' in st.session_state:
             df_audit = st.session_state['audit_df'].copy()
@@ -3916,7 +3925,7 @@ if modulo.startswith("📦"):
                 if not df_audit.empty:
                     def _muc_label(r):
                         combos_str = f"⚠️ {int(r['n_combos_params'])} combos params" if int(r.get('n_combos_params',1)) > 1 else ""
-                        rango_str  = f"Δ MUC {float(r['dispersion']):.2f}" if float(r.get('dispersion',0)) > 0.1 else ""
+                        rango_str  = f"{float(r['dispersion']):.1f}×" if float(r.get('dispersion',0)) > 1.0 else ""
                         flags      = " | ".join(filter(None, [combos_str, rango_str]))
                         return f"{r['sku']} — {r['nombre_producto'][:40]}" + (f" [{flags}]" if flags else "")
                     opciones_muc = df_audit.drop_duplicates('sku').apply(_muc_label, axis=1).tolist()
@@ -4097,7 +4106,7 @@ if modulo.startswith("📦"):
                 if _prev_sel:
                     def _opt_label(r):
                         d = float(r.get('dispersion', 0) or 0)
-                        dl = f'🔴 Δ{d:.2f}' if d > 1.0 else f'🟡 Δ{d:.2f}' if d > 0.1 else '—'
+                        dl = f'🔴 {d:.1f}×' if d > 8 else f'🟡 {d:.1f}×' if d > 2 else f'⚪ {d:.1f}×'
                         return f'{r["sku"]} | MUC {float(r["muc"]):.4f} | {int(r["n_registros"])} reg. | {dl}'
                     _opciones_tmp = [_opt_label(r) for _, r in df_tabla.iterrows()]
                     sel_indices_prev = [i for i, opt in enumerate(_opciones_tmp) if opt in _prev_sel]
@@ -4199,12 +4208,12 @@ if modulo.startswith("📦"):
 
 
                     # Badge de MUC: según rango absoluto dentro del combo
-                    if dispersion > 1.0:
-                        dc = '#e84545'; dl = f'🔴 Δ{dispersion:.2f}'
-                    elif dispersion > 0.1:
-                        dc = '#e89c45'; dl = f'🟡 Δ{dispersion:.2f}'
+                    if dispersion > 8:
+                        dc = '#e84545'; dl = f'🔴 {dispersion:.1f}×'
+                    elif dispersion > 2:
+                        dc = '#e89c45'; dl = f'🟡 {dispersion:.1f}×'
                     else:
-                        dc = '#555';    dl = f'—'
+                        dc = '#aaa';    dl = f'⚪ {dispersion:.1f}×'
 
                     # Resaltar MUC si es el extremo del rango dentro del combo
                     muc_min_v = float(r.get('muc_min', 0) or 0)
@@ -4234,7 +4243,7 @@ if modulo.startswith("📦"):
                     '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
                     '<thead><tr style="background:#111">'
                     + ''.join([f'<th style="{hs_a};text-align:{"left" if i<3 else "right" if i in (3,4,6,7,8) else "center"}">{h}</th>'
-                               for i, h in enumerate(['SKU','Producto','Proveedor','Conv.','Formato','Neto Fact/u','MUC','# Reg.','Rango MUC'])])
+                               for i, h in enumerate(['SKU','Producto','Proveedor','Conv.','Formato','Neto Fact/u','MUC','# Reg.','Dispersión'])])
                     + f'</tr></thead><tbody>{rows_html}</tbody></table></div>'
                 )
                 st.markdown(tabla_html, unsafe_allow_html=True)
