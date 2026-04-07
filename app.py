@@ -1972,6 +1972,16 @@ def procesar_compras(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     df = _normalizar_columnas(df_raw)
 
     # ── Verificar columnas mínimas ──────────────────────────────────────────
+    # ── Normalización de nombres de local ────────────────────────────────
+    _LOCAL_ALIAS_C = {
+        'pedro de valdivia': 'Providencia',
+        'providencia':       'Providencia',
+    }
+    if 'local' in df.columns:
+        df['local'] = df['local'].apply(
+            lambda x: _LOCAL_ALIAS_C.get(str(x).strip().lower(), str(x).strip()) if pd.notna(x) else x
+        )
+
     faltantes = [c for c in COLS_REQUERIDAS if c not in df.columns]
     if faltantes:
         warnings.append(
@@ -2309,7 +2319,9 @@ def save_ventas(df_raw):
     df = df[df['sku_producto'].astype(str).str.strip() != '']
 
     if 'precio_pagar' in df.columns and 'monto_venta_real' not in df.columns:
-        df['monto_venta_real'] = pd.to_numeric(df['precio_pagar'], errors='coerce').fillna(0)
+        _precio = pd.to_numeric(df['precio_pagar'], errors='coerce').fillna(0)
+        _desc   = pd.to_numeric(df['descuento'], errors='coerce').fillna(0) if 'descuento' in df.columns else 0
+        df['monto_venta_real'] = _precio - _desc
 
     for col in ['cantidad_vendida','monto_venta_real','precio_base','costo_receta','descuento','impuesto',
                 'pago_total','valor_boleta','total_a_pagar','propina','pagado','cambio',
@@ -2429,7 +2441,9 @@ def save_ventas_chunk(df_raw, engine, skip_delete=False):
     df = df[df['sku_producto'].astype(str).str.strip() != '']
 
     if 'precio_pagar' in df.columns and 'monto_venta_real' not in df.columns:
-        df['monto_venta_real'] = pd.to_numeric(df['precio_pagar'], errors='coerce').fillna(0)
+        _precio = pd.to_numeric(df['precio_pagar'], errors='coerce').fillna(0)
+        _desc   = pd.to_numeric(df['descuento'], errors='coerce').fillna(0) if 'descuento' in df.columns else 0
+        df['monto_venta_real'] = _precio - _desc
 
     for col in ['cantidad_vendida','monto_venta_real','precio_base','costo_receta','descuento','impuesto',
                 'pago_total','valor_boleta','total_a_pagar','propina','pagado','cambio',
@@ -3563,7 +3577,9 @@ if modulo.startswith("📦"):
                         df_proc = df_proc[df_proc['sku_producto'].astype(str).str.strip() != '']
 
                         if 'precio_pagar' in df_proc.columns and 'monto_venta_real' not in df_proc.columns:
-                            df_proc['monto_venta_real'] = pd.to_numeric(df_proc['precio_pagar'], errors='coerce').fillna(0)
+                            _precio = pd.to_numeric(df_proc['precio_pagar'], errors='coerce').fillna(0)
+                            _desc   = pd.to_numeric(df_proc['descuento'], errors='coerce').fillna(0) if 'descuento' in df_proc.columns else 0
+                            df_proc['monto_venta_real'] = _precio - _desc
 
                         for col in ['cantidad_vendida','monto_venta_real','precio_base','costo_receta',
                                     'descuento','impuesto','pago_total','valor_boleta','total_a_pagar',
@@ -7967,7 +7983,7 @@ elif modulo.startswith("📊"):
                         SELECT local,
                                SUM(CASE WHEN origen IS NULL OR origen='' THEN monto_venta_real ELSE 0 END) as venta_salon,
                                SUM(CASE WHEN origen IS NOT NULL AND origen!='' THEN monto_venta_real ELSE 0 END) as venta_delivery,
-                               SUM(monto_venta_real) as venta_total,
+                               SUM(monto_venta_real - COALESCE(descuento, 0)) as venta_total,
                                SUM(CASE WHEN categoria_menu ILIKE '%cerveza%' OR categoria_menu ILIKE '%bebida%'
                                         OR categoria_menu ILIKE '%coctele%' OR categoria_menu ILIKE '%vino%'
                                         OR categoria_menu ILIKE '%pisco%' OR categoria_menu ILIKE '%vodka%'
@@ -8001,7 +8017,7 @@ elif modulo.startswith("📊"):
                     lf = "AND UPPER(local)=ANY(:ls)" if locales else ""
                     q = f"""
                         SELECT local, categoria_menu as producto,
-                               SUM(monto_venta_real) as venta
+                               SUM(monto_venta_real - COALESCE(descuento, 0)) as venta
                         FROM ventas
                         WHERE fecha_venta BETWEEN :i AND :f
                           AND (categoria_menu ILIKE '%cerveza%' OR categoria_menu ILIKE '%bebida%'
@@ -8323,7 +8339,7 @@ elif modulo.startswith("📊"):
                 filas_cadena = []
                 for loc4 in todos_loc_cadena:
                     loc4_u = loc4.upper().strip()
-                    r_v4  = run_query("SELECT SUM(monto_venta_real) as vt FROM ventas WHERE fecha_venta BETWEEN :i AND :f AND UPPER(local)=:l", {'i': str(fecha_acum_i), 'f': str(fecha_acum_f), 'l': loc4_u})
+                    r_v4  = run_query("SELECT SUM(monto_venta_real - COALESCE(descuento, 0)) as vt FROM ventas WHERE fecha_venta BETWEEN :i AND :f AND UPPER(local)=:l", {'i': str(fecha_acum_i), 'f': str(fecha_acum_f), 'l': loc4_u})
                     r_c4  = run_query("SELECT categoria_producto, SUM(costo_realfinal) as ct FROM compras WHERE fecha_dte::date BETWEEN :i AND :f AND UPPER(local)=:l GROUP BY categoria_producto", {'i': str(fecha_acum_i), 'f': str(fecha_acum_f), 'l': loc4_u})
                     venta4   = float(r_v4['vt'].iloc[0]) if not r_v4.empty and r_v4['vt'].iloc[0] else 0
                     compra4  = sum(float(r_c4.loc[r_c4['categoria_producto'].str.upper().str.strip()==cat,'ct'].sum()) for cat in cats_compra4) if not r_c4.empty else 0
