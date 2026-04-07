@@ -4194,15 +4194,9 @@ if modulo.startswith("📦"):
                     precio     = float(r.get('precio_factura', 0) or 0)
                     sku_r      = str(r.get('sku', ''))
                     nombre_r   = str(r.get('nombre_producto', ''))
-                    n_combos   = int(r.get('n_combos_params', 1) or 1)
                     n_bins     = int(r.get('n_bins_muc', 1) or 1)
                     dispersion = float(r.get('dispersion', 0) or 0)
 
-                    # Badge de parámetros (conv+fmt): rojo si hay >1 combo para el SKU
-                    if n_combos > 1:
-                        badge_params = f'<span style="background:#3a1010;color:#e84545;border-radius:4px;padding:2px 6px;font-size:0.68rem;font-weight:600">⚠️ {n_combos} combos</span>'
-                    else:
-                        badge_params = f'<span style="color:#444;font-size:0.72rem">✓</span>'
 
                     # Badge de MUC: según rango absoluto dentro del combo
                     if dispersion > 1.0:
@@ -4227,7 +4221,6 @@ if modulo.startswith("📦"):
                         f'<td style="padding:9px 12px;color:#777;font-size:0.75rem;width:15%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{r.get("proveedor","")}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#888;width:6%">{r.get("conversion","")}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#888;width:6%">{r.get("formato","")}</td>'
-                        f'<td style="padding:9px 12px;text-align:center;width:10%">{badge_params}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#aaa;width:9%">${precio:,.2f}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:{mc};font-weight:{mw};width:9%">{muc:,.4f}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#666;width:5%">{n_reg}</td>'
@@ -4241,7 +4234,7 @@ if modulo.startswith("📦"):
                     '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
                     '<thead><tr style="background:#111">'
                     + ''.join([f'<th style="{hs_a};text-align:{"left" if i<3 else "right" if i in (3,4,6,7,8) else "center"}">{h}</th>'
-                               for i, h in enumerate(['SKU','Producto','Proveedor','Conv.','Formato','Params','Neto Fact/u','MUC','# Reg.','Rango MUC'])])
+                               for i, h in enumerate(['SKU','Producto','Proveedor','Conv.','Formato','Neto Fact/u','MUC','# Reg.','Rango MUC'])])
                     + f'</tr></thead><tbody>{rows_html}</tbody></table></div>'
                 )
                 st.markdown(tabla_html, unsafe_allow_html=True)
