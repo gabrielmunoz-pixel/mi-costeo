@@ -3837,20 +3837,19 @@ if modulo.startswith("📦"):
                     FROM base b
                     GROUP BY b.sku, b.conversion, b.formato, FLOOR(b.muc / 0.1) * 0.1
                 ),
-                -- PASO 5: contar bins MUC distintos por combo; filtrar solo los que tienen > 1 bin
-                muc_dispersion AS (
+                -- PASO 5: dispersión calculada a nivel SKU completo (todos los bins del SKU)
+                sku_dispersion AS (
                     SELECT
                         sku,
-                        conversion,
-                        formato,
-                        COUNT(*)                                                        AS n_bins_muc,
+                        COUNT(*)                                                        AS n_bins_total,
                         MIN(muc_bin)                                                    AS muc_bin_min,
                         MAX(muc_bin)                                                    AS muc_bin_max,
                         COALESCE(ROUND((MAX(muc_bin) / NULLIF(MIN(muc_bin), 0))::numeric, 2), 1.0) AS dispersion_ratio
                     FROM muc_grupos
-                    GROUP BY sku, conversion, formato
+                    GROUP BY sku
                 )
                 -- RESULTADO FINAL: un registro por bin MUC dentro de cada combo SKU+conv+fmt
+                -- ordenado por dispersión SKU DESC, luego muc_bin ASC dentro del SKU
                 SELECT
                     mg.sku,
                     mg.nombre_producto,
@@ -3863,28 +3862,26 @@ if modulo.startswith("📦"):
                     mg.n_registros,
                     mg.ids,
                     mg.precio_factura,
-                    md.muc_bin_min                                                      AS muc_min,
-                    md.muc_bin_max                                                      AS muc_max,
-                    md.dispersion_ratio                                                 AS dispersion,
-                    md.n_bins_muc,
+                    sd.muc_bin_min                                                      AS muc_min,
+                    sd.muc_bin_max                                                      AS muc_max,
+                    sd.dispersion_ratio                                                 AS dispersion,
+                    sd.n_bins_total                                                     AS n_bins_muc,
                     sc.n_combos_params,
                     sc.n_registros_total
                 FROM muc_grupos mg
-                JOIN muc_dispersion md
-                    ON mg.sku = md.sku
-                   AND mg.conversion = md.conversion
-                   AND mg.formato = md.formato
+                JOIN sku_dispersion sd
+                    ON mg.sku = sd.sku
                 JOIN sku_combos sc
                     ON mg.sku = sc.sku
                 WHERE (
-                    -- Mostrar si tiene > 1 bin MUC dentro del mismo combo (dispersión de precio)
-                    md.n_bins_muc > 1
+                    -- Mostrar si el SKU tiene dispersión real (más de 1 bin en todo el SKU)
+                    sd.n_bins_total > 1
                     OR
-                    -- O si el SKU tiene más de 1 combinación conv+fmt (inconsistencia de parámetros)
+                    -- O si tiene más de 1 combinación conv+fmt
                     sc.n_combos_params > 1
                 )
                 {filtro_cat_audit_c}
-                ORDER BY md.dispersion_ratio DESC, mg.sku, mg.conversion, mg.formato, mg.muc_bin ASC
+                ORDER BY sd.dispersion_ratio DESC, mg.sku, mg.muc_bin ASC
                 LIMIT 500
             """
             df_audit = run_query(q_audit)
@@ -4133,12 +4130,12 @@ if modulo.startswith("📦"):
                 # Filtrar tabla según búsqueda — siempre ordenar por dispersión DESC
                 if sku_activo:
                     df_tabla = (df_audit[df_audit['sku'] == sku_activo]
-                                .sort_values(['dispersion', 'muc_bin'], ascending=[False, True])
+                                .sort_values('muc_bin', ascending=True)
                                 .reset_index(drop=True))
                     sku_fil  = sku_activo
                 else:
                     df_tabla = (df_audit
-                                .sort_values(['dispersion', 'muc_bin'], ascending=[False, True])
+                                .sort_values(['dispersion', 'sku', 'muc_bin'], ascending=[False, True, True])
                                 .reset_index(drop=True))
                     sku_fil  = None
 
