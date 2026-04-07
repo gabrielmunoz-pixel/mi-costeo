@@ -4712,13 +4712,50 @@ if modulo.startswith("📦"):
 
                             registros = []
 
+                            # ── Helper: detectar columna de inicio de mermas por header ──
+                            def _find_merma_col(df_raw, keyword):
+                                """Busca en fila 0 la columna que contiene keyword. Retorna índice o None."""
+                                for i, val in enumerate(df_raw.iloc[0]):
+                                    if val and keyword.lower() in str(val).lower():
+                                        return i
+                                return None
+
+                            def _read_merma_total(df_raw, col_start):
+                                """Lee el Total de mermas desde col_start.
+                                Estructura: PRODUCTO | UM | ... | Total | TIPO
+                                El Total es la antepenúltima columna del bloque (col_start+3 para Alimentos, col_start+3 para Bar)
+                                Retorna dict {producto_lower: merma_kg} indexado por fila."""
+                                if col_start is None:
+                                    return {}
+                                # Header de mermas está en fila 1 (índice 1)
+                                hdrs = [str(v).strip() if pd.notna(v) else '' for v in df_raw.iloc[1, col_start:col_start+6]]
+                                # Buscar columna Total dentro del bloque
+                                try:
+                                    total_offset = next(i for i, h in enumerate(hdrs) if h.lower() == 'total')
+                                except StopIteration:
+                                    total_offset = 3  # fallback
+                                col_total = col_start + total_offset
+                                # Retornar por índice de fila (fila 2 en adelante)
+                                result = {}
+                                for row_i in range(2, len(df_raw)):
+                                    val = df_raw.iloc[row_i, col_total]
+                                    result[row_i] = float(val) if pd.notna(val) and val != '' else 0.0
+                                return result
+
                             # Alimentos
-                            df_ali = pd.read_excel(f_inv, sheet_name='Alimentos', header=None)
+                            df_ali_raw = pd.read_excel(f_inv, sheet_name='Alimentos', header=None)
+                            _merma_col_ali = _find_merma_col(df_ali_raw, 'MERMAS')
+                            _mermas_ali    = _read_merma_total(df_ali_raw, _merma_col_ali)
+                            if _merma_col_ali is None:
+                                st.info("ℹ️ Alimentos: sección de mermas no encontrada — se cargará merma_kg = 0")
+
+                            df_ali = df_ali_raw.iloc[:, :7].copy()
                             df_ali.columns = df_ali.iloc[1]
+                            df_ali.columns = [str(c).strip() if pd.notna(c) else f'_col{i}' for i, c in enumerate(df_ali.columns)]
                             df_ali = df_ali.iloc[2:].reset_index(drop=True)
                             df_ali = df_ali[df_ali['PRODUCTO'].notna()].copy()
 
-                            for _, row in df_ali.iterrows():
+                            for row_i, (_, row) in enumerate(df_ali.iterrows()):
                                 prod   = str(row.get('PRODUCTO','')).strip()
                                 if not prod or prod == 'nan': continue
                                 um     = str(row.get('Unidad de Medida','')).strip()
@@ -4727,6 +4764,8 @@ if modulo.startswith("📦"):
                                 cocido = pd.to_numeric(row.get('Cocido',0),    errors='coerce') or 0
                                 total  = pd.to_numeric(row.get('Total',0),     errors='coerce') or 0
                                 tipo   = str(row.get('TIPO','')).strip()
+                                # Merma: buscar por posición original en df_raw (row_i + 2 por offset de headers)
+                                merma  = _mermas_ali.get(row_i + 2, 0.0)
                                 total_kg, prod_ctrl_a = calcular_total_kg(prod, total, crudo, prod_, cocido, prod)
                                 registros.append({
                                     'local': local_inv, 'periodo': periodo_inv,
@@ -4734,29 +4773,38 @@ if modulo.startswith("📦"):
                                     'producto': prod, 'producto_control': prod_ctrl_a,
                                     'um': um, 'crudo': crudo, 'produccion': prod_,
                                     'cocido': cocido, 'total_original': total,
-                                    'total_kg': total_kg, 'tipo': tipo, 'fuente': 'alimentos'
+                                    'total_kg': total_kg, 'tipo': tipo,
+                                    'merma_kg': merma, 'fuente': 'alimentos'
                                 })
 
                             # Bar
-                            df_bar = pd.read_excel(f_inv, sheet_name='Bar', header=None)
+                            df_bar_raw = pd.read_excel(f_inv, sheet_name='Bar', header=None)
+                            _merma_col_bar = _find_merma_col(df_bar_raw, 'MERMAS')
+                            _mermas_bar    = _read_merma_total(df_bar_raw, _merma_col_bar)
+                            if _merma_col_bar is None:
+                                st.info("ℹ️ Bar: sección de mermas no encontrada — se cargará merma_kg = 0")
+
+                            df_bar = df_bar_raw.iloc[:, :7].copy()
                             df_bar.columns = df_bar.iloc[1]
+                            df_bar.columns = [str(c).strip() if pd.notna(c) else f'_col{i}' for i, c in enumerate(df_bar.columns)]
                             df_bar = df_bar.iloc[2:].reset_index(drop=True)
                             df_bar = df_bar[df_bar['PRODUCTO'].notna()].copy()
 
-                            for _, row in df_bar.iterrows():
+                            for row_i, (_, row) in enumerate(df_bar.iterrows()):
                                 prod  = str(row.get('PRODUCTO','')).strip()
                                 if not prod or prod == 'nan': continue
                                 um    = str(row.get('Unidad de Medida','')).strip()
                                 total = pd.to_numeric(row.get('Total',0), errors='coerce') or 0
                                 tipo  = str(row.get('TIPO','')).strip().upper()
                                 ctrl  = TIPO_BAR_CONTROL.get(tipo, tipo)
+                                merma = _mermas_bar.get(row_i + 2, 0.0)
                                 registros.append({
                                     'local': local_inv, 'periodo': periodo_inv,
                                     'tipo_inventario': str(fecha_inv),
                                     'producto': prod, 'producto_control': ctrl,
                                     'um': um, 'crudo': 0, 'produccion': 0, 'cocido': 0,
                                     'total_original': total, 'total_kg': total,
-                                    'tipo': tipo, 'fuente': 'bar'
+                                    'tipo': tipo, 'merma_kg': merma, 'fuente': 'bar'
                                 })
 
                             df_inv_save = pd.DataFrame(registros)
