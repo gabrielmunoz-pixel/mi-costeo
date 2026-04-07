@@ -3842,7 +3842,7 @@ if modulo.startswith("📦"):
                         COUNT(*)                                                        AS n_bins_muc,
                         MIN(muc_bin)                                                    AS muc_bin_min,
                         MAX(muc_bin)                                                    AS muc_bin_max,
-                        ROUND((MAX(muc_bin) / NULLIF(MIN(muc_bin), 0))::numeric, 2)   AS dispersion_ratio
+                        COALESCE(ROUND((MAX(muc_bin) / NULLIF(MIN(muc_bin), 0))::numeric, 2), 1.0) AS dispersion_ratio
                     FROM muc_grupos
                     GROUP BY sku, conversion, formato
                 )
@@ -4259,7 +4259,8 @@ if modulo.startswith("📦"):
                     sku_r      = str(r.get('sku', ''))
                     nombre_r   = str(r.get('nombre_producto', ''))
                     n_bins     = int(r.get('n_bins_muc', 1) or 1)
-                    dispersion = float(r.get('dispersion', 0) or 0)
+                    _disp_raw  = r.get('dispersion', 1.0)
+                    dispersion = float(_disp_raw) if _disp_raw is not None and str(_disp_raw) not in ('nan','None','') else 1.0
 
 
                     # Badge de MUC: según rango absoluto dentro del combo
