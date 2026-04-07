@@ -3770,6 +3770,8 @@ if modulo.startswith("📦"):
                         conversion,
                         formato,
                         muc,
+                        monto_real,
+                        cant_conv,
                         nombre_producto,
                         nombre_proveedor,
                         categoria_producto
