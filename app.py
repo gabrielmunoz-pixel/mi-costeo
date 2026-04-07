@@ -3946,26 +3946,49 @@ if modulo.startswith("📦"):
                 with st.expander("🔎 Inspeccionar cualquier SKU", expanded=False):
                     sku_inspect = st.text_input("SKU exacto", key='audit_inspect_sku', placeholder="ej: AL-AF-095")
                     if sku_inspect:
+                        # Query agrupada por conversion + formato + bin MUC (igual que el auditor principal)
                         q_inspect = f"""
                             SELECT
-                                ROUND(muc::numeric, 1)                                    AS muc,
+                                conversion,
+                                formato,
+                                FLOOR(muc / 0.1) * 0.1                                   AS muc_bin,
+                                ROUND(AVG(muc)::numeric, 4)                               AS muc,
                                 COUNT(*)                                                  AS n_registros,
-                                ARRAY_AGG(id)                                             AS ids,
-                                ROUND(AVG(monto_real / NULLIF(cantidad, 0))::numeric, 2) AS precio_factura,
-                                MAX(conversion)                                           AS conversion,
-                                MAX(formato)                                              AS formato,
-                                MODE() WITHIN GROUP (ORDER BY nombre_producto)            AS nombre_producto,
-                                MAX(categoria_producto)                                   AS categoria,
-                                MODE() WITHIN GROUP (ORDER BY nombre_proveedor)           AS proveedor
+                                ARRAY_AGG(id ORDER BY fecha_dte)                          AS ids,
+                                ROUND(AVG(monto_real / NULLIF(cantidad, 0))::numeric, 2)  AS precio_factura,
+                                MODE() WITHIN GROUP (ORDER BY nombre_producto)             AS nombre_producto,
+                                MAX(categoria_producto)                                    AS categoria,
+                                MODE() WITHIN GROUP (ORDER BY nombre_proveedor)            AS proveedor
                             FROM compras
                             WHERE UPPER(sku) = UPPER('{sku_inspect}')
-                              AND muc > 0 AND costo_realfinal > 0 AND monto_real > 0
-                              AND ROUND(muc::numeric, 1) > 0
+                              AND muc > 0
+                              AND costo_realfinal > 0
+                              AND COALESCE(tipo_dte::text,'') != '61'
                               {_filtro_fecha_audit}
-                            GROUP BY ROUND(muc::numeric, 1)
-                            ORDER BY ROUND(muc::numeric, 1)
+                            GROUP BY conversion, formato, FLOOR(muc / 0.1) * 0.1
+                            ORDER BY conversion, formato, muc_bin
+                        """
+                        # Query de detalle — registros individuales para debug
+                        q_debug = f"""
+                            SELECT
+                                id, local, fecha_dte::date AS fecha,
+                                folio, nombre_producto, nombre_proveedor,
+                                cantidad, conversion, formato, cant_conv,
+                                ROUND(monto_real::numeric, 0)       AS monto_real,
+                                ROUND(costo_realfinal::numeric, 0)  AS costo_realfinal,
+                                ROUND(muc::numeric, 4)              AS muc,
+                                tipo_dte
+                            FROM compras
+                            WHERE UPPER(sku) = UPPER('{sku_inspect}')
+                              AND muc > 0
+                              AND costo_realfinal > 0
+                              AND COALESCE(tipo_dte::text,'') != '61'
+                              {_filtro_fecha_audit}
+                            ORDER BY conversion, formato, muc, fecha_dte
                         """
                         df_inspect = run_query(q_inspect)
+                        df_debug   = run_query(q_debug)
+
                         if df_inspect.empty:
                             st.warning(f"SKU '{sku_inspect}' no encontrado o sin registros.")
                         else:
@@ -3980,56 +4003,83 @@ if modulo.startswith("📦"):
                                 badge = f'🟡 {disp_i:.1f}×'
                             else:
                                 badge = f'⚪ {disp_i:.1f}×'
-                            st.caption(f"**{nombre_insp}** | {cat_insp} | {len(df_inspect)} grupos MUC | dispersión {badge}")
 
-                            # Tabla igual al informe
+                            _n_combos_i = df_inspect.groupby(['conversion','formato']).ngroups
+                            st.caption(
+                                f"**{nombre_insp}** | {cat_insp} | "
+                                f"{_n_combos_i} combo(s) conv+fmt | "
+                                f"{len(df_inspect)} grupo(s) MUC | "
+                                f"dispersión global {badge}"
+                            )
+
+                            # ── Tabla resumen por grupo ───────────────────
                             hs_i = 'padding:9px 12px;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
                             rows_i = ''
                             for _, r in df_inspect.iterrows():
-                                muc_i  = float(r['muc'])
-                                es_min = abs(muc_i - muc_min_i) < 0.0001
-                                es_max = abs(muc_i - muc_max_i) < 0.0001
-                                es_out = es_min or es_max
-                                mc     = '#e84545' if es_out else '#aaa'
+                                muc_i    = float(r['muc'])
                                 precio_i = float(r['precio_factura'] or 0)
-                                if disp_i > 8:
-                                    sc = '#e84545'; sl = f'🔴 {disp_i:.0f}×'
-                                elif disp_i > 2:
-                                    sc = '#e89c45'; sl = f'🟡 {disp_i:.1f}×'
-                                else:
-                                    sc = '#aaa';    sl = f'⚪ {disp_i:.1f}×'
+                                conv_i   = r['conversion']
+                                fmt_i    = r['formato']
+                                # Dispersión dentro de este combo conv+fmt
+                                _grp = df_inspect[(df_inspect['conversion']==conv_i) & (df_inspect['formato']==fmt_i)]
+                                _mn  = float(_grp['muc'].min()); _mx = float(_grp['muc'].max())
+                                _d   = round(_mx / _mn, 1) if _mn > 0 else 0
+                                if _d > 8:   sc = '#e84545'; sl = f'🔴 {_d:.1f}×'
+                                elif _d > 2: sc = '#e89c45'; sl = f'🟡 {_d:.1f}×'
+                                else:        sc = '#aaa';    sl = f'⚪ {_d:.1f}×'
+                                # Resaltar conv+fmt que solo aparece en este SKU con valores atípicos
+                                conv_color = '#e84545' if float(conv_i) != 1.0 and float(conv_i) != float(fmt_i) else '#888'
                                 rows_i += (
                                     f'<tr style="border-bottom:1px solid #1e1e1e">'
-                                    f'<td style="padding:9px 12px;color:#666;font-family:monospace;font-size:0.72rem">{sku_inspect.upper()}</td>'
                                     f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de;font-size:0.8rem">{r.get("nombre_producto","")}</td>'
                                     f'<td style="padding:9px 12px;color:#666;font-size:0.75rem">{r.get("proveedor","")}</td>'
-                                    f'<td style="padding:9px 12px;text-align:right;color:#888">{r["conversion"]}</td>'
-                                    f'<td style="padding:9px 12px;text-align:right;color:#888">{r["formato"]}</td>'
+                                    f'<td style="padding:9px 12px;text-align:right;color:{conv_color};font-weight:600">{conv_i}</td>'
+                                    f'<td style="padding:9px 12px;text-align:right;color:#888">{fmt_i}</td>'
                                     f'<td style="padding:9px 12px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">${precio_i:,.2f}</td>'
-                                    f'<td style="padding:9px 12px;text-align:right;color:{mc};font-weight:{"700" if es_out else "400"};font-variant-numeric:tabular-nums">{muc_i:.4f}</td>'
+                                    f'<td style="padding:9px 12px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">{muc_i:.4f}</td>'
                                     f'<td style="padding:9px 12px;text-align:right;color:#666">{int(r["n_registros"])}</td>'
                                     f'<td style="padding:9px 12px;text-align:center;color:{sc};font-weight:600">{sl}</td>'
                                     f'</tr>'
                                 )
-                            hdrs_i = ['SKU','Producto','Proveedor','Conv.','Formato','Neto Fact/u','MUC','# Reg.','Dispersión']
+                            hdrs_i = ['Producto','Proveedor','Conv.','Formato','Neto Fact/u','MUC','# Reg.','Dispersión']
                             st.markdown(
                                 '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
                                 '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
                                 '<thead><tr style="background:#111">'
-                                + ''.join([f'<th style="{hs_i};text-align:{"left" if i<3 else "right" if i<8 else "center"}">{h}</th>' for i, h in enumerate(hdrs_i)])
+                                + ''.join([f'<th style="{hs_i};text-align:{"left" if i<2 else "right" if i<7 else "center"}">{h}</th>' for i, h in enumerate(hdrs_i)])
                                 + f'</tr></thead><tbody>{rows_i}</tbody></table></div>',
                                 unsafe_allow_html=True
                             )
 
-                            # Acciones de corrección
+                            # ── Debug: detalle de registros individuales ──
+                            with st.expander(f"🔬 Ver registros individuales ({len(df_debug)} registros)", expanded=False):
+                                st.dataframe(
+                                    df_debug,
+                                    use_container_width=True,
+                                    hide_index=True,
+                                    column_config={
+                                        'id':             st.column_config.NumberColumn('ID'),
+                                        'fecha':          st.column_config.DateColumn('Fecha'),
+                                        'monto_real':     st.column_config.NumberColumn('Monto Real', format='$%d'),
+                                        'costo_realfinal':st.column_config.NumberColumn('Costo Final', format='$%d'),
+                                        'muc':            st.column_config.NumberColumn('MUC', format='%.4f'),
+                                    }
+                                )
+
+                            # ── Acciones de corrección ────────────────────
                             st.markdown("<br>", unsafe_allow_html=True)
                             st.markdown("**Corregir grupo**")
                             df_inspect = df_inspect.reset_index(drop=True)
                             opciones_inspect = list(range(len(df_inspect)))
                             idx_fix = st.selectbox(
-                                "MUC a corregir",
+                                "Grupo a corregir",
                                 opciones_inspect,
-                                format_func=lambda i: f"{float(df_inspect.iloc[i]['muc']):.4f}  ({int(df_inspect.iloc[i]['n_registros'])} reg.)",
+                                format_func=lambda i: (
+                                    f"Conv {df_inspect.iloc[i]['conversion']} · "
+                                    f"Fmt {df_inspect.iloc[i]['formato']} · "
+                                    f"MUC {float(df_inspect.iloc[i]['muc']):.4f} · "
+                                    f"{int(df_inspect.iloc[i]['n_registros'])} reg."
+                                ),
                                 key='inspect_muc_fix'
                             )
                             fila_fix = df_inspect.iloc[idx_fix]
@@ -4045,7 +4095,11 @@ if modulo.startswith("📦"):
                             if isinstance(raw_ids_i, str):
                                 raw_ids_i = _ast2.literal_eval(raw_ids_i)
                             ids_fix = [int(i) for i in raw_ids_i]
-                            st.caption(f"Afecta **{len(ids_fix)}** registros")
+                            st.warning(
+                                f"⚠️ Esto modificará **{len(ids_fix)} registros** con "
+                                f"conversion={fila_fix['conversion']} · formato={fila_fix['formato']} · "
+                                f"MUC bin {float(fila_fix['muc_bin']):.2f}"
+                            )
                             if st.button("💾 Aplicar corrección", key='inspect_apply'):
                                 engine = get_engine()
                                 try:
