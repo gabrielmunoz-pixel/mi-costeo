@@ -2042,9 +2042,11 @@ def procesar_compras(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     # ── PASO 7: identificar líneas de despacho ───────────────────────────────
     nombre_lower = df['nombre_producto'].str.lower().fillna('')
     df['_es_despacho'] = (
-        nombre_lower.str.contains('despacho', na=False) |
-        nombre_lower.str.contains('flete',    na=False) |
-        nombre_lower.str.contains('distribucion', na=False)
+        nombre_lower.str.contains('despacho',    na=False) |
+        nombre_lower.str.contains('flete',       na=False) |
+        nombre_lower.str.contains('distribucion',na=False) |
+        nombre_lower.str.contains('envio',       na=False) |
+        nombre_lower.str.contains('envío',       na=False)
     )
 
     # ── PASO 8: Desp_Folio = suma(monto_real de líneas despacho) × 1.19 ─────
@@ -2150,9 +2152,11 @@ def recalcular_folios(df: pd.DataFrame, folios: list) -> pd.DataFrame:
 
     nombre_lower = d['nombre_producto'].str.lower().fillna('')
     d['_es_despacho'] = (
-        nombre_lower.str.contains('despacho', na=False) |
-        nombre_lower.str.contains('flete',    na=False) |
-        nombre_lower.str.contains('distribucion', na=False)
+        nombre_lower.str.contains('despacho',    na=False) |
+        nombre_lower.str.contains('flete',       na=False) |
+        nombre_lower.str.contains('distribucion',na=False) |
+        nombre_lower.str.contains('envio',       na=False) |
+        nombre_lower.str.contains('envío',       na=False)
     )
 
     d['_desp_linea']        = np.where(d['_es_despacho'], d['monto_real'] * 1.19, 0)
