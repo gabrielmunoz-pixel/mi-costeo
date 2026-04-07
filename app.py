@@ -4472,13 +4472,16 @@ if modulo.startswith("📦"):
         with t6b:
             st.markdown("#### Inventario por Local")
 
-            ci1, ci2, ci3, ci4 = st.columns(4)
+            ci1, ci2, ci4 = st.columns(3)
             with ci1:
-                tipo_inv = st.selectbox("Tipo", ["Inicial","Final"], key="tipo_inv")
+                fecha_inv = st.date_input("Fecha inventario (domingo)", key="fecha_inv", value=None,
+                                          help="Selecciona el domingo en que se realizó el inventario")
+                if fecha_inv and fecha_inv.weekday() != 6:
+                    st.warning("⚠️ La fecha seleccionada no es domingo")
             with ci2:
-                inv_fecha_i = st.date_input("Inicio semana", key="inv_fecha_i", value=None)
-            with ci3:
-                inv_fecha_f = st.date_input("Fin semana", key="inv_fecha_f", value=None)
+                inv_fecha_i = fecha_inv
+                inv_fecha_f = fecha_inv
+                tipo_inv = str(fecha_inv) if fecha_inv else None
             with ci4:
                 formato_inv = st.radio("Formato", [
                     "Forma A (por local)",
@@ -4489,12 +4492,9 @@ if modulo.startswith("📦"):
 
             _MESES_ES = {1:'Ene',2:'Feb',3:'Mar',4:'Abr',5:'May',6:'Jun',
                          7:'Jul',8:'Ago',9:'Sep',10:'Oct',11:'Nov',12:'Dic'}
-            if inv_fecha_i and inv_fecha_f:
-                if inv_fecha_i.month == inv_fecha_f.month:
-                    periodo_inv = f"{inv_fecha_i.day}-{inv_fecha_f.day} {_MESES_ES[inv_fecha_i.month]} {inv_fecha_i.year}"
-                else:
-                    periodo_inv = f"{inv_fecha_i.day} {_MESES_ES[inv_fecha_i.month]}-{inv_fecha_f.day} {_MESES_ES[inv_fecha_f.month]} {inv_fecha_i.year}"
-                st.caption(f"Período: **{periodo_inv}**")
+            if fecha_inv:
+                periodo_inv = str(fecha_inv)
+                st.caption(f"Inventario: **{fecha_inv.strftime('%A %d %b %Y')}**")
             else:
                 periodo_inv = None
 
@@ -4520,7 +4520,7 @@ if modulo.startswith("📦"):
                 "Archivo Inventario (.xlsx o .csv)",
                 type=["xlsx","csv"], key="inv_file")
 
-            if f_inv and periodo_inv and inv_fecha_i and inv_fecha_f:
+            if f_inv and periodo_inv and fecha_inv:
                 if st.button("💾 Cargar Inventario", key="btn_inv"):
                     fmt = st.session_state.get("formato_inv", "Forma A")
                     es_forma_c_btn = "C" in fmt
@@ -4561,7 +4561,7 @@ if modulo.startswith("📦"):
                                 _, prod_ctrl_b = calcular_total_kg(prod, 1)
                                 registros.append({
                                     'local': local_fila, 'periodo': periodo_inv,
-                                    'tipo_inventario': tipo_inv,
+                                    'tipo_inventario': str(fecha_inv),
                                     'producto': prod, 'producto_control': prod_ctrl_b,
                                     'um': um, 'crudo': 0, 'produccion': 0, 'cocido': 0,
                                     'total_original': total_og, 'total_kg': total_kg,
@@ -4572,13 +4572,13 @@ if modulo.startswith("📦"):
                             with engine.connect() as conn:
                                 if local_inv:
                                     conn.execute(text(
-                                        "DELETE FROM inventarios WHERE LOWER(TRIM(local))=:l AND TRIM(periodo)=:p AND tipo_inventario=:t"),
-                                        {'l': local_inv.lower().strip(), 'p': periodo_inv, 't': tipo_inv})
+                                        "DELETE FROM inventarios WHERE LOWER(TRIM(local))=:l AND TRIM(periodo)=:p"),
+                                        {'l': local_inv.lower().strip(), 'p': periodo_inv})
                                 else:
                                     locales_archivo = [l.lower().strip() for l in df_inv_save['local'].dropna().unique().tolist()]
                                     conn.execute(text(
-                                        "DELETE FROM inventarios WHERE LOWER(TRIM(local))=ANY(:ls) AND TRIM(periodo)=:p AND tipo_inventario=:t"),
-                                        {'ls': locales_archivo, 'p': periodo_inv, 't': tipo_inv})
+                                        "DELETE FROM inventarios WHERE LOWER(TRIM(local))=ANY(:ls) AND TRIM(periodo)=:p"),
+                                        {'ls': locales_archivo, 'p': periodo_inv})
                                 conn.commit()
                             df_inv_save.to_sql('inventarios', engine, if_exists='append', index=False)
                             n_locales = df_inv_save['local'].nunique()
@@ -4633,7 +4633,7 @@ if modulo.startswith("📦"):
                                 )
                                 registros.append({
                                     'local': loc, 'periodo': periodo_inv,
-                                    'tipo_inventario': tipo_inv,
+                                    'tipo_inventario': str(fecha_inv),
                                     'producto': prod, 'producto_control': prod_ctrl,
                                     'um': um, 'crudo': crudo, 'produccion': prod_,
                                     'cocido': cocido, 'total_original': total,
@@ -4656,7 +4656,7 @@ if modulo.startswith("📦"):
                                     ctrl  = TIPO_BAR_CONTROL.get(tipo, tipo)
                                     registros.append({
                                         'local': loc, 'periodo': periodo_inv,
-                                        'tipo_inventario': tipo_inv,
+                                        'tipo_inventario': str(fecha_inv),
                                         'producto': prod, 'producto_control': ctrl,
                                         'um': um, 'crudo': 0, 'produccion': 0, 'cocido': 0,
                                         'total_original': total, 'total_kg': total,
@@ -4667,8 +4667,8 @@ if modulo.startswith("📦"):
                             locales_c = [l.lower().strip() for l in df_inv_save['local'].dropna().unique().tolist()]
                             with engine.connect() as conn:
                                 conn.execute(text(
-                                    "DELETE FROM inventarios WHERE LOWER(TRIM(local))=ANY(:ls) AND TRIM(periodo)=:p AND tipo_inventario=:t"),
-                                    {'ls': locales_c, 'p': periodo_inv, 't': tipo_inv})
+                                    "DELETE FROM inventarios WHERE LOWER(TRIM(local))=ANY(:ls) AND TRIM(periodo)=:p"),
+                                    {'ls': locales_c, 'p': periodo_inv})
                                 conn.commit()
                             df_inv_save.to_sql('inventarios', engine, if_exists='append', index=False)
                             n_loc = df_inv_save['local'].nunique()
@@ -4730,7 +4730,7 @@ if modulo.startswith("📦"):
                                 total_kg, prod_ctrl_a = calcular_total_kg(prod, total, crudo, prod_, cocido, prod)
                                 registros.append({
                                     'local': local_inv, 'periodo': periodo_inv,
-                                    'tipo_inventario': tipo_inv,
+                                    'tipo_inventario': str(fecha_inv),
                                     'producto': prod, 'producto_control': prod_ctrl_a,
                                     'um': um, 'crudo': crudo, 'produccion': prod_,
                                     'cocido': cocido, 'total_original': total,
@@ -4752,7 +4752,7 @@ if modulo.startswith("📦"):
                                 ctrl  = TIPO_BAR_CONTROL.get(tipo, tipo)
                                 registros.append({
                                     'local': local_inv, 'periodo': periodo_inv,
-                                    'tipo_inventario': tipo_inv,
+                                    'tipo_inventario': str(fecha_inv),
                                     'producto': prod, 'producto_control': ctrl,
                                     'um': um, 'crudo': 0, 'produccion': 0, 'cocido': 0,
                                     'total_original': total, 'total_kg': total,
@@ -4762,8 +4762,8 @@ if modulo.startswith("📦"):
                             df_inv_save = pd.DataFrame(registros)
                             with engine.connect() as conn:
                                 conn.execute(text(
-                                    "DELETE FROM inventarios WHERE LOWER(TRIM(local))=:l AND TRIM(periodo)=:p AND tipo_inventario=:t"),
-                                    {'l': local_inv.lower().strip(), 'p': periodo_inv, 't': tipo_inv})
+                                    "DELETE FROM inventarios WHERE LOWER(TRIM(local))=:l AND TRIM(periodo)=:p"),
+                                    {'l': local_inv.lower().strip(), 'p': periodo_inv})
                                 conn.commit()
                             df_inv_save.to_sql('inventarios', engine, if_exists='append', index=False)
                             st.success(f"✅ {len(df_inv_save)} registros cargados (Forma A) — {local_inv} · {tipo_inv} · {periodo_inv}")
@@ -4773,7 +4773,7 @@ if modulo.startswith("📦"):
                         st.exception(e)
 
             # Vista de inventarios cargados
-            df_inv_bd = run_query("SELECT periodo, tipo_inventario, local, COUNT(*) as items FROM inventarios GROUP BY periodo, tipo_inventario, local ORDER BY periodo DESC, tipo_inventario, local")
+            df_inv_bd = run_query("SELECT periodo, local, COUNT(*) as items FROM inventarios GROUP BY periodo, local ORDER BY periodo DESC, local")
             if not df_inv_bd.empty:
                 st.markdown("**Inventarios en BD:**")
                 st.dataframe(df_inv_bd, use_container_width=True, hide_index=True)
@@ -7894,17 +7894,18 @@ elif modulo.startswith("📊"):
                 locales_sel = todos_locales if local_ic == "Todos" else [local_ic]
 
                 # ── Funciones de cálculo ──────────────────────────────
-                def get_inv(periodo, tipo, locales):
+                def get_inv(fecha_domingo, locales):
+                    """Trae inventario por fecha exacta del domingo."""
                     lf = "AND LOWER(TRIM(local))=ANY(:ls)" if locales else ""
                     q = f"""
                         SELECT LOWER(TRIM(local)) as local,
                                UPPER(TRIM(producto_control)) as producto_control,
                                SUM(total_kg) as kg
                         FROM inventarios
-                        WHERE TRIM(periodo)=:p AND tipo_inventario=:t {lf}
+                        WHERE periodo = :p {lf}
                         GROUP BY LOWER(TRIM(local)), UPPER(TRIM(producto_control))
                     """
-                    params = {'p': periodo.strip(), 't': tipo}
+                    params = {'p': str(fecha_domingo)}
                     if locales: params['ls'] = [l.lower().strip() for l in locales]
                     return run_query(q, params)
 
@@ -8045,8 +8046,13 @@ elif modulo.startswith("📊"):
 
                 # Puntos 3/4/5: usan el rango exacto del período (fecha_ic_i → fecha_ic_f)
                 # Puntos 1/2: usan acumulado mensual (fecha_acum_i → fecha_acum_f)
-                df_inv_ini = get_inv(periodo_ic, 'Inicial', locales_sel)
-                df_inv_fin = get_inv(periodo_ic, 'Final',   locales_sel)
+                # Inicial = domingo antes del lunes (fecha_ic_i - 1 día)
+                # Final   = domingo al final de la semana (fecha_ic_f, que es domingo)
+                from datetime import timedelta as _td
+                _domingo_ini = fecha_ic_i - _td(days=1)
+                _domingo_fin = fecha_ic_f
+                df_inv_ini = get_inv(_domingo_ini, locales_sel)
+                df_inv_fin = get_inv(_domingo_fin, locales_sel)
                 df_uso_ic  = get_uso(periodo_ic, locales_sel)
                 df_ventas_ic   = get_ventas_ic(fecha_acum_i, fecha_acum_f, locales_sel)   # acumulado
                 df_compras_cat = get_compras_cat(fecha_acum_i, fecha_acum_f, locales_sel) # acumulado
