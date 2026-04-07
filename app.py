@@ -3829,7 +3829,7 @@ if modulo.startswith("📦"):
                         MIN(b.muc)                                                      AS muc_min,
                         MAX(b.muc)                                                      AS muc_max,
                         AVG(b.muc)                                                      AS muc_avg,
-                        ROUND(AVG(b.monto_real / NULLIF(b.cant_conv, 0))::numeric, 2)  AS precio_factura,
+                        ROUND(AVG(b.monto_real / NULLIF(b.cantidad, 0))::numeric, 2)   AS precio_factura,
                         MODE() WITHIN GROUP (ORDER BY b.nombre_producto)               AS nombre_producto,
                         MODE() WITHIN GROUP (ORDER BY b.nombre_proveedor)              AS proveedor,
                         MAX(b.categoria_producto)                                      AS categoria
@@ -3958,7 +3958,7 @@ if modulo.startswith("📦"):
                                 ROUND(AVG(muc)::numeric, 4)                               AS muc,
                                 COUNT(*)                                                  AS n_registros,
                                 ARRAY_AGG(id ORDER BY fecha_dte)                          AS ids,
-                                ROUND(AVG(monto_real / NULLIF(cant_conv, 0))::numeric, 2)  AS precio_factura,
+                                ROUND(AVG(monto_real / NULLIF(cantidad, 0))::numeric, 2)   AS precio_factura,
                                 MODE() WITHIN GROUP (ORDER BY nombre_producto)             AS nombre_producto,
                                 MAX(categoria_producto)                                    AS categoria,
                                 MODE() WITHIN GROUP (ORDER BY nombre_proveedor)            AS proveedor
