@@ -4189,12 +4189,14 @@ if modulo.startswith("📦"):
                 opciones_sel = []  # para el multiselect
 
                 for idx, r in df_tabla.iterrows():
-                    muc    = float(r.get('muc', 0) or 0)
-                    n_reg  = int(r.get('n_registros', 1) or 1)
-                    precio = float(r.get('precio_factura', 0) or 0)
-                    n_combos       = int(r.get('n_combos_params', 1) or 1)
-                    n_bins         = int(r.get('n_bins_muc', 1) or 1)
-                    dispersion     = float(r.get('dispersion', 0) or 0)
+                    muc        = float(r.get('muc', 0) or 0)
+                    n_reg      = int(r.get('n_registros', 1) or 1)
+                    precio     = float(r.get('precio_factura', 0) or 0)
+                    sku_r      = str(r.get('sku', ''))
+                    nombre_r   = str(r.get('nombre_producto', ''))
+                    n_combos   = int(r.get('n_combos_params', 1) or 1)
+                    n_bins     = int(r.get('n_bins_muc', 1) or 1)
+                    dispersion = float(r.get('dispersion', 0) or 0)
 
                     # Badge de parámetros (conv+fmt): rojo si hay >1 combo para el SKU
                     if n_combos > 1:
