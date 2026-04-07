@@ -3734,10 +3734,10 @@ if modulo.startswith("📦"):
             cat_sel = st.session_state.get('audit_cat', 'Todas (sin Colación)')
             if cat_sel in ('Todas (sin Colación)', '── Colación ──'):
                 fcat   = "AND UPPER(categoria_producto) NOT LIKE '%COLACION%' AND UPPER(categoria_producto) NOT LIKE '%COLACIÓN%'"
-                fcat_c = "AND UPPER(g.categoria) NOT LIKE '%COLACION%' AND UPPER(g.categoria) NOT LIKE '%COLACIÓN%'"
+                fcat_c = "AND UPPER(mg.categoria) NOT LIKE '%COLACION%' AND UPPER(mg.categoria) NOT LIKE '%COLACIÓN%'"
             else:
                 fcat   = f"AND categoria_producto = '{cat_sel}'"
-                fcat_c = f"AND g.categoria = '{cat_sel}'"
+                fcat_c = f"AND mg.categoria = '{cat_sel}'"
             umbral = st.session_state.get('audit_umbral', 5.0)
             return fcat, fcat_c, umbral
 
@@ -3749,10 +3749,10 @@ if modulo.startswith("📦"):
             umbral_audit = st.session_state.get('audit_umbral', 5.0)
             if cat_sel in ('Todas (sin Colación)', '── Colación ──'):
                 filtro_cat_audit   = "AND UPPER(categoria_producto) NOT LIKE '%COLACION%' AND UPPER(categoria_producto) NOT LIKE '%COLACIÓN%'"
-                filtro_cat_audit_c = "AND UPPER(g.categoria) NOT LIKE '%COLACION%' AND UPPER(g.categoria) NOT LIKE '%COLACIÓN%'"
+                filtro_cat_audit_c = "AND UPPER(mg.categoria) NOT LIKE '%COLACION%' AND UPPER(mg.categoria) NOT LIKE '%COLACIÓN%'"
             else:
                 filtro_cat_audit   = f"AND categoria_producto = '{cat_sel}'"
-                filtro_cat_audit_c = f"AND g.categoria = '{cat_sel}'"
+                filtro_cat_audit_c = f"AND mg.categoria = '{cat_sel}'"
             q_audit = f"""
                 -- PASO 1: registros base válidos
                 WITH base AS (
@@ -3871,7 +3871,7 @@ if modulo.startswith("📦"):
                     -- O si el SKU tiene más de 1 combinación conv+fmt (inconsistencia de parámetros)
                     sc.n_combos_params > 1
                 )
-                {filtro_cat_audit_c.replace('c.sku', 'mg.sku').replace('c.categoria_producto', 'mg.categoria')}
+                {filtro_cat_audit_c}
                 ORDER BY sc.n_combos_params DESC, md.rango_muc DESC, mg.sku, mg.conversion, mg.formato, mg.muc_bin
                 LIMIT 500
             """
