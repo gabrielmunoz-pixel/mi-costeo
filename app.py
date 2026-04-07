@@ -3880,7 +3880,7 @@ if modulo.startswith("📦"):
                     sc.n_combos_params > 1
                 )
                 {filtro_cat_audit_c}
-                ORDER BY sc.n_combos_params DESC, md.dispersion_ratio DESC, mg.sku, mg.conversion, mg.formato, mg.muc_bin
+                ORDER BY md.dispersion_ratio DESC, mg.sku, mg.conversion, mg.formato, mg.muc_bin ASC
                 LIMIT 500
             """
             df_audit = run_query(q_audit)
@@ -4129,12 +4129,12 @@ if modulo.startswith("📦"):
                 # Filtrar tabla según búsqueda — siempre ordenar por dispersión DESC
                 if sku_activo:
                     df_tabla = (df_audit[df_audit['sku'] == sku_activo]
-                                .sort_values('dispersion', ascending=False)
+                                .sort_values(['dispersion', 'muc_bin'], ascending=[False, True])
                                 .reset_index(drop=True))
                     sku_fil  = sku_activo
                 else:
                     df_tabla = (df_audit
-                                .sort_values('dispersion', ascending=False)
+                                .sort_values(['dispersion', 'muc_bin'], ascending=[False, True])
                                 .reset_index(drop=True))
                     sku_fil  = None
 
