@@ -2223,36 +2223,7 @@ def save_compras(df: pd.DataFrame):
             df[cols_ok].to_sql('compras', engine, if_exists='append',
                                index=False, method='multi', chunksize=500)
 
-        # Recuperar IDs de registros sin match para permitir corrección posterior
-        unmatched_idx = st.session_state.get('df_match_unmatched_idx', [])
-        if unmatched_idx:
-            df_unmatched = df.iloc[unmatched_idx].copy()
-            # Build query to find their IDs in BD
-            ids_sin_match = []
-            with engine.connect() as conn:
-                for _, row in df_unmatched.iterrows():
-                    try:
-                        res = pd.read_sql(text("""
-                            SELECT id FROM compras
-                            WHERE folio = :folio
-                              AND rut_proveedor = :rut
-                              AND nombre_producto = :prod
-                              AND fecha_dte::date = :fecha
-                            LIMIT 1
-                        """), conn, params={
-                            'folio': str(row.get('folio', '')),
-                            'rut':   str(row.get('rut_proveedor', '')),
-                            'prod':  str(row.get('nombre_producto', '')),
-                            'fecha': str(pd.to_datetime(row.get('fecha_dte'), errors='coerce').date())
-                        })
-                        if not res.empty:
-                            ids_sin_match.append(int(res['id'].iloc[0]))
-                    except Exception:
-                        pass
-            st.session_state['ids_sin_match_bd'] = ids_sin_match
-
-        st.success(f"✅ {total:,} registros guardados ({fecha_min} → {fecha_max})."
-                   + (f" ⚠️ {len(unmatched_idx)} sin match — clasifícalos en la sección de sin match." if unmatched_idx else ""))
+        st.success(f"✅ {total:,} registros guardados ({fecha_min} → {fecha_max}).")
     except Exception as e:
         st.error(f"Error al guardar compras: {e}")
 
@@ -3337,75 +3308,16 @@ if modulo.startswith("📦"):
         f_comp = st.file_uploader("📂 Excel de Compras fuente (.xlsx)", type="xlsx", key="comp")
 
         if f_comp:
-            # ── Leer, match y calcular en orden correcto ──────────────────
+            # ── Leer y calcular ───────────────────────────────────────────
             if 'df_compras_procesado' not in st.session_state or \
                st.session_state.get('comp_filename') != f_comp.name:
 
-                # PASO 1: Leer y normalizar columnas solamente
-                with st.spinner("Leyendo archivo..."):
-                    df_raw  = pd.read_excel(f_comp)
-                    df_norm = _normalizar_columnas(df_raw)
-
-                # PASO 2: Matching contra BD → asigna conversion, formato, sku, subcat, categoria
-                with st.spinner("Aplicando matching con historial BD..."):
-                    _q_hist = """
-                        SELECT DISTINCT ON (rut_proveedor, nombre_producto)
-                            rut_proveedor, nombre_producto,
-                            sku, conversion, formato, subcat, categoria_producto
-                        FROM compras
-                        WHERE rut_proveedor IS NOT NULL
-                          AND nombre_producto IS NOT NULL
-                          AND sku IS NOT NULL
-                          AND conversion IS NOT NULL
-                          AND formato IS NOT NULL
-                        ORDER BY rut_proveedor, nombre_producto, fecha_dte DESC
-                    """
-                    _df_hist = run_query(_q_hist)
-                    _matched = 0
-                    _unmatched_idx = []
-
-                    # Ensure columns exist before matching
-                    for _f, _default in [('sku',''),('conversion',1.0),('formato',1.0),('subcat',''),('categoria_producto','')]:
-                        if _f not in df_norm.columns:
-                            df_norm[_f] = _default
-
-                    if not _df_hist.empty:
-                        _df_hist['_key'] = (
-                            _df_hist['rut_proveedor'].astype(str).str.strip() + '|' +
-                            _df_hist['nombre_producto'].astype(str).str.strip().str.upper()
-                        )
-                        _df_hist = _df_hist.drop_duplicates(subset='_key', keep='first')
-                        _hist_map = _df_hist.set_index('_key')[
-                            ['sku','conversion','formato','subcat','categoria_producto']
-                        ].to_dict('index')
-
-                        df_norm['_key'] = (
-                            df_norm['rut_proveedor'].astype(str).str.strip() + '|' +
-                            df_norm['nombre_producto'].astype(str).str.strip().str.upper()
-                        )
-                        for _i, _row in df_norm.iterrows():
-                            _k = _row['_key']
-                            if _k in _hist_map:
-                                _h = _hist_map[_k]
-                                df_norm.at[_i, 'sku']               = str(_h['sku'])
-                                df_norm.at[_i, 'conversion']        = float(_h['conversion']) if _h['conversion'] else 1.0
-                                df_norm.at[_i, 'formato']           = float(_h['formato']) if _h['formato'] else 1.0
-                                df_norm.at[_i, 'subcat']            = str(_h['subcat']) if _h['subcat'] else ''
-                                df_norm.at[_i, 'categoria_producto']= str(_h['categoria_producto']) if _h['categoria_producto'] else ''
-                                _matched += 1
-                            else:
-                                _unmatched_idx.append(_i)
-                        df_norm = df_norm.drop(columns=['_key'])
-
-                # PASO 3: Calcular con conversion/formato ya correctos
-                with st.spinner("Calculando campos financieros..."):
-                    df_proc, warns = procesar_compras(df_norm)
-
-                st.session_state['df_compras_procesado']    = df_proc
-                st.session_state['comp_warnings']           = warns
-                st.session_state['comp_filename']           = f_comp.name
-                st.session_state['df_match_unmatched_idx'] = _unmatched_idx
-                st.session_state['_match_matched']         = _matched
+                with st.spinner("Procesando archivo..."):
+                    df_raw = pd.read_excel(f_comp)
+                    df_proc, warns = procesar_compras(df_raw)
+                    st.session_state['df_compras_procesado'] = df_proc
+                    st.session_state['comp_warnings']        = warns
+                    st.session_state['comp_filename']        = f_comp.name
 
             df_proc = st.session_state['df_compras_procesado']
             warns   = st.session_state.get('comp_warnings', [])
@@ -3415,24 +3327,15 @@ if modulo.startswith("📦"):
                 st.warning(w)
 
             # ── Métricas resumen ─────────────────────────────────────────
-            _matched_auto  = st.session_state.get('_match_matched', 0)
-            _unmatched_idx = st.session_state.get('df_match_unmatched_idx', [])
-            _total_auto    = len(df_proc)
-            _pct_auto      = _matched_auto / _total_auto * 100 if _total_auto > 0 else 0
-
-            col1, col2, col3, col4, col5 = st.columns(5)
+            col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric("Líneas procesadas", f"{_total_auto:,}")
+                st.metric("Líneas procesadas", f"{len(df_proc):,}")
             with col2:
                 n_folios = df_proc['folio'].nunique() if 'folio' in df_proc.columns else 0
                 st.metric("Folios únicos", f"{n_folios:,}")
             with col3:
                 tot = df_proc['costo_realfinal'].sum() if 'costo_realfinal' in df_proc.columns else 0
                 st.metric("Costo total procesado", f"${tot:,.0f}")
-            with col4:
-                st.metric("✅ Con match", f"{_matched_auto:,} ({_pct_auto:.1f}%)")
-            with col5:
-                st.metric("⚠️ Sin match", f"{len(_unmatched_idx):,} ({100-_pct_auto:.1f}%)")
 
             st.markdown("---")
 
@@ -3515,210 +3418,7 @@ if modulo.startswith("📦"):
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
-            # ── Sin match ─────────────────────────────────────────────
-            st.markdown("#### 🔗 Resultado del matching automático")
-            _unmatched_idx = st.session_state.get('df_match_unmatched_idx', [])
 
-            if _unmatched_idx:
-                st.warning(f"⚠️ {len(_unmatched_idx)} registro(s) sin match — completa los campos faltantes y recalcula.")
-
-                _df_cur = st.session_state['df_compras_procesado']
-                _cols_um = [c for c in ['local','fecha_dte','folio','rut_proveedor','nombre_proveedor',
-                            'nombre_producto','cantidad','sku','conversion','formato',
-                            'subcat','categoria_producto'] if c in _df_cur.columns]
-                df_unmatched_view = _df_cur.iloc[_unmatched_idx][_cols_um].copy()
-
-                # Editable table for corrections
-                df_edited = st.data_editor(
-                    df_unmatched_view,
-                    use_container_width=True,
-                    hide_index=False,
-                    key="unmatched_editor",
-                    column_config={
-                        'conversion': st.column_config.NumberColumn('conversion', min_value=0.0),
-                        'formato':    st.column_config.NumberColumn('formato',    min_value=0.0),
-                        'sku':        st.column_config.TextColumn('sku'),
-                        'subcat':     st.column_config.TextColumn('subcat'),
-                        'categoria_producto': st.column_config.TextColumn('categoria_producto'),
-                    }
-                )
-
-                _c1, _c2 = st.columns(2)
-                with _c1:
-                    if st.button("🔄 Aplicar y recalcular folios afectados", type="primary", key="btn_recalc_unmatched"):
-                        _df_upd = st.session_state['df_compras_procesado'].copy()
-                        # Apply edited values back
-                        for _edit_i, _orig_i in zip(df_edited.index, _unmatched_idx):
-                            for _f in ['sku','conversion','formato','subcat','categoria_producto']:
-                                if _f in df_edited.columns:
-                                    _v = df_edited.at[_edit_i, _f]
-                                    if pd.notna(_v) and str(_v) not in ('','nan'):
-                                        if _f in ('conversion','formato'):
-                                            _v = float(_v)
-                                        _df_upd.at[_orig_i, _f] = _v
-
-                        # Recalculate all folios that had unmatched rows
-                        _folios_afectados = _df_upd.iloc[_unmatched_idx]['folio'].unique().tolist()
-                        _df_upd = recalcular_folios(_df_upd, _folios_afectados)
-
-                        # Check which are now resolved (have sku + conversion + formato)
-                        _still_unmatched = []
-                        for _orig_i in _unmatched_idx:
-                            _row = _df_upd.iloc[_orig_i] if _orig_i < len(_df_upd) else None
-                            if _row is not None:
-                                _has_sku  = pd.notna(_row.get('sku')) and str(_row.get('sku','')) not in ('','nan')
-                                _has_conv = pd.notna(_row.get('conversion')) and float(_row.get('conversion', 0)) > 0
-                                if not (_has_sku and _has_conv):
-                                    _still_unmatched.append(_orig_i)
-
-                        # UPDATE in BD if records were already saved
-                        _ids_bd = st.session_state.get('ids_sin_match_bd', [])
-                        if _ids_bd:
-                            try:
-                                _engine_upd = get_engine()
-                                with _engine_upd.connect() as _conn_upd:
-                                    for _edit_i, _orig_i, _id_bd in zip(
-                                        df_edited.index, _unmatched_idx,
-                                        _ids_bd[:len(_unmatched_idx)]
-                                    ):
-                                        _row_upd = _df_upd.iloc[_orig_i]
-                                        _conn_upd.execute(text("""
-                                            UPDATE compras SET
-                                                sku               = :sku,
-                                                conversion        = :conv,
-                                                formato           = :fmt,
-                                                subcat            = :subcat,
-                                                categoria_producto= :cat,
-                                                cant_conv         = :cant_conv,
-                                                costo_realfinal   = :costo,
-                                                muc               = :muc,
-                                                tootal2           = :tootal2,
-                                                recargo2          = :recargo2,
-                                                total_neto2       = :total_neto2
-                                            WHERE id = :id
-                                        """), {
-                                            'sku':        str(_row_upd.get('sku', '')),
-                                            'conv':       float(_row_upd.get('conversion', 1)),
-                                            'fmt':        float(_row_upd.get('formato', 1)),
-                                            'subcat':     str(_row_upd.get('subcat', '')),
-                                            'cat':        str(_row_upd.get('categoria_producto', '')),
-                                            'cant_conv':  float(_row_upd.get('cant_conv', 0)),
-                                            'costo':      float(_row_upd.get('costo_realfinal', 0)),
-                                            'muc':        float(_row_upd.get('muc', 0)),
-                                            'tootal2':    float(_row_upd.get('tootal2', 0)),
-                                            'recargo2':   float(_row_upd.get('recargo2', 0)),
-                                            'total_neto2':float(_row_upd.get('total_neto2', 0)),
-                                            'id':         _id_bd,
-                                        })
-                                    _conn_upd.commit()
-                                st.session_state['ids_sin_match_bd'] = []
-                            except Exception as _eu:
-                                st.error(f"Error actualizando BD: {_eu}")
-
-                        st.session_state['df_compras_procesado']    = _df_upd
-                        st.session_state['df_match_unmatched_idx']  = _still_unmatched
-                        st.session_state['_match_matched']          = len(_df_upd) - len(_still_unmatched)
-                        st.success(f"✅ Recalculados {len(_folios_afectados)} folio(s). {len(_still_unmatched)} registro(s) aún sin resolver.")
-                        st.rerun()
-
-                with _c2:
-                    _buf_um = io.BytesIO()
-                    df_unmatched_view.to_excel(_buf_um, index=False)
-                    _buf_um.seek(0)
-                    st.download_button(
-                        "⬇️ Descargar sin match (Excel)",
-                        data=_buf_um,
-                        file_name="compras_sin_match.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        key='dl_unmatched'
-                    )
-
-            # ── Subir Excel corregido — visible si hay sin match ──────────
-            if _unmatched_idx:
-                st.markdown("#### 📥 Subir Excel con casos corregidos")
-                st.caption("Completa sku / conversion / formato / subcat / categoria_producto en el Excel descargado y súbelo aquí.")
-                f_corr = st.file_uploader("Excel corregido (.xlsx)", type="xlsx", key="comp_corr")
-                if f_corr and st.button("✅ Aplicar y recalcular", key='btn_apply_corr', type='primary'):
-                    try:
-                        df_corr = pd.read_excel(f_corr)
-                        df_corr.columns = df_corr.columns.str.strip()
-                        df_corr['_key'] = (
-                            df_corr['rut_proveedor'].astype(str).str.strip() + '|' +
-                            df_corr['nombre_producto'].astype(str).str.strip().str.upper()
-                        )
-                        corr_map = df_corr.drop_duplicates('_key').set_index('_key')[
-                            ['sku','conversion','formato','subcat','categoria_producto']
-                        ].to_dict('index')
-
-                        _df_upd = st.session_state['df_compras_procesado'].copy()
-                        _unmatched_now = st.session_state.get('df_match_unmatched_idx', [])
-
-                        for _orig_i in _unmatched_now:
-                            _row = _df_upd.iloc[_orig_i]
-                            _k = (str(_row.get('rut_proveedor','')).strip() + '|' +
-                                  str(_row.get('nombre_producto','')).strip().upper())
-                            if _k in corr_map:
-                                _h = corr_map[_k]
-                                for _f in ['sku','subcat','categoria_producto']:
-                                    if pd.notna(_h.get(_f)) and str(_h.get(_f,'')) not in ('','nan'):
-                                        _df_upd.at[_orig_i, _f] = str(_h[_f])
-                                for _f in ['conversion','formato']:
-                                    if pd.notna(_h.get(_f)) and str(_h.get(_f,'')) not in ('','nan'):
-                                        _df_upd.at[_orig_i, _f] = float(_h[_f])
-
-                        _folios = _df_upd.iloc[_unmatched_now]['folio'].unique().tolist()
-                        _df_upd = recalcular_folios(_df_upd, _folios)
-
-                        _ids_bd = st.session_state.get('ids_sin_match_bd', [])
-                        if _ids_bd:
-                            try:
-                                _eng = get_engine()
-                                with _eng.connect() as _conn:
-                                    for _orig_i, _id_bd in zip(_unmatched_now, _ids_bd):
-                                        _r = _df_upd.iloc[_orig_i]
-                                        _conn.execute(text("""
-                                            UPDATE compras SET
-                                                sku=:sku, conversion=:conv, formato=:fmt,
-                                                subcat=:subcat, categoria_producto=:cat,
-                                                cant_conv=:cant_conv, costo_realfinal=:costo,
-                                                muc=:muc, tootal2=:tootal2,
-                                                recargo2=:recargo2, total_neto2=:total_neto2
-                                            WHERE id=:id
-                                        """), {
-                                            'sku':str(_r.get('sku','')),
-                                            'conv':float(_r.get('conversion',1)),
-                                            'fmt':float(_r.get('formato',1)),
-                                            'subcat':str(_r.get('subcat','')),
-                                            'cat':str(_r.get('categoria_producto','')),
-                                            'cant_conv':float(_r.get('cant_conv',0)),
-                                            'costo':float(_r.get('costo_realfinal',0)),
-                                            'muc':float(_r.get('muc',0)),
-                                            'tootal2':float(_r.get('tootal2',0)),
-                                            'recargo2':float(_r.get('recargo2',0)),
-                                            'total_neto2':float(_r.get('total_neto2',0)),
-                                            'id':_id_bd,
-                                        })
-                                    _conn.commit()
-                                st.session_state['ids_sin_match_bd'] = []
-                            except Exception as _eu:
-                                st.error(f"Error actualizando BD: {_eu}")
-
-                        _still = []
-                        for _orig_i in _unmatched_now:
-                            _r = _df_upd.iloc[_orig_i]
-                            if not (pd.notna(_r.get('sku')) and str(_r.get('sku','')) not in ('','nan')
-                                    and float(_r.get('conversion',0)) > 0):
-                                _still.append(_orig_i)
-
-                        st.session_state['df_compras_procesado']   = _df_upd
-                        st.session_state['df_match_unmatched_idx'] = _still
-                        st.session_state['_match_matched']         = len(_df_upd) - len(_still)
-                        st.success(f"✅ {len(_unmatched_now)-len(_still)} corregido(s). {len(_still)} aún sin resolver.")
-                        st.rerun()
-                    except Exception as _ec:
-                        st.error(f"Error: {_ec}")
-            if not _unmatched_idx:
-                st.success("✅ Todos los registros hicieron match con el historial.")
 
             st.markdown("---")
 
@@ -3734,136 +3434,65 @@ if modulo.startswith("📦"):
         else:
             st.info("Carga el archivo Excel fuente para comenzar el procesado.")
 
-        # ── SECCIÓN PERMANENTE: Corregir casos sin match ──────────────
+        # ── SECCIÓN PERMANENTE: Descarga de maestro de productos desde BD ──
         st.markdown("---")
-        st.markdown("#### 📥 Corregir casos sin match en BD")
+        st.markdown("#### 📥 Descargar maestro de productos para enriquecer")
         st.markdown(
-            "<div class='info-box'>Sube aquí el Excel con los casos corregidos. "
-            "Actualiza directamente en BD usando <b>rut_proveedor + nombre_producto</b> "
-            "y recalcula <b>cant_conv, costo_realfinal y MUC</b> para todos los folios afectados.</div>",
+            "<div class='info-box'>Descarga los productos únicos registrados en BD con sus parámetros actuales "
+            "(<b>local, rut_proveedor, nombre_producto, categoria_producto, subcat, formato, conversion, sku</b>). "
+            "Úsalo como base para hacer BUSCARV y completar los campos en tu Excel de compras antes de cargar.</div>",
             unsafe_allow_html=True
         )
-        f_fix = st.file_uploader("Excel con casos corregidos (.xlsx)", type="xlsx", key="comp_fix")
-        if f_fix:
-            # Botón 1: Solo aplica sku, conversion, formato, subcat, categoria en BD
-            if st.button("1️⃣ Aplicar correcciones en BD", type="primary", key="btn_fix_bd"):
-                try:
-                    df_fix = pd.read_excel(f_fix)
-                    df_fix.columns = df_fix.columns.str.strip()
-                    required_fix = ['rut_proveedor','nombre_producto','sku','conversion','formato','subcat','categoria_producto']
-                    missing_fix = [c for c in required_fix if c not in df_fix.columns]
-                    if missing_fix:
-                        st.error(f"Faltan columnas: {', '.join(missing_fix)}")
-                    else:
-                        df_fix['_key'] = (
-                            df_fix['rut_proveedor'].astype(str).str.strip() + '|' +
-                            df_fix['nombre_producto'].astype(str).str.strip().str.upper()
-                        )
-                        df_fix = df_fix.drop_duplicates('_key')
-                        _ruts  = df_fix['rut_proveedor'].astype(str).str.strip().tolist()
-                        _prods = df_fix['nombre_producto'].astype(str).str.strip().tolist()
+        _dl_c1, _dl_c2 = st.columns(2)
+        with _dl_c1:
+            _dl_fecha_i = st.date_input("Desde", value=None, key="dl_maest_fi",
+                                        help="Dejar vacío para todo el historial")
+        with _dl_c2:
+            _dl_fecha_f = st.date_input("Hasta", value=None, key="dl_maest_ff")
 
-                        # Fetch matching IDs and folios from BD
-                        _df_bd = run_query("""
-                            SELECT id, rut_proveedor, nombre_producto, folio
-                            FROM compras
-                            WHERE rut_proveedor = ANY(:ruts)
-                              AND nombre_producto = ANY(:prods)
-                        """, {'ruts': _ruts, 'prods': _prods})
+        _dl_filtro = ""
+        if _dl_fecha_i and _dl_fecha_f:
+            _dl_filtro = f"AND fecha_dte::date BETWEEN '{_dl_fecha_i}' AND '{_dl_fecha_f}'"
+        elif _dl_fecha_i:
+            _dl_filtro = f"AND fecha_dte::date >= '{_dl_fecha_i}'"
+        elif _dl_fecha_f:
+            _dl_filtro = f"AND fecha_dte::date <= '{_dl_fecha_f}'"
 
-                        if _df_bd.empty:
-                            st.warning("No se encontraron registros en BD para los productos del Excel.")
-                        else:
-                            _corr_map = {}
-                            for _, _fr in df_fix.iterrows():
-                                _k = (str(_fr['rut_proveedor']).strip(), str(_fr['nombre_producto']).strip())
-                                _corr_map[_k] = {
-                                    'sku':  str(_fr['sku']).strip(),
-                                    'conv': float(_fr['conversion']),
-                                    'fmt':  float(_fr['formato']),
-                                    'sub':  str(_fr.get('subcat','')).strip(),
-                                    'cat':  str(_fr.get('categoria_producto','')).strip(),
-                                }
-
-                            _updated = 0
-                            _folios_corregidos = set()
-                            _eng_fix = get_engine()
-                            with _eng_fix.connect() as _conn:
-                                for _, _row in _df_bd.iterrows():
-                                    _k = (str(_row['rut_proveedor']).strip(), str(_row['nombre_producto']).strip())
-                                    if _k not in _corr_map:
-                                        continue
-                                    _c = _corr_map[_k]
-                                    _conn.execute(text("""
-                                        UPDATE compras SET
-                                            sku=:sku, conversion=:conv, formato=:fmt,
-                                            subcat=:sub, categoria_producto=:cat
-                                        WHERE id=:id
-                                    """), {
-                                        'sku': _c['sku'], 'conv': _c['conv'], 'fmt': _c['fmt'],
-                                        'sub': _c['sub'], 'cat': _c['cat'],
-                                        'id': int(_row['id'])
-                                    })
-                                    _folios_corregidos.add(str(_row['folio']))
-                                    _updated += 1
-                                _conn.commit()
-
-                            st.session_state['folios_pendientes_recalculo'] = list(_folios_corregidos)
-                            st.success(f"✅ {_updated} registro(s) actualizados. {len(_folios_corregidos)} folio(s) listos para recalcular.")
-                except Exception as _ef:
-                    st.error(f"Error: {_ef}")
-
-        # Botón 2: Recalcula todos los registros de los folios afectados
-        _folios_pendientes = st.session_state.get('folios_pendientes_recalculo', [])
-        if _folios_pendientes:
-            st.info(f"📋 {len(_folios_pendientes)} folio(s) pendientes de recalcular: {', '.join(_folios_pendientes[:5])}{'...' if len(_folios_pendientes) > 5 else ''}")
-            if st.button("2️⃣ Recalcular folios en BD", type="primary", key="btn_recalc_bd"):
-                try:
-                    _df_folios = run_query("""
-                        SELECT id, cantidad, conversion, formato, costo_realfinal
-                        FROM compras
-                        WHERE folio = ANY(:folios)
-                    """, {'folios': _folios_pendientes})
-
-                    if _df_folios.empty:
-                        st.warning("No se encontraron registros para esos folios.")
-                    else:
-                        import numpy as np
-                        _df_folios['cantidad']        = pd.to_numeric(_df_folios['cantidad'],        errors='coerce').fillna(1)
-                        _df_folios['conversion']      = pd.to_numeric(_df_folios['conversion'],      errors='coerce').fillna(1)
-                        _df_folios['formato']         = pd.to_numeric(_df_folios['formato'],         errors='coerce').fillna(1)
-                        _df_folios['costo_realfinal'] = pd.to_numeric(_df_folios['costo_realfinal'], errors='coerce').fillna(0)
-
-                        _df_folios['cant_conv'] = _df_folios['cantidad'] * _df_folios['conversion']
-                        _denom = np.where(
-                            _df_folios['formato'] == 1,
-                            _df_folios['cant_conv'],
-                            _df_folios['cant_conv'] * _df_folios['formato']
-                        )
-                        _df_folios['muc'] = np.where(
-                            _denom != 0,
-                            _df_folios['costo_realfinal'] / _denom,
-                            0
-                        )
-
-                        _recalc = 0
-                        _eng_r = get_engine()
-                        with _eng_r.connect() as _conn_r:
-                            for _, _rr in _df_folios.iterrows():
-                                _conn_r.execute(text("""
-                                    UPDATE compras SET cant_conv=:cc, muc=:muc WHERE id=:id
-                                """), {
-                                    'cc':  float(_rr['cant_conv']),
-                                    'muc': float(_rr['muc']),
-                                    'id':  int(_rr['id'])
-                                })
-                                _recalc += 1
-                            _conn_r.commit()
-
-                        st.session_state['folios_pendientes_recalculo'] = []
-                        st.success(f"✅ {_recalc} registro(s) recalculados en {len(_folios_pendientes)} folio(s).")
-                except Exception as _er:
-                    st.error(f"Error: {_er}")
+        if st.button("⬇️ Descargar maestro de productos", key="btn_dl_maestro"):
+            with st.spinner("Consultando BD..."):
+                _df_maestro = run_query(f"""
+                    SELECT DISTINCT ON (rut_proveedor, nombre_producto)
+                        local,
+                        rut_proveedor,
+                        nombre_producto,
+                        categoria_producto,
+                        subcat,
+                        formato,
+                        conversion,
+                        sku
+                    FROM compras
+                    WHERE rut_proveedor IS NOT NULL
+                      AND nombre_producto IS NOT NULL
+                      {_dl_filtro}
+                    ORDER BY rut_proveedor, nombre_producto, fecha_dte DESC
+                """)
+            if _df_maestro.empty:
+                st.warning("Sin registros para el rango de fechas seleccionado.")
+            else:
+                _buf_maest = io.BytesIO()
+                _df_maestro.to_excel(_buf_maest, index=False)
+                _buf_maest.seek(0)
+                _rango_str = (
+                    f"{_dl_fecha_i}_a_{_dl_fecha_f}" if _dl_fecha_i and _dl_fecha_f
+                    else _dl_fecha_i or _dl_fecha_f or "historico"
+                )
+                st.download_button(
+                    label=f"⬇️ maestro_productos_{_rango_str}.xlsx ({len(_df_maestro):,} productos únicos)",
+                    data=_buf_maest,
+                    file_name=f"maestro_productos_{_rango_str}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="dl_maestro_file"
+                )
 
     with tab3:
         st.markdown("<div class='info-box'>Carga el historial de ventas exportado desde tu POS. Se añade al historial existente (append).</div>", unsafe_allow_html=True)
@@ -4122,18 +3751,17 @@ if modulo.startswith("📦"):
                 filtro_cat_audit   = f"AND categoria_producto = '{cat_sel}'"
                 filtro_cat_audit_c = f"AND g.categoria = '{cat_sel}'"
             q_audit = f"""
-                WITH grupos AS (
+                -- PASO 1: registros base válidos
+                WITH base AS (
                     SELECT
+                        id,
                         sku,
                         conversion,
                         formato,
-                        ROUND(muc::numeric, 4)                                          AS muc_grupo,
-                        COUNT(*)                                                        AS n_registros,
-                        ARRAY_AGG(id)                                                   AS ids,
-                        MODE() WITHIN GROUP (ORDER BY nombre_producto)                  AS nombre_producto,
-                        MODE() WITHIN GROUP (ORDER BY nombre_proveedor)                 AS proveedor,
-                        MAX(categoria_producto)                                         AS categoria,
-                        ROUND((ROUND(muc::numeric, 4) * formato)::numeric, 2)          AS precio_factura
+                        muc,
+                        nombre_producto,
+                        nombre_proveedor,
+                        categoria_producto
                     FROM compras
                     WHERE muc > 0
                       AND costo_realfinal > 0
@@ -4148,44 +3776,100 @@ if modulo.startswith("📦"):
                       AND UPPER(subcat) NOT LIKE '%COLACIÓN%'
                       {filtro_cat_audit}
                       {_filtro_fecha_audit}
-                    GROUP BY sku, conversion, formato, ROUND(muc::numeric, 4)
-                    HAVING ROUND(muc::numeric, 4) > 0
                 ),
-                dispersos AS (
+                -- PASO 2: combinaciones únicas de SKU+conversion+formato
+                combos AS (
                     SELECT
                         sku,
                         conversion,
                         formato,
-                        MAX(muc_grupo)                                                  AS muc_max,
-                        MIN(muc_grupo)                                                  AS muc_min,
-                        ROUND((MAX(muc_grupo) / NULLIF(MIN(muc_grupo), 0))::numeric, 1) AS dispersion,
-                        COUNT(*)                                                        AS n_grupos
-                    FROM grupos
-                    WHERE muc_grupo > 0
+                        COUNT(DISTINCT id)                                              AS n_registros_combo,
+                        MIN(muc)                                                        AS muc_min_combo,
+                        MAX(muc)                                                        AS muc_max_combo,
+                        MODE() WITHIN GROUP (ORDER BY nombre_producto)                  AS nombre_producto,
+                        MODE() WITHIN GROUP (ORDER BY nombre_proveedor)                 AS proveedor,
+                        MAX(categoria_producto)                                         AS categoria
+                    FROM base
                     GROUP BY sku, conversion, formato
-                    HAVING COUNT(*) >= 2
-                       AND MAX(muc_grupo) / NULLIF(MIN(muc_grupo), 0) > {umbral_audit}
+                ),
+                -- PASO 3: por SKU, detectar cuántas combinaciones conv+fmt distintas existen
+                sku_combos AS (
+                    SELECT
+                        sku,
+                        COUNT(*)                                                        AS n_combos_params,
+                        MIN(muc_min_combo)                                              AS muc_global_min,
+                        MAX(muc_max_combo)                                              AS muc_global_max,
+                        SUM(n_registros_combo)                                         AS n_registros_total
+                    FROM combos
+                    GROUP BY sku
+                ),
+                -- PASO 4: subgrupos MUC dentro de cada combo SKU+conv+fmt
+                -- Agrupa registros cuyo MUC cae en el mismo "escalón" de 0.1
+                muc_grupos AS (
+                    SELECT
+                        b.sku,
+                        b.conversion,
+                        b.formato,
+                        FLOOR(b.muc / 0.1) * 0.1                                       AS muc_bin,
+                        COUNT(*)                                                        AS n_registros,
+                        ARRAY_AGG(b.id)                                                 AS ids,
+                        MIN(b.muc)                                                      AS muc_min,
+                        MAX(b.muc)                                                      AS muc_max,
+                        AVG(b.muc)                                                      AS muc_avg,
+                        MODE() WITHIN GROUP (ORDER BY b.nombre_producto)               AS nombre_producto,
+                        MODE() WITHIN GROUP (ORDER BY b.nombre_proveedor)              AS proveedor,
+                        MAX(b.categoria_producto)                                      AS categoria
+                    FROM base b
+                    GROUP BY b.sku, b.conversion, b.formato, FLOOR(b.muc / 0.1) * 0.1
+                ),
+                -- PASO 5: contar bins MUC distintos por combo; filtrar solo los que tienen > 1 bin
+                muc_dispersion AS (
+                    SELECT
+                        sku,
+                        conversion,
+                        formato,
+                        COUNT(*)                                                        AS n_bins_muc,
+                        MIN(muc_bin)                                                    AS muc_bin_min,
+                        MAX(muc_bin)                                                    AS muc_bin_max,
+                        ROUND((MAX(muc_bin) - MIN(muc_bin))::numeric, 2)               AS rango_muc
+                    FROM muc_grupos
+                    GROUP BY sku, conversion, formato
                 )
+                -- RESULTADO FINAL: un registro por bin MUC dentro de cada combo SKU+conv+fmt
                 SELECT
-                    g.sku,
-                    g.nombre_producto,
-                    g.categoria,
-                    g.proveedor,
-                    g.conversion,
-                    g.formato,
-                    g.muc_grupo                                                         AS muc,
-                    g.n_registros,
-                    g.ids,
-                    g.precio_factura,
-                    d.muc_min,
-                    d.muc_max,
-                    d.dispersion
-                FROM grupos g
-                JOIN dispersos d ON g.sku = d.sku
-                  AND g.conversion = d.conversion
-                  AND g.formato = d.formato
-                  {filtro_cat_audit_c.replace('c.sku', 'g.sku').replace('c.categoria_producto', 'g.categoria')}
-                ORDER BY d.dispersion DESC, g.sku, g.conversion, g.formato, g.muc_grupo
+                    mg.sku,
+                    mg.nombre_producto,
+                    mg.categoria,
+                    mg.proveedor,
+                    mg.conversion,
+                    mg.formato,
+                    ROUND(mg.muc_avg::numeric, 4)                                      AS muc,
+                    ROUND(mg.muc_bin::numeric, 2)                                      AS muc_bin,
+                    mg.n_registros,
+                    mg.ids,
+                    ROUND((mg.muc_avg * mg.formato)::numeric, 2)                       AS precio_factura,
+                    md.muc_bin_min                                                      AS muc_min,
+                    md.muc_bin_max                                                      AS muc_max,
+                    md.rango_muc                                                        AS dispersion,
+                    md.n_bins_muc,
+                    sc.n_combos_params,
+                    sc.n_registros_total
+                FROM muc_grupos mg
+                JOIN muc_dispersion md
+                    ON mg.sku = md.sku
+                   AND mg.conversion = md.conversion
+                   AND mg.formato = md.formato
+                JOIN sku_combos sc
+                    ON mg.sku = sc.sku
+                WHERE (
+                    -- Mostrar si tiene > 1 bin MUC dentro del mismo combo (dispersión de precio)
+                    md.n_bins_muc > 1
+                    OR
+                    -- O si el SKU tiene más de 1 combinación conv+fmt (inconsistencia de parámetros)
+                    sc.n_combos_params > 1
+                )
+                {filtro_cat_audit_c.replace('c.sku', 'mg.sku').replace('c.categoria_producto', 'mg.categoria')}
+                ORDER BY sc.n_combos_params DESC, md.rango_muc DESC, mg.sku, mg.conversion, mg.formato, mg.muc_bin
                 LIMIT 500
             """
             df_audit = run_query(q_audit)
@@ -4210,50 +3894,44 @@ if modulo.startswith("📦"):
 
                 st.markdown("<br>", unsafe_allow_html=True)
 
-                # ── Construir grupos ──────────────────────────────────────
-                ids_disp    = df_audit['id'].astype(str).tolist() if 'id' in df_audit.columns else []
-                nombres_disp = (df_audit['sku'] + ' — ' + df_audit['nombre_producto']).tolist()
-
-                # Cada fila ya es un grupo SKU+MUC — construir labels para el buscador
+                # ── Construir grupos — resumen por SKU para el selector ───
                 if not df_audit.empty:
-                    df_audit['_label'] = df_audit.apply(
-                        lambda r: f"{r['sku']} — {r['nombre_producto'][:40]} | MUC {float(r['muc']):.4f} ({int(r['n_registros'])} reg. | {float(r['dispersion']):.0f}×)",
-                        axis=1
-                    )
-                    # Para el selector de SKU (agrupa todas las filas del mismo SKU)
                     grupos = df_audit.groupby('sku').agg(
-                        nombre     = ('nombre_producto', 'first'),
-                        dispersion = ('dispersion', 'first'),
-                        n_filas    = ('n_registros', 'sum'),
+                        nombre         = ('nombre_producto', 'first'),
+                        n_combos_params= ('n_combos_params', 'first'),
+                        dispersion     = ('dispersion', 'max'),
+                        n_filas        = ('n_registros', 'sum'),
                     ).reset_index()
-                    grupos = grupos.sort_values('dispersion', ascending=False).reset_index(drop=True)
-                    grupos['label'] = grupos.apply(
-                        lambda r: f"{r['sku']} — {r['nombre'][:40]} ({int(r['n_filas'])} reg. | {float(r['dispersion']):.0f}×)",
-                        axis=1
-                    )
+                    # Ordenar: primero los que tienen múltiples combos params, luego por rango MUC
+                    grupos = grupos.sort_values(
+                        ['n_combos_params', 'dispersion'], ascending=[False, False]
+                    ).reset_index(drop=True)
                 else:
                     grupos = pd.DataFrame()
 
-                # Buscador: selectbox con búsqueda nativa — una opción por SKU+MUC
+                # Buscador: una opción por SKU (no por bin MUC) para filtrar la tabla
                 if not df_audit.empty:
-                    opciones_muc = df_audit.apply(
-                        lambda r: f"{r['sku']} — {r['nombre_producto'][:40]} | MUC {float(r['muc']):.1f} ({int(r['n_registros'])} reg.)",
-                        axis=1
-                    ).tolist()
+                    def _muc_label(r):
+                        combos_str = f"⚠️ {int(r['n_combos_params'])} combos params" if int(r.get('n_combos_params',1)) > 1 else ""
+                        rango_str  = f"Δ MUC {float(r['dispersion']):.2f}" if float(r.get('dispersion',0)) > 0.1 else ""
+                        flags      = " | ".join(filter(None, [combos_str, rango_str]))
+                        return f"{r['sku']} — {r['nombre_producto'][:40]}" + (f" [{flags}]" if flags else "")
+                    opciones_muc = df_audit.drop_duplicates('sku').apply(_muc_label, axis=1).tolist()
                 else:
                     opciones_muc = []
 
-                label_sel_muc = st.selectbox("🔍 Buscar SKU / producto / MUC",
-                                             [None] + opciones_muc,
-                                             format_func=lambda x: "— Todos —" if x is None else x,
-                                             key='audit_grupo_sel')
+                label_sel_muc = st.selectbox(
+                    "🔍 Filtrar por SKU / producto",
+                    [None] + opciones_muc,
+                    format_func=lambda x: "— Todos los SKUs —" if x is None else x,
+                    key='audit_grupo_sel'
+                )
 
                 # Extraer SKU seleccionado del label
                 if label_sel_muc:
                     sku_activo = label_sel_muc.split(" — ")[0].strip()
-                    label_sel = grupos[grupos['sku'] == sku_activo]['label'].iloc[0] if not grupos.empty and sku_activo in grupos['sku'].values else None
                 else:
-                    label_sel = None
+                    sku_activo = None
 
                 # ── Inspector libre de SKU ────────────────────────────────
                 with st.expander("🔎 Inspeccionar cualquier SKU", expanded=False):
@@ -4386,13 +4064,14 @@ if modulo.startswith("📦"):
                 # ══════════════════════════════════════════════════════════
 
                 # Filtrar tabla según búsqueda
-                if label_sel_muc:
-                    sku_fil = label_sel_muc.split(' — ')[0].strip()
-                    df_tabla = df_audit[df_audit['sku'] == sku_fil].reset_index(drop=True)
+                if sku_activo:
+                    df_tabla = df_audit[df_audit['sku'] == sku_activo].reset_index(drop=True)
+                    sku_fil  = sku_activo
                 else:
                     df_tabla = df_audit.reset_index(drop=True)
+                    sku_fil  = None
 
-                st.caption(f"{'SKU: ' + sku_fil if label_sel_muc else 'Todos los SKUs'} — {len(df_tabla)} grupos MUC")
+                st.caption(f"{'SKU: ' + sku_fil if sku_fil else 'Todos los SKUs'} — {len(df_tabla)} grupos")
 
                 import ast as _ast
                 def _parse_ids(raw):
@@ -4414,10 +4093,9 @@ if modulo.startswith("📦"):
                 _prev_sel = st.session_state.get('audit_multisel', [])
                 if _prev_sel:
                     def _opt_label(r):
-                        d = float(r["dispersion"])
-                        emoji = "🔴" if d > 8 else "🟡" if d > 2 else "⚪"
-                        df = f"{d:.0f}" if d > 8 else f"{d:.1f}"
-                        return f'{r["sku"]} | MUC {float(r["muc"]):.4f} | {int(r["n_registros"])} reg. | {emoji} {df}×'
+                        d = float(r.get('dispersion', 0) or 0)
+                        dl = f'🔴 Δ{d:.2f}' if d > 1.0 else f'🟡 Δ{d:.2f}' if d > 0.1 else '—'
+                        return f'{r["sku"]} | MUC {float(r["muc"]):.4f} | {int(r["n_registros"])} reg. | {dl}'
                     _opciones_tmp = [_opt_label(r) for _, r in df_tabla.iterrows()]
                     sel_indices_prev = [i for i, opt in enumerate(_opciones_tmp) if opt in _prev_sel]
                     if sel_indices_prev:
@@ -4508,31 +4186,47 @@ if modulo.startswith("📦"):
                 opciones_sel = []  # para el multiselect
 
                 for idx, r in df_tabla.iterrows():
-                    muc        = float(r.get('muc', 0) or 0)
-                    muc_min    = float(r.get('muc_min', 0) or 0)
-                    muc_max    = float(r.get('muc_max', 0) or 0)
-                    dispersion = float(r.get('dispersion', 1) or 1)
-                    n_reg      = int(r.get('n_registros', 1) or 1)
-                    precio     = float(r.get('precio_factura', 0) or 0)
-                    sku_r      = r.get('sku', '')
-                    nombre_r   = str(r.get('nombre_producto', ''))
-                    es_out     = muc_min > 0 and (abs(muc - muc_min) < 0.0001 or abs(muc - muc_max) < 0.0001)
-                    if dispersion > 8:   dc = '#e84545'; dl = f'🔴 {dispersion:.0f}×'
-                    elif dispersion > 2: dc = '#e89c45'; dl = f'🟡 {dispersion:.1f}×'
-                    else:                dc = '#aaa';    dl = f'⚪ {dispersion:.1f}×'
-                    mc = '#e84545' if es_out else '#aaa'
-                    mw = '700' if es_out else '400'
+                    muc    = float(r.get('muc', 0) or 0)
+                    n_reg  = int(r.get('n_registros', 1) or 1)
+                    precio = float(r.get('precio_factura', 0) or 0)
+                    n_combos       = int(r.get('n_combos_params', 1) or 1)
+                    n_bins         = int(r.get('n_bins_muc', 1) or 1)
+                    dispersion     = float(r.get('dispersion', 0) or 0)
+
+                    # Badge de parámetros (conv+fmt): rojo si hay >1 combo para el SKU
+                    if n_combos > 1:
+                        badge_params = f'<span style="background:#3a1010;color:#e84545;border-radius:4px;padding:2px 6px;font-size:0.68rem;font-weight:600">⚠️ {n_combos} combos</span>'
+                    else:
+                        badge_params = f'<span style="color:#444;font-size:0.72rem">✓</span>'
+
+                    # Badge de MUC: según rango absoluto dentro del combo
+                    if dispersion > 1.0:
+                        dc = '#e84545'; dl = f'🔴 Δ{dispersion:.2f}'
+                    elif dispersion > 0.1:
+                        dc = '#e89c45'; dl = f'🟡 Δ{dispersion:.2f}'
+                    else:
+                        dc = '#555';    dl = f'—'
+
+                    # Resaltar MUC si es el extremo del rango dentro del combo
+                    muc_min_v = float(r.get('muc_min', 0) or 0)
+                    muc_max_v = float(r.get('muc_max', 0) or 0)
+                    muc_bin   = float(r.get('muc_bin', 0) or 0)
+                    es_extremo = n_bins > 1 and (abs(muc_bin - muc_min_v) < 0.001 or abs(muc_bin - muc_max_v) < 0.001)
+                    mc = '#e84545' if es_extremo else '#aaa'
+                    mw = '700'     if es_extremo else '400'
+
                     rows_html += (
                         f'<tr style="border-bottom:1px solid #1e1e1e">'
-                        f'<td style="padding:9px 12px;color:#666;font-family:monospace;font-size:0.72rem;width:8%">{sku_r}</td>'
-                        f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de;font-size:0.8rem;width:22%">{nombre_r}</td>'
-                        f'<td style="padding:9px 12px;color:#777;font-size:0.75rem;width:18%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{r.get("proveedor","")}</td>'
+                        f'<td style="padding:9px 12px;color:#666;font-family:monospace;font-size:0.72rem;width:7%">{sku_r}</td>'
+                        f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de;font-size:0.8rem;width:20%">{nombre_r}</td>'
+                        f'<td style="padding:9px 12px;color:#777;font-size:0.75rem;width:15%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{r.get("proveedor","")}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#888;width:6%">{r.get("conversion","")}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:#888;width:7%">{r.get("formato","")}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:#aaa;width:10%">${precio:,.2f}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:{mc};font-weight:{mw};width:10%">{muc:,.4f}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:#666;width:6%">{n_reg}</td>'
-                        f'<td style="padding:9px 12px;text-align:center;color:{dc};font-weight:600;width:8%">{dl}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#888;width:6%">{r.get("formato","")}</td>'
+                        f'<td style="padding:9px 12px;text-align:center;width:10%">{badge_params}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#aaa;width:9%">${precio:,.2f}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:{mc};font-weight:{mw};width:9%">{muc:,.4f}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#666;width:5%">{n_reg}</td>'
+                        f'<td style="padding:9px 12px;text-align:center;color:{dc};font-weight:600;width:9%">{dl}</td>'
                         f'</tr>'
                     )
                     opciones_sel.append(f'{sku_r} | MUC {muc:.4f} | {n_reg} reg. | {dl}')
@@ -4541,8 +4235,8 @@ if modulo.startswith("📦"):
                     '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
                     '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
                     '<thead><tr style="background:#111">'
-                    + ''.join([f'<th style="{hs_a};text-align:{"left" if i<3 else "right" if i<8 else "center"}">{h}</th>'
-                               for i, h in enumerate(['SKU','Producto','Proveedor','Conv.','Formato','Neto Fact/u','MUC','# Reg.','Dispersión'])])
+                    + ''.join([f'<th style="{hs_a};text-align:{"left" if i<3 else "right" if i in (3,4,6,7,8) else "center"}">{h}</th>'
+                               for i, h in enumerate(['SKU','Producto','Proveedor','Conv.','Formato','Params','Neto Fact/u','MUC','# Reg.','Rango MUC'])])
                     + f'</tr></thead><tbody>{rows_html}</tbody></table></div>'
                 )
                 st.markdown(tabla_html, unsafe_allow_html=True)
