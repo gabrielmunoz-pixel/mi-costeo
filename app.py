@@ -3771,6 +3771,7 @@ if modulo.startswith("📦"):
                         formato,
                         muc,
                         monto_real,
+                        cantidad,
                         cant_conv,
                         nombre_producto,
                         nombre_proveedor,
