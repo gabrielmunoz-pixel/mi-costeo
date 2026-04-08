@@ -5637,24 +5637,41 @@ if modulo.startswith("📦"):
             except Exception:
                 return pd.NaT
 
+        def _conc_norm_rut(v):
+            """Normaliza RUT: uppercase, strip, sin puntos."""
+            if v is None:
+                return ''
+            return str(v).upper().strip().replace('.', '')
+
         def _conc_leer_excel(file_bytes):
-            """Lee el Excel y devuelve (df_sii, df_rg) normalizados o lanza ValueError."""
+            """
+            Lee el Excel y devuelve (df_sii, df_rg) normalizados o lanza ValueError.
+
+            Hoja SII esperada:        Local | FECHA | RUT PROVEEDOR | FOLIO | MONTO
+            Hoja Rinde Gastos esperada: Local | FECHA | RUT PROVEEDOR | Folio | CATEGORÍA | MONTO
+              (PROVEEDOR razón social es opcional — se usa RUT como clave de cruce)
+            """
             xls = pd.ExcelFile(io.BytesIO(file_bytes))
             if 'SII' not in xls.sheet_names:
                 raise ValueError("El archivo no contiene una hoja 'SII'.")
             if 'Rinde Gastos' not in xls.sheet_names:
                 raise ValueError("El archivo no contiene una hoja 'Rinde Gastos'.")
 
-            COLS_SII = {'Local', 'FECHA', 'PROVEEDOR', 'Folio', 'CATEGORÍA', 'MONTO'}
-            COLS_RG  = {'Local', 'FECHA', 'PROVEEDOR', 'Folio', 'CATEGORÍA', 'MONTO'}
+            # Columnas mínimas requeridas
+            COLS_SII_REQ = {'Local', 'FECHA', 'MONTO'}
+            COLS_RG_REQ  = {'Local', 'FECHA', 'MONTO'}
 
             df_sii_raw = pd.read_excel(xls, sheet_name='SII')
             df_rg_raw  = pd.read_excel(xls, sheet_name='Rinde Gastos')
 
-            missing_sii = COLS_SII - set(df_sii_raw.columns)
+            # Normalizar nombres de columnas (strip espacios)
+            df_sii_raw.columns = [str(c).strip() for c in df_sii_raw.columns]
+            df_rg_raw.columns  = [str(c).strip() for c in df_rg_raw.columns]
+
+            missing_sii = COLS_SII_REQ - set(df_sii_raw.columns)
             if missing_sii:
-                raise ValueError(f"Faltan columnas en SII: {sorted(missing_sii)}. Esperadas: Local, FECHA, PROVEEDOR, Folio, CATEGORÍA, MONTO.")
-            missing_rg = COLS_RG - set(df_rg_raw.columns)
+                raise ValueError(f"Faltan columnas en SII: {sorted(missing_sii)}. Mínimo requerido: Local, FECHA, MONTO.")
+            missing_rg = COLS_RG_REQ - set(df_rg_raw.columns)
             if missing_rg:
                 raise ValueError(f"Faltan columnas en Rinde Gastos: {sorted(missing_rg)}.")
             if df_sii_raw.empty:
@@ -5662,23 +5679,50 @@ if modulo.startswith("📦"):
             if df_rg_raw.empty:
                 raise ValueError("La hoja Rinde Gastos no contiene datos.")
 
+            def _detect_col(df, candidates):
+                """Devuelve el primer nombre de columna que coincida (case-insensitive)."""
+                cols_upper = {c.upper(): c for c in df.columns}
+                for cand in candidates:
+                    if cand.upper() in cols_upper:
+                        return cols_upper[cand.upper()]
+                return None
+
             def _norm(df):
                 df = df.copy()
-                df['local']    = df['Local'].apply(_conc_norm_local)
-                df['proveedor']= df['PROVEEDOR'].apply(_conc_norm_prov)
-                df['folio']    = df['Folio'].apply(_conc_norm_folio)
-                df['fecha']    = df['FECHA'].apply(_conc_norm_fecha)
-                df['monto']    = df['MONTO'].apply(_conc_norm_monto)
-                df['categoria']= df['CATEGORÍA'].astype(str).str.strip()
-                return df[['local','proveedor','folio','fecha','monto','categoria']].reset_index(drop=True)
+                df['local'] = df['Local'].apply(_conc_norm_local)
+                df['monto'] = df['MONTO'].apply(_conc_norm_monto)
+
+                # Folio — buscar por nombre flexible
+                _col_folio = _detect_col(df, ['FOLIO', 'Folio', 'folio', 'N° FOLIO', 'Nro Folio'])
+                df['folio'] = df[_col_folio].apply(_conc_norm_folio) if _col_folio else ''
+
+                # Fecha
+                _col_fecha = _detect_col(df, ['FECHA', 'Fecha', 'FECHA DTE', 'Fecha DTE'])
+                df['fecha'] = df[_col_fecha].apply(_conc_norm_fecha) if _col_fecha else pd.NaT
+
+                # RUT proveedor — buscar por nombre flexible
+                _col_rut = _detect_col(df, ['RUT PROVEEDOR', 'RUT_PROVEEDOR', 'RUT', 'Rut Proveedor', 'rut_proveedor'])
+                df['rut'] = df[_col_rut].apply(_conc_norm_rut) if _col_rut else ''
+
+                # Razón social (opcional)
+                _col_prov = _detect_col(df, ['PROVEEDOR', 'Proveedor', 'RAZÓN SOCIAL', 'RAZON SOCIAL', 'Razon Social'])
+                df['proveedor'] = df[_col_prov].apply(_conc_norm_prov) if _col_prov else ''
+
+                # Categoría (opcional — en SII puede no existir)
+                _col_cat = _detect_col(df, ['CATEGORÍA', 'CATEGORIA', 'Categoría', 'Categoria'])
+                df['categoria'] = df[_col_cat].astype(str).str.strip() if _col_cat else ''
+
+                return df[['local','rut','proveedor','folio','fecha','monto','categoria']].reset_index(drop=True)
 
             return _norm(df_sii_raw), _norm(df_rg_raw)
 
         def _conc_cargar_compras(fi, ff, local_filter):
-            """Carga compras desde BD y agrega por folio."""
+            """Carga compras desde BD agrupadas por folio, incluyendo RUT y categoría."""
             q = """
                 SELECT local, folio::text AS folio, nombre_proveedor,
-                       rut_proveedor, fecha_dte, SUM(total) AS monto_total
+                       rut_proveedor, fecha_dte,
+                       SUM(total) AS monto_total,
+                       MAX(categoria_producto) AS categoria
                 FROM compras
                 WHERE fecha_dte::date BETWEEN :fi AND :ff
             """
@@ -5689,13 +5733,15 @@ if modulo.startswith("📦"):
             q += " GROUP BY local, folio::text, nombre_proveedor, rut_proveedor, fecha_dte"
             df = run_query(q, params)
             if df.empty:
-                return pd.DataFrame(columns=['local','folio','proveedor','fecha','monto'])
+                return pd.DataFrame(columns=['local','rut','proveedor','folio','fecha','monto','categoria'])
             df['local']     = df['local'].apply(_conc_norm_local)
             df['folio']     = df['folio'].apply(_conc_norm_folio)
+            df['rut']       = df['rut_proveedor'].apply(_conc_norm_rut)
             df['proveedor'] = df['nombre_proveedor'].apply(_conc_norm_prov)
             df['fecha']     = df['fecha_dte'].apply(_conc_norm_fecha)
             df['monto']     = df['monto_total'].apply(_conc_norm_monto)
-            return df[['local','folio','proveedor','fecha','monto']].reset_index(drop=True)
+            df['categoria'] = df['categoria'].fillna('').astype(str).str.strip()
+            return df[['local','rut','proveedor','folio','fecha','monto','categoria']].reset_index(drop=True)
 
         def _conc_match_greedy(df_a, df_b, fecha_dias=3, monto_pct=0.01):
             """
@@ -5719,8 +5765,12 @@ if modulo.startswith("📦"):
                             usados_b.add(ib)
                             break
 
-            tol_m  = monto_pct
-            tol_d  = pd.Timedelta(days=fecha_dias)
+            tol_m = monto_pct
+            tol_d = pd.Timedelta(days=fecha_dias)
+
+            def _rut_ok(a, b):
+                """RUT válido y coincidente en ambos lados."""
+                return a.get('rut','') != '' and b.get('rut','') != '' and a.get('rut','') == b.get('rut','')
 
             def _monto_ok(a, b):
                 ma, mb = a['monto'], b['monto']
@@ -5732,25 +5782,50 @@ if modulo.startswith("📦"):
                 if pd.isna(a['fecha']) or pd.isna(b['fecha']): return False
                 return abs(a['fecha'] - b['fecha']) <= tol_d
 
-            # P0 exact
-            _try(lambda a,b: a['local']==b['local'] and a['folio']==b['folio'] and a['monto']==b['monto'] and a['fecha']==b['fecha'])
-            # P1 local+folio+monto
+            # P0 local + RUT + folio + monto + fecha exactos
+            _try(lambda a,b: a['local']==b['local'] and _rut_ok(a,b) and a['folio']==b['folio'] and a['monto']==b['monto'] and a['fecha']==b['fecha'])
+            # P1 local + RUT + folio + monto
+            _try(lambda a,b: a['local']==b['local'] and _rut_ok(a,b) and a['folio']==b['folio'] and a['monto']==b['monto'])
+            # P2 local + RUT + folio (RUT puede estar mal digitado en RG, folio + local alcanzan)
             _try(lambda a,b: a['local']==b['local'] and a['folio']==b['folio'] and a['monto']==b['monto'])
-            # P2 local+proveedor+fecha+monto
-            _try(lambda a,b: a['local']==b['local'] and a['proveedor']==b['proveedor'] and a['fecha']==b['fecha'] and a['monto']==b['monto'])
-            # P3 local+folio+proveedor
-            _try(lambda a,b: a['local']==b['local'] and a['folio']==b['folio'] and a['proveedor']==b['proveedor'])
-            # P4 local+folio, monto ±50%
+            # P3 local + RUT + fecha + monto
+            _try(lambda a,b: a['local']==b['local'] and _rut_ok(a,b) and a['fecha']==b['fecha'] and a['monto']==b['monto'])
+            # P4 local + folio + proveedor (razón social si existe)
+            _try(lambda a,b: a['local']==b['local'] and a['folio']==b['folio'] and
+                 a.get('proveedor','')!='' and a.get('proveedor','')==b.get('proveedor',''))
+            # P5 local + folio, monto ±50% (folio puede tener error menor)
             _try(lambda a,b: a['local']==b['local'] and a['folio']==b['folio'] and
                  (abs(a['monto']-b['monto']) / max(abs(a['monto']),abs(b['monto']),1)) <= 0.5)
-            # P5 local+monto+fecha±N
+            # P6 local + RUT + fecha±N + monto±pct (sin folio — folio puede faltar)
+            _try(lambda a,b: a['local']==b['local'] and _rut_ok(a,b) and _fecha_ok(a,b) and _monto_ok(a,b))
+            # P7 local + monto + fecha±N (último recurso)
             _try(lambda a,b: a['local']==b['local'] and a['monto']==b['monto'] and _fecha_ok(a,b))
-            # P6 local+proveedor+fecha±N+monto±pct
-            _try(lambda a,b: a['local']==b['local'] and a['proveedor']==b['proveedor'] and _fecha_ok(a,b) and _monto_ok(a,b))
 
             sin_a = set(df_a.index) - usados_a
             sin_b = set(df_b.index) - usados_b
             return pares, sin_a, sin_b
+
+        def _conc_enrich_categoria(df_items, df_bd):
+            """
+            Enriquece la columna 'categoria' de df_items usando df_bd:
+            si la fila no tiene categoría pero su RUT está en BD, toma la categoría de BD.
+            """
+            if df_bd.empty or df_items.empty:
+                return df_items
+            # Mapa rut → categoría desde BD (primera categoría no vacía por RUT)
+            _rut_cat = (
+                df_bd[df_bd['categoria'].str.strip() != ''][['rut','categoria']]
+                .drop_duplicates('rut')
+                .set_index('rut')['categoria']
+                .to_dict()
+            )
+            df_items = df_items.copy()
+            def _fill_cat(row):
+                if str(row.get('categoria','')).strip() in ('', 'nan', 'None'):
+                    return _rut_cat.get(row.get('rut',''), '')
+                return row.get('categoria','')
+            df_items['categoria'] = df_items.apply(_fill_cat, axis=1)
+            return df_items
 
         def _conc_engine(df_sii, df_rg, df_bd, fecha_dias=3, monto_pct=0.01):
             """Motor de conciliación. Retorna dict con cat_a, cat_b, cat_cd, resumen."""
@@ -5816,6 +5891,11 @@ if modulo.startswith("📦"):
             cat_cd = pd.DataFrame(cat_cd_rows).reset_index(drop=True) if cat_cd_rows else pd.DataFrame()
 
             total_unicas = len(df_univ) if not df_univ.empty else 0
+            # Enriquecer categoría desde BD por RUT donde falte
+            cat_a  = _conc_enrich_categoria(cat_a,  df_bd) if not cat_a.empty  else cat_a
+            cat_b  = _conc_enrich_categoria(cat_b,  df_bd) if not cat_b.empty  else cat_b
+            cat_cd = _conc_enrich_categoria(cat_cd, df_bd) if not cat_cd.empty else cat_cd
+
             resumen = {
                 'total_facturas_unicas': total_unicas,
                 'conciliadas':           len(cat_a),
