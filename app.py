@@ -2377,11 +2377,11 @@ def save_ventas(df_raw):
         with engine.connect() as conn:
             if locales:
                 conn.execute(text(
-                    "DELETE FROM ventas WHERE fecha_venta = ANY(:fechas) AND local = ANY(:locales)"),
+                    "DELETE FROM ventas WHERE fecha_venta = ANY(:fechas::date[]) AND local = ANY(:locales)"),
                     {'fechas': fechas_archivo, 'locales': locales})
             else:
                 conn.execute(text(
-                    "DELETE FROM ventas WHERE fecha_venta = ANY(:fechas)"),
+                    "DELETE FROM ventas WHERE fecha_venta = ANY(:fechas::date[])"),
                     {'fechas': fechas_archivo})
             conn.commit()
 
@@ -3673,11 +3673,11 @@ if modulo.startswith("📦"):
                     with engine.connect() as conn:
                         if locales2:
                             conn.execute(text(
-                                "DELETE FROM ventas WHERE fecha_venta = ANY(:fechas) AND local = ANY(:locales)"),
+                                "DELETE FROM ventas WHERE fecha_venta = ANY(:fechas::date[]) AND local = ANY(:locales)"),
                                 {'fechas': fechas_archivo2, 'locales': locales2})
                         else:
                             conn.execute(text(
-                                "DELETE FROM ventas WHERE fecha_venta = ANY(:fechas)"),
+                                "DELETE FROM ventas WHERE fecha_venta = ANY(:fechas::date[])"),
                                 {'fechas': fechas_archivo2})
                         conn.commit()
 
