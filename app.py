@@ -2569,7 +2569,7 @@ with st.sidebar:
     if _is_admin:
         menu_items["📦 Gestión de Datos"] = []
     if _user_puede("📊 Informes"):
-        menu_items["📊 Informes"] = ["Rentabilidad", "Desviación", "Variación Precio Compras", "Informe de Costos", "Auditor Categorías", "Tendencias Bar", "Cuentas Casa"]
+        menu_items["📊 Informes"] = ["Rentabilidad", "Desviación", "Variación Precio Compras", "Informe de Costos", "Auditor Categorías", "Tendencias Bar", "Cuentas Casa", "Venta Diaria"]
     if _is_admin or _user_puede("📋 Notas de Crédito"):
         menu_items["📋 Notas de Crédito"] = []
     if _is_admin:
@@ -2939,6 +2939,30 @@ def generar_pdf_variacion(df, mes_base, mes_comp, local='Cadena Completa'):
     doc.build(story, onFirstPage=add_bg, onLaterPages=add_bg)
     buf.seek(0)
     return buf.getvalue()
+
+
+# ── Mapa RUT Aliva → Local ────────────────────────────────────────────────
+_ALIVA_RUT_LOCAL = {
+    '76376098-7': 'Providencia',
+    '76439807-6': 'Vitacura',
+    '76450253-1': 'La Dehesa',
+    '77009575-1': 'Las Condes',
+    '77116729-2': 'Chicureo',
+    '77531748-5': 'Macul',
+    '77726513-K': 'La Reina',
+    '77773363-K': 'Quilin',
+    '77887201-3': 'Nueva Providencia',
+    '77847982-6': 'Los Trapenses',
+}
+
+def _normalizar_rut_aliva(rut_raw):
+    """Convierte C763760987 → 76376098-7"""
+    r = str(rut_raw).strip().upper()
+    if r.startswith('C'):
+        r = r[1:]
+    if '-' not in r and len(r) >= 2:
+        r = r[:-1] + '-' + r[-1]
+    return r
 
 # ============================================================
 # MÓDULO: GESTIÓN DE DATOS
@@ -5496,6 +5520,8 @@ elif modulo.startswith("📊"):
         informe_sel = "Bar"
     elif "Cuentas Casa" in modulo:
         informe_sel = "CuentasCasa"
+    elif "Venta Diaria" in modulo:
+        informe_sel = "VentaDiaria"
     else:
         informe_sel = "Informe 1"  # default
 
@@ -10291,6 +10317,663 @@ elif informe_sel == "CuentasCasa":
                         unsafe_allow_html=True)
 
 # ============================================================
+# MÓDULO: INFORME VENTA DIARIA
+# ============================================================
+elif informe_sel == "VentaDiaria":
+
+    import calendar as _cal
+
+    def _dias_habiles_aliva(año, mes, hasta_dia):
+        count = 0
+        for d in range(1, hasta_dia + 1):
+            if _cal.weekday(año, mes, d) < 6:
+                count += 1
+        return count
+
+    def _dias_habiles_mes_aliva(año, mes):
+        _, ultimo = _cal.monthrange(año, mes)
+        return _dias_habiles_aliva(año, mes, ultimo)
+
+    def _dias_calendario_mes(año, mes):
+        _, ultimo = _cal.monthrange(año, mes)
+        return ultimo
+
+    st.markdown("""
+    <div style="margin-bottom:1.5rem">
+        <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#555;margin-bottom:4px">Informes</div>
+        <div style="font-family:'DM Serif Display',serif;font-size:2rem;color:#f0ede8;letter-spacing:-0.02em;line-height:1.1">
+            📈 Informe Venta Diaria
+        </div>
+        <div style="font-size:0.8rem;color:#888;margin-top:4px">Ventas del día anterior · Acumulado · Proyección mensual</div>
+        <div style="width:40px;height:2px;background:#d4a853;margin-top:8px;border-radius:2px"></div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    _vd_tab1, _vd_tab2, _vd_tab3 = st.tabs(["📊 Informe", "📥 Cargar Venta Aliva", "📂 Cargar Histórico Excel"])
+
+    # ══ TAB 2: CARGADOR ALIVA ════════════════════════════════
+    with _vd_tab2:
+        st.markdown("#### 📥 Cargar Venta Aliva")
+        st.markdown(
+            "<div class='info-box'>Carga el archivo diario de Aliva. Extrae "
+            "<b>Código de cliente</b> y <b>Total Factura de deudores</b>, aplica IVA (×1.19) "
+            "y acumula por fecha. Si ya existe un registro para esa fecha y RUT, lo reemplaza.</div>",
+            unsafe_allow_html=True
+        )
+        _al_c1, _al_c2 = st.columns(2)
+        with _al_c1:
+            _al_fecha = st.date_input("Fecha de venta", key="aliva_fecha",
+                                      help="Fecha a la que corresponde este archivo (generalmente ayer)")
+        with _al_c2:
+            _al_file = st.file_uploader("Archivo Aliva (.xlsx)", type=["xlsx"], key="aliva_file")
+
+        if _al_file and _al_fecha:
+            try:
+                _df_al = pd.read_excel(io.BytesIO(_al_file.read()), header=0)
+                _df_al.columns = _df_al.columns.str.strip()
+                _col_rut   = next((c for c in _df_al.columns if "código" in c.lower() or "codigo" in c.lower()), None)
+                _col_monto = next((c for c in _df_al.columns if "total factura" in c.lower()), None)
+                if not _col_rut or not _col_monto:
+                    st.error(f"Columnas no encontradas. Disponibles: {list(_df_al.columns)}")
+                else:
+                    _df_al['_rut_norm'] = _df_al[_col_rut].apply(_normalizar_rut_aliva)
+                    _df_al['_local']    = _df_al['_rut_norm'].map(_ALIVA_RUT_LOCAL)
+                    _df_al['_neto']     = pd.to_numeric(_df_al[_col_monto], errors='coerce').fillna(0)
+                    _df_al['_iva']      = (_df_al['_neto'] * 0.19).round(2)
+                    _df_al['_total']    = (_df_al['_neto'] * 1.19).round(2)
+                    st.dataframe(
+                        _df_al[['_rut_norm','_local','_neto','_iva','_total']].rename(columns={
+                            '_rut_norm':'RUT','_local':'Local',
+                            '_neto':'Neto','_iva':'IVA','_total':'Total con IVA'
+                        }),
+                        use_container_width=True, hide_index=True
+                    )
+                    _sin_local = _df_al[_df_al['_local'].isna()]
+                    if not _sin_local.empty:
+                        st.warning(f"⚠️ {len(_sin_local)} RUT(s) sin local mapeado: {_sin_local['_rut_norm'].tolist()}")
+                    if st.button("💾 Guardar venta Aliva", type="primary", key="btn_save_aliva"):
+                        try:
+                            _eng_al = get_engine()
+                            with _eng_al.connect() as _conn_al:
+                                for _, _row_al in _df_al.iterrows():
+                                    _conn_al.execute(text("""
+                                        INSERT INTO ventas_aliva (fecha, rut_cliente, local, monto_neto, monto_iva, monto_total)
+                                        VALUES (:fecha, :rut, :local, :neto, :iva, :total)
+                                        ON CONFLICT (fecha, rut_cliente)
+                                        DO UPDATE SET
+                                            local        = EXCLUDED.local,
+                                            monto_neto   = EXCLUDED.monto_neto,
+                                            monto_iva    = EXCLUDED.monto_iva,
+                                            monto_total  = EXCLUDED.monto_total,
+                                            fecha_carga  = NOW()
+                                    """), {
+                                        'fecha': str(_al_fecha),
+                                        'rut':   str(_row_al['_rut_norm']),
+                                        'local': str(_row_al['_local']) if pd.notna(_row_al['_local']) else None,
+                                        'neto':  float(_row_al['_neto']),
+                                        'iva':   float(_row_al['_iva']),
+                                        'total': float(_row_al['_total']),
+                                    })
+                                _conn_al.commit()
+                            st.success(f"✅ {len(_df_al)} registros guardados para {_al_fecha}")
+                            st.session_state.pop('vd_data', None)
+                        except Exception as _e_al:
+                            st.error(f"Error: {_e_al}")
+            except Exception as _e_al2:
+                st.error(f"Error leyendo archivo: {_e_al2}")
+
+    # ══ TAB 1: INFORME ═══════════════════════════════════════
+    with _vd_tab1:
+        _vdi1, _vdi2, _vdi3 = st.columns(3)
+        with _vdi1:
+            _vd_fecha = st.date_input("Fecha del informe (ayer)", key="vd_fecha", value=None)
+        with _vdi2:
+            _vd_dias_cal = st.number_input(
+                "Días calendario transcurridos", min_value=1, max_value=31,
+                value=int(_vd_fecha.day) if _vd_fecha else 1, key="vd_dias_cal"
+            )
+        with _vdi3:
+            _vd_dias_hab = st.number_input(
+                "Días hábiles Aliva (L-S)", min_value=1, max_value=27,
+                value=_dias_habiles_aliva(_vd_fecha.year, _vd_fecha.month, _vd_fecha.day) if _vd_fecha else 1,
+                key="vd_dias_hab"
+            )
+
+        if not _vd_fecha:
+            st.info("Selecciona la fecha del informe para continuar.")
+        else:
+            _vd_año = _vd_fecha.year
+            _vd_mes = _vd_fecha.month
+            _vd_fi  = _vd_fecha.replace(day=1)
+            _vd_ff  = _vd_fecha
+            _MESES_VD = {1:'ENE',2:'FEB',3:'MAR',4:'ABR',5:'MAY',6:'JUN',
+                         7:'JUL',8:'AGO',9:'SEP',10:'OCT',11:'NOV',12:'DIC'}
+            _mes_str  = _MESES_VD[_vd_mes]
+            _dia_str  = f"{_mes_str} {_vd_fecha.day:02d}"
+            _acum_str = f"ACUMULADA {_mes_str}"
+            _dias_cal_mes = _dias_calendario_mes(_vd_año, _vd_mes)
+            _dias_hab_mes = _dias_habiles_mes_aliva(_vd_año, _vd_mes)
+
+            # ── Queries ───────────────────────────────────────
+            _df_alem_dia = run_query("""
+                SELECT local, origen,
+                       SUM(monto_venta_real - COALESCE(descuento,0)) AS venta
+                FROM ventas
+                WHERE fecha_venta = :f
+                  AND local IS NOT NULL
+                  AND (es_opcion = false OR es_opcion IS NULL)
+                GROUP BY local, origen
+            """, {'f': str(_vd_fecha)})
+
+            _df_alem_acum = run_query("""
+                SELECT local, origen,
+                       SUM(monto_venta_real - COALESCE(descuento,0)) AS venta
+                FROM ventas
+                WHERE fecha_venta BETWEEN :fi AND :ff
+                  AND local IS NOT NULL
+                  AND (es_opcion = false OR es_opcion IS NULL)
+                GROUP BY local, origen
+            """, {'fi': str(_vd_fi), 'ff': str(_vd_ff)})
+
+            _df_aliva_dia = run_query("""
+                SELECT local, SUM(monto_total) AS venta
+                FROM ventas_aliva
+                WHERE fecha = :f AND local IS NOT NULL
+                GROUP BY local
+            """, {'f': str(_vd_fecha)})
+
+            _df_aliva_acum = run_query("""
+                SELECT local, SUM(monto_total) AS venta
+                FROM ventas_aliva
+                WHERE fecha BETWEEN :fi AND :ff AND local IS NOT NULL
+                GROUP BY local
+            """, {'fi': str(_vd_fi), 'ff': str(_vd_ff)})
+
+            _LOCALES_ORD = ['Vitacura','Las Condes','Chicureo','Macul',
+                            'La Dehesa','La Reina','Nueva Providencia',
+                            'Providencia','Quilin','Los Trapenses']
+
+            def _vget(df, loc, tipo=None):
+                if df.empty: return 0.0
+                if tipo is not None and 'origen' in df.columns:
+                    mask = df['local'].str.strip().str.lower() == loc.lower()
+                    if tipo == 'salon':
+                        mask &= df['origen'].isna() | (df['origen'].astype(str).str.strip() == '')
+                    else:
+                        mask &= df['origen'].notna() & (df['origen'].astype(str).str.strip() != '')
+                    sub = df[mask]
+                else:
+                    sub = df[df['local'].str.strip().str.lower() == loc.lower()]
+                return float(sub['venta'].sum()) if not sub.empty else 0.0
+
+            def _fmt(v):
+                if v == 0: return "$0"
+                return "$" + f"{int(round(v)):,}".replace(",",".")
+
+            def _pct(p, t):
+                if t == 0: return ""
+                return f"{p/t*100:.1f}%"
+
+            def _proy_c(a, dt, dm):
+                return a / dt * dm if dt > 0 else 0
+
+            # Totales Aliva
+            _tot_aliva_dia  = float(_df_aliva_dia['venta'].sum())  if not _df_aliva_dia.empty  else 0
+            _tot_aliva_acum = float(_df_aliva_acum['venta'].sum()) if not _df_aliva_acum.empty else 0
+
+            # ── CSS ───────────────────────────────────────────
+            _vd_css = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');
+.vdw { font-family:'IBM Plex Sans',sans-serif; }
+.vdw .vd-hdr { border-bottom:2px solid #d4a853; padding-bottom:10px; margin-bottom:18px; }
+.vdw .vd-htitle { font-size:1.2rem; font-weight:600; color:#f0ede8; letter-spacing:0.04em; }
+.vdw .vd-hsub { font-size:0.7rem; color:#666; text-transform:uppercase; letter-spacing:0.12em; margin-top:3px; }
+.vdw .vd-sec-title { font-size:0.6rem; text-transform:uppercase; letter-spacing:0.18em; color:#d4a853;
+    font-weight:600; padding:5px 0; border-bottom:1px solid #2a2a2a; margin:20px 0 0 0; }
+.vdw table { width:100%; border-collapse:collapse; font-size:0.75rem; margin-top:0; }
+.vdw th { padding:6px 8px; font-size:0.58rem; text-transform:uppercase; letter-spacing:0.1em;
+    color:#444; border-bottom:1px solid #222; font-weight:500; text-align:right; white-space:nowrap; }
+.vdw th:first-child,.vdw th:nth-child(2) { text-align:left; }
+.vdw td { padding:5px 8px; text-align:right; color:#c8c4be; border-bottom:1px solid #161616;
+    font-family:'IBM Plex Mono',monospace; font-size:0.73rem; white-space:nowrap; }
+.vdw td:first-child { text-align:left; color:#f0ede8; font-family:'IBM Plex Sans',sans-serif; font-weight:500; padding-left:4px; }
+.vdw td:nth-child(2) { text-align:left; color:#666; font-family:'IBM Plex Sans',sans-serif; font-size:0.7rem; }
+.vdw .pct { color:#3a3a3a !important; font-size:0.65rem !important; }
+.vdw .proy { color:#4caf7d !important; }
+.vdw .loc-hdr td { background:#0d0d0d; color:#555; font-size:0.66rem; padding:3px 8px;
+    font-family:'IBM Plex Sans',sans-serif; font-weight:600; letter-spacing:0.08em; }
+.vdw .sub-tot td { background:#0a0a0a; }
+.vdw .sub-tot td:first-child { color:#aaa !important; }
+.vdw .sub-tot td:nth-child(2) { color:#777 !important; }
+.vdw .grand-tot td { color:#d4a853 !important; font-weight:600;
+    border-top:1px solid #333; border-bottom:2px solid #333; }
+.vdw .grand-tot td:first-child { color:#d4a853 !important; }
+@media print {
+    section[data-testid="stSidebar"], [data-testid="stToolbar"],
+    .stButton, [data-testid="stTabs"] > div:first-child { display:none !important; }
+    .vdw { color:#000 !important; background:#fff !important; }
+    .vdw th { color:#333 !important; }
+    .vdw td { color:#222 !important; border-color:#ddd !important; }
+    .vdw .pct { color:#999 !important; }
+    .vdw .proy { color:#2a7a4a !important; }
+    .vdw .grand-tot td { color:#8a6000 !important; }
+}
+</style>"""
+
+            # ── Build tabla Alemán ────────────────────────────
+            def _tabla_aleman():
+                rows = ""
+                gt_d=0; gt_a=0; gt_p=0
+                for loc in _LOCALES_ORD:
+                    d_s = _vget(_df_alem_dia,  loc, 'salon')
+                    d_d = _vget(_df_alem_dia,  loc, 'delivery')
+                    a_s = _vget(_df_alem_acum, loc, 'salon')
+                    a_d = _vget(_df_alem_acum, loc, 'delivery')
+                    d_t = d_s + d_d; a_t = a_s + a_d
+                    if d_t == 0 and a_t == 0: continue
+                    p_s = _proy_c(a_s, int(_vd_dias_cal), _dias_cal_mes)
+                    p_d = _proy_c(a_d, int(_vd_dias_cal), _dias_cal_mes)
+                    p_t = p_s + p_d
+                    gt_d+=d_t; gt_a+=a_t; gt_p+=p_t
+                    rows += (
+                        f'<tr class="loc-hdr"><td colspan="8">{loc.upper()}</td></tr>'
+                        f'<tr><td></td><td>Salón</td>'
+                        f'<td>{_fmt(d_s)}</td><td class="pct">{_pct(d_s,d_t)}</td>'
+                        f'<td>{_fmt(a_s)}</td><td class="pct">{_pct(a_s,a_t)}</td>'
+                        f'<td class="proy">{_fmt(p_s)}</td><td class="pct">{_pct(p_s,p_t)}</td></tr>'
+                        f'<tr><td></td><td>Delivery</td>'
+                        f'<td>{_fmt(d_d)}</td><td class="pct">{_pct(d_d,d_t)}</td>'
+                        f'<td>{_fmt(a_d)}</td><td class="pct">{_pct(a_d,a_t)}</td>'
+                        f'<td class="proy">{_fmt(p_d)}</td><td class="pct">{_pct(p_d,p_t)}</td></tr>'
+                        f'<tr class="sub-tot"><td></td><td>Total</td>'
+                        f'<td style="color:#f0ede8">{_fmt(d_t)}</td><td></td>'
+                        f'<td style="color:#f0ede8">{_fmt(a_t)}</td><td></td>'
+                        f'<td class="proy" style="font-weight:600">{_fmt(p_t)}</td><td></td></tr>'
+                    )
+                rows += (
+                    f'<tr class="grand-tot"><td colspan="2">TOTAL</td>'
+                    f'<td>{_fmt(gt_d)}</td><td></td>'
+                    f'<td>{_fmt(gt_a)}</td><td></td>'
+                    f'<td>{_fmt(gt_p)}</td><td></td></tr>'
+                )
+                return rows
+
+            # ── Build tabla Aliva ─────────────────────────────
+            def _tabla_aliva():
+                rows = ""
+                gt_d=0; gt_a=0; gt_p=0
+                _tot_proy = _proy_c(_tot_aliva_acum, int(_vd_dias_hab), _dias_hab_mes)
+                for loc in _LOCALES_ORD:
+                    d = _vget(_df_aliva_dia,  loc)
+                    a = _vget(_df_aliva_acum, loc)
+                    if d == 0 and a == 0: continue
+                    p = _proy_c(a, int(_vd_dias_hab), _dias_hab_mes)
+                    gt_d+=d; gt_a+=a; gt_p+=p
+                    rows += (
+                        f'<tr><td>{loc.upper()}</td><td></td>'
+                        f'<td>{_fmt(d)}</td><td class="pct">{_pct(d,_tot_aliva_dia)}</td>'
+                        f'<td>{_fmt(a)}</td><td class="pct">{_pct(a,_tot_aliva_acum)}</td>'
+                        f'<td class="proy">{_fmt(p)}</td><td class="pct">{_pct(p,_tot_proy)}</td></tr>'
+                    )
+                rows += (
+                    f'<tr class="grand-tot"><td colspan="2">TOTAL ALIVA</td>'
+                    f'<td>{_fmt(gt_d)}</td><td></td>'
+                    f'<td>{_fmt(gt_a)}</td><td></td>'
+                    f'<td>{_fmt(gt_p)}</td><td></td></tr>'
+                )
+                return rows
+
+            _thead = (
+                f'<thead><tr>'
+                f'<th style="text-align:left">LOCAL</th>'
+                f'<th style="text-align:left">TIPO</th>'
+                f'<th>{_dia_str}</th><th>%</th>'
+                f'<th>{_acum_str}</th><th>%</th>'
+                f'<th>PROY. {_mes_str} {_vd_año}</th><th>%</th>'
+                f'</tr></thead>'
+            )
+
+            st.markdown(_vd_css + f"""
+<div class="vdw">
+  <div class="vd-hdr">
+    <div class="vd-htitle">INFORME DE VENTAS &nbsp;·&nbsp; ALEMÁN EXPERTO</div>
+    <div class="vd-hsub">{_dia_str} {_vd_año} &nbsp;·&nbsp; Generado {_vd_fecha.strftime("%d/%m/%Y")}</div>
+  </div>
+  <div class="vd-sec-title">Ventas por Local — Alemán Experto</div>
+  <table>{_thead}<tbody>{_tabla_aleman()}</tbody></table>
+  <div class="vd-sec-title" style="margin-top:28px">Ventas Aliva &nbsp;·&nbsp; Lunes a Sábado</div>
+  <table>{_thead}<tbody>{_tabla_aliva()}</tbody></table>
+</div>
+""", unsafe_allow_html=True)
+
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown("""
+<button onclick="window.print()"
+  style="background:#d4a853;color:#000;border:none;padding:10px 28px;border-radius:8px;
+         font-weight:600;font-size:0.85rem;cursor:pointer;font-family:sans-serif;">
+  🖨️ Imprimir / Guardar PDF
+</button>""", unsafe_allow_html=True)
+
+
+    # ══ TAB 3: CARGAR HISTÓRICO + EXPORTAR EXCEL ═════════════
+    with _vd_tab3:
+        st.markdown("#### 📂 Cargar datos históricos desde Excel")
+        st.markdown(
+            "<div class='info-box'>Carga los datos históricos mensuales desde el Excel de ventas. "
+            "Lee la hoja <b>INF DIARIO 15</b> y extrae Salón/Delivery por local y mes. "
+            "Los datos se guardan en <b>ventas_mensual</b> y se usan como histórico en el informe.</div>",
+            unsafe_allow_html=True
+        )
+
+        _hist_file = st.file_uploader("Excel de ventas históricas (.xlsx)", type=["xlsx"], key="hist_ventas_file")
+
+        if _hist_file:
+            try:
+                import io as _io_hist
+                _wb_hist = __import__('openpyxl').load_workbook(
+                    _io_hist.BytesIO(_hist_file.read()), data_only=True)
+
+                if 'INF DIARIO 15' not in _wb_hist.sheetnames:
+                    st.error(f"No se encontró hoja 'INF DIARIO 15'. Hojas disponibles: {_wb_hist.sheetnames}")
+                else:
+                    _ws_hist = _wb_hist['INF DIARIO 15']
+
+                    # Leer headers fila 5 — mapear columnas a meses
+                    # Cols 9+ son meses históricos (May 2025 en adelante)
+                    # Col 5 = día actual (skip), Col 7 = acumulado actual (skip)
+                    _MESES_MAP_ES = {
+                        'ENE':1,'FEB':2,'MAR':3,'ABR':4,'MAY':5,'JUN':6,
+                        'JUL':7,'AGO':8,'SEP':9,'OCT':10,'NOV':11,'DIC':12
+                    }
+                    _col_meses = {}  # col_idx → (año, mes)
+                    for j in range(9, _ws_hist.max_column+1, 2):  # saltar cols %
+                        hdr = _ws_hist.cell(5, j).value
+                        if not hdr or str(hdr).strip() in ('PROYECCIÓN ABR 2026','PROYECCIÓN  ANUAL 2026'):
+                            continue
+                        hdr_clean = str(hdr).strip().upper()
+                        # Formato: ' MAY 2025' o ' MAR  2026'
+                        parts = hdr_clean.split()
+                        if len(parts) >= 2:
+                            mes_str = parts[0][:3]
+                            try:
+                                año_val = int([p for p in parts if len(p)==4 and p.isdigit()][0])
+                                mes_val = _MESES_MAP_ES.get(mes_str)
+                                if mes_val:
+                                    _col_meses[j] = (año_val, mes_val)
+                            except (IndexError, ValueError):
+                                pass
+
+                    st.info(f"Columnas de meses detectadas: {len(_col_meses)} meses")
+
+                    # Mapa fila → (local, tipo) para sección Alemán (filas 6-42)
+                    # Local se detecta en col C (merged), tipo en col D
+                    _LOCALES_ROWS = {
+                        6: 'Vitacura', 9: 'Las Condes', 12: 'Chicureo',
+                        15: 'Macul', 18: 'La Dehesa', 21: 'La Reina',
+                        24: 'Quilin', 27: 'Providencia', 30: 'Nueva Providencia',
+                        33: 'Los Trapenses'
+                    }
+
+                    _registros_hist = []
+                    for _base_row, _local in _LOCALES_ROWS.items():
+                        for _offset, _tipo in [(0,'SALON'),(1,'DELIVERY')]:
+                            _r = _base_row + _offset
+                            for _col, (_año, _mes) in _col_meses.items():
+                                _val = _ws_hist.cell(_r, _col).value
+                                _monto = float(_val) if _val and str(_val) not in ('#DIV/0!','#REF!') else 0.0
+                                if _monto > 0:
+                                    _registros_hist.append({
+                                        'año': _año, 'mes': _mes,
+                                        'local': _local, 'tipo': _tipo,
+                                        'monto': _monto, 'fuente': 'excel'
+                                    })
+
+                    _df_hist_prev = pd.DataFrame(_registros_hist)
+                    if _df_hist_prev.empty:
+                        st.warning("No se encontraron datos en el archivo.")
+                    else:
+                        st.success(f"✅ {len(_df_hist_prev)} registros detectados — {_df_hist_prev['año'].nunique()} año(s), {_df_hist_prev[['año','mes']].drop_duplicates().shape[0]} mes(es)")
+                        st.dataframe(
+                            _df_hist_prev.groupby(['año','mes','local','tipo'])['monto'].sum().reset_index().head(20),
+                            use_container_width=True, hide_index=True
+                        )
+                        if st.button("💾 Guardar histórico en BD", type="primary", key="btn_save_hist"):
+                            try:
+                                _eng_h = get_engine()
+                                _saved_h = 0
+                                with _eng_h.connect() as _conn_h:
+                                    for _, _rh in _df_hist_prev.iterrows():
+                                        _conn_h.execute(text("""
+                                            INSERT INTO ventas_mensual (año, mes, local, tipo, monto, fuente)
+                                            VALUES (:año, :mes, :local, :tipo, :monto, :fuente)
+                                            ON CONFLICT (año, mes, local, tipo)
+                                            DO UPDATE SET monto=EXCLUDED.monto, fuente=EXCLUDED.fuente
+                                        """), {
+                                            'año':    int(_rh['año']),
+                                            'mes':    int(_rh['mes']),
+                                            'local':  str(_rh['local']),
+                                            'tipo':   str(_rh['tipo']),
+                                            'monto':  float(_rh['monto']),
+                                            'fuente': 'excel'
+                                        })
+                                    _conn_h.commit()
+                                    _saved_h = len(_df_hist_prev)
+                                st.success(f"✅ {_saved_h} registros guardados en ventas_mensual")
+                            except Exception as _e_h:
+                                st.error(f"Error: {_e_h}")
+            except Exception as _e_hist:
+                st.error(f"Error leyendo archivo: {_e_hist}")
+
+        st.markdown("---")
+        st.markdown("#### 📊 Exportar Informe Excel")
+        st.markdown(
+            "<div class='info-box'>Genera el informe en formato Excel idéntico a la plantilla original, "
+            "con los datos del día y acumulado desde BD y el histórico mensual desde <b>ventas_mensual</b>.</div>",
+            unsafe_allow_html=True
+        )
+
+        _exp_c1, _exp_c2, _exp_c3 = st.columns(3)
+        with _exp_c1:
+            _exp_fecha = st.date_input("Fecha del informe", key="exp_fecha", value=None)
+        with _exp_c2:
+            _exp_dias_cal = st.number_input("Días calendario", min_value=1, max_value=31,
+                                            value=int(_exp_fecha.day) if _exp_fecha else 1,
+                                            key="exp_dias_cal")
+        with _exp_c3:
+            _exp_dias_hab = st.number_input("Días hábiles Aliva", min_value=1, max_value=27,
+                                            value=_dias_habiles_aliva(_exp_fecha.year, _exp_fecha.month, _exp_fecha.day) if _exp_fecha else 1,
+                                            key="exp_dias_hab")
+
+        if _exp_fecha and st.button("📥 Generar Excel", type="primary", key="btn_gen_excel"):
+            with st.spinner("Generando informe..."):
+                try:
+                    import io as _io_exp
+                    import openpyxl as _oxl
+                    from openpyxl.utils import get_column_letter as _gcl
+                    import requests as _req
+
+                    # Descargar plantilla desde GitHub
+                    _tmpl_url = "https://raw.githubusercontent.com/gabrielmunoz-pixel/mi-costeo/main/ventas_diarias.xlsx"
+                    _tmpl_resp = _req.get(_tmpl_url, timeout=15)
+                    _wb_out = _oxl.load_workbook(_io_exp.BytesIO(_tmpl_resp.content))
+                    _ws_out = _wb_out['INF DIARIO 15']
+
+                    _exp_año = _exp_fecha.year
+                    _exp_mes = _exp_fecha.month
+                    _exp_dia = _exp_fecha.day
+                    _exp_fi  = _exp_fecha.replace(day=1)
+                    _exp_ff  = _exp_fecha
+                    _MESES_EXP = {1:'ENE',2:'FEB',3:'MAR',4:'ABR',5:'MAY',6:'JUN',
+                                  7:'JUL',8:'AGO',9:'SEP',10:'OCT',11:'NOV',12:'DIC'}
+                    _mes_exp_str = _MESES_EXP[_exp_mes]
+
+                    # Actualizar M2 (días calendario) y N2 (días hábiles)
+                    _ws_out.cell(2, 13).value = int(_exp_dias_cal)
+                    _ws_out.cell(2, 14).value = int(_exp_dias_hab)
+
+                    # Actualizar header col E (día) y col G (acumulado)
+                    _ws_out.cell(5, 5).value  = f' {_mes_exp_str} {_exp_dia:02d}'
+                    _ws_out.cell(5, 7).value  = f' ACUMULADA {_mes_exp_str}'
+                    _ws_out.cell(44, 5).value = f' {_mes_exp_str} {_exp_dia:02d}'
+                    _ws_out.cell(44, 7).value = f' ACUMULADA {_mes_exp_str}'
+
+                    # Queries ventas Alemán
+                    _df_exp_dia = run_query("""
+                        SELECT local, origen,
+                               SUM(monto_venta_real - COALESCE(descuento,0)) AS venta
+                        FROM ventas WHERE fecha_venta=:f AND local IS NOT NULL
+                        AND (es_opcion=false OR es_opcion IS NULL)
+                        GROUP BY local, origen
+                    """, {'f': str(_exp_fecha)})
+
+                    _df_exp_acum = run_query("""
+                        SELECT local, origen,
+                               SUM(monto_venta_real - COALESCE(descuento,0)) AS venta
+                        FROM ventas WHERE fecha_venta BETWEEN :fi AND :ff
+                        AND local IS NOT NULL AND (es_opcion=false OR es_opcion IS NULL)
+                        GROUP BY local, origen
+                    """, {'fi': str(_exp_fi), 'ff': str(_exp_ff)})
+
+                    # Queries Aliva
+                    _df_exp_aliva_dia = run_query("""
+                        SELECT local, SUM(monto_total) AS venta FROM ventas_aliva
+                        WHERE fecha=:f AND local IS NOT NULL GROUP BY local
+                    """, {'f': str(_exp_fecha)})
+
+                    _df_exp_aliva_acum = run_query("""
+                        SELECT local, SUM(monto_total) AS venta FROM ventas_aliva
+                        WHERE fecha BETWEEN :fi AND :ff AND local IS NOT NULL GROUP BY local
+                    """, {'fi': str(_exp_fi), 'ff': str(_exp_ff)})
+
+                    # Histórico mensual desde ventas_mensual
+                    _df_mens = run_query("""
+                        SELECT año, mes, local, tipo, monto FROM ventas_mensual
+                        ORDER BY año, mes, local, tipo
+                    """)
+
+                    def _vget_exp(df, loc, tipo=None):
+                        if df.empty: return 0.0
+                        if tipo is not None and 'origen' in df.columns:
+                            mask = df['local'].str.strip().str.lower() == loc.lower()
+                            if tipo == 'salon':
+                                mask &= df['origen'].isna() | (df['origen'].astype(str).str.strip()=='')
+                            else:
+                                mask &= df['origen'].notna() & (df['origen'].astype(str).str.strip()!='')
+                            sub = df[mask]
+                        elif tipo is not None and 'tipo' in df.columns:
+                            sub = df[(df['local'].str.strip().str.lower()==loc.lower()) &
+                                     (df['tipo']==tipo)]
+                        else:
+                            sub = df[df['local'].str.strip().str.lower()==loc.lower()]
+                        return float(sub['venta'].sum()) if 'venta' in sub.columns and not sub.empty else                                float(sub['monto'].sum()) if 'monto' in sub.columns and not sub.empty else 0.0
+
+                    def _mens_val(local, tipo, año, mes):
+                        if _df_mens.empty: return 0.0
+                        sub = _df_mens[
+                            (_df_mens['local'].str.strip().str.lower()==local.lower()) &
+                            (_df_mens['tipo']==tipo) &
+                            (_df_mens['año']==año) &
+                            (_df_mens['mes']==mes)
+                        ]
+                        return float(sub['monto'].sum()) if not sub.empty else 0.0
+
+                    # Mapa fila base → local para sección Alemán
+                    _EXP_LOCAL_ROWS = {
+                        6:'Vitacura', 9:'Las Condes', 12:'Chicureo',
+                        15:'Macul', 18:'La Dehesa', 21:'La Reina',
+                        24:'Quilin', 27:'Providencia', 30:'Nueva Providencia',
+                        33:'Los Trapenses'
+                    }
+
+                    # Leer mapa de columnas → (año, mes) de la plantilla
+                    _EXP_COL_MES = {}
+                    _MESES_MAP2 = {v:k for k,v in {
+                        1:'ENE',2:'FEB',3:'MAR',4:'ABR',5:'MAY',6:'JUN',
+                        7:'JUL',8:'AGO',9:'SEP',10:'OCT',11:'NOV',12:'DIC'
+                    }.items()}
+                    for _jj in range(9, _ws_out.max_column+1, 2):
+                        _hh = _ws_out.cell(5, _jj).value
+                        if not _hh: continue
+                        _hh_c = str(_hh).strip().upper()
+                        if 'PROYECCIÓN' in _hh_c or 'ANUAL' in _hh_c: continue
+                        _pp = _hh_c.split()
+                        if len(_pp) >= 2:
+                            _mm = _pp[0][:3]
+                            try:
+                                _aa = int([p for p in _pp if len(p)==4 and p.isdigit()][0])
+                                _mv = _MESES_MAP2.get(_mm)
+                                if _mv:
+                                    _EXP_COL_MES[_jj] = (_aa, _mv)
+                            except (IndexError, ValueError):
+                                pass
+
+                    # Calcular días del mes para proyección
+                    _exp_dias_mes = _dias_calendario_mes(_exp_año, _exp_mes)
+                    _exp_dias_hab_mes = _dias_habiles_mes_aliva(_exp_año, _exp_mes)
+
+                    # Escribir datos sección Alemán
+                    for _base_r, _loc in _EXP_LOCAL_ROWS.items():
+                        for _off, _tipo, _tipo_bd in [(0,'SALON','salon'),(1,'DELIVERY','delivery')]:
+                            _r = _base_r + _off
+                            # Col E = día, Col G = acumulado, Col AE = proyección
+                            _dia_v  = _vget_exp(_df_exp_dia,  _loc, _tipo_bd)
+                            _acum_v = _vget_exp(_df_exp_acum, _loc, _tipo_bd)
+                            _proy_v = _acum_v / int(_exp_dias_cal) * _exp_dias_mes if int(_exp_dias_cal) > 0 else 0
+                            _ws_out.cell(_r, 5).value  = round(_dia_v)  if _dia_v  else 0
+                            _ws_out.cell(_r, 7).value  = round(_acum_v) if _acum_v else 0
+                            _ws_out.cell(_r, 31).value = round(_proy_v) if _proy_v else 0
+                            # Histórico mensual
+                            for _col_h, (_aa_h, _mm_h) in _EXP_COL_MES.items():
+                                _mv = _mens_val(_loc, _tipo.upper(), _aa_h, _mm_h)
+                                if _mv > 0:
+                                    _ws_out.cell(_r, _col_h).value = round(_mv)
+
+                    # Escribir datos sección Aliva (filas 45-54)
+                    _ALIVA_ROWS = {
+                        45:'Vitacura', 46:'Las Condes', 47:'Chicureo',
+                        48:'Macul', 49:'La Dehesa', 50:'La Reina',
+                        51:'Quilin', 52:'Providencia', 53:'Nueva Providencia',
+                        54:'Los Trapenses'
+                    }
+                    for _ar, _aloc in _ALIVA_ROWS.items():
+                        _aliva_d = _vget_exp(_df_exp_aliva_dia,  _aloc)
+                        _aliva_a = _vget_exp(_df_exp_aliva_acum, _aloc)
+                        _aliva_p = _aliva_a / int(_exp_dias_hab) * _exp_dias_hab_mes if int(_exp_dias_hab) > 0 else 0
+                        _ws_out.cell(_ar, 5).value  = round(_aliva_d, 2) if _aliva_d else 0
+                        _ws_out.cell(_ar, 7).value  = round(_aliva_a, 2) if _aliva_a else 0
+                        _ws_out.cell(_ar, 31).value = round(_aliva_p, 2) if _aliva_p else 0
+                        # Histórico Aliva desde ventas_aliva por mes
+                        for _col_h, (_aa_h, _mm_h) in _EXP_COL_MES.items():
+                            _df_aliva_mes = run_query("""
+                                SELECT SUM(monto_total) AS venta FROM ventas_aliva
+                                WHERE EXTRACT(YEAR FROM fecha)=:a AND EXTRACT(MONTH FROM fecha)=:m
+                                AND local ILIKE :loc
+                            """, {'a': _aa_h, 'm': _mm_h, 'loc': f'%{_aloc}%'})
+                            _aliva_mv = float(_df_aliva_mes['venta'].iloc[0]) if not _df_aliva_mes.empty and _df_aliva_mes['venta'].iloc[0] else 0
+                            if _aliva_mv > 0:
+                                _ws_out.cell(_ar, _col_h).value = round(_aliva_mv, 2)
+
+                    # Guardar
+                    _buf_exp = _io_exp.BytesIO()
+                    _wb_out.save(_buf_exp)
+                    _buf_exp.seek(0)
+
+                    st.download_button(
+                        label=f"⬇️ Informe_Ventas_{_exp_fecha.strftime('%d%m%Y')}.xlsx",
+                        data=_buf_exp.getvalue(),
+                        file_name=f"Informe_Ventas_{_exp_fecha.strftime('%d%m%Y')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="dl_informe_excel"
+                    )
+                    st.success("✅ Excel generado correctamente")
+                except Exception as _e_exp:
+                    st.error(f"Error generando Excel: {_e_exp}")
+                    st.exception(_e_exp)
+
+
+
+# ============================================================
 # MÓDULO: NOTAS DE CRÉDITO
 # ============================================================
 elif modulo.startswith("📋 Notas de Crédito"):
@@ -10508,8 +11191,7 @@ elif modulo.startswith("📋 Notas de Crédito"):
                                 except Exception as _eu:
                                     st.error(f"Error: {_eu}")
 
-# ============================================================
-# MÓDULO: GESTIÓN DE USUARIOS
-# ============================================================
+
+
 elif modulo.startswith("👥"):
     _render_gestion_usuarios()
