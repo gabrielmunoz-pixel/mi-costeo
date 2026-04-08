@@ -6187,7 +6187,16 @@ elif modulo.startswith("📊"):
                                                 key="exp_dias_hab")
 
             if _exp_fecha and st.button("📥 Generar Excel", type="primary", key="btn_gen_excel"):
+                st.session_state['vd_excel_fecha'] = _exp_fecha
+                st.session_state['vd_excel_dias_cal'] = int(_exp_dias_cal)
+                st.session_state['vd_excel_dias_hab'] = int(_exp_dias_hab)
+                st.session_state['vd_excel_data'] = None  # resetear
+
+            if st.session_state.get('vd_excel_fecha') and st.session_state.get('vd_excel_data') is None:
                 with st.spinner("Generando informe..."):
+                    _exp_fecha    = st.session_state['vd_excel_fecha']
+                    _exp_dias_cal = st.session_state['vd_excel_dias_cal']
+                    _exp_dias_hab = st.session_state['vd_excel_dias_hab']
                     try:
                         import io as _io_exp
                         import openpyxl as _oxl
@@ -6359,17 +6368,23 @@ elif modulo.startswith("📊"):
                         _wb_out.save(_buf_exp)
                         _buf_exp.seek(0)
 
-                        st.download_button(
-                            label=f"⬇️ Informe_Ventas_{_exp_fecha.strftime('%d%m%Y')}.xlsx",
-                            data=_buf_exp.getvalue(),
-                            file_name=f"Informe_Ventas_{_exp_fecha.strftime('%d%m%Y')}.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            key="dl_informe_excel"
-                        )
-                        st.success("✅ Excel generado correctamente")
+                        st.session_state['vd_excel_data']    = _buf_exp.getvalue()
+                        st.session_state['vd_excel_filename'] = f"Informe_Ventas_{_exp_fecha.strftime('%d%m%Y')}.xlsx"
+                        st.rerun()
                     except Exception as _e_exp:
                         st.error(f"Error generando Excel: {_e_exp}")
                         st.exception(_e_exp)
+                        st.session_state.pop('vd_excel_fecha', None)
+
+            if st.session_state.get('vd_excel_data') is not None:
+                st.success("✅ Excel generado correctamente")
+                st.download_button(
+                    label=f"⬇️ {st.session_state.get('vd_excel_filename', 'Informe_Ventas.xlsx')}",
+                    data=st.session_state['vd_excel_data'],
+                    file_name=st.session_state.get('vd_excel_filename', 'Informe_Ventas.xlsx'),
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="dl_informe_excel"
+                )
 
 
     elif informe_sel in ("CuentasCasa", "Auditor", "Bar"):
