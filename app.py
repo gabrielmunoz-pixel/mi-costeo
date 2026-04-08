@@ -5643,78 +5643,125 @@ if modulo.startswith("📦"):
                 return ''
             return str(v).upper().strip().replace('.', '')
 
+        # Mapa para limpiar prefijos del local en RG
+        _CONC_LOCAL_MAP = {
+            'RG - CHICUREO':          'CHICUREO',
+            'RG - LA DEHESA':         'LA DEHESA',
+            'RG - LA REINA':          'LA REINA',
+            'RG - LAS CONDES':        'LAS CONDES',
+            'RG - LOS TRAPENSES':     'LOS TRAPENSES',
+            'RG - MACUL':             'MACUL',
+            'RG - N. PROVIDENCIA':    'NUEVA PROVIDENCIA',
+            'RG - NUEVA PROVIDENCIA': 'NUEVA PROVIDENCIA',
+            'RG - P. DE VALDIVIA':    'PEDRO DE VALDIVIA',
+            'RG - QUILIN':            'QUILIN',
+            'RG- VITACURA':           'VITACURA',
+            'RG - VITACURA':          'VITACURA',
+        }
+
+        def _conc_norm_local_rg(v):
+            """Normaliza local de RG quitando prefijo 'RG - '."""
+            raw = str(v).upper().strip() if v else ''
+            # Intentar mapa exacto primero
+            if raw in _CONC_LOCAL_MAP:
+                return _CONC_LOCAL_MAP[raw]
+            # Fallback: quitar prefijos conocidos
+            for prefix in ('RG- ', 'RG -', 'RG-'):
+                if raw.startswith(prefix):
+                    return raw[len(prefix):].strip()
+            return raw
+
         def _conc_leer_excel(file_bytes):
             """
-            Lee el Excel y devuelve (df_sii, df_rg) normalizados o lanza ValueError.
+            Lee el Excel con dos archivos posibles:
 
-            Hoja SII esperada:        Local | FECHA | RUT PROVEEDOR | FOLIO | MONTO
-            Hoja Rinde Gastos esperada: Local | FECHA | RUT PROVEEDOR | Folio | CATEGORÍA | MONTO
-              (PROVEEDOR razón social es opcional — se usa RUT como clave de cruce)
+            Formato A — un solo Excel con dos hojas:
+              • Hoja 'SII':          LOCAL | FECHA | RUT PROVEEDOR | FOLIO | MONTO
+              • Hoja 'Rinde Gastos': LOCAL | FECHA | RUT PROVEEDOR | FOLIO | MONTO (+ opcionales)
+
+            Formato B — dos Excel separados:
+              • SII:  hoja 'Consolidado' o 'SII'  con columnas similares
+              • RG:   hoja 'Consolidado' con LOCAL(prefijo RG-) | FECHA | RUT PROVEEDOR |
+                      PROVEEDOR | CATEGORIA | ... | NÚMERO DE FOLIO | MONTO
+
+            Retorna (df_sii, df_rg) normalizados.
             """
             xls = pd.ExcelFile(io.BytesIO(file_bytes))
-            if 'SII' not in xls.sheet_names:
-                raise ValueError("El archivo no contiene una hoja 'SII'.")
-            if 'Rinde Gastos' not in xls.sheet_names:
-                raise ValueError("El archivo no contiene una hoja 'Rinde Gastos'.")
-
-            # Columnas mínimas requeridas
-            COLS_SII_REQ = {'Local', 'FECHA', 'MONTO'}
-            COLS_RG_REQ  = {'Local', 'FECHA', 'MONTO'}
-
-            df_sii_raw = pd.read_excel(xls, sheet_name='SII')
-            df_rg_raw  = pd.read_excel(xls, sheet_name='Rinde Gastos')
-
-            # Normalizar nombres de columnas (strip espacios)
-            df_sii_raw.columns = [str(c).strip() for c in df_sii_raw.columns]
-            df_rg_raw.columns  = [str(c).strip() for c in df_rg_raw.columns]
-
-            missing_sii = COLS_SII_REQ - set(df_sii_raw.columns)
-            if missing_sii:
-                raise ValueError(f"Faltan columnas en SII: {sorted(missing_sii)}. Mínimo requerido: Local, FECHA, MONTO.")
-            missing_rg = COLS_RG_REQ - set(df_rg_raw.columns)
-            if missing_rg:
-                raise ValueError(f"Faltan columnas en Rinde Gastos: {sorted(missing_rg)}.")
-            if df_sii_raw.empty:
-                raise ValueError("La hoja SII no contiene datos.")
-            if df_rg_raw.empty:
-                raise ValueError("La hoja Rinde Gastos no contiene datos.")
 
             def _detect_col(df, candidates):
-                """Devuelve el primer nombre de columna que coincida (case-insensitive)."""
-                cols_upper = {c.upper(): c for c in df.columns}
+                cols_upper = {str(c).upper().strip(): c for c in df.columns}
                 for cand in candidates:
                     if cand.upper() in cols_upper:
                         return cols_upper[cand.upper()]
                 return None
 
-            def _norm(df):
+            def _norm_sii(df):
                 df = df.copy()
-                df['local'] = df['Local'].apply(_conc_norm_local)
-                df['monto'] = df['MONTO'].apply(_conc_norm_monto)
-
-                # Folio — buscar por nombre flexible
-                _col_folio = _detect_col(df, ['FOLIO', 'Folio', 'folio', 'N° FOLIO', 'Nro Folio'])
-                df['folio'] = df[_col_folio].apply(_conc_norm_folio) if _col_folio else ''
-
-                # Fecha
-                _col_fecha = _detect_col(df, ['FECHA', 'Fecha', 'FECHA DTE', 'Fecha DTE'])
-                df['fecha'] = df[_col_fecha].apply(_conc_norm_fecha) if _col_fecha else pd.NaT
-
-                # RUT proveedor — buscar por nombre flexible
-                _col_rut = _detect_col(df, ['RUT PROVEEDOR', 'RUT_PROVEEDOR', 'RUT', 'Rut Proveedor', 'rut_proveedor'])
-                df['rut'] = df[_col_rut].apply(_conc_norm_rut) if _col_rut else ''
-
-                # Razón social (opcional)
-                _col_prov = _detect_col(df, ['PROVEEDOR', 'Proveedor', 'RAZÓN SOCIAL', 'RAZON SOCIAL', 'Razon Social'])
-                df['proveedor'] = df[_col_prov].apply(_conc_norm_prov) if _col_prov else ''
-
-                # Categoría (opcional — en SII puede no existir)
-                _col_cat = _detect_col(df, ['CATEGORÍA', 'CATEGORIA', 'Categoría', 'Categoria'])
-                df['categoria'] = df[_col_cat].astype(str).str.strip() if _col_cat else ''
-
+                df.columns = [str(c).strip() for c in df.columns]
+                df['local']    = df[_detect_col(df, ['LOCAL','Local']) or 'LOCAL'].apply(_conc_norm_local)
+                df['monto']    = df[_detect_col(df, ['MONTO','Monto']) or 'MONTO'].apply(_conc_norm_monto)
+                _cf = _detect_col(df, ['FOLIO','Folio','NÚMERO DE FOLIO','NUMERO DE FOLIO','N° FOLIO'])
+                df['folio']    = df[_cf].apply(_conc_norm_folio) if _cf else ''
+                _cd = _detect_col(df, ['FECHA','Fecha','FECHA DTE'])
+                df['fecha']    = df[_cd].apply(_conc_norm_fecha) if _cd else pd.NaT
+                _cr = _detect_col(df, ['RUT PROVEEDOR','RUT_PROVEEDOR','RUT'])
+                df['rut']      = df[_cr].apply(_conc_norm_rut) if _cr else ''
+                _cp = _detect_col(df, ['PROVEEDOR','Proveedor','RAZON SOCIAL','RAZÓN SOCIAL'])
+                df['proveedor']= df[_cp].apply(_conc_norm_prov) if _cp else ''
+                _cc = _detect_col(df, ['CATEGORÍA','CATEGORIA','Categoría','Categoria'])
+                df['categoria']= df[_cc].astype(str).str.strip() if _cc else ''
                 return df[['local','rut','proveedor','folio','fecha','monto','categoria']].reset_index(drop=True)
 
-            return _norm(df_sii_raw), _norm(df_rg_raw)
+            def _norm_rg(df):
+                """Normaliza RG — mismo proceso pero con limpieza de prefijo en local."""
+                df = df.copy()
+                df.columns = [str(c).strip() for c in df.columns]
+                _cl = _detect_col(df, ['LOCAL','Local'])
+                df['local']    = df[_cl].apply(_conc_norm_local_rg) if _cl else ''
+                df['monto']    = df[_detect_col(df, ['MONTO','Monto']) or 'MONTO'].apply(_conc_norm_monto)
+                _cf = _detect_col(df, ['NÚMERO DE FOLIO','NUMERO DE FOLIO','N° FOLIO','FOLIO','Folio'])
+                df['folio']    = df[_cf].apply(_conc_norm_folio) if _cf else ''
+                _cd = _detect_col(df, ['FECHA','Fecha','FECHA DTE'])
+                df['fecha']    = df[_cd].apply(_conc_norm_fecha) if _cd else pd.NaT
+                _cr = _detect_col(df, ['RUT PROVEEDOR','RUT_PROVEEDOR','RUT'])
+                df['rut']      = df[_cr].apply(_conc_norm_rut) if _cr else ''
+                _cp = _detect_col(df, ['PROVEEDOR','Proveedor','RAZON SOCIAL','RAZÓN SOCIAL'])
+                df['proveedor']= df[_cp].apply(_conc_norm_prov) if _cp else ''
+                _cc = _detect_col(df, ['CATEGORÍA','CATEGORIA','Categoría','Categoria','CATEGORY'])
+                df['categoria']= df[_cc].astype(str).str.strip() if _cc else ''
+                return df[['local','rut','proveedor','folio','fecha','monto','categoria']].reset_index(drop=True)
+
+            # ── Detectar formato ──────────────────────────────────────
+            # SII: buscar hoja SII o Consolidado
+            _sii_sheet = None
+            for _s in ['SII', 'Consolidado', 'consolidado']:
+                if _s in xls.sheet_names:
+                    _sii_sheet = _s
+                    break
+            if _sii_sheet is None:
+                raise ValueError(f"No se encontró hoja SII en el archivo. Hojas disponibles: {xls.sheet_names}")
+
+            # RG: buscar hoja Rinde Gastos o Consolidado
+            _rg_sheet = None
+            for _s in ['Rinde Gastos', 'RindeGastos', 'Consolidado', 'consolidado']:
+                if _s in xls.sheet_names:
+                    _rg_sheet = _s
+                    break
+            if _rg_sheet is None:
+                raise ValueError(f"No se encontró hoja RindeGastos en el archivo. Hojas disponibles: {xls.sheet_names}")
+
+            df_sii_raw = pd.read_excel(xls, sheet_name=_sii_sheet)
+            df_rg_raw  = pd.read_excel(xls, sheet_name=_rg_sheet)
+
+            if df_sii_raw.empty:
+                raise ValueError(f"La hoja '{_sii_sheet}' no contiene datos.")
+            if df_rg_raw.empty:
+                raise ValueError(f"La hoja '{_rg_sheet}' no contiene datos.")
+
+            df_sii = _norm_sii(df_sii_raw)
+            df_rg  = _norm_rg(df_rg_raw)
+
+            return df_sii, df_rg
 
         def _conc_cargar_compras(fi, ff, local_filter):
             """Carga compras desde BD agrupadas por folio, incluyendo RUT y categoría."""
@@ -5910,17 +5957,23 @@ if modulo.startswith("📦"):
                 del st.session_state[k]
 
         # ── UI: Configuración ────────────────────────────────────────────
-        _conc_c1, _conc_c2, _conc_c3 = st.columns([2, 2, 2])
+        _conc_c1, _conc_c2 = st.columns([2, 2])
         with _conc_c1:
             _conc_locales_opts = ['TODOS'] + sorted([
                 'CHICUREO','VITACURA','LA DEHESA','LAS CONDES','LA REINA',
-                'LOS TRAPENSES','MACUL','NUEVA PROVIDENCIA','PROVIDENCIA','QUILIN'
+                'LOS TRAPENSES','MACUL','NUEVA PROVIDENCIA','PEDRO DE VALDIVIA','QUILIN'
             ])
             _conc_local = st.selectbox("Local", _conc_locales_opts, key='conc_local_sel')
         with _conc_c2:
             _conc_periodo = st.text_input("Período (YYYY-MM)", value=pd.Timestamp.now().strftime('%Y-%m'), key='conc_periodo_sel')
-        with _conc_c3:
-            _conc_file = st.file_uploader("Excel SII + RindeGastos (.xlsx)", type=['xlsx'], key='conc_file_up')
+
+        _conc_fc1, _conc_fc2 = st.columns(2)
+        with _conc_fc1:
+            _conc_file_sii = st.file_uploader("📄 Archivo SII (.xlsx)", type=['xlsx'], key='conc_file_sii',
+                                               help="Columnas: LOCAL, FECHA, RUT PROVEEDOR, FOLIO, MONTO")
+        with _conc_fc2:
+            _conc_file_rg  = st.file_uploader("📄 Archivo RindeGastos (.xlsx)", type=['xlsx'], key='conc_file_rg',
+                                               help="Hoja 'Consolidado': LOCAL, FECHA, RUT PROVEEDOR, PROVEEDOR, CATEGORIA, NÚMERO DE FOLIO, MONTO")
 
         _conc_tc1, _conc_tc2 = st.columns(2)
         with _conc_tc1:
@@ -5929,7 +5982,7 @@ if modulo.startswith("📦"):
             _conc_monto_pct  = st.number_input("Tolerancia monto (%)", min_value=0.0, max_value=50.0, value=1.0, step=0.5, key='conc_tpct') / 100.0
 
         # Reset si cambia config
-        _conc_cfg_key = f"{_conc_local}|{_conc_periodo}|{id(_conc_file)}"
+        _conc_cfg_key = f"{_conc_local}|{_conc_periodo}|{id(_conc_file_sii)}|{id(_conc_file_rg)}"
         if st.session_state.get('conc_cfg_prev') != _conc_cfg_key:
             _conc_reset()
             st.session_state['conc_cfg_prev'] = _conc_cfg_key
@@ -5938,9 +5991,12 @@ if modulo.startswith("📦"):
             _conc_reset()
             st.session_state['conc_cfg_prev'] = _conc_cfg_key
             try:
-                # Validar archivo
-                if _conc_file is None:
-                    st.error("Debes subir un archivo Excel con las hojas SII y Rinde Gastos.")
+                # Validar archivos
+                if _conc_file_sii is None:
+                    st.error("Debes subir el archivo SII.")
+                    st.stop()
+                if _conc_file_rg is None:
+                    st.error("Debes subir el archivo RindeGastos.")
                     st.stop()
 
                 # Derivar rango de fechas del período
@@ -5951,9 +6007,11 @@ if modulo.startswith("📦"):
                     st.error(f"Período inválido: '{_conc_periodo}'. Usa formato YYYY-MM.")
                     st.stop()
 
-                # Leer Excel
-                _conc_file.seek(0)
-                df_sii_c, df_rg_c = _conc_leer_excel(_conc_file.read())
+                # Leer archivos por separado
+                _conc_file_sii.seek(0)
+                _conc_file_rg.seek(0)
+                df_sii_c, _ = _conc_leer_excel(_conc_file_sii.read())
+                _, df_rg_c  = _conc_leer_excel(_conc_file_rg.read())
 
                 # Cargar compras BD
                 df_bd_c = _conc_cargar_compras(_conc_fi.date(), _conc_ff.date(), _conc_local)
@@ -10149,8 +10207,8 @@ elif modulo.startswith("📊"):
                                 m = (df['local'].astype(str).str.lower().str.strip() == local.lower().strip()) &                                     (df['producto_control'].astype(str).str.upper().str.strip() == prod.upper().strip())
                                 return float(df.loc[m, col].sum() or 0)
                             except: return 0.0
-                        il_entrada = _get_il(_il_loc, local_rpt, prod, 'kg_entrada')
-                        il_salida  = _get_il(_il_loc, local_rpt, prod, 'kg_salida')
+                        il_entrada = _get_il(_il_loc, local_show, prod, 'kg_entrada')
+                        il_salida  = _get_il(_il_loc, local_show, prod, 'kg_salida')
                         costo_u = _getcosto(ckr, prod) # costo real compras período
 
                         # Si no hay compras clasificadas disponibles, estimar por balance
@@ -10163,7 +10221,7 @@ elif modulo.startswith("📊"):
 
                         # Descontar NCs del período para este producto
                         if not df_nc.empty:
-                            _nc_mask = df_nc['local'].str.upper().str.strip() == local_rpt.upper().strip()
+                            _nc_mask = df_nc['local'].str.upper().str.strip() == local_show.upper().strip()
                             # Cruzar por producto_control si existe, sino por nombre_producto
                             if 'producto_control' in df_nc.columns:
                                 _nc_mask &= df_nc['producto_control'].str.upper().str.strip() == prod.upper().strip()
