@@ -4890,16 +4890,18 @@ if modulo.startswith("📦"):
                         st.error(f"Error en re-mapeo: {e}")
 
         with t6c:
-            st.markdown("#### Compras No Registradas / Venta Inter-local")
-            st.markdown("<div class='info-box'>Compras que no pasaron por el facturador ni la BD. Solo se consideran las cantidades con <b>Categoria Control</b> válida para el cálculo del informe de costos. <b>No se guardan en la tabla de compras.</b></div>", unsafe_allow_html=True)
+            _t6c_tab1, _t6c_tab2 = st.tabs(["📦 Compras No Registradas", "🔄 Venta Inter-local"])
 
-            nr1, nr2 = st.columns([2,3])
-            with nr1:
+            with _t6c_tab1:
+              st.markdown("<div class='info-box'>Compras que no pasaron por el facturador ni la BD. Solo se consideran las cantidades con <b>Categoria Control</b> válida para el cálculo del informe de costos. <b>No se guardan en la tabla de compras.</b></div>", unsafe_allow_html=True)
+
+              nr1, nr2 = st.columns([2,3])
+              with nr1:
                 periodo_nr = st.text_input("Período", key="nr_periodo", placeholder="ej: 2-8 Mar 2026")
-            with nr2:
+              with nr2:
                 f_nr = st.file_uploader("Archivo No Registrado (.xlsx)", type=["xlsx"], key="nr_file")
 
-            if f_nr and periodo_nr:
+              if f_nr and periodo_nr:
                 if st.button("💾 Cargar No Registrado", key="btn_nr"):
                     try:
                         df_nr = pd.read_excel(f_nr, header=0)
@@ -4908,20 +4910,14 @@ if modulo.startswith("📦"):
                         df_nr['Categoria Control'] = df_nr['Categoria Control'].fillna('').astype(str).str.strip()
                         df_nr['Local'] = df_nr['Local'].fillna('').astype(str).str.strip()
                         df_nr['fecha_dte'] = pd.to_datetime(df_nr['fecha_dte'], errors='coerce').dt.date
-
-                        # Solo filas con Categoria Control válida
                         df_nr = df_nr[~df_nr['Categoria Control'].isin(['','0','nan','NaN'])]
                         df_nr['periodo'] = periodo_nr
-
-                        # Normalizar local a title case
                         df_nr['Local'] = df_nr['Local'].str.title()
-
                         engine = get_engine()
                         with engine.connect() as conn:
                             conn.execute(text("DELETE FROM compras_no_registradas WHERE periodo=:p"),
                                          {'p': periodo_nr})
                             conn.commit()
-
                         cols_bd = ['fecha_dte','Local','producto','desc_producto','cantidad',
                                    'Categoria Control','Categoria Producto','periodo']
                         rename_map = {'Local':'local','producto':'nombre_producto',
@@ -4935,11 +4931,159 @@ if modulo.startswith("📦"):
                         st.error(f"Error: {e}")
                         st.exception(e)
 
-            # Vista de lo cargado
-            df_nr_bd = run_query("SELECT periodo, local, COUNT(*) as registros, SUM(cantidad) as cant_total FROM compras_no_registradas GROUP BY periodo, local ORDER BY periodo DESC, local")
-            if not df_nr_bd.empty:
+              df_nr_bd = run_query("SELECT periodo, local, COUNT(*) as registros, SUM(cantidad) as cant_total FROM compras_no_registradas GROUP BY periodo, local ORDER BY periodo DESC, local")
+              if not df_nr_bd.empty:
                 st.markdown("**No registrados en BD:**")
                 st.dataframe(df_nr_bd, use_container_width=True, hide_index=True)
+
+            with _t6c_tab2:
+              st.markdown("<div class='info-box'>Carga la planilla de venta entre locales. El sistema detecta el <b>local origen</b> desde el nombre del archivo (ej: <code>Las_Condes_-_Vta_Inter.xlsx</code>). Cada movimiento se registra como <b>egreso en origen</b> e <b>ingreso en destino</b> para el informe de costos.</div>", unsafe_allow_html=True)
+
+              _il_c1, _il_c2 = st.columns([2, 3])
+              with _il_c1:
+                  _il_periodo = st.text_input("Período", key="il_periodo", placeholder="ej: 31 Mar-5 Abr 2026")
+              with _il_c2:
+                  _il_file = st.file_uploader("Planilla Venta Inter-local (.xlsx)", type=["xlsx"], key="il_file")
+
+              if _il_file and _il_periodo:
+                  # Detectar local origen desde nombre del archivo
+                  _il_nombre = _il_file.name.replace('.xlsx','').replace('.XLSX','')
+                  # Extraer parte antes de _-_Vta o similar
+                  _il_local_raw = _il_nombre.split('-')[0].strip().replace('_',' ').strip()
+                  # Normalizar
+                  _LOCAL_NORM_IL = {
+                      'LAS CONDES':'Las Condes', 'VITACURA':'Vitacura',
+                      'CHICUREO':'Chicureo', 'MACUL':'Macul',
+                      'LA DEHESA':'La Dehesa', 'LA REINA':'La Reina',
+                      'QUILIN':'Quilin', 'PROVIDENCIA':'Providencia',
+                      'NUEVA PROVIDENCIA':'Nueva Providencia',
+                      'LOS TRAPENSES':'Los Trapenses',
+                  }
+                  _il_local_origen = _LOCAL_NORM_IL.get(_il_local_raw.upper(), _il_local_raw.title())
+                  st.info(f"📍 Local origen detectado: **{_il_local_origen}**")
+
+                  try:
+                      import io as _io_il
+                      _wb_il = __import__('openpyxl').load_workbook(
+                          _io_il.BytesIO(_il_file.read()), data_only=True)
+                      _ws_il = _wb_il.active
+
+                      # Leer fechas del período desde filas 5 y 6
+                      _il_fecha_ini = _ws_il.cell(5, 4).value
+                      _il_fecha_fin = _ws_il.cell(6, 4).value
+
+                      # Encontrar fila de headers (contiene 'Descripción')
+                      _hdr_row = None
+                      for _r in range(1, 20):
+                          if _ws_il.cell(_r, 3).value and 'descripci' in str(_ws_il.cell(_r, 3).value).lower():
+                              _hdr_row = _r
+                              break
+
+                      if not _hdr_row:
+                          st.error("No se encontró la fila de headers en el archivo.")
+                      else:
+                          # Columnas de grupos: (cant_col, destino_col, fecha_col)
+                          # Patrón: cols 5,6,7 | 8,9,10 | 11,12,13 | ...
+                          _grupos_cols = [(5+k*3, 6+k*3, 7+k*3) for k in range(7)]
+
+                          _registros_il = []
+                          for _r in range(_hdr_row+1, _ws_il.max_row+1):
+                              _categoria = _ws_il.cell(_r, 2).value
+                              _producto  = _ws_il.cell(_r, 3).value
+                              _formato   = _ws_il.cell(_r, 4).value
+                              if not _producto or not str(_producto).strip():
+                                  continue
+
+                              for _cc, _dc, _fc in _grupos_cols:
+                                  _cant    = _ws_il.cell(_r, _cc).value
+                                  _destino = _ws_il.cell(_r, _dc).value
+                                  _fecha   = _ws_il.cell(_r, _fc).value
+
+                                  if not isinstance(_cant, (int, float)) or not _cant:
+                                      continue
+                                  if not _destino:
+                                      continue
+
+                                  # Normalizar destino
+                                  _dest_norm = _LOCAL_NORM_IL.get(
+                                      str(_destino).strip().upper(),
+                                      str(_destino).strip().title()
+                                  )
+                                  # Fecha
+                                  if isinstance(_fecha, __import__('datetime').datetime):
+                                      _fecha_val = _fecha.date()
+                                  elif isinstance(_fecha, __import__('datetime').date):
+                                      _fecha_val = _fecha
+                                  else:
+                                      _fecha_val = _il_fecha_ini.date() if isinstance(_il_fecha_ini, __import__('datetime').datetime) else _il_fecha_ini
+
+                                  _registros_il.append({
+                                      'periodo':      _il_periodo,
+                                      'fecha':        str(_fecha_val),
+                                      'local_origen': _il_local_origen,
+                                      'local_destino':_dest_norm,
+                                      'categoria':    str(_categoria or '').strip(),
+                                      'producto':     str(_producto).strip(),
+                                      'formato':      str(_formato or '').strip(),
+                                      'cantidad':     float(_cant),
+                                  })
+
+                          if not _registros_il:
+                              st.warning("No se encontraron movimientos con cantidad en el archivo.")
+                          else:
+                              _df_il = pd.DataFrame(_registros_il)
+                              st.markdown(f"**Preview — {len(_df_il)} movimientos detectados:**")
+                              st.dataframe(
+                                  _df_il[['fecha','local_origen','local_destino','categoria','producto','cantidad']],
+                                  use_container_width=True, hide_index=True
+                              )
+
+                              if st.button("💾 Guardar venta inter-local", type="primary", key="btn_save_il"):
+                                  try:
+                                      _eng_il = get_engine()
+                                      with _eng_il.connect() as _conn_il:
+                                          # Eliminar registros del mismo período y origen
+                                          _conn_il.execute(text("""
+                                              DELETE FROM venta_interlocal
+                                              WHERE periodo=:p AND local_origen=:o
+                                          """), {'p': _il_periodo, 'o': _il_local_origen})
+                                          for _, _rr in _df_il.iterrows():
+                                              _conn_il.execute(text("""
+                                                  INSERT INTO venta_interlocal
+                                                      (periodo, fecha, local_origen, local_destino,
+                                                       categoria, producto, formato, cantidad)
+                                                  VALUES (:p, :f, :o, :d, :cat, :prod, :fmt, :cant)
+                                                  ON CONFLICT (periodo, fecha, local_origen, local_destino, producto)
+                                                  DO UPDATE SET cantidad=EXCLUDED.cantidad
+                                              """), {
+                                                  'p':    _rr['periodo'],
+                                                  'f':    _rr['fecha'],
+                                                  'o':    _rr['local_origen'],
+                                                  'd':    _rr['local_destino'],
+                                                  'cat':  _rr['categoria'],
+                                                  'prod': _rr['producto'],
+                                                  'fmt':  _rr['formato'],
+                                                  'cant': _rr['cantidad'],
+                                              })
+                                          _conn_il.commit()
+                                      st.success(f"✅ {len(_df_il)} movimientos guardados — origen: {_il_local_origen} · {_il_periodo}")
+                                      st.session_state.pop('il_data', None)
+                                  except Exception as _e_il:
+                                      st.error(f"Error: {_e_il}")
+                  except Exception as _e_il2:
+                      st.error(f"Error leyendo archivo: {_e_il2}")
+
+              # Vista de lo cargado
+              _df_il_bd = run_query("""
+                  SELECT periodo, local_origen, local_destino,
+                         COUNT(*) as productos, SUM(cantidad) as cant_total
+                  FROM venta_interlocal
+                  GROUP BY periodo, local_origen, local_destino
+                  ORDER BY periodo DESC, local_origen, local_destino
+              """)
+              if not _df_il_bd.empty:
+                  st.markdown("**Inter-local en BD:**")
+                  st.dataframe(_df_il_bd, use_container_width=True, hide_index=True)
 
     with tab7:
         st.markdown("#### 🗂️ Clasificación de Productos")
@@ -8702,6 +8846,39 @@ elif modulo.startswith("📊"):
                     if locales: params['ls'] = [l.upper() for l in locales]
                     return run_query(q, params)
 
+                def get_interlocal(periodo, locales):
+                    """Inter-local: entradas (destino) y salidas (origen) por producto_control.
+                    Retorna df con producto_control, kg_entrada, kg_salida por local."""
+                    lf_dest = "AND LOWER(TRIM(local_destino))=ANY(:ls)" if locales else ""
+                    lf_orig = "AND LOWER(TRIM(local_origen))=ANY(:ls)"  if locales else ""
+                    q = f"""
+                        SELECT
+                            COALESCE(e.local, s.local)        AS local,
+                            COALESCE(e.producto_control, s.producto_control) AS producto_control,
+                            COALESCE(e.kg_entrada, 0)         AS kg_entrada,
+                            COALESCE(s.kg_salida,  0)         AS kg_salida
+                        FROM (
+                            SELECT LOWER(TRIM(local_destino)) AS local,
+                                   UPPER(TRIM(producto))      AS producto_control,
+                                   SUM(cantidad)              AS kg_entrada
+                            FROM venta_interlocal
+                            WHERE TRIM(periodo)=:p {lf_dest}
+                            GROUP BY LOWER(TRIM(local_destino)), UPPER(TRIM(producto))
+                        ) e
+                        FULL OUTER JOIN (
+                            SELECT LOWER(TRIM(local_origen)) AS local,
+                                   UPPER(TRIM(producto))     AS producto_control,
+                                   SUM(cantidad)             AS kg_salida
+                            FROM venta_interlocal
+                            WHERE TRIM(periodo)=:p {lf_orig}
+                            GROUP BY LOWER(TRIM(local_origen)), UPPER(TRIM(producto))
+                        ) s
+                        ON e.local = s.local AND e.producto_control = s.producto_control
+                    """
+                    params = {'p': periodo.strip()}
+                    if locales: params['ls'] = [l.lower().strip() for l in locales]
+                    return run_query(q, params)
+
                 def get_no_registrado(periodo, locales):
                     """Compras no registradas — solo cantidad, agrupada por local + producto_control"""
                     lf = "AND LOWER(TRIM(local))=ANY(:ls)" if locales else ""
@@ -8799,6 +8976,7 @@ elif modulo.startswith("📊"):
                 df_compras_cat = get_compras_cat(fecha_acum_i, fecha_acum_f, locales_sel) # acumulado
                 df_bar_ven     = get_bar_ventas(fecha_acum_i, fecha_acum_f, locales_sel)  # acumulado
                 df_no_reg      = get_no_registrado(periodo_ic, locales_sel)
+                df_interlocal  = get_interlocal(periodo_ic, locales_sel)
 
                 # Compras KG por producto_control usando clasificación
                 # Todos los nombres de producto_control conocidos en cat_labels
@@ -8874,6 +9052,7 @@ elif modulo.startswith("📊"):
                     'df_inv_fin': df_inv_fin,
                     'df_uso': df_uso_ic,
                     'df_no_reg': df_no_reg,
+                    'df_interlocal': df_interlocal,
                     'cat_labels': cat_labels,
                     'fecha_i': fecha_ic_i,
                     'fecha_f': fecha_ic_f,
@@ -8891,6 +9070,7 @@ elif modulo.startswith("📊"):
             df_cc  = d['df_compras_cat']
             df_bv  = d['df_bar_ven']
             df_nr  = d.get('df_no_reg', pd.DataFrame())
+            df_il  = d.get('df_interlocal', pd.DataFrame())
             df_ckr = d.get('df_compras_kg', pd.DataFrame())
             df_nc  = d.get('df_nc', pd.DataFrame())
             cat_labels = d.get('cat_labels', {})
@@ -9146,6 +9326,16 @@ elif modulo.startswith("📊"):
                         uso_kg  = _getkg(uso,  prod)   # uso teórico recetario (Toteat) KG
                         nr_kg   = _getkg(nr,   prod)   # no registrado con signo
                         comp_kg = _getkg(ckr,  prod)   # compras reales KG del período
+                        # Inter-local: entrada (recibido) y salida (enviado)
+                        _il_loc = df_il if not df_il.empty else pd.DataFrame()
+                        def _get_il(df, local, prod, col):
+                            try:
+                                if df.empty: return 0.0
+                                m = (df['local'].astype(str).str.lower().str.strip() == local.lower().strip()) &                                     (df['producto_control'].astype(str).str.upper().str.strip() == prod.upper().strip())
+                                return float(df.loc[m, col].sum() or 0)
+                            except: return 0.0
+                        il_entrada = _get_il(_il_loc, local_rpt, prod, 'kg_entrada')
+                        il_salida  = _get_il(_il_loc, local_rpt, prod, 'kg_salida')
                         costo_u = _getcosto(ckr, prod) # costo real compras período
 
                         # Si no hay compras clasificadas disponibles, estimar por balance
@@ -9166,8 +9356,8 @@ elif modulo.startswith("📊"):
                                 _nc_desc = float(_nc_prod['monto'].sum())
                                 costo_u  = max(0.0, costo_u - _nc_desc)
 
-                        # Real Utilizado = Inv.Ini + Compras + No Reg - Inv.Fin
-                        real_ut  = ini_kg + comp_kg + nr_kg - fin_kg
+                        # Real Utilizado = Inv.Ini + Compras + No Reg + Inter.Entrada - Inter.Salida - Inv.Fin
+                        real_ut  = ini_kg + comp_kg + nr_kg + il_entrada - il_salida - fin_kg
 
                         # Desviación = Real - Recetario
                         desv_kg  = real_ut - uso_kg
