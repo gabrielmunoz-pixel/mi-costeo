@@ -2371,19 +2371,22 @@ def save_ventas(df_raw):
         fecha_max = fechas.max().date()
         locales   = df_save['local'].dropna().unique().tolist() if 'local' in df_save.columns else []
 
+        # Fechas exactas del archivo — DELETE solo por los días que trae el archivo
+        fechas_archivo = [str(f) for f in fechas.dt.date.unique().tolist()]
+
         with engine.connect() as conn:
             if locales:
                 conn.execute(text(
-                    "DELETE FROM ventas WHERE fecha_venta BETWEEN :fi AND :ff AND local = ANY(:locales)"),
-                    {'fi': fecha_min, 'ff': fecha_max, 'locales': locales})
+                    "DELETE FROM ventas WHERE fecha_venta = ANY(:fechas) AND local = ANY(:locales)"),
+                    {'fechas': fechas_archivo, 'locales': locales})
             else:
                 conn.execute(text(
-                    "DELETE FROM ventas WHERE fecha_venta BETWEEN :fi AND :ff"),
-                    {'fi': fecha_min, 'ff': fecha_max})
+                    "DELETE FROM ventas WHERE fecha_venta = ANY(:fechas)"),
+                    {'fechas': fechas_archivo})
             conn.commit()
 
         df_save.to_sql('ventas', engine, if_exists='append', index=False)
-        st.success(f"✅ {len(df_save):,} registros guardados ({fecha_min} → {fecha_max}). Período reemplazado.")
+        st.success(f"✅ {len(df_save):,} registros guardados ({fecha_min} → {fecha_max}). {len(fechas_archivo)} día(s) reemplazado(s).")
     except Exception as e:
         st.error(f"Error al guardar ventas: {e}")
         st.exception(e)
@@ -3662,15 +3665,20 @@ if modulo.startswith("📦"):
 
                 # INSERT con barra de progreso — fuera del spinner para que sea visible
                 try:
+                    # DELETE solo por los días exactos del archivo
+                    fechas_archivo2 = [str(f) for f in pd.to_datetime(
+                        df_save2['fecha_venta'].astype(str), errors='coerce'
+                    ).dropna().dt.date.unique().tolist()]
+
                     with engine.connect() as conn:
                         if locales2:
                             conn.execute(text(
-                                "DELETE FROM ventas WHERE fecha_venta BETWEEN :fi AND :ff AND local = ANY(:locales)"),
-                                {'fi': fecha_min2, 'ff': fecha_max2, 'locales': locales2})
+                                "DELETE FROM ventas WHERE fecha_venta = ANY(:fechas) AND local = ANY(:locales)"),
+                                {'fechas': fechas_archivo2, 'locales': locales2})
                         else:
                             conn.execute(text(
-                                "DELETE FROM ventas WHERE fecha_venta BETWEEN :fi AND :ff"),
-                                {'fi': fecha_min2, 'ff': fecha_max2})
+                                "DELETE FROM ventas WHERE fecha_venta = ANY(:fechas)"),
+                                {'fechas': fechas_archivo2})
                         conn.commit()
 
                     total_filas = len(df_save2)
