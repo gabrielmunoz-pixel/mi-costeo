@@ -6433,21 +6433,19 @@ elif modulo.startswith("📊"):
                 # ── Queries ───────────────────────────────────────
                 _df_alem_dia = run_query("""
                     SELECT local, origen,
-                           SUM(monto_venta_real) AS venta
+                           SUM(monto_venta_real + COALESCE(descuento,0)) AS venta
                     FROM ventas
                     WHERE fecha_venta = :f
                       AND local IS NOT NULL
-                      AND (es_opcion = false OR es_opcion IS NULL)
                     GROUP BY local, origen
                 """, {'f': str(_vd_fecha)})
 
                 _df_alem_acum = run_query("""
                     SELECT local, origen,
-                           SUM(monto_venta_real) AS venta
+                           SUM(monto_venta_real + COALESCE(descuento,0)) AS venta
                     FROM ventas
                     WHERE fecha_venta BETWEEN :fi AND :ff
                       AND local IS NOT NULL
-                      AND (es_opcion = false OR es_opcion IS NULL)
                     GROUP BY local, origen
                 """, {'fi': str(_vd_fi), 'ff': str(_vd_ff)})
 
@@ -6805,17 +6803,16 @@ elif modulo.startswith("📊"):
                         # Queries ventas Alemán
                         _df_exp_dia = run_query("""
                             SELECT local, origen,
-                                   SUM(monto_venta_real) AS venta
+                                   SUM(monto_venta_real + COALESCE(descuento,0)) AS venta
                             FROM ventas WHERE fecha_venta=:f AND local IS NOT NULL
-                            AND (es_opcion=false OR es_opcion IS NULL)
                             GROUP BY local, origen
                         """, {'f': str(_exp_fecha)})
 
                         _df_exp_acum = run_query("""
                             SELECT local, origen,
-                                   SUM(monto_venta_real) AS venta
+                                   SUM(monto_venta_real + COALESCE(descuento,0)) AS venta
                             FROM ventas WHERE fecha_venta BETWEEN :fi AND :ff
-                            AND local IS NOT NULL AND (es_opcion=false OR es_opcion IS NULL)
+                            AND local IS NOT NULL
                             GROUP BY local, origen
                         """, {'fi': str(_exp_fi), 'ff': str(_exp_ff)})
 
@@ -6981,8 +6978,8 @@ elif modulo.startswith("📊"):
                             _ws_out.cell(_app_row, 31).value = round(_app_proy)
 
                         # ── FILA 42: TOTAL GENERAL (locales + apps) ───────────────
-                        _df_apps_dia  = run_query("SELECT SUM(monto_venta_real) AS v FROM ventas WHERE fecha_venta=:f AND forma_pago IN ('UberEats','PedidosYa','PedidosYa Vouchers','PedidosYa Cash Collection','Rappi') AND (es_opcion=false OR es_opcion IS NULL)", {'f': str(_exp_fecha)})
-                        _df_apps_acum = run_query("SELECT SUM(monto_venta_real) AS v FROM ventas WHERE fecha_venta BETWEEN :fi AND :ff AND forma_pago IN ('UberEats','PedidosYa','PedidosYa Vouchers','PedidosYa Cash Collection','Rappi') AND (es_opcion=false OR es_opcion IS NULL)", {'fi': str(_exp_fi), 'ff': str(_exp_ff)})
+                        _df_apps_dia  = run_query("SELECT SUM(monto_venta_real + COALESCE(descuento,0)) AS v FROM ventas WHERE fecha_venta=:f AND forma_pago IN ('UberEats','PedidosYa','PedidosYa Vouchers','PedidosYa Cash Collection','Rappi')", {'f': str(_exp_fecha)})
+                        _df_apps_acum = run_query("SELECT SUM(monto_venta_real + COALESCE(descuento,0)) AS v FROM ventas WHERE fecha_venta BETWEEN :fi AND :ff AND forma_pago IN ('UberEats','PedidosYa','PedidosYa Vouchers','PedidosYa Cash Collection','Rappi')", {'fi': str(_exp_fi), 'ff': str(_exp_ff)})
                         _gt_apps_dia  = float(_df_apps_dia['v'].iloc[0]  or 0) if not _df_apps_dia.empty  else 0
                         _gt_apps_acum = float(_df_apps_acum['v'].iloc[0] or 0) if not _df_apps_acum.empty else 0
                         _ws_out.cell(42, 5).value  = round(_gt_dia_s + _gt_dia_d + _gt_apps_dia)
@@ -9800,21 +9797,37 @@ elif modulo.startswith("📊"):
                     if locales: params['ls'] = [l.upper() for l in locales]
                     return run_query(q, params)
 
+                # SKU → Categoría bar (mapeado desde archivo Productos_Bar.xlsx)
+                _BAR_SKU_CAT = {"BAJ-001": "Bajativo", "BEB-001": "Bebidas", "BEB-002": "Bebidas", "BEB-003": "Bebidas", "BEB-004": "Bebidas", "BEB-005": "Bebidas", "BEB-006": "Bebidas", "BEB-007": "Bebidas", "BEB-008": "Bebidas", "BEB-009": "Bebidas", "BEB-010": "Bebidas", "BEB-011": "Bebidas", "BEB-012": "Bebidas", "BEB-013": "Bebidas", "BEB-014": "Bebidas", "BEB-015": "Bebidas", "BEB-016": "Bebidas", "BEB-017": "Bebidas", "BEB-018": "Bebidas", "BEB-019": "Bebidas", "BEB-020": "Bebidas", "BEB-021": "Bebidas", "BET-001": "Bebidas", "BET-002": "Bebidas", "BET-003": "Bebidas", "BET-004": "Bebidas", "BET-005": "Bebidas", "BET-006": "Bebidas", "BET-007": "Bebidas", "BET-008": "Bebidas", "BET-009": "Bebidas", "BET-010": "Bebidas", "BET-011": "Bebidas", "BET-012": "Bebidas", "CAF-001": "Cafetería", "CAF-002": "Cafetería", "CAF-003": "Cafetería", "CAF-004": "Cafetería", "CAF-005": "Cafetería", "CAF-006": "Cafetería", "CAF-007": "Cafetería", "CAF-008": "Cafetería", "CAF-009": "Cafetería", "CER-001": "Cervezas", "CER-002": "Cervezas", "CER-003": "Cervezas", "CER-004": "Cervezas", "CER-005": "Cervezas", "CER-006": "Cervezas", "CER-007": "Cervezas", "CER-008": "Cervezas", "CER-009": "Cervezas", "CER-010": "Cervezas", "CER-011": "Cervezas", "CER-012": "Cervezas", "CER-013": "Cervezas", "CER-014": "Cervezas", "CER-015": "Cervezas", "CER-016": "Cervezas", "CER-017": "Cervezas", "CER-018": "Cervezas", "CER-019": "Cervezas", "CER-020": "Cervezas", "CER-021": "Cervezas", "CER-022": "Cervezas", "CER-023": "Cervezas", "CER-024": "Cervezas", "CER-025": "Cervezas", "CER-026": "Cervezas", "CER-027": "Cervezas", "CER-028": "Cervezas", "CER-029": "Cervezas", "CER-030": "Cervezas", "CER-031": "Cervezas", "CER-032": "Cervezas", "CER-034": "Cervezas", "CER-035": "Cervezas", "CER-036": "Cervezas", "CER-037": "Cervezas", "CER-038": "Cervezas", "CER-039": "Cervezas", "COC-001": "Cocteles", "COC-002": "Cocteles", "COC-003": "Cocteles", "COC-004": "Cocteles", "COC-005": "Cocteles", "COC-006": "Cocteles", "COC-007": "Cocteles", "COC-008": "Cocteles", "COC-009": "Cocteles", "COC-010": "Cocteles", "COC-011": "Cocteles", "COC-012": "Cocteles", "COC-013": "Cocteles", "COC-014": "Cocteles", "COC-015": "Cocteles", "COC-016": "Cocteles", "COC-017": "Cocteles", "COC-018": "Cocteles", "COC-019": "Cocteles", "COC-020": "Cocteles", "COC-021": "Cocteles", "COC-022": "Cocteles", "COC-023": "Cocteles", "COC-024": "Cocteles", "COC-025": "Cocteles", "COC-026": "Cocteles", "COC-027": "Cocteles", "COC-028": "Cocteles", "COC-029": "Cocteles", "COC-030": "Cocteles", "COC-031": "Cocteles", "COC-032": "Cocteles", "COC-035": "Cocteles", "COC-037": "Cocteles", "COC-038": "Cocteles", "COC-039": "Cocteles", "COC-040": "Cocteles", "COC-041": "Cocteles", "COC-042": "Cocteles", "COC-043": "Cocteles", "COC-045": "Cocteles", "COC-046": "Cocteles", "ESP-001": "Espumantes", "ESP-002": "Espumantes", "ESP-003": "Espumantes", "ESP-004": "Espumantes", "ESP-005": "Espumantes", "JUG-001": "Jugos/Limonadas", "JUG-002": "Jugos/Limonadas", "JUG-003": "Jugos/Limonadas", "JUG-004": "Jugos/Limonadas", "JUG-005": "Jugos/Limonadas", "JUG-006": "Jugos/Limonadas", "LIM-001": "Jugos/Limonadas", "LIM-002": "Jugos/Limonadas", "LIM-003": "Jugos/Limonadas", "LIM-004": "Jugos/Limonadas", "LIM-005": "Jugos/Limonadas", "LIM-006": "Jugos/Limonadas", "LIM-007": "Jugos/Limonadas", "LIM-008": "Jugos/Limonadas", "PIS-001": "Pisco", "PIS-002": "Pisco", "PIS-003": "Pisco", "PIS-004": "Pisco", "PIS-005": "Pisco", "PIS-006": "Pisco", "PIS-007": "Pisco", "POS-001": "Dulce", "POS-002": "Dulce", "POS-003": "Dulce", "POS-004": "Dulce", "POS-005": "Dulce", "POS-006": "Dulce", "POS-007": "Dulce", "POS-008": "Dulce", "POS-009": "Dulce", "POS-010": "Dulce", "POS-011": "Dulce", "POS-012": "Dulce", "POS-013": "Dulce", "POS-014": "Dulce", "POS-015": "Dulce", "POS-016": "Dulce", "POS-017": "Dulce", "POS-018": "Dulce", "POS-019": "Dulce", "POS-020": "Dulce", "POS-021": "Dulce", "RON-001": "Ron", "TEQ-001": "Tequila", "VIN-001": "Vinos", "VIN-002": "Vinos", "VIN-003": "Vinos", "VIN-004": "Vinos", "VIN-005": "Vinos", "VIN-006": "Vinos", "VIN-007": "Vinos", "VIN-008": "Vinos", "VIN-009": "Vinos", "VIN-010": "Vinos", "VIN-011": "Vinos", "VIN-012": "Vinos", "VIN-013": "Vinos", "VIN-014": "Vinos", "VIN-015": "Vinos", "VIN-016": "Vinos", "VIN-017": "Vinos", "VIN-018": "Vinos", "VIN-019": "Vinos", "VIN-020": "Vinos", "VIN-021": "Vinos", "VIN-022": "Vinos", "VIN-023": "Vinos", "VIN-024": "Vinos", "VIN-025": "Vinos", "VIN-026": "Vinos", "VIN-027": "Vinos", "VIN-028": "Vinos", "VIN-029": "Vinos", "VIN-030": "Vinos", "VIN-031": "Vinos", "VIN-032": "Vinos", "VIN-033": "Vinos", "VIN-036": "Vinos", "VIN-037": "Vinos", "VOD-001": "Vodka", "VOD-002": "Vodka", "VOD-003": "Vodka", "VOD-004": "Vodka", "VOD-005": "Vodka", "VOD-006": "Vodka", "WHI-001": "Whisky", "WHI-002": "Whisky", "WHI-003": "Whisky", "WHI-004": "Whisky", "WHI-006": "Whisky", "WHI-007": "Whisky"}
+                _BAR_SKUS    = list(_BAR_SKU_CAT.keys())
+
                 def get_bar_ventas(fecha_i, fecha_f, locales):
                     lf = "AND UPPER(local)=ANY(:ls)" if locales else ""
+                    sku_in = "', '".join(_BAR_SKUS)
                     q = f"""
-                        SELECT local, categoria_menu as producto,
-                               SUM(monto_venta_real) as venta
+                        SELECT local,
+                               CASE
+                               WHEN sku_producto IN ('BAJ-001') THEN 'Bajativo'
+                               WHEN sku_producto IN ('BEB-001', 'BEB-002', 'BEB-003', 'BEB-004', 'BEB-005', 'BEB-006', 'BEB-007', 'BEB-008', 'BEB-009', 'BEB-010', 'BEB-011', 'BEB-012', 'BEB-013', 'BEB-014', 'BEB-015', 'BEB-016', 'BEB-017', 'BEB-018', 'BEB-019', 'BEB-020', 'BEB-021', 'BET-001', 'BET-002', 'BET-003', 'BET-004', 'BET-005', 'BET-006', 'BET-007', 'BET-008', 'BET-009', 'BET-010', 'BET-011', 'BET-012') THEN 'Bebidas'
+                               WHEN sku_producto IN ('CAF-001', 'CAF-002', 'CAF-003', 'CAF-004', 'CAF-005', 'CAF-006', 'CAF-007', 'CAF-008', 'CAF-009') THEN 'Cafetería'
+                               WHEN sku_producto IN ('CER-001', 'CER-002', 'CER-003', 'CER-004', 'CER-005', 'CER-006', 'CER-007', 'CER-008', 'CER-009', 'CER-010', 'CER-011', 'CER-012', 'CER-013', 'CER-014', 'CER-015', 'CER-016', 'CER-017', 'CER-018', 'CER-019', 'CER-020', 'CER-021', 'CER-022', 'CER-023', 'CER-024', 'CER-025', 'CER-026', 'CER-027', 'CER-028', 'CER-029', 'CER-030', 'CER-031', 'CER-032', 'CER-034', 'CER-035', 'CER-036', 'CER-037', 'CER-038', 'CER-039') THEN 'Cervezas'
+                               WHEN sku_producto IN ('COC-001', 'COC-002', 'COC-003', 'COC-004', 'COC-005', 'COC-006', 'COC-007', 'COC-008', 'COC-009', 'COC-010', 'COC-011', 'COC-012', 'COC-013', 'COC-014', 'COC-015', 'COC-016', 'COC-017', 'COC-018', 'COC-019', 'COC-020', 'COC-021', 'COC-022', 'COC-023', 'COC-024', 'COC-025', 'COC-026', 'COC-027', 'COC-028', 'COC-029', 'COC-030', 'COC-031', 'COC-032', 'COC-035', 'COC-037', 'COC-038', 'COC-039', 'COC-040', 'COC-041', 'COC-042', 'COC-043', 'COC-045', 'COC-046') THEN 'Cocteles'
+                               WHEN sku_producto IN ('POS-001', 'POS-002', 'POS-003', 'POS-004', 'POS-005', 'POS-006', 'POS-007', 'POS-008', 'POS-009', 'POS-010', 'POS-011', 'POS-012', 'POS-013', 'POS-014', 'POS-015', 'POS-016', 'POS-017', 'POS-018', 'POS-019', 'POS-020', 'POS-021') THEN 'Dulce'
+                               WHEN sku_producto IN ('ESP-001', 'ESP-002', 'ESP-003', 'ESP-004', 'ESP-005') THEN 'Espumantes'
+                               WHEN sku_producto IN ('JUG-001', 'JUG-002', 'JUG-003', 'JUG-004', 'JUG-005', 'JUG-006', 'LIM-001', 'LIM-002', 'LIM-003', 'LIM-004', 'LIM-005', 'LIM-006', 'LIM-007', 'LIM-008') THEN 'Jugos/Limonadas'
+                               WHEN sku_producto IN ('PIS-001', 'PIS-002', 'PIS-003', 'PIS-004', 'PIS-005', 'PIS-006', 'PIS-007') THEN 'Pisco'
+                               WHEN sku_producto IN ('RON-001') THEN 'Ron'
+                               WHEN sku_producto IN ('TEQ-001') THEN 'Tequila'
+                               WHEN sku_producto IN ('VIN-001', 'VIN-002', 'VIN-003', 'VIN-004', 'VIN-005', 'VIN-006', 'VIN-007', 'VIN-008', 'VIN-009', 'VIN-010', 'VIN-011', 'VIN-012', 'VIN-013', 'VIN-014', 'VIN-015', 'VIN-016', 'VIN-017', 'VIN-018', 'VIN-019', 'VIN-020', 'VIN-021', 'VIN-022', 'VIN-023', 'VIN-024', 'VIN-025', 'VIN-026', 'VIN-027', 'VIN-028', 'VIN-029', 'VIN-030', 'VIN-031', 'VIN-032', 'VIN-033', 'VIN-036', 'VIN-037') THEN 'Vinos'
+                               WHEN sku_producto IN ('VOD-001', 'VOD-002', 'VOD-003', 'VOD-004', 'VOD-005', 'VOD-006') THEN 'Vodka'
+                               WHEN sku_producto IN ('WHI-001', 'WHI-002', 'WHI-003', 'WHI-004', 'WHI-006', 'WHI-007') THEN 'Whisky'
+                               ELSE 'Otros'
+                               END AS producto,
+                               SUM(monto_venta_real + COALESCE(descuento,0)) as venta
                         FROM ventas
                         WHERE fecha_venta BETWEEN :i AND :f
-                          AND (categoria_menu ILIKE '%cerveza%' OR categoria_menu ILIKE '%bebida%'
-                               OR categoria_menu ILIKE '%coctel%' OR categoria_menu ILIKE '%vino%'
-                               OR categoria_menu ILIKE '%pisco%' OR categoria_menu ILIKE '%vodka%'
-                               OR categoria_menu ILIKE '%whisky%' OR categoria_menu ILIKE '%ron%'
-                               OR categoria_menu ILIKE '%espumante%' OR categoria_menu ILIKE '%bajativo%'
-                               OR categoria_menu ILIKE '%jugo%' OR categoria_menu ILIKE '%cafeter%'
-                               OR categoria_menu ILIKE '%dulce%') {lf}
-                        GROUP BY local, categoria_menu
+                          AND sku_producto IN ('WHI-001', 'WHI-002', 'WHI-003', 'WHI-004', 'WHI-006', 'WHI-007') {lf}
+                        GROUP BY local, 2
                         ORDER BY local, venta DESC
                     """
                     params = {'i': str(fecha_i), 'f': str(fecha_f)}
@@ -10066,31 +10079,40 @@ elif modulo.startswith("📊"):
                 with c2:
                     st.markdown(f"**2. Vista General Bar** *(acumulado {acum_label})*")
                     if not bv.empty:
-                        bv_s = bv.sort_values('venta', ascending=False).head(14)
+                        # Agrupar por categoría (columna 'producto' ya viene como categoría)
+                        bv_cat = (bv.groupby('producto', as_index=False)['venta']
+                                    .sum()
+                                    .sort_values('venta', ascending=False))
+                        total_bv = bv_cat['venta'].sum()
                         r2_html = ''.join([
                             f'<tr style="border-bottom:1px solid #1a1a1a">'
-                            f'<td style="padding:5px 10px;color:#888;font-size:0.7rem;text-align:right">{i+2}</td>'
-                            f'<td style="padding:5px 10px;color:#ccc;font-size:0.75rem">{r["producto"]}</td>'
+                            f'<td style="padding:5px 12px;color:#ccc;font-size:0.78rem">{r["producto"]}</td>'
                             f'<td style="padding:5px 10px;text-align:right;color:#d4a853;font-size:0.78rem">{fmt_clp(r["venta"])}</td>'
+                            f'<td style="padding:5px 10px;text-align:right;color:#666;font-size:0.73rem">{r["venta"]/total_bv:.1%}</td>'
                             f'</tr>'
-                            for i, (_, r) in enumerate(bv_s.iterrows())
+                            for _, r in bv_cat.iterrows()
                         ])
                         comp_bar = float(cat_map['BAR'])
-                        pct_bar  = comp_bar / v_bar if v_bar > 0 else 0
+                        pct_bar  = comp_bar / total_bv if total_bv > 0 else 0
                         r2_html += (
                             f'<tr style="background:#0d1a0d;border-top:1px solid #2a2a2a">'
-                            f'<td colspan="2" style="padding:6px 10px;color:#4caf7d;font-size:0.75rem;font-weight:600">Total Venta</td>'
-                            f'<td style="padding:6px 10px;text-align:right;color:#4caf7d;font-weight:600;font-size:0.78rem">{fmt_clp(v_bar)}</td></tr>'
-                            f'<tr style="background:#0d1a0d"><td colspan="2" style="padding:4px 10px;color:#888;font-size:0.73rem">Total Compra Bar</td>'
-                            f'<td style="padding:4px 10px;text-align:right;color:#aaa;font-size:0.75rem">{fmt_clp(comp_bar)}</td></tr>'
-                            f'<tr style="background:#0d1a0d"><td colspan="2" style="padding:4px 10px;color:#888;font-size:0.73rem">% Compra</td>'
-                            f'<td style="padding:4px 10px;text-align:right;color:#d4a853;font-size:0.75rem">{fmt_pct(pct_bar)}</td></tr>'
+                            f'<td style="padding:6px 10px;color:#4caf7d;font-size:0.75rem;font-weight:600">Total Venta</td>'
+                            f'<td style="padding:6px 10px;text-align:right;color:#4caf7d;font-weight:600;font-size:0.78rem">{fmt_clp(total_bv)}</td>'
+                            f'<td></td></tr>'
+                            f'<tr style="background:#0d1a0d"><td style="padding:4px 10px;color:#888;font-size:0.73rem">Total Compra Bar</td>'
+                            f'<td style="padding:4px 10px;text-align:right;color:#aaa;font-size:0.75rem">{fmt_clp(comp_bar)}</td>'
+                            f'<td></td></tr>'
+                            f'<tr style="background:#0d1a0d"><td style="padding:4px 10px;color:#888;font-size:0.73rem">% Compra / Venta</td>'
+                            f'<td style="padding:4px 10px;text-align:right;color:#d4a853;font-size:0.75rem">{fmt_pct(pct_bar)}</td>'
+                            f'<td></td></tr>'
                         )
                         st.markdown(
                             f'<div style="border:1px solid #1e1e1e;border-radius:10px;overflow:hidden;background:#0d0d0d">'
                             f'<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif">'
-                            f'<thead><tr style="background:#111"><th style="{hs};text-align:right">#</th>'
-                            f'<th style="{hs};text-align:left">PRODUCTO</th><th style="{hs};text-align:right">$ CLP</th></tr></thead>'
+                            f'<thead><tr style="background:#111">'
+                            f'<th style="{hs};text-align:left">CATEGORÍA</th>'
+                            f'<th style="{hs};text-align:right">$ CLP</th>'
+                            f'<th style="{hs};text-align:right">%</th></tr></thead>'
                             f'<tbody>{r2_html}</tbody></table></div>',
                             unsafe_allow_html=True)
                     else:
