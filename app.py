@@ -6406,12 +6406,10 @@ elif modulo.startswith("📊"):
                             _ws_out.cell(_app_row, 31).value = round(_app_proy)
 
                         # ── FILA 42: TOTAL GENERAL (locales + apps) ───────────────
-                        _gt_apps_dia  = sum(
-                            float(run_query(f"SELECT SUM(monto_venta_real - COALESCE(descuento,0)) AS v FROM ventas WHERE fecha_venta=:f AND forma_pago IN ('UberEats','PedidosYa','PedidosYa Vouchers','PedidosYa Cash Collection','Rappi') AND (es_opcion=false OR es_opcion IS NULL)", {'f': str(_exp_fecha)})['v'].iloc[0] or 0)
-                        )
-                        _gt_apps_acum = sum(
-                            float(run_query(f"SELECT SUM(monto_venta_real - COALESCE(descuento,0)) AS v FROM ventas WHERE fecha_venta BETWEEN :fi AND :ff AND forma_pago IN ('UberEats','PedidosYa','PedidosYa Vouchers','PedidosYa Cash Collection','Rappi') AND (es_opcion=false OR es_opcion IS NULL)", {'fi': str(_exp_fi), 'ff': str(_exp_ff)})['v'].iloc[0] or 0)
-                        )
+                        _df_apps_dia  = run_query("SELECT SUM(monto_venta_real - COALESCE(descuento,0)) AS v FROM ventas WHERE fecha_venta=:f AND forma_pago IN ('UberEats','PedidosYa','PedidosYa Vouchers','PedidosYa Cash Collection','Rappi') AND (es_opcion=false OR es_opcion IS NULL)", {'f': str(_exp_fecha)})
+                        _df_apps_acum = run_query("SELECT SUM(monto_venta_real - COALESCE(descuento,0)) AS v FROM ventas WHERE fecha_venta BETWEEN :fi AND :ff AND forma_pago IN ('UberEats','PedidosYa','PedidosYa Vouchers','PedidosYa Cash Collection','Rappi') AND (es_opcion=false OR es_opcion IS NULL)", {'fi': str(_exp_fi), 'ff': str(_exp_ff)})
+                        _gt_apps_dia  = float(_df_apps_dia['v'].iloc[0]  or 0) if not _df_apps_dia.empty  else 0
+                        _gt_apps_acum = float(_df_apps_acum['v'].iloc[0] or 0) if not _df_apps_acum.empty else 0
                         _ws_out.cell(42, 5).value  = round(_gt_dia_s + _gt_dia_d + _gt_apps_dia)
                         _ws_out.cell(42, 7).value  = round(_gt_acum_s + _gt_acum_d + _gt_apps_acum)
                         _ws_out.cell(42, 31).value = round((_gt_acum_s + _gt_acum_d + _gt_apps_acum) / int(_exp_dias_cal) * _exp_dias_mes) if int(_exp_dias_cal) > 0 else 0
