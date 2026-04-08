@@ -9288,12 +9288,17 @@ elif modulo.startswith("📊"):
                 # Cargar NCs pendientes del período (estado Pendiente o Emitida)
                 df_nc_periodo = run_query("""
                     SELECT id, local, folio_factura, nombre_producto, sku,
-                           monto, estado, observacion, registrado_por, fecha_registro
+                           monto, estado, observacion, registrado_por, fecha_registro,
+                           COALESCE(producto_control, nombre_producto) AS producto_control,
+                           categoria
                     FROM notas_credito
-                    WHERE periodo = :p
-                      AND estado IN ('Pendiente', 'Emitida')
+                    WHERE (
+                        fecha_dte BETWEEN :fi AND :ff
+                        OR periodo = :p
+                    )
+                    AND estado IN ('Pendiente', 'Emitida')
                     ORDER BY local, nombre_producto
-                """, {'p': periodo_ic})
+                """, {'fi': str(fecha_ic_i), 'ff': str(fecha_ic_f), 'p': periodo_ic})
 
                 st.session_state['ic_data'] = {
                     'periodo': periodo_ic,
@@ -9602,10 +9607,13 @@ elif modulo.startswith("📊"):
 
                         # Descontar NCs del período para este producto
                         if not df_nc.empty:
-                            _nc_prod = df_nc[
-                                (df_nc['local'].str.upper().str.strip() == local_rpt.upper().strip()) &
-                                (df_nc['nombre_producto'].str.upper().str.strip() == prod.upper().strip())
-                            ]
+                            _nc_mask = df_nc['local'].str.upper().str.strip() == local_rpt.upper().strip()
+                            # Cruzar por producto_control si existe, sino por nombre_producto
+                            if 'producto_control' in df_nc.columns:
+                                _nc_mask &= df_nc['producto_control'].str.upper().str.strip() == prod.upper().strip()
+                            else:
+                                _nc_mask &= df_nc['nombre_producto'].str.upper().str.strip() == prod.upper().strip()
+                            _nc_prod = df_nc[_nc_mask]
                             if not _nc_prod.empty:
                                 _nc_desc = float(_nc_prod['monto'].sum())
                                 costo_u  = max(0.0, costo_u - _nc_desc)
