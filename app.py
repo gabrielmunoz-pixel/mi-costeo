@@ -6975,10 +6975,10 @@ elif modulo.startswith("📊"):
 
                         # Leer meses del histórico (cols I,K,M...AC = cols 9,11,13...29 + AE=31)
                         _HIST_COLS = list(range(9, 30, 2)) + [31]  # 12 meses
-                        _meses_lbl = []
+                        _meses_lbl_raw = []
                         for _hc in _HIST_COLS:
                             _v = _ws_out.cell(5, _hc).value
-                            _meses_lbl.append(str(_v).strip() if _v else '')
+                            _meses_lbl_raw.append(str(_v).strip() if _v else '')
 
                         def _fmt_mill(x, pos=None):
                             if x >= 1_000_000: return f'${x/1_000_000:.1f}M'
@@ -7022,11 +7022,17 @@ elif modulo.startswith("📊"):
                         _GRAF_H = 8  * 18   # ≈ 144px  — ajustar si se ve muy comprimido
 
                         # ── GRÁFICO 1: Locales año móvil (línea) ─────────────
-                        _tot_hist  = [_cell_float(_ws_out, 42, _c) for _c in _HIST_COLS]
-                        _sal_hist  = [_cell_float(_ws_out, 37, _c) for _c in _HIST_COLS]
-                        _del_hist  = [_cell_float(_ws_out, 38, _c) for _c in _HIST_COLS]
+                        _tot_hist_raw = [_cell_float(_ws_out, 42, _c) for _c in _HIST_COLS]
+                        _sal_hist_raw = [_cell_float(_ws_out, 37, _c) for _c in _HIST_COLS]
+                        _del_hist_raw = [_cell_float(_ws_out, 38, _c) for _c in _HIST_COLS]
+                        # Filtrar columnas donde el total es 0 (fórmulas sin calcular)
+                        _hist_mask = [v > 0 for v in _tot_hist_raw]
+                        _meses_lbl = [l for l, m in zip(_meses_lbl_raw, _hist_mask) if m]
+                        _tot_hist  = [v for v, m in zip(_tot_hist_raw, _hist_mask) if m]
+                        _sal_hist  = [v for v, m in zip(_sal_hist_raw, _hist_mask) if m]
+                        _del_hist  = [v for v, m in zip(_del_hist_raw, _hist_mask) if m]
 
-                        fig1, ax1 = _plt.subplots(figsize=(14.5, 3.4), facecolor=_BG)
+                        fig1, ax1 = _plt.subplots(figsize=(14.5, 3.6), facecolor=_BG)
                         ax1.set_facecolor(_BG)
                         _x = range(len(_meses_lbl))
                         ax1.plot(_x, _tot_hist, color=_GOLD,  linewidth=2.5, marker='o', markersize=5, label='TOTAL')
@@ -7042,7 +7048,7 @@ elif modulo.startswith("📊"):
                         ax1.legend(facecolor='#1a1a1a', edgecolor='#333', labelcolor='white', fontsize=8)
                         ax1.grid(axis='y', color='#2a2a2a', linewidth=0.5)
                         fig1.tight_layout()
-                        _insert_img(_ws_out, _img_bytes(fig1), 'C59', 1396, 324)
+                        _insert_img(_ws_out, _img_bytes(fig1), 'C59', 1396, 344)
 
                         # ── GRÁFICO 2: Aporte % por local (torta) ─────────
                         _APORTE_ROWS = [8,10,14,17,20,23,26,29,32,35]
@@ -7054,7 +7060,7 @@ elif modulo.startswith("📊"):
                         _APORTE_COLORS = ['#d4a853','#5b9bd5','#4caf7d','#e84545','#9b59b6',
                                           '#f39c12','#1abc9c','#e74c3c','#3498db','#2ecc71']
 
-                        fig2, ax2 = _plt.subplots(figsize=(5.2, 3.4), facecolor=_BG)
+                        fig2, ax2 = _plt.subplots(figsize=(5.2, 3.6), facecolor=_BG)
                         ax2.set_facecolor(_BG)
                         if _aporte_total > 0:
                             _filtered = [(v, l, c) for v, l, c in zip(_aporte_vals, _aporte_locs, _APORTE_COLORS) if v > 0]
@@ -7071,7 +7077,7 @@ elif modulo.startswith("📊"):
                         ax2.set_title('APORTE % LOCAL',
                                       color='white', fontsize=9, fontweight='bold', pad=6)
                         fig2.tight_layout()
-                        _insert_img(_ws_out, _img_bytes(fig2), 'S59', 666, 324)
+                        _insert_img(_ws_out, _img_bytes(fig2), 'S59', 666, 344)
 
                         # ── GRÁFICO 3: Participación delivery apps (torta) ────
                         _app_names = ['UberEats', 'PedidosYa', 'Rappi']
@@ -7079,7 +7085,7 @@ elif modulo.startswith("📊"):
                         _app_colors = [_GOLD, _GREEN, _RED]
                         _app_total = sum(_app_vals)
 
-                        fig3, ax3 = _plt.subplots(figsize=(6.9, 3.4), facecolor=_BG)
+                        fig3, ax3 = _plt.subplots(figsize=(6.9, 3.6), facecolor=_BG)
                         ax3.set_facecolor(_BG)
                         if _app_total > 0:
                             _wedges, _texts, _autotexts = ax3.pie(
@@ -7092,15 +7098,21 @@ elif modulo.startswith("📊"):
                         ax3.set_title('PARTICIPACIÓN DELIVERY APPS',
                                       color='white', fontsize=10, fontweight='bold', pad=10)
                         fig3.tight_layout()
-                        _insert_img(_ws_out, _img_bytes(fig3), 'N59', 500, 324)
+                        _insert_img(_ws_out, _img_bytes(fig3), 'N59', 500, 344)
 
                         # ── GRÁFICO 4: Total Aliva histórico (línea) ──────────
                         # Aliva usa cols I,K...AE fila 44 como categorías, fila 56 como valores
                         _ALIVA_HIST_COLS = list(range(9, 30, 2)) + [31]
-                        _aliva_lbl  = [str(_ws_out.cell(44, _c).value or '').strip() for _c in _ALIVA_HIST_COLS]
-                        _aliva_vals = [_cell_float(_ws_out, 56, _c) for _c in _ALIVA_HIST_COLS]
+                        _aliva_lbl_raw  = [str(_ws_out.cell(44, _c).value or '').strip() for _c in _ALIVA_HIST_COLS]
+                        _aliva_vals_raw = [_cell_float(_ws_out, 56, _c) for _c in _ALIVA_HIST_COLS]
+                        # Filtrar puntos con valor 0 (celdas con fórmula sin calcular o vacías)
+                        _aliva_pairs = [(l, v) for l, v in zip(_aliva_lbl_raw, _aliva_vals_raw) if v > 0]
+                        if _aliva_pairs:
+                            _aliva_lbl, _aliva_vals = zip(*_aliva_pairs)
+                        else:
+                            _aliva_lbl, _aliva_vals = _aliva_lbl_raw, _aliva_vals_raw
 
-                        fig4, ax4 = _plt.subplots(figsize=(15.0, 3.4), facecolor=_BG)
+                        fig4, ax4 = _plt.subplots(figsize=(15.0, 3.6), facecolor=_BG)
                         ax4.set_facecolor(_BG)
                         ax4.plot(range(len(_aliva_lbl)), _aliva_vals,
                                  color=_GOLD, linewidth=2.5, marker='o', markersize=5)
@@ -7115,7 +7127,7 @@ elif modulo.startswith("📊"):
                                       color='white', fontsize=10, fontweight='bold', pad=10)
                         ax4.grid(axis='y', color='#2a2a2a', linewidth=0.5)
                         fig4.tight_layout()
-                        _insert_img(_ws_out, _img_bytes(fig4), 'Y59', 1443, 324)
+                        _insert_img(_ws_out, _img_bytes(fig4), 'Y59', 1443, 344)
 
                         # Guardar
                         _buf_exp = _io_exp.BytesIO()
