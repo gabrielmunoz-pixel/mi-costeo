@@ -6946,7 +6946,7 @@ elif modulo.startswith("📊"):
                         _sal_hist  = [_cell_float(_ws_out, 37, _c) for _c in _HIST_COLS]
                         _del_hist  = [_cell_float(_ws_out, 38, _c) for _c in _HIST_COLS]
 
-                        fig1, ax1 = _plt.subplots(figsize=(13, 5), facecolor=_BG)
+                        fig1, ax1 = _plt.subplots(figsize=(7.4, 3.0), facecolor=_BG)
                         ax1.set_facecolor(_BG)
                         _x = range(len(_meses_lbl))
                         ax1.plot(_x, _tot_hist, color=_GOLD,  linewidth=2.5, marker='o', markersize=5, label='TOTAL')
@@ -6962,32 +6962,36 @@ elif modulo.startswith("📊"):
                         ax1.legend(facecolor='#1a1a1a', edgecolor='#333', labelcolor='white', fontsize=8)
                         ax1.grid(axis='y', color='#2a2a2a', linewidth=0.5)
                         fig1.tight_layout()
-                        _insert_img(_ws_out, _img_bytes(fig1), 'C59', _GRAF_W, _GRAF_H)
+                        _insert_img(_ws_out, _img_bytes(fig1), 'C59', 715, 288)
 
-                        # ── GRÁFICO 2: Aporte por local (barra horizontal) ────
-                        # Filas proyección por local: 8,10,14,17,20,23,26,29,32,35 col AE(31)
+                        # ── GRÁFICO 2: Aporte % por local (torta) ─────────
                         _APORTE_ROWS = [8,10,14,17,20,23,26,29,32,35]
                         _aporte_vals = [_cell_float(_ws_out, _r, 31) for _r in _APORTE_ROWS]
                         _aporte_locs = ['Vitacura','Las Condes','Chicureo','Macul',
                                         'La Dehesa','La Reina','Quilin',
-                                        'N.Providencia','Providencia','Los Trapenses']
-                        _sorted_pairs = sorted(zip(_aporte_vals, _aporte_locs), reverse=True)
-                        _av, _al = zip(*_sorted_pairs) if _sorted_pairs else ([], [])
+                                        'N.Prov.','Providencia','L.Trapenses']
+                        _aporte_total = sum(_aporte_vals)
+                        _APORTE_COLORS = ['#d4a853','#5b9bd5','#4caf7d','#e84545','#9b59b6',
+                                          '#f39c12','#1abc9c','#e74c3c','#3498db','#2ecc71']
 
-                        fig2, ax2 = _plt.subplots(figsize=(9, 5), facecolor=_BG)
+                        fig2, ax2 = _plt.subplots(figsize=(4.1, 3.0), facecolor=_BG)
                         ax2.set_facecolor(_BG)
-                        _bars = ax2.barh(_al, _av, color=_GOLD, height=0.6)
-                        ax2.xaxis.set_major_formatter(_mticker.FuncFormatter(_fmt_mill))
-                        ax2.tick_params(colors=_GRAY, labelsize=8)
-                        ax2.spines[:].set_color('#2a2a2a')
-                        ax2.set_title('APORTE POR LOCAL — PROYECCIÓN MES',
-                                      color='white', fontsize=10, fontweight='bold', pad=10)
-                        for _bar, _val in zip(_bars, _av):
-                            ax2.text(_bar.get_width() * 1.01, _bar.get_y() + _bar.get_height()/2,
-                                     _fmt_mill(_val), va='center', ha='left', color='white', fontsize=7)
-                        ax2.grid(axis='x', color='#2a2a2a', linewidth=0.5)
+                        if _aporte_total > 0:
+                            _filtered = [(v, l, c) for v, l, c in zip(_aporte_vals, _aporte_locs, _APORTE_COLORS) if v > 0]
+                            if _filtered:
+                                _fv, _fl, _fc = zip(*_filtered)
+                                _wedges2, _texts2, _autotexts2 = ax2.pie(
+                                    _fv, labels=_fl, colors=_fc,
+                                    autopct='%1.0f%%', startangle=90,
+                                    wedgeprops={'edgecolor': _BG, 'linewidth': 1.5},
+                                    textprops={'fontsize': 6}
+                                )
+                                for _t in _texts2:      _t.set_color(_GRAY)
+                                for _at in _autotexts2: _at.set_color('white'); _at.set_fontsize(7)
+                        ax2.set_title('APORTE % LOCAL',
+                                      color='white', fontsize=9, fontweight='bold', pad=6)
                         fig2.tight_layout()
-                        _insert_img(_ws_out, _img_bytes(fig2), 'U59', _GRAF_W, _GRAF_H)
+                        _insert_img(_ws_out, _img_bytes(fig2), 'S59', 390, 288)
 
                         # ── GRÁFICO 3: Participación delivery apps (torta) ────
                         _app_names = ['UberEats', 'PedidosYa', 'Rappi']
@@ -6995,7 +6999,7 @@ elif modulo.startswith("📊"):
                         _app_colors = [_GOLD, _GREEN, _RED]
                         _app_total = sum(_app_vals)
 
-                        fig3, ax3 = _plt.subplots(figsize=(6, 5), facecolor=_BG)
+                        fig3, ax3 = _plt.subplots(figsize=(3.4, 3.0), facecolor=_BG)
                         ax3.set_facecolor(_BG)
                         if _app_total > 0:
                             _wedges, _texts, _autotexts = ax3.pie(
@@ -7008,7 +7012,7 @@ elif modulo.startswith("📊"):
                         ax3.set_title('PARTICIPACIÓN DELIVERY APPS',
                                       color='white', fontsize=10, fontweight='bold', pad=10)
                         fig3.tight_layout()
-                        _insert_img(_ws_out, _img_bytes(fig3), 'C67', _GRAF_W, _GRAF_H)
+                        _insert_img(_ws_out, _img_bytes(fig3), 'N59', 325, 288)
 
                         # ── GRÁFICO 4: Total Aliva histórico (línea) ──────────
                         # Aliva usa cols I,K...AE fila 44 como categorías, fila 56 como valores
@@ -7016,7 +7020,7 @@ elif modulo.startswith("📊"):
                         _aliva_lbl  = [str(_ws_out.cell(44, _c).value or '').strip() for _c in _ALIVA_HIST_COLS]
                         _aliva_vals = [_cell_float(_ws_out, 56, _c) for _c in _ALIVA_HIST_COLS]
 
-                        fig4, ax4 = _plt.subplots(figsize=(13, 5), facecolor=_BG)
+                        fig4, ax4 = _plt.subplots(figsize=(9.5, 3.0), facecolor=_BG)
                         ax4.set_facecolor(_BG)
                         ax4.plot(range(len(_aliva_lbl)), _aliva_vals,
                                  color=_GOLD, linewidth=2.5, marker='o', markersize=5)
@@ -7031,7 +7035,7 @@ elif modulo.startswith("📊"):
                                       color='white', fontsize=10, fontweight='bold', pad=10)
                         ax4.grid(axis='y', color='#2a2a2a', linewidth=0.5)
                         fig4.tight_layout()
-                        _insert_img(_ws_out, _img_bytes(fig4), 'U67', _GRAF_W, _GRAF_H)
+                        _insert_img(_ws_out, _img_bytes(fig4), 'Y59', 910, 288)
 
                         # Guardar
                         _buf_exp = _io_exp.BytesIO()
