@@ -6919,9 +6919,9 @@ elif modulo.startswith("📊"):
                             ws.add_image(_img, anchor_cell)
 
                         # ── GRÁFICO 1: Locales año móvil (línea) ─────────────
-                        _tot_hist  = [_ws_out.cell(42, _c).value or 0 for _c in _HIST_COLS]
-                        _sal_hist  = [_ws_out.cell(37, _c).value or 0 for _c in _HIST_COLS]
-                        _del_hist  = [_ws_out.cell(38, _c).value or 0 for _c in _HIST_COLS]
+                        _tot_hist  = [float(_ws_out.cell(42, _c).value or 0) for _c in _HIST_COLS]
+                        _sal_hist  = [float(_ws_out.cell(37, _c).value or 0) for _c in _HIST_COLS]
+                        _del_hist  = [float(_ws_out.cell(38, _c).value or 0) for _c in _HIST_COLS]
 
                         fig1, ax1 = _plt.subplots(figsize=(10, 4), facecolor=_BG)
                         ax1.set_facecolor(_BG)
@@ -6944,7 +6944,7 @@ elif modulo.startswith("📊"):
                         # ── GRÁFICO 2: Aporte por local (barra horizontal) ────
                         # Filas proyección por local: 8,10,14,17,20,23,26,29,32,35 col AE(31)
                         _APORTE_ROWS = [8,10,14,17,20,23,26,29,32,35]
-                        _aporte_vals = [_ws_out.cell(_r, 31).value or 0 for _r in _APORTE_ROWS]
+                        _aporte_vals = [float(_ws_out.cell(_r, 31).value or 0) for _r in _APORTE_ROWS]
                         _aporte_locs = ['Vitacura','Las Condes','Chicureo','Macul',
                                         'La Dehesa','La Reina','Quilin',
                                         'N.Providencia','Providencia','Los Trapenses']
@@ -6968,7 +6968,7 @@ elif modulo.startswith("📊"):
 
                         # ── GRÁFICO 3: Participación delivery apps (torta) ────
                         _app_names = ['UberEats', 'PedidosYa', 'Rappi']
-                        _app_vals  = [_ws_out.cell(_r, 31).value or 0 for _r in [39, 40, 41]]
+                        _app_vals  = [float(_ws_out.cell(_r, 31).value or 0) for _r in [39, 40, 41]]
                         _app_colors = [_GOLD, _GREEN, _RED]
                         _app_total = sum(_app_vals)
 
@@ -6991,7 +6991,7 @@ elif modulo.startswith("📊"):
                         # Aliva usa cols I,K...AE fila 44 como categorías, fila 56 como valores
                         _ALIVA_HIST_COLS = list(range(9, 30, 2)) + [31]
                         _aliva_lbl  = [str(_ws_out.cell(44, _c).value or '').strip() for _c in _ALIVA_HIST_COLS]
-                        _aliva_vals = [_ws_out.cell(56, _c).value or 0 for _c in _ALIVA_HIST_COLS]
+                        _aliva_vals = [float(_ws_out.cell(56, _c).value or 0) for _c in _ALIVA_HIST_COLS]
 
                         fig4, ax4 = _plt.subplots(figsize=(10, 4), facecolor=_BG)
                         ax4.set_facecolor(_BG)
