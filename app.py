@@ -6439,6 +6439,140 @@ elif modulo.startswith("📊"):
                                 if _aliva_mv > 0:
                                     _ws_out.cell(_ar, _col_h).value = round(_aliva_mv, 2)
 
+                        # ── GENERAR GRÁFICOS CON MATPLOTLIB ─────────────────
+                        import matplotlib
+                        matplotlib.use('Agg')
+                        import matplotlib.pyplot as _plt
+                        import matplotlib.ticker as _mticker
+
+                        _GOLD   = '#d4a853'
+                        _DARK   = '#1a1a1a'
+                        _GRAY   = '#888888'
+                        _GREEN  = '#4caf7d'
+                        _BLUE   = '#5b9bd5'
+                        _RED    = '#e84545'
+                        _BG     = '#0d0d0d'
+                        _LOCALES_GRAF = ['Vitacura','Las Condes','Chicureo','Macul',
+                                         'La Dehesa','La Reina','Quilin',
+                                         'Nueva Providencia','Providencia','Los Trapenses']
+
+                        # Leer meses del histórico (cols I,K,M...AC = cols 9,11,13...29 + AE=31)
+                        _HIST_COLS = list(range(9, 30, 2)) + [31]  # 12 meses
+                        _meses_lbl = []
+                        for _hc in _HIST_COLS:
+                            _v = _ws_out.cell(5, _hc).value
+                            _meses_lbl.append(str(_v).strip() if _v else '')
+
+                        def _fmt_mill(x, pos=None):
+                            if x >= 1_000_000: return f'${x/1_000_000:.1f}M'
+                            if x >= 1_000:     return f'${x/1_000:.0f}K'
+                            return f'${x:.0f}'
+
+                        def _img_bytes(fig):
+                            _buf_img = _io_exp.BytesIO()
+                            fig.savefig(_buf_img, format='png', dpi=130,
+                                        bbox_inches='tight', facecolor=_BG)
+                            _buf_img.seek(0)
+                            _plt.close(fig)
+                            return _buf_img
+
+                        def _insert_img(ws, img_bytes, anchor_cell):
+                            from openpyxl.drawing.image import Image as _OXLImg
+                            _img = _OXLImg(img_bytes)
+                            ws.add_image(_img, anchor_cell)
+
+                        # ── GRÁFICO 1: Locales año móvil (línea) ─────────────
+                        _tot_hist  = [_ws_out.cell(42, _c).value or 0 for _c in _HIST_COLS]
+                        _sal_hist  = [_ws_out.cell(37, _c).value or 0 for _c in _HIST_COLS]
+                        _del_hist  = [_ws_out.cell(38, _c).value or 0 for _c in _HIST_COLS]
+
+                        fig1, ax1 = _plt.subplots(figsize=(10, 4), facecolor=_BG)
+                        ax1.set_facecolor(_BG)
+                        _x = range(len(_meses_lbl))
+                        ax1.plot(_x, _tot_hist, color=_GOLD,  linewidth=2.5, marker='o', markersize=5, label='TOTAL')
+                        ax1.plot(_x, _sal_hist, color=_GREEN, linewidth=1.8, marker='o', markersize=4, label='SALÓN', linestyle='--')
+                        ax1.plot(_x, _del_hist, color=_BLUE,  linewidth=1.8, marker='o', markersize=4, label='DELIVERY', linestyle=':')
+                        ax1.set_xticks(_x)
+                        ax1.set_xticklabels(_meses_lbl, rotation=45, ha='right', fontsize=8, color=_GRAY)
+                        ax1.yaxis.set_major_formatter(_mticker.FuncFormatter(_fmt_mill))
+                        ax1.tick_params(colors=_GRAY, labelsize=8)
+                        ax1.spines[:].set_color('#2a2a2a')
+                        ax1.set_title('LOCALES AÑO MÓVIL — 12 ÚLTIMOS MESES',
+                                      color='white', fontsize=10, fontweight='bold', pad=10)
+                        ax1.legend(facecolor='#1a1a1a', edgecolor='#333', labelcolor='white', fontsize=8)
+                        ax1.grid(axis='y', color='#2a2a2a', linewidth=0.5)
+                        fig1.tight_layout()
+                        _insert_img(_ws_out, _img_bytes(fig1), 'B59')
+
+                        # ── GRÁFICO 2: Aporte por local (barra horizontal) ────
+                        # Filas proyección por local: 8,10,14,17,20,23,26,29,32,35 col AE(31)
+                        _APORTE_ROWS = [8,10,14,17,20,23,26,29,32,35]
+                        _aporte_vals = [_ws_out.cell(_r, 31).value or 0 for _r in _APORTE_ROWS]
+                        _aporte_locs = ['Vitacura','Las Condes','Chicureo','Macul',
+                                        'La Dehesa','La Reina','Quilin',
+                                        'N.Providencia','Providencia','Los Trapenses']
+                        _sorted_pairs = sorted(zip(_aporte_vals, _aporte_locs), reverse=True)
+                        _av, _al = zip(*_sorted_pairs) if _sorted_pairs else ([], [])
+
+                        fig2, ax2 = _plt.subplots(figsize=(7, 4), facecolor=_BG)
+                        ax2.set_facecolor(_BG)
+                        _bars = ax2.barh(_al, _av, color=_GOLD, height=0.6)
+                        ax2.xaxis.set_major_formatter(_mticker.FuncFormatter(_fmt_mill))
+                        ax2.tick_params(colors=_GRAY, labelsize=8)
+                        ax2.spines[:].set_color('#2a2a2a')
+                        ax2.set_title('APORTE POR LOCAL — PROYECCIÓN MES',
+                                      color='white', fontsize=10, fontweight='bold', pad=10)
+                        for _bar, _val in zip(_bars, _av):
+                            ax2.text(_bar.get_width() * 1.01, _bar.get_y() + _bar.get_height()/2,
+                                     _fmt_mill(_val), va='center', ha='left', color='white', fontsize=7)
+                        ax2.grid(axis='x', color='#2a2a2a', linewidth=0.5)
+                        fig2.tight_layout()
+                        _insert_img(_ws_out, _img_bytes(fig2), 'O59')
+
+                        # ── GRÁFICO 3: Participación delivery apps (torta) ────
+                        _app_names = ['UberEats', 'PedidosYa', 'Rappi']
+                        _app_vals  = [_ws_out.cell(_r, 31).value or 0 for _r in [39, 40, 41]]
+                        _app_colors = [_GOLD, _GREEN, _RED]
+                        _app_total = sum(_app_vals)
+
+                        fig3, ax3 = _plt.subplots(figsize=(5, 4), facecolor=_BG)
+                        ax3.set_facecolor(_BG)
+                        if _app_total > 0:
+                            _wedges, _texts, _autotexts = ax3.pie(
+                                _app_vals, labels=_app_names, colors=_app_colors,
+                                autopct='%1.1f%%', startangle=90,
+                                wedgeprops={'edgecolor': _BG, 'linewidth': 2}
+                            )
+                            for _t in _texts:      _t.set_color(_GRAY)
+                            for _at in _autotexts: _at.set_color('white'); _at.set_fontsize(9)
+                        ax3.set_title('PARTICIPACIÓN DELIVERY APPS',
+                                      color='white', fontsize=10, fontweight='bold', pad=10)
+                        fig3.tight_layout()
+                        _insert_img(_ws_out, _img_bytes(fig3), 'B75')
+
+                        # ── GRÁFICO 4: Total Aliva histórico (línea) ──────────
+                        # Aliva usa cols I,K...AE fila 44 como categorías, fila 56 como valores
+                        _ALIVA_HIST_COLS = list(range(9, 30, 2)) + [31]
+                        _aliva_lbl  = [str(_ws_out.cell(44, _c).value or '').strip() for _c in _ALIVA_HIST_COLS]
+                        _aliva_vals = [_ws_out.cell(56, _c).value or 0 for _c in _ALIVA_HIST_COLS]
+
+                        fig4, ax4 = _plt.subplots(figsize=(10, 4), facecolor=_BG)
+                        ax4.set_facecolor(_BG)
+                        ax4.plot(range(len(_aliva_lbl)), _aliva_vals,
+                                 color=_GOLD, linewidth=2.5, marker='o', markersize=5)
+                        ax4.fill_between(range(len(_aliva_lbl)), _aliva_vals,
+                                         alpha=0.15, color=_GOLD)
+                        ax4.set_xticks(range(len(_aliva_lbl)))
+                        ax4.set_xticklabels(_aliva_lbl, rotation=45, ha='right', fontsize=8, color=_GRAY)
+                        ax4.yaxis.set_major_formatter(_mticker.FuncFormatter(_fmt_mill))
+                        ax4.tick_params(colors=_GRAY, labelsize=8)
+                        ax4.spines[:].set_color('#2a2a2a')
+                        ax4.set_title('TOTAL ALIVA — 12 ÚLTIMOS MESES',
+                                      color='white', fontsize=10, fontweight='bold', pad=10)
+                        ax4.grid(axis='y', color='#2a2a2a', linewidth=0.5)
+                        fig4.tight_layout()
+                        _insert_img(_ws_out, _img_bytes(fig4), 'O75')
+
                         # Guardar
                         _buf_exp = _io_exp.BytesIO()
                         _wb_out.save(_buf_exp)
