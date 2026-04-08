@@ -5740,16 +5740,35 @@ elif modulo.startswith("📊"):
 
             if _al_file and _al_fecha:
                 try:
-                    _df_al = pd.read_excel(io.BytesIO(_al_file.read()), header=0)
+                    # Detectar fila de header automáticamente (busca "código" en primeras 5 filas)
+                    _al_bytes = _al_file.read()
+                    _al_hdr_row = 0
+                    import openpyxl as _oxl_al
+                    _wb_al = _oxl_al.load_workbook(io.BytesIO(_al_bytes), data_only=True)
+                    _ws_al = _wb_al.active
+                    for _ri in range(1, 6):
+                        _row_vals = [str(_ws_al.cell(_ri, _ci).value or '').lower() for _ci in range(1, _ws_al.max_column+1)]
+                        if any('código' in v or 'codigo' in v for v in _row_vals):
+                            _al_hdr_row = _ri - 1  # 0-indexed para pandas
+                            break
+                    _df_al = pd.read_excel(io.BytesIO(_al_bytes), header=_al_hdr_row)
                     _df_al.columns = _df_al.columns.str.strip()
                     _col_rut   = next((c for c in _df_al.columns if "código" in c.lower() or "codigo" in c.lower()), None)
                     _col_monto = next((c for c in _df_al.columns if "total factura" in c.lower()), None)
                     if not _col_rut or not _col_monto:
                         st.error(f"Columnas no encontradas. Disponibles: {list(_df_al.columns)}")
                     else:
+                        # Filtrar solo filas con RUT válido (empieza con C + dígitos)
+                        _df_al = _df_al[_df_al[_col_rut].astype(str).str.match(r'C\d+', na=False)].copy()
                         _df_al['_rut_norm'] = _df_al[_col_rut].apply(_normalizar_rut_aliva)
                         _df_al['_local']    = _df_al['_rut_norm'].map(_ALIVA_RUT_LOCAL)
-                        _df_al['_neto']     = pd.to_numeric(_df_al[_col_monto], errors='coerce').fillna(0)
+                        _df_al['_neto'] = (
+                            _df_al[_col_monto].astype(str)
+                            .str.replace(r'[A-Za-z$\s]', '', regex=True)  # quitar CLP y espacios
+                            .str.replace('.', '', regex=False)               # quitar separador miles
+                            .str.replace(',', '.', regex=False)              # coma → punto decimal
+                            .pipe(pd.to_numeric, errors='coerce').fillna(0)
+                        )
                         _df_al['_iva']      = (_df_al['_neto'] * 0.19).round(2)
                         _df_al['_total']    = (_df_al['_neto'] * 1.19).round(2)
                         st.dataframe(
@@ -11218,7 +11237,13 @@ elif informe_sel == "CuentasCasa":
                 else:
                     _df_al['_rut_norm'] = _df_al[_col_rut].apply(_normalizar_rut_aliva)
                     _df_al['_local']    = _df_al['_rut_norm'].map(_ALIVA_RUT_LOCAL)
-                    _df_al['_neto']     = pd.to_numeric(_df_al[_col_monto], errors='coerce').fillna(0)
+                    _df_al['_neto'] = (
+                            _df_al[_col_monto].astype(str)
+                            .str.replace(r'[A-Za-z$\s]', '', regex=True)
+                            .str.replace('.', '', regex=False)
+                            .str.replace(',', '.', regex=False)
+                            .pipe(pd.to_numeric, errors='coerce').fillna(0)
+                        )
                     _df_al['_iva']      = (_df_al['_neto'] * 0.19).round(2)
                     _df_al['_total']    = (_df_al['_neto'] * 1.19).round(2)
                     st.dataframe(
