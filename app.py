@@ -6322,10 +6322,13 @@ elif modulo.startswith("📊"):
                         _exp_dias_hab_mes = _dias_habiles_mes_aliva(_exp_año, _exp_mes)
 
                         # Escribir datos sección Alemán
+                        _gt_dia_s=0; _gt_dia_d=0; _gt_acum_s=0; _gt_acum_d=0; _gt_proy_s=0; _gt_proy_d=0
+                        _gt_mens = {}  # col → (salon, delivery)
+
                         for _base_r, _loc in _EXP_LOCAL_ROWS.items():
+                            _loc_dia_s=0; _loc_dia_d=0; _loc_acum_s=0; _loc_acum_d=0
                             for _off, _tipo, _tipo_bd in [(0,'SALON','salon'),(1,'DELIVERY','delivery')]:
                                 _r = _base_r + _off
-                                # Col E = día, Col G = acumulado, Col AE = proyección
                                 _dia_v  = _vget_exp(_df_exp_dia,  _loc, _tipo_bd)
                                 _acum_v = _vget_exp(_df_exp_acum, _loc, _tipo_bd)
                                 _proy_v = _acum_v / int(_exp_dias_cal) * _exp_dias_mes if int(_exp_dias_cal) > 0 else 0
@@ -6337,6 +6340,81 @@ elif modulo.startswith("📊"):
                                     _mv = _mens_val(_loc, _tipo.upper(), _aa_h, _mm_h)
                                     if _mv > 0:
                                         _ws_out.cell(_r, _col_h).value = round(_mv)
+                                # Acumular para totales
+                                if _tipo_bd == 'salon':
+                                    _loc_dia_s = _dia_v; _loc_acum_s = _acum_v
+                                    _gt_dia_s += _dia_v; _gt_acum_s += _acum_v; _gt_proy_s += _proy_v
+                                else:
+                                    _loc_dia_d = _dia_v; _loc_acum_d = _acum_v
+                                    _gt_dia_d += _dia_v; _gt_acum_d += _acum_v; _gt_proy_d += _proy_v
+
+                            # Fila TOTAL del local (_base_r + 2)
+                            _r_tot = _base_r + 2
+                            _tot_dia = _loc_dia_s + _loc_dia_d
+                            _tot_acum = _loc_acum_s + _loc_acum_d
+                            _tot_proy = (_tot_acum / int(_exp_dias_cal) * _exp_dias_mes) if int(_exp_dias_cal) > 0 else 0
+                            _ws_out.cell(_r_tot, 5).value  = round(_tot_dia)
+                            _ws_out.cell(_r_tot, 7).value  = round(_tot_acum)
+                            _ws_out.cell(_r_tot, 31).value = round(_tot_proy)
+                            for _col_h, (_aa_h, _mm_h) in _EXP_COL_MES.items():
+                                _mv_s = _mens_val(_loc, 'SALON',    _aa_h, _mm_h)
+                                _mv_d = _mens_val(_loc, 'DELIVERY', _aa_h, _mm_h)
+                                if (_mv_s + _mv_d) > 0:
+                                    _ws_out.cell(_r_tot, _col_h).value = round(_mv_s + _mv_d)
+
+                        # ── TOTAL LOCALES (filas 37=SALON, 38=DELIVERY) ──────────
+                        _ws_out.cell(37, 5).value  = round(_gt_dia_s)
+                        _ws_out.cell(37, 7).value  = round(_gt_acum_s)
+                        _ws_out.cell(37, 31).value = round(_gt_proy_s)
+                        _ws_out.cell(38, 5).value  = round(_gt_dia_d)
+                        _ws_out.cell(38, 7).value  = round(_gt_acum_d)
+                        _ws_out.cell(38, 31).value = round(_gt_proy_d)
+                        # Histórico mensual de totales locales
+                        for _col_h, (_aa_h, _mm_h) in _EXP_COL_MES.items():
+                            _tot_s_h = sum(_mens_val(_loc, 'SALON',    _aa_h, _mm_h) for _loc in _EXP_LOCAL_ROWS.values())
+                            _tot_d_h = sum(_mens_val(_loc, 'DELIVERY', _aa_h, _mm_h) for _loc in _EXP_LOCAL_ROWS.values())
+                            if _tot_s_h > 0: _ws_out.cell(37, _col_h).value = round(_tot_s_h)
+                            if _tot_d_h > 0: _ws_out.cell(38, _col_h).value = round(_tot_d_h)
+
+                        # ── DELIVERY APPS (filas 39=Uber, 40=PedidosYa, 41=Rappi) ──
+                        _APPS = {
+                            39: ['UberEats'],
+                            40: ['PedidosYa', 'PedidosYa Vouchers', 'PedidosYa Cash Collection'],
+                            41: ['Rappi'],
+                        }
+                        for _app_row, _fp_list in _APPS.items():
+                            _fp_in = "','".join(_fp_list)
+                            _df_app_dia = run_query(f"""
+                                SELECT SUM(monto_venta_real - COALESCE(descuento,0)) AS venta
+                                FROM ventas
+                                WHERE fecha_venta = :f
+                                  AND forma_pago IN ('{_fp_in}')
+                                  AND (es_opcion = false OR es_opcion IS NULL)
+                            """, {'f': str(_exp_fecha)})
+                            _df_app_acum = run_query(f"""
+                                SELECT SUM(monto_venta_real - COALESCE(descuento,0)) AS venta
+                                FROM ventas
+                                WHERE fecha_venta BETWEEN :fi AND :ff
+                                  AND forma_pago IN ('{_fp_in}')
+                                  AND (es_opcion = false OR es_opcion IS NULL)
+                            """, {'fi': str(_exp_fi), 'ff': str(_exp_ff)})
+                            _app_dia  = float(_df_app_dia['venta'].iloc[0])  if not _df_app_dia.empty  and _df_app_dia['venta'].iloc[0]  else 0
+                            _app_acum = float(_df_app_acum['venta'].iloc[0]) if not _df_app_acum.empty and _df_app_acum['venta'].iloc[0] else 0
+                            _app_proy = _app_acum / int(_exp_dias_cal) * _exp_dias_mes if int(_exp_dias_cal) > 0 else 0
+                            _ws_out.cell(_app_row, 5).value  = round(_app_dia)
+                            _ws_out.cell(_app_row, 7).value  = round(_app_acum)
+                            _ws_out.cell(_app_row, 31).value = round(_app_proy)
+
+                        # ── FILA 42: TOTAL GENERAL (locales + apps) ───────────────
+                        _gt_apps_dia  = sum(
+                            float(run_query(f"SELECT SUM(monto_venta_real - COALESCE(descuento,0)) AS v FROM ventas WHERE fecha_venta=:f AND forma_pago IN ('UberEats','PedidosYa','PedidosYa Vouchers','PedidosYa Cash Collection','Rappi') AND (es_opcion=false OR es_opcion IS NULL)", {'f': str(_exp_fecha)})['v'].iloc[0] or 0)
+                        )
+                        _gt_apps_acum = sum(
+                            float(run_query(f"SELECT SUM(monto_venta_real - COALESCE(descuento,0)) AS v FROM ventas WHERE fecha_venta BETWEEN :fi AND :ff AND forma_pago IN ('UberEats','PedidosYa','PedidosYa Vouchers','PedidosYa Cash Collection','Rappi') AND (es_opcion=false OR es_opcion IS NULL)", {'fi': str(_exp_fi), 'ff': str(_exp_ff)})['v'].iloc[0] or 0)
+                        )
+                        _ws_out.cell(42, 5).value  = round(_gt_dia_s + _gt_dia_d + _gt_apps_dia)
+                        _ws_out.cell(42, 7).value  = round(_gt_acum_s + _gt_acum_d + _gt_apps_acum)
+                        _ws_out.cell(42, 31).value = round((_gt_acum_s + _gt_acum_d + _gt_apps_acum) / int(_exp_dias_cal) * _exp_dias_mes) if int(_exp_dias_cal) > 0 else 0
 
                         # Escribir datos sección Aliva (filas 45-54)
                         _ALIVA_ROWS = {
