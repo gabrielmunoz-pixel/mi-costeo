@@ -5546,7 +5546,9 @@ elif modulo.startswith("📊"):
     # ----------------------------------------------------------
     # INFORME 1
     # ----------------------------------------------------------
-    if "Informe 1" in informe_sel:
+    if informe_sel in ("VentaDiaria", "CuentasCasa", "Auditor", "Bar"):
+        pass  # estos módulos se renderizan en sus propios elif globales
+    elif "Informe 1" in informe_sel:
         st.markdown("### 💰 Rentabilidad por Producto / Categoría")
         st.markdown(f"<div class='info-box'>Período: <b>{f_inicio}</b> → <b>{f_fin}</b> · Local: <b>{f_local}</b><br><b>Rent. Teórica</b>: último precio de compra por SKU · <b>Rent. Período</b>: MUC ponderado del período (fallback: última compra).</div>", unsafe_allow_html=True)
 
