@@ -5952,8 +5952,13 @@ if modulo.startswith("📦"):
             return {'cat_a': cat_a, 'cat_b': cat_b, 'cat_cd': cat_cd, 'resumen': resumen}
 
         # ── Estado ───────────────────────────────────────────────────────
+        _CONC_WIDGET_KEYS = {
+            'conc_local_sel', 'conc_periodo_sel',
+            'conc_file_sii', 'conc_file_rg',
+            'conc_tdias', 'conc_tpct', 'conc_cfg_prev'
+        }
         def _conc_reset():
-            for k in [kk for kk in st.session_state if kk.startswith('conc_')]:
+            for k in [kk for kk in st.session_state if kk.startswith('conc_') and kk not in _CONC_WIDGET_KEYS]:
                 del st.session_state[k]
 
         # ── UI: Configuración ────────────────────────────────────────────
@@ -5982,7 +5987,9 @@ if modulo.startswith("📦"):
             _conc_monto_pct  = st.number_input("Tolerancia monto (%)", min_value=0.0, max_value=50.0, value=1.0, step=0.5, key='conc_tpct') / 100.0
 
         # Reset si cambia config
-        _conc_cfg_key = f"{_conc_local}|{_conc_periodo}|{id(_conc_file_sii)}|{id(_conc_file_rg)}"
+        _sii_name = _conc_file_sii.name if _conc_file_sii else 'none'
+        _rg_name  = _conc_file_rg.name  if _conc_file_rg  else 'none'
+        _conc_cfg_key = f"{_conc_local}|{_conc_periodo}|{_sii_name}|{_rg_name}"
         if st.session_state.get('conc_cfg_prev') != _conc_cfg_key:
             _conc_reset()
             st.session_state['conc_cfg_prev'] = _conc_cfg_key
@@ -10307,6 +10314,11 @@ elif modulo.startswith("📊"):
                     tot_dk  = sum(f[7] for f in filas_ctrl)
                     tot_dp  = tot_dk / tot_uc if tot_uc > 0 else 0
                     tot_cd  = sum(f[9] for f in filas_ctrl)
+                    # Valor absoluto en la fila TOTAL para todas las categorías excepto CARNES ROJAS
+                    _es_carne_roja = cat_nombre == 'CARNES ROJAS'
+                    _disp_dk = tot_dk if _es_carne_roja else abs(tot_dk)
+                    _disp_dp = tot_dp if _es_carne_roja else abs(tot_dp)
+                    _disp_cd = tot_cd if _es_carne_roja else abs(tot_cd)
                     ctrl_rows += (
                         f'<tr style="background:#111;border-top:1px solid #2a2a2a">'
                         f'<td style="padding:6px 10px;color:#d4a853;font-weight:600;font-size:0.75rem">TOTAL</td>'
@@ -10316,9 +10328,9 @@ elif modulo.startswith("📊"):
                         f'<td style="padding:6px 10px;text-align:right;color:#aaa;font-size:0.73rem">{fmt_kg(tot_cp)}</td>'
                         f'<td style="padding:6px 10px;text-align:right;color:#aaa;font-size:0.73rem">{fmt_kg(tot_ru)}</td>'
                         f'<td style="padding:6px 10px;text-align:right;color:#888;font-size:0.73rem">{fmt_kg(tot_uc)}</td>'
-                        f'<td style="padding:6px 10px;text-align:right;color:#d4a853;font-weight:600;font-size:0.73rem">{fmt_kg(tot_dk)}</td>'
-                        f'<td style="padding:6px 10px;text-align:right;color:#d4a853;font-weight:600;font-size:0.73rem">{fmt_pct(tot_dp)}</td>'
-                        f'<td style="padding:6px 10px;text-align:right;color:#d4a853;font-weight:600;font-size:0.73rem">{fmt_clp(tot_cd)}</td>'
+                        f'<td style="padding:6px 10px;text-align:right;color:#d4a853;font-weight:600;font-size:0.73rem">{fmt_kg(_disp_dk)}</td>'
+                        f'<td style="padding:6px 10px;text-align:right;color:#d4a853;font-weight:600;font-size:0.73rem">{fmt_pct(_disp_dp)}</td>'
+                        f'<td style="padding:6px 10px;text-align:right;color:#d4a853;font-weight:600;font-size:0.73rem">{fmt_clp(_disp_cd)}</td>'
                         f'<td style="padding:6px 10px;text-align:right;color:#555;font-size:0.73rem">0</td></tr>'
                     )
                     st.markdown(
