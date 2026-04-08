@@ -2375,14 +2375,15 @@ def save_ventas(df_raw):
         fechas_archivo = [str(f) for f in fechas.dt.date.unique().tolist()]
 
         with engine.connect() as conn:
+            # Construir IN dinámico con cast explícito a date
+            _f_placeholders = ','.join([f"'{f}'::date" for f in fechas_archivo])
             if locales:
                 conn.execute(text(
-                    "DELETE FROM ventas WHERE fecha_venta = ANY(:fechas::date[]) AND local = ANY(:locales)"),
-                    {'fechas': fechas_archivo, 'locales': locales})
+                    f"DELETE FROM ventas WHERE fecha_venta IN ({_f_placeholders}) AND local = ANY(:locales)"),
+                    {'locales': locales})
             else:
                 conn.execute(text(
-                    "DELETE FROM ventas WHERE fecha_venta = ANY(:fechas::date[])"),
-                    {'fechas': fechas_archivo})
+                    f"DELETE FROM ventas WHERE fecha_venta IN ({_f_placeholders})"))
             conn.commit()
 
         df_save.to_sql('ventas', engine, if_exists='append', index=False)
@@ -3671,14 +3672,14 @@ if modulo.startswith("📦"):
                     ).dropna().dt.date.unique().tolist()]
 
                     with engine.connect() as conn:
+                        _f_ph2 = ','.join([f"'{f}'::date" for f in fechas_archivo2])
                         if locales2:
                             conn.execute(text(
-                                "DELETE FROM ventas WHERE fecha_venta = ANY(:fechas::date[]) AND local = ANY(:locales)"),
-                                {'fechas': fechas_archivo2, 'locales': locales2})
+                                f"DELETE FROM ventas WHERE fecha_venta IN ({_f_ph2}) AND local = ANY(:locales)"),
+                                {'locales': locales2})
                         else:
                             conn.execute(text(
-                                "DELETE FROM ventas WHERE fecha_venta = ANY(:fechas::date[])"),
-                                {'fechas': fechas_archivo2})
+                                f"DELETE FROM ventas WHERE fecha_venta IN ({_f_ph2})"))
                         conn.commit()
 
                     total_filas = len(df_save2)
