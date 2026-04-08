@@ -9826,7 +9826,7 @@ elif modulo.startswith("📊"):
                                SUM(monto_venta_real + COALESCE(descuento,0)) as venta
                         FROM ventas
                         WHERE fecha_venta BETWEEN :i AND :f
-                          AND sku_producto IN ('WHI-001', 'WHI-002', 'WHI-003', 'WHI-004', 'WHI-006', 'WHI-007') {lf}
+                          AND sku_producto IN ('{sku_in}') {lf}
                         GROUP BY local, 2
                         ORDER BY local, venta DESC
                     """
