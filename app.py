@@ -2985,7 +2985,7 @@ if modulo.startswith("📦"):
     </div>
     """, unsafe_allow_html=True)
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(["📖 Recetario", "🛒 Compras", "📈 Ventas", "🔀 Equivalencias SKU", "🔍 Auditoría Compras", "📦 Inventario / Uso", "🗂️ Clasificación", "🏷️ Auditoría Categorías"])
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs(["📖 Recetario", "🛒 Compras", "📈 Ventas", "🔀 Equivalencias SKU", "🔍 Auditoría Compras", "📦 Inventario / Uso", "🗂️ Clasificación", "🏷️ Auditoría Categorías", "🔗 Conciliador"])
 
     with tab1:
         _rt1, _rt2 = st.tabs(["📥 Carga Masiva", "✏️ Editor de Recetas"])
@@ -5604,6 +5604,443 @@ if modulo.startswith("📦"):
                     + f'</tr></thead><tbody>{_rows_ac}</tbody></table></div>',
                     unsafe_allow_html=True
                 )
+
+    with tab9:
+        # ============================================================
+        # CONCILIADOR TRIPLE: SII + RindeGastos + Compras BD
+        # ============================================================
+        st.markdown(
+            "<div class='info-box'>Cruza facturas del <b>SII</b>, <b>RindeGastos</b> y "
+            "<b>Compras BD</b> para detectar discrepancias y cargar facturas no registradas.</div>",
+            unsafe_allow_html=True
+        )
+
+        # ── helpers internos ──────────────────────────────────────────────
+        def _conc_norm_folio(v):
+            return str(v).strip().lstrip('0') if v is not None else ''
+
+        def _conc_norm_local(v):
+            return str(v).upper().strip() if v is not None else ''
+
+        def _conc_norm_prov(v):
+            return str(v).upper().strip() if v is not None else ''
+
+        def _conc_norm_monto(v):
+            try:
+                return round(float(v))
+            except Exception:
+                return 0
+
+        def _conc_norm_fecha(v):
+            try:
+                return pd.to_datetime(v)
+            except Exception:
+                return pd.NaT
+
+        def _conc_leer_excel(file_bytes):
+            """Lee el Excel y devuelve (df_sii, df_rg) normalizados o lanza ValueError."""
+            xls = pd.ExcelFile(io.BytesIO(file_bytes))
+            if 'SII' not in xls.sheet_names:
+                raise ValueError("El archivo no contiene una hoja 'SII'.")
+            if 'Rinde Gastos' not in xls.sheet_names:
+                raise ValueError("El archivo no contiene una hoja 'Rinde Gastos'.")
+
+            COLS_SII = {'Local', 'FECHA', 'PROVEEDOR', 'Folio', 'CATEGORÍA', 'MONTO'}
+            COLS_RG  = {'Local', 'FECHA', 'PROVEEDOR', 'Folio', 'CATEGORÍA', 'MONTO'}
+
+            df_sii_raw = pd.read_excel(xls, sheet_name='SII')
+            df_rg_raw  = pd.read_excel(xls, sheet_name='Rinde Gastos')
+
+            missing_sii = COLS_SII - set(df_sii_raw.columns)
+            if missing_sii:
+                raise ValueError(f"Faltan columnas en SII: {sorted(missing_sii)}. Esperadas: Local, FECHA, PROVEEDOR, Folio, CATEGORÍA, MONTO.")
+            missing_rg = COLS_RG - set(df_rg_raw.columns)
+            if missing_rg:
+                raise ValueError(f"Faltan columnas en Rinde Gastos: {sorted(missing_rg)}.")
+            if df_sii_raw.empty:
+                raise ValueError("La hoja SII no contiene datos.")
+            if df_rg_raw.empty:
+                raise ValueError("La hoja Rinde Gastos no contiene datos.")
+
+            def _norm(df):
+                df = df.copy()
+                df['local']    = df['Local'].apply(_conc_norm_local)
+                df['proveedor']= df['PROVEEDOR'].apply(_conc_norm_prov)
+                df['folio']    = df['Folio'].apply(_conc_norm_folio)
+                df['fecha']    = df['FECHA'].apply(_conc_norm_fecha)
+                df['monto']    = df['MONTO'].apply(_conc_norm_monto)
+                df['categoria']= df['CATEGORÍA'].astype(str).str.strip()
+                return df[['local','proveedor','folio','fecha','monto','categoria']].reset_index(drop=True)
+
+            return _norm(df_sii_raw), _norm(df_rg_raw)
+
+        def _conc_cargar_compras(fi, ff, local_filter):
+            """Carga compras desde BD y agrega por folio."""
+            q = """
+                SELECT local, folio::text AS folio, nombre_proveedor,
+                       rut_proveedor, fecha_dte, SUM(total) AS monto_total
+                FROM compras
+                WHERE fecha_dte::date BETWEEN :fi AND :ff
+            """
+            params = {'fi': str(fi), 'ff': str(ff)}
+            if local_filter and local_filter != 'TODOS':
+                q += " AND UPPER(TRIM(local)) = :loc"
+                params['loc'] = local_filter.upper().strip()
+            q += " GROUP BY local, folio::text, nombre_proveedor, rut_proveedor, fecha_dte"
+            df = run_query(q, params)
+            if df.empty:
+                return pd.DataFrame(columns=['local','folio','proveedor','fecha','monto'])
+            df['local']     = df['local'].apply(_conc_norm_local)
+            df['folio']     = df['folio'].apply(_conc_norm_folio)
+            df['proveedor'] = df['nombre_proveedor'].apply(_conc_norm_prov)
+            df['fecha']     = df['fecha_dte'].apply(_conc_norm_fecha)
+            df['monto']     = df['monto_total'].apply(_conc_norm_monto)
+            return df[['local','folio','proveedor','fecha','monto']].reset_index(drop=True)
+
+        def _conc_match_greedy(df_a, df_b, fecha_dias=3, monto_pct=0.01):
+            """
+            Matching greedy en pasadas P0-P6.
+            Retorna lista de pares (idx_a, idx_b) y sets de no-matcheados.
+            """
+            usados_a = set()
+            usados_b = set()
+            pares    = []
+
+            def _try(mask_fn):
+                for ia, ra in df_a.iterrows():
+                    if ia in usados_a:
+                        continue
+                    for ib, rb in df_b.iterrows():
+                        if ib in usados_b:
+                            continue
+                        if mask_fn(ra, rb):
+                            pares.append((ia, ib))
+                            usados_a.add(ia)
+                            usados_b.add(ib)
+                            break
+
+            tol_m  = monto_pct
+            tol_d  = pd.Timedelta(days=fecha_dias)
+
+            def _monto_ok(a, b):
+                ma, mb = a['monto'], b['monto']
+                if ma == 0 and mb == 0: return True
+                base = max(abs(ma), abs(mb), 1)
+                return abs(ma - mb) / base <= tol_m
+
+            def _fecha_ok(a, b):
+                if pd.isna(a['fecha']) or pd.isna(b['fecha']): return False
+                return abs(a['fecha'] - b['fecha']) <= tol_d
+
+            # P0 exact
+            _try(lambda a,b: a['local']==b['local'] and a['folio']==b['folio'] and a['monto']==b['monto'] and a['fecha']==b['fecha'])
+            # P1 local+folio+monto
+            _try(lambda a,b: a['local']==b['local'] and a['folio']==b['folio'] and a['monto']==b['monto'])
+            # P2 local+proveedor+fecha+monto
+            _try(lambda a,b: a['local']==b['local'] and a['proveedor']==b['proveedor'] and a['fecha']==b['fecha'] and a['monto']==b['monto'])
+            # P3 local+folio+proveedor
+            _try(lambda a,b: a['local']==b['local'] and a['folio']==b['folio'] and a['proveedor']==b['proveedor'])
+            # P4 local+folio, monto ±50%
+            _try(lambda a,b: a['local']==b['local'] and a['folio']==b['folio'] and
+                 (abs(a['monto']-b['monto']) / max(abs(a['monto']),abs(b['monto']),1)) <= 0.5)
+            # P5 local+monto+fecha±N
+            _try(lambda a,b: a['local']==b['local'] and a['monto']==b['monto'] and _fecha_ok(a,b))
+            # P6 local+proveedor+fecha±N+monto±pct
+            _try(lambda a,b: a['local']==b['local'] and a['proveedor']==b['proveedor'] and _fecha_ok(a,b) and _monto_ok(a,b))
+
+            sin_a = set(df_a.index) - usados_a
+            sin_b = set(df_b.index) - usados_b
+            return pares, sin_a, sin_b
+
+        def _conc_engine(df_sii, df_rg, df_bd, fecha_dias=3, monto_pct=0.01):
+            """Motor de conciliación. Retorna dict con cat_a, cat_b, cat_cd, resumen."""
+            # --- Proceso 1: SII vs RG ---
+            pares_srg, sin_sii, sin_rg = _conc_match_greedy(df_sii, df_rg, fecha_dias, monto_pct)
+
+            pares_srg_sii = {ia for ia, _ in pares_srg}   # SII con match en RG
+            # SII sin match → candidato B
+            candidatos_b_idx = list(sin_sii)               # indices en df_sii
+
+            # --- Proceso 2: todas las facturas únicas vs BD ---
+            # Construir universo único de facturas
+            filas_univ = []
+            for ia, ib in pares_srg:
+                r = df_sii.loc[ia].copy()
+                r['origen'] = 'SII+RG'
+                r['_idx_sii'] = ia
+                filas_univ.append(r)
+            for ia in sin_sii:
+                r = df_sii.loc[ia].copy()
+                r['origen'] = 'SII'
+                r['_idx_sii'] = ia
+                filas_univ.append(r)
+            for ib in sin_rg:
+                r = df_rg.loc[ib].copy()
+                r['origen'] = 'RG'
+                r['_idx_sii'] = -1
+                filas_univ.append(r)
+
+            if filas_univ:
+                df_univ = pd.DataFrame(filas_univ).reset_index(drop=True)
+            else:
+                df_univ = pd.DataFrame(columns=['local','proveedor','folio','fecha','monto','categoria','origen','_idx_sii'])
+
+            cat_a_rows  = []
+            cat_b_rows  = []
+            cat_cd_rows = []
+
+            if not df_univ.empty and not df_bd.empty:
+                pares_bd, sin_univ, _ = _conc_match_greedy(
+                    df_univ[['local','proveedor','folio','fecha','monto']],
+                    df_bd[['local','proveedor','folio','fecha','monto']],
+                    fecha_dias, monto_pct
+                )
+                matcheados_en_bd = {iu for iu, _ in pares_bd}
+                no_en_bd = set(df_univ.index) - matcheados_en_bd
+            else:
+                matcheados_en_bd = set()
+                no_en_bd = set(df_univ.index)
+
+            for iu, row in df_univ.iterrows():
+                en_bd = iu in matcheados_en_bd
+                es_sii_sin_rg = row['origen'] == 'SII'
+                if en_bd and row['origen'] == 'SII+RG':
+                    cat_a_rows.append(row)
+                if es_sii_sin_rg:
+                    cat_b_rows.append(row)
+                if not en_bd:
+                    cat_cd_rows.append(row)
+
+            cat_a  = pd.DataFrame(cat_a_rows).reset_index(drop=True)  if cat_a_rows  else pd.DataFrame()
+            cat_b  = pd.DataFrame(cat_b_rows).reset_index(drop=True)  if cat_b_rows  else pd.DataFrame()
+            cat_cd = pd.DataFrame(cat_cd_rows).reset_index(drop=True) if cat_cd_rows else pd.DataFrame()
+
+            total_unicas = len(df_univ) if not df_univ.empty else 0
+            resumen = {
+                'total_facturas_unicas': total_unicas,
+                'conciliadas':           len(cat_a),
+                'falta_rindegastos':     len(cat_b),
+                'no_registradas':        len(cat_cd),
+            }
+            return {'cat_a': cat_a, 'cat_b': cat_b, 'cat_cd': cat_cd, 'resumen': resumen}
+
+        # ── Estado ───────────────────────────────────────────────────────
+        def _conc_reset():
+            for k in [kk for kk in st.session_state if kk.startswith('conc_')]:
+                del st.session_state[k]
+
+        # ── UI: Configuración ────────────────────────────────────────────
+        _conc_c1, _conc_c2, _conc_c3 = st.columns([2, 2, 2])
+        with _conc_c1:
+            _conc_locales_opts = ['TODOS'] + sorted([
+                'CHICUREO','VITACURA','LA DEHESA','LAS CONDES','LA REINA',
+                'LOS TRAPENSES','MACUL','NUEVA PROVIDENCIA','PROVIDENCIA','QUILIN'
+            ])
+            _conc_local = st.selectbox("Local", _conc_locales_opts, key='conc_local_sel')
+        with _conc_c2:
+            _conc_periodo = st.text_input("Período (YYYY-MM)", value=pd.Timestamp.now().strftime('%Y-%m'), key='conc_periodo_sel')
+        with _conc_c3:
+            _conc_file = st.file_uploader("Excel SII + RindeGastos (.xlsx)", type=['xlsx'], key='conc_file_up')
+
+        _conc_tc1, _conc_tc2 = st.columns(2)
+        with _conc_tc1:
+            _conc_fecha_dias = st.number_input("Tolerancia fecha (días)", min_value=0, max_value=30, value=3, key='conc_tdias')
+        with _conc_tc2:
+            _conc_monto_pct  = st.number_input("Tolerancia monto (%)", min_value=0.0, max_value=50.0, value=1.0, step=0.5, key='conc_tpct') / 100.0
+
+        # Reset si cambia config
+        _conc_cfg_key = f"{_conc_local}|{_conc_periodo}|{id(_conc_file)}"
+        if st.session_state.get('conc_cfg_prev') != _conc_cfg_key:
+            _conc_reset()
+            st.session_state['conc_cfg_prev'] = _conc_cfg_key
+
+        if st.button("🔍 Ejecutar Conciliación", key='conc_run_btn', use_container_width=True):
+            _conc_reset()
+            st.session_state['conc_cfg_prev'] = _conc_cfg_key
+            try:
+                # Validar archivo
+                if _conc_file is None:
+                    st.error("Debes subir un archivo Excel con las hojas SII y Rinde Gastos.")
+                    st.stop()
+
+                # Derivar rango de fechas del período
+                try:
+                    _conc_fi = pd.Timestamp(_conc_periodo + '-01')
+                    _conc_ff = _conc_fi + pd.offsets.MonthEnd(0)
+                except Exception:
+                    st.error(f"Período inválido: '{_conc_periodo}'. Usa formato YYYY-MM.")
+                    st.stop()
+
+                # Leer Excel
+                _conc_file.seek(0)
+                df_sii_c, df_rg_c = _conc_leer_excel(_conc_file.read())
+
+                # Cargar compras BD
+                df_bd_c = _conc_cargar_compras(_conc_fi.date(), _conc_ff.date(), _conc_local)
+                if df_bd_c.empty:
+                    st.warning(f"No se encontraron compras en BD para {_conc_local} — {_conc_periodo}.")
+
+                # Ejecutar engine
+                _conc_res = _conc_engine(df_sii_c, df_rg_c, df_bd_c, int(_conc_fecha_dias), _conc_monto_pct)
+
+                st.session_state['conc_resultado']  = _conc_res
+                st.session_state['conc_ejecutada']  = True
+                st.session_state['conc_periodo']    = _conc_periodo
+                st.session_state['conc_local']      = _conc_local
+                st.session_state['conc_fi']         = str(_conc_fi.date())
+                st.session_state['conc_ff']         = str(_conc_ff.date())
+
+                # Preparar df cat_cd con checkbox
+                _df_cd = _conc_res['cat_cd'].copy()
+                if not _df_cd.empty:
+                    _df_cd['Aprobar'] = False
+                    st.session_state['conc_df_cat_cd'] = _df_cd
+                else:
+                    st.session_state['conc_df_cat_cd'] = pd.DataFrame()
+
+                st.rerun()
+
+            except ValueError as _ve:
+                st.error(str(_ve))
+            except Exception as _ec:
+                st.error(f"Error al conectar con la base de datos. Intenta nuevamente. ({_ec})")
+
+        # ── Resultados ───────────────────────────────────────────────────
+        if st.session_state.get('conc_ejecutada'):
+            _cr = st.session_state['conc_resultado']
+            _rs = _cr['resumen']
+
+            # Métricas globales
+            _mc1, _mc2, _mc3, _mc4 = st.columns(4)
+            _mc1.metric("📊 Total facturas", _rs['total_facturas_unicas'])
+            _mc2.metric("✅ Conciliadas",     _rs['conciliadas'])
+            _mc3.metric("🔴 Falta en RG",     _rs['falta_rindegastos'])
+            _mc4.metric("🟠 No registradas",  _rs['no_registradas'])
+
+            _rt1, _rt2, _rt3 = st.tabs(["📊 Vista General", "🔴 Notificar Administradores", "🟠 Compras No Registradas"])
+
+            # ── TAB 1: Vista General ──────────────────────────────────
+            with _rt1:
+                _all_cats  = list(_cr['cat_a']['local'].unique()  if not _cr['cat_a'].empty  else [])
+                _all_cats += list(_cr['cat_b']['local'].unique()  if not _cr['cat_b'].empty  else [])
+                _all_cats += list(_cr['cat_cd']['local'].unique() if not _cr['cat_cd'].empty else [])
+                _all_locs  = sorted(set(_all_cats))
+
+                _tbl_rows = []
+                for _loc in _all_locs:
+                    _n_sii = len(_cr['cat_a'][_cr['cat_a']['local']==_loc]) if not _cr['cat_a'].empty else 0
+                    _n_b   = len(_cr['cat_b'][_cr['cat_b']['local']==_loc]) if not _cr['cat_b'].empty else 0
+                    _n_cd  = len(_cr['cat_cd'][_cr['cat_cd']['local']==_loc]) if not _cr['cat_cd'].empty else 0
+                    _n_tot = _n_sii + _n_b + _n_cd
+                    _tbl_rows.append({'Local': _loc, 'Total SII': _n_tot, 'Conciliadas': _n_sii, 'Falta en RG': _n_b, 'No en Compras': _n_cd})
+
+                if _tbl_rows:
+                    _df_resumen = pd.DataFrame(_tbl_rows)
+                    _tot_row = {'Local': 'TOTAL', 'Total SII': _df_resumen['Total SII'].sum(),
+                                'Conciliadas': _df_resumen['Conciliadas'].sum(),
+                                'Falta en RG': _df_resumen['Falta en RG'].sum(),
+                                'No en Compras': _df_resumen['No en Compras'].sum()}
+                    _df_resumen = pd.concat([_df_resumen, pd.DataFrame([_tot_row])], ignore_index=True)
+                    st.dataframe(_df_resumen, use_container_width=True, hide_index=True)
+
+                # Detalle colapsable
+                with st.expander("📋 Detalle completo de facturas"):
+                    _all_rows = []
+                    for _df_c, _cat in [(_cr['cat_a'],'A-Conciliada'),(_cr['cat_b'],'B-Falta RG'),(_cr['cat_cd'],'C+D-No BD')]:
+                        if not _df_c.empty:
+                            _tmp = _df_c[['local','fecha','proveedor','folio','monto','origen']].copy()
+                            _tmp['Categoría'] = _cat
+                            _all_rows.append(_tmp)
+                    if _all_rows:
+                        _df_det = pd.concat(_all_rows, ignore_index=True)
+                        st.dataframe(_df_det, use_container_width=True, hide_index=True)
+
+                # Descargar resumen Excel
+                _buf_conc = io.BytesIO()
+                if _tbl_rows:
+                    with pd.ExcelWriter(_buf_conc, engine='openpyxl') as _xw:
+                        _df_resumen.to_excel(_xw, index=False, sheet_name='Resumen')
+                        if _all_rows:
+                            _df_det.to_excel(_xw, index=False, sheet_name='Detalle')
+                st.download_button(
+                    "📥 Descargar resumen Excel",
+                    data=_buf_conc.getvalue(),
+                    file_name=f"conciliacion_{st.session_state.get('conc_periodo','')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key='conc_dl_resumen'
+                )
+
+            # ── TAB 2: Notificar Administradores (SMTP en pausa) ──────
+            with _rt2:
+                st.info("📧 El envío de correos está en pausa — próximamente disponible.", icon="⏸️")
+                _df_b = _cr['cat_b']
+                if _df_b.empty:
+                    st.success("✅ No hay facturas faltantes en RindeGastos para este período.")
+                else:
+                    st.markdown(f"**{len(_df_b)} factura(s) no declaradas en RindeGastos:**")
+                    _cols_b = ['local','fecha','proveedor','folio','monto']
+                    _cols_b = [c for c in _cols_b if c in _df_b.columns]
+                    st.dataframe(_df_b[_cols_b], use_container_width=True, hide_index=True)
+
+            # ── TAB 3: Compras No Registradas (C+D) ───────────────────
+            with _rt3:
+                _df_cd_edit = st.session_state.get('conc_df_cat_cd', pd.DataFrame())
+
+                if _df_cd_edit is None or (isinstance(_df_cd_edit, pd.DataFrame) and _df_cd_edit.empty):
+                    st.success("✅ Todas las facturas están registradas en Compras BD.")
+                else:
+                    st.markdown(f"**{len(_df_cd_edit)} factura(s) no registradas en Compras BD.**")
+
+                    _cols_show = ['origen','local','fecha','proveedor','folio','categoria','monto','Aprobar']
+                    _cols_show = [c for c in _cols_show if c in _df_cd_edit.columns]
+
+                    _df_edited = st.data_editor(
+                        _df_cd_edit[_cols_show],
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={'Aprobar': st.column_config.CheckboxColumn("✅ Aprobar", default=False)},
+                        key='conc_data_editor'
+                    )
+
+                    _aprobadas = _df_edited[_df_edited['Aprobar'] == True] if 'Aprobar' in _df_edited.columns else pd.DataFrame()
+
+                    if not _aprobadas.empty:
+                        st.warning(f"⚠️ ¿Cargar {len(_aprobadas)} registro(s) a compras_no_registradas?")
+                        if st.button("✅ Confirmar carga", key='conc_confirmar_carga'):
+                            _ok_cnt  = 0
+                            _err_lst = []
+                            try:
+                                with get_engine().connect() as _conn_cd:
+                                    for _, _fila in _aprobadas.iterrows():
+                                        try:
+                                            _fecha_cd = pd.to_datetime(_fila.get('fecha')).date() if not pd.isna(_fila.get('fecha')) else None
+                                            _periodo_cd = str(_fecha_cd)[:7] if _fecha_cd else st.session_state.get('conc_periodo','')
+                                            _conn_cd.execute(text("""
+                                                INSERT INTO compras_no_registradas
+                                                    (fecha_dte, local, nombre_producto, desc_producto,
+                                                     cantidad, producto_control, categoria_producto, periodo)
+                                                VALUES
+                                                    (:fecha, :local, :prov, :desc,
+                                                     1, :folio, :cat, :periodo)
+                                                ON CONFLICT DO NOTHING
+                                            """), {
+                                                'fecha':   str(_fecha_cd) if _fecha_cd else None,
+                                                'local':   str(_fila.get('local','')).upper().strip(),
+                                                'prov':    str(_fila.get('proveedor','')),
+                                                'desc':    f"Conciliación SII — {_fila.get('origen','')}",
+                                                'folio':   str(_fila.get('folio','')),
+                                                'cat':     str(_fila.get('categoria','')),
+                                                'periodo': _periodo_cd,
+                                            })
+                                            _ok_cnt += 1
+                                        except Exception as _ef:
+                                            _err_lst.append(str(_ef))
+                                    _conn_cd.commit()
+                                st.success(f"✅ Insertados: {_ok_cnt}")
+                                if _err_lst:
+                                    st.error("Errores: " + " | ".join(_err_lst[:5]))
+                            except Exception as _ec2:
+                                st.error(f"Error al conectar con la base de datos: {_ec2}")
 
 # ============================================================
 # MÓDULO: EXPLOSIÓN MRP (eliminado — ahora en pestaña de Gestión de Datos)
