@@ -1233,7 +1233,13 @@ def calcular_cmv_con_opciones(fecha_i, fecha_f, local):
     _plates_3_scoops_sql = 'POS-008'
 
     q_opciones = f"""
-        WITH padres AS (
+        WITH skus_con_opciones AS (
+            -- Solo padres que tienen opciones costeables declaradas en su receta
+            SELECT DISTINCT codigo_venta AS sku_padre
+            FROM recetas
+            WHERE es_opcion IN (1, 2, 3, 6)
+        ),
+        padres AS (
             SELECT id_orden, ab_categoria, sku_producto AS sku_padre,
                    SUM(cantidad_vendida) AS cant_padre,
                    CASE
@@ -1245,6 +1251,7 @@ def calcular_cmv_con_opciones(fecha_i, fecha_f, local):
             WHERE fecha_venta BETWEEN :i AND :f
               AND es_opcion = false
               AND ab_categoria IS NOT NULL
+              AND sku_producto IN (SELECT sku_padre FROM skus_con_opciones)
               {filtro_v}
             GROUP BY id_orden, ab_categoria, sku_producto
         ),
@@ -7222,18 +7229,19 @@ elif modulo.startswith("📊"):
         # Vista: Interempresa o Por Local
         vista = st.radio("Vista", ["🌐 Interempresa", "📍 Por Local"], horizontal=True, key="rent_vista")
 
-        # ── Filtro de plato (previo al informe) ───────────────────
-        _df_platos_disp = run_query("""
-            SELECT DISTINCT sku_producto, MAX(nombre_producto) as nombre_producto
-            FROM ventas WHERE es_opcion = false
-            GROUP BY sku_producto ORDER BY sku_producto
-        """)
-        if not _df_platos_disp.empty:
-            _platos_opts = _df_platos_disp.apply(
-                lambda r: f"{r['sku_producto']} — {r['nombre_producto']}", axis=1
-            ).tolist()
-        else:
-            _platos_opts = []
+        # ── Filtro de plato — cacheado en session_state (no rerrunea al filtrar) ──
+        if 'inf1_platos_opts' not in st.session_state:
+            _df_platos_disp = run_query("""
+                SELECT DISTINCT sku_producto, MAX(nombre_producto) as nombre_producto
+                FROM ventas WHERE es_opcion = false
+                GROUP BY sku_producto ORDER BY sku_producto
+            """)
+            st.session_state['inf1_platos_opts'] = (
+                _df_platos_disp.apply(
+                    lambda r: f"{r['sku_producto']} — {r['nombre_producto']}", axis=1
+                ).tolist() if not _df_platos_disp.empty else []
+            )
+        _platos_opts = st.session_state['inf1_platos_opts']
 
         _platos_sel = st.multiselect(
             "🔍 Filtrar platos (dejar vacío = todos)",
@@ -7294,34 +7302,40 @@ elif modulo.startswith("📊"):
             _was_plato      = st.session_state.get('inf1_was_plato', False)
             _skus_debug     = st.session_state.get('inf1_skus_filtro', [])
 
-            # Pre-calculate KPIs and category list for use inside tabs
-            venta_total  = df_inf1['venta'].sum()
-            cmv_total    = df_inf1['cmv_total'].sum() if 'cmv_total' in df_inf1.columns else df_inf1['costo_total_teorico'].sum()
-            mc_total     = df_inf1['mc_total'].sum()  if 'mc_total'  in df_inf1.columns else (venta_total - cmv_total)
-            margen_gral  = mc_total / venta_total * 100 if venta_total > 0 else 0
-            cmv_pct_gral = cmv_total / venta_total * 100 if venta_total > 0 else 0
-            _alerta1     = "alerta" if cmv_pct_gral > 35 else ""
             _cats_rent   = sorted(df_inf1['categoria_menu'].dropna().unique().tolist())
-            _df_inf1_view = df_inf1.copy()  # default, overwritten inside tab
 
-            def badge_margen(val):
-                if pd.isna(val): return '<span style="color:#555">—</span>'
-                if val >= 60:   return f'<span style="background:#1a3a2a;color:#4caf7d;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:.2f}%</span>'
-                elif val >= 40: return f'<span style="background:#3a2a1a;color:#e89c45;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:.2f}%</span>'
-                return f'<span style="background:#3a1a1a;color:#e84545;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:.2f}%</span>'
+            def fmt_mc(val):
+                if val >= 0: return f'<span style="color:#4caf7d;font-weight:600">${val:,.0f}</span>'
+                return f'<span style="color:#e84545;font-weight:600">${val:,.0f}</span>'
 
             def badge_cuadrante(val):
                 colors = {"⭐ Estrella":"#d4a853","❓ Interrogante":"#4caf7d","🐄 Vaca":"#5b8dd9","🐶 Perro":"#888"}
                 c = colors.get(val,"#666")
                 return f'<span style="background:#1a1a1a;color:{c};padding:2px 8px;border-radius:12px;font-size:0.75rem;font-weight:600;border:1px solid {c}44">{val}</span>'
 
-            def fmt_mc(val):
-                if val >= 0: return f'<span style="color:#4caf7d;font-weight:600">${val:,.0f}</span>'
-                return f'<span style="color:#e84545;font-weight:600">${val:,.0f}</span>'
+            @st.fragment
+            def _render_tab_rent1(df_inf1, abs_con_opciones, fi_, ff_, local_, _was_plato, _skus_debug, _cats_rent, vista):
+                # ── Helpers ──────────────────────────────────────
+                venta_total  = df_inf1['venta'].sum()
+                cmv_total    = df_inf1['cmv_total'].sum() if 'cmv_total' in df_inf1.columns else df_inf1['costo_total_teorico'].sum()
+                mc_total     = df_inf1['mc_total'].sum()  if 'mc_total'  in df_inf1.columns else (venta_total - cmv_total)
+                margen_gral  = mc_total / venta_total * 100 if venta_total > 0 else 0
+                cmv_pct_gral = cmv_total / venta_total * 100 if venta_total > 0 else 0
+                _alerta1     = "alerta" if cmv_pct_gral > 35 else ""
+                _df_inf1_view = df_inf1.copy()
 
-            hs  = 'padding:10px 12px;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
+                def badge_margen(val):
+                    if pd.isna(val): return '<span style="color:#555">—</span>'
+                    if val >= 60:   return f'<span style="background:#1a3a2a;color:#4caf7d;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:.2f}%</span>'
+                    elif val >= 40: return f'<span style="background:#3a2a1a;color:#e89c45;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:.2f}%</span>'
+                    return f'<span style="background:#3a1a1a;color:#e84545;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:.2f}%</span>'
 
-            with _tab_rent1:
+                def fmt_mc(val):
+                    if val >= 0: return f'<span style="color:#4caf7d;font-weight:600">${val:,.0f}</span>'
+                    return f'<span style="color:#e84545;font-weight:600">${val:,.0f}</span>'
+
+                hs  = 'padding:10px 12px;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
+
                 # ── KPIs ejecutivos ──────────────────────────────
                 st.markdown(f"""
                 <div class="kpi-grid">
@@ -7651,6 +7665,11 @@ elif modulo.startswith("📊"):
                                    st.session_state[_excel_key],
                                    "Informe1_Rentabilidad.xlsx",
                                    key='inf1_dl_btn')
+
+            # ── Llamar fragment del tab1 ───────────────────────
+            with _tab_rent1:
+                _render_tab_rent1(df_inf1, abs_con_opciones, fi_, ff_, local_,
+                                  _was_plato, _skus_debug, _cats_rent, vista)
 
             with _tab_rent2:
                 st.markdown("<br>", unsafe_allow_html=True)
