@@ -8960,7 +8960,7 @@ elif modulo.startswith("📊"):
                     _pv_det_q = f"""
                         SELECT
                             sku,
-                            MAX(nombre_producto)  AS producto,
+                            nombre_producto       AS producto,
                             DATE_TRUNC('month', fecha_dte::date) AS mes,
                             SUM(costo_realfinal) / NULLIF(SUM(cant_conv * NULLIF(formato,0)),0) AS precio_unit
                         FROM compras
@@ -8968,8 +8968,8 @@ elif modulo.startswith("📊"):
                           AND nombre_proveedor = :prov
                           AND cant_conv > 0 AND costo_realfinal > 0 AND formato > 0
                           {_pv_lf}
-                        GROUP BY sku, DATE_TRUNC('month', fecha_dte::date)
-                        ORDER BY sku, mes
+                        GROUP BY sku, nombre_producto, DATE_TRUNC('month', fecha_dte::date)
+                        ORDER BY sku, nombre_producto, mes
                     """
                     df_det = run_query(_pv_det_q, _pv_params2)
 
@@ -9088,7 +9088,16 @@ elif modulo.startswith("📊"):
                             WHERE fecha_dte::date BETWEEN :fi AND :ff
                               AND cant_conv > 0 AND costo_realfinal > 0 AND formato > 0
                             GROUP BY sku, nombre_producto, nombre_proveedor, rut_proveedor
+                            ORDER BY sku, nombre_proveedor
                         """, {'fi': _ac_fi, 'ff': _ac_ff})
+
+                        # Si un SKU tiene múltiples nombre_producto (mismo código, distinto producto),
+                        # quedarse con la fila de mayor gasto para ese SKU+proveedor
+                        if not df_real.empty:
+                            df_real = (df_real
+                                .sort_values('gasto_total', ascending=False)
+                                .drop_duplicates(subset=['sku','rut_proveedor'], keep='first')
+                                .reset_index(drop=True))
 
                         if df_real.empty:
                             st.warning("Sin compras registradas para el período seleccionado.")
