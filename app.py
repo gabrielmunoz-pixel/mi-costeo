@@ -8773,6 +8773,13 @@ elif modulo.startswith("📊"):
         # ══════════════════════════════════════════════════════
         # TAB COMPORTAMIENTO PROVEEDORES
         # ══════════════════════════════════════════════════════
+        def _color_var(val):
+            if isinstance(val, str): return ''
+            if val > 10:  return 'color:#e84545;font-weight:600'
+            if val > 5:   return 'color:#e89c45;font-weight:600'
+            if val > 0:   return 'color:#d4a853'
+            return 'color:#4caf7d'
+
         with _tab_prov:
             st.markdown("### 🏢 Comportamiento de Precios por Proveedor")
             st.markdown("<div class='info-box'>Evolución mensual del gasto total y precio unitario ponderado por proveedor. Se muestran los <b>15 proveedores con mayor variación</b> en los últimos 6 meses.</div>", unsafe_allow_html=True)
@@ -8903,13 +8910,6 @@ elif modulo.startswith("📊"):
                     _pv_pivot2['Δ $']  = _pv_pivot2[_col_fin] - _pv_pivot2[_col_ini]
                     _pv_pivot2['Δ %']  = (_pv_pivot2['Δ $'] / _pv_pivot2[_col_ini].replace(0, pd.NA) * 100).fillna(0).round(1)
                     _pv_pivot2 = _pv_pivot2.sort_values('Δ %', ascending=False)
-
-                def _color_var(val):
-                    if isinstance(val, str): return ''
-                    if val > 10:  return 'color:#e84545;font-weight:600'
-                    if val > 5:   return 'color:#e89c45;font-weight:600'
-                    if val > 0:   return 'color:#d4a853'
-                    return 'color:#4caf7d'
 
                 _hs_pv = 'padding:8px 12px;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
                 _rows_pv = ''
