@@ -1389,7 +1389,6 @@ def informe_rentabilidad(fecha_i, fecha_f, local):
               )
           )
           AND sku_producto NOT LIKE 'CP%'
-          AND sku_producto NOT LIKE 'MEJ%'
           {filtro_local_r}
         GROUP BY sku_producto
     """
