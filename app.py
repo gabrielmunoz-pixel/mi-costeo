@@ -8791,7 +8791,12 @@ elif modulo.startswith("📊"):
                 _pv_loc_opts = ['Todos'] + (_pv_locales['local'].tolist() if not _pv_locales.empty else [])
                 _pv_local = st.selectbox("Local", _pv_loc_opts, key='pv_local')
             with _pv_c2:
-                _pv_cats = run_query("SELECT DISTINCT categoria_producto FROM compras WHERE categoria_producto IS NOT NULL ORDER BY 1")
+                _pv_cats = run_query("""
+                    SELECT DISTINCT categoria_producto FROM compras
+                    WHERE categoria_producto IS NOT NULL
+                      AND UPPER(categoria_producto) NOT LIKE '%ADMINISTR%'
+                    ORDER BY 1
+                """)
                 _pv_cat_opts = ['Todas'] + (_pv_cats['categoria_producto'].tolist() if not _pv_cats.empty else [])
                 _pv_cat = st.selectbox("Categoría", _pv_cat_opts, key='pv_cat')
             with _pv_c3:
@@ -8800,7 +8805,7 @@ elif modulo.startswith("📊"):
             if st.button("▶ Generar Análisis", key='pv_btn', use_container_width=True):
                 with st.spinner("Calculando..."):
                     _pv_lf  = "AND UPPER(TRIM(local)) = UPPER(:loc)" if _pv_local != 'Todos' else ''
-                    _pv_cf  = "AND UPPER(TRIM(categoria_producto)) = UPPER(:cat)" if _pv_cat != 'Todas' else ''
+                    _pv_cf  = "AND UPPER(TRIM(categoria_producto)) = UPPER(:cat)" if _pv_cat != 'Todas' else "AND UPPER(COALESCE(categoria_producto,'')) NOT LIKE '%ADMINISTR%'"
                     _pv_params = {}
                     if _pv_local != 'Todos': _pv_params['loc'] = _pv_local
                     if _pv_cat   != 'Todas': _pv_params['cat'] = _pv_cat
@@ -8817,7 +8822,6 @@ elif modulo.startswith("📊"):
                         FROM compras
                         WHERE fecha_dte::date >= DATE_TRUNC('month', NOW()) - INTERVAL '{_pv_meses} months'
                           AND cant_conv > 0 AND costo_realfinal > 0 AND formato > 0
-                          AND UPPER(COALESCE(categoria_producto,'')) NOT LIKE '%ADMINISTR%'
                           {_pv_lf} {_pv_cf}
                         GROUP BY nombre_proveedor, rut_proveedor, DATE_TRUNC('month', fecha_dte::date)
                         ORDER BY nombre_proveedor, mes
