@@ -8795,7 +8795,7 @@ elif modulo.startswith("📊"):
                 _pv_cat_opts = ['Todas'] + (_pv_cats['categoria_producto'].tolist() if not _pv_cats.empty else [])
                 _pv_cat = st.selectbox("Categoría", _pv_cat_opts, key='pv_cat')
             with _pv_c3:
-                _pv_meses = st.number_input("Meses historial", min_value=3, max_value=12, value=6, step=1, key='pv_meses')
+                _pv_meses = st.number_input("Meses historial", min_value=3, max_value=12, value=6, step=1, key='pv_meses_input')
 
             if st.button("▶ Generar Análisis", key='pv_btn', use_container_width=True):
                 with st.spinner("Calculando..."):
@@ -8848,7 +8848,7 @@ elif modulo.startswith("📊"):
 
                     st.session_state['pv_data']  = df_pv
                     st.session_state['pv_top15'] = _pv_top15
-                    st.session_state['pv_meses'] = int(_pv_meses)
+                    st.session_state['pv_meses_val'] = int(_pv_meses)
 
             if 'pv_data' in st.session_state:
                 df_pv   = st.session_state['pv_data']
@@ -8964,7 +8964,7 @@ elif modulo.startswith("📊"):
                             DATE_TRUNC('month', fecha_dte::date) AS mes,
                             SUM(costo_realfinal) / NULLIF(SUM(cant_conv * NULLIF(formato,0)),0) AS precio_unit
                         FROM compras
-                        WHERE fecha_dte::date >= DATE_TRUNC('month', NOW()) - INTERVAL '{st.session_state["pv_meses"]} months'
+                        WHERE fecha_dte::date >= DATE_TRUNC('month', NOW()) - INTERVAL '{st.session_state['pv_meses_val']} months'
                           AND nombre_proveedor = :prov
                           AND cant_conv > 0 AND costo_realfinal > 0 AND formato > 0
                           {_pv_lf}
