@@ -8817,6 +8817,7 @@ elif modulo.startswith("📊"):
                         FROM compras
                         WHERE fecha_dte::date >= DATE_TRUNC('month', NOW()) - INTERVAL '{_pv_meses} months'
                           AND cant_conv > 0 AND costo_realfinal > 0 AND formato > 0
+                          AND UPPER(COALESCE(categoria_producto,'')) NOT LIKE '%ADMINISTR%'
                           {_pv_lf} {_pv_cf}
                         GROUP BY nombre_proveedor, rut_proveedor, DATE_TRUNC('month', fecha_dte::date)
                         ORDER BY nombre_proveedor, mes
@@ -8964,7 +8965,7 @@ elif modulo.startswith("📊"):
                             DATE_TRUNC('month', fecha_dte::date) AS mes,
                             SUM(costo_realfinal) / NULLIF(SUM(cant_conv * NULLIF(formato,0)),0) AS precio_unit
                         FROM compras
-                        WHERE fecha_dte::date >= DATE_TRUNC('month', NOW()) - INTERVAL '{st.session_state['pv_meses_val']} months'
+                        WHERE fecha_dte::date >= DATE_TRUNC('month', NOW()) - INTERVAL '{st.session_state.get('pv_meses_val', 6)} months'
                           AND nombre_proveedor = :prov
                           AND cant_conv > 0 AND costo_realfinal > 0 AND formato > 0
                           {_pv_lf}
