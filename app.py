@@ -7279,6 +7279,8 @@ elif modulo.startswith("📊"):
                 st.session_state['inf1_local']         = f_local
                 st.session_state['inf1_was_plato']     = _gen_plato
                 st.session_state['inf1_skus_filtro']   = _skus_filtro
+                st.session_state['inf1_filter_reset']  = True   # resetear filtros al nuevo informe
+                st.session_state.pop('inf1_excel_bytes', None)  # invalidar Excel cacheado
 
         # ── Tabs always visible ───────────────────────────────
         _tab_rent1, _tab_rent2, _tab_rent3, _tab_rent4 = st.tabs(["📊 Detalle por Producto", "🔲 Cuadrantes", "📸 Snapshots", "📑 Informe Ejecutivo"])
@@ -7344,13 +7346,19 @@ elif modulo.startswith("📊"):
                 """, unsafe_allow_html=True)
                 st.markdown("<br>", unsafe_allow_html=True)
 
-                # ── Filtros ──────────────────────────────────────
+                # ── Filtros — operan sobre datos precalculados en session_state ──
+                # Inicializar defaults solo cuando se genera un nuevo informe
+                if st.session_state.get('inf1_filter_reset'):
+                    st.session_state['inf1_cat_filter2'] = _cats_rent
+                    st.session_state['inf1_ord2']        = 'Venta (mayor a menor)'
+                    st.session_state['inf1_filter_reset'] = False
+
                 _fc1, _fc2 = st.columns(2)
                 with _fc1:
                     _cats_sel2 = st.multiselect(
                         "Categorías a mostrar (dejar vacío = todas)",
                         _cats_rent,
-                        default=_cats_rent,
+                        default=st.session_state.get('inf1_cat_filter2', _cats_rent),
                         key='inf1_cat_filter2'
                     )
                 with _fc2:
@@ -7360,16 +7368,19 @@ elif modulo.startswith("📊"):
                         'Rentabilidad % (menor a mayor)', 'Volumen (menor a mayor)'
                     ], key='inf1_ord2')
 
+                # Aplicar filtro y orden sobre el DataFrame ya guardado — sin recalcular
                 _df_view2 = df_inf1.copy()
                 if _cats_sel2:
                     _df_view2 = _df_view2[_df_view2['categoria_menu'].isin(_cats_sel2)]
                 _ocol2, _oasc2 = {
-                    'Venta (mayor a menor)':('venta',False),'Rentabilidad % (mayor a menor)':('margen_pct',False),
-                    'Volumen (mayor a menor)':('cant',False),'Venta (menor a mayor)':('venta',True),
-                    'Rentabilidad % (menor a mayor)':('margen_pct',True),'Volumen (menor a mayor)':('cant',True),
-                }.get(_ord_rent_sel2, ('venta',False))
+                    'Venta (mayor a menor)':        ('venta',      False),
+                    'Rentabilidad % (mayor a menor)':('margen_pct', False),
+                    'Volumen (mayor a menor)':       ('cant',       False),
+                    'Venta (menor a mayor)':         ('venta',      True),
+                    'Rentabilidad % (menor a mayor)':('margen_pct', True),
+                    'Volumen (menor a mayor)':       ('cant',       True),
+                }.get(_ord_rent_sel2, ('venta', False))
                 _df_inf1_view = _df_view2.sort_values(_ocol2, ascending=_oasc2, na_position='last')
-                st.session_state['inf1_cats_sel'] = _cats_sel2
                 if _was_plato and _skus_debug:
                     for _sku_dbg in _skus_debug:
                         with st.expander(f"🔬 Desglose de costo — {_sku_dbg}", expanded=True):
@@ -7623,15 +7634,23 @@ elif modulo.startswith("📊"):
                                         pivot = pivot.sort_values('TOTAL', ascending=False)
                                         st.dataframe(pivot.astype(int), use_container_width=True)
 
-                # Descarga
-                buf2 = io.BytesIO()
-                with pd.ExcelWriter(buf2, engine='openpyxl') as w:
-                    cols_excel = ['sku_producto','categoria_menu','nombre_producto','cant','venta',
-                                  'cmv_unitario','cmv_base','cmv_opciones','cmv_total','cmv_pct',
-                                  'mc_unitario','mc_total','margen_pct','mix_pct','umbral_pct','cuadrante']
-                    cols_excel = [c for c in cols_excel if c in _df_inf1_view.columns]
-                    _df_inf1_view[cols_excel].to_excel(w, sheet_name='Rentabilidad', index=False)
-                st.download_button("📥 Descargar Informe 1", buf2.getvalue(), "Informe1_Rentabilidad.xlsx")
+                # Descarga — cachear en session_state para evitar rerun al hacer clic
+                _excel_key = 'inf1_excel_bytes'
+                _excel_sig = f"{fi_}|{ff_}|{local_}|{len(_df_inf1_view)}"
+                if st.session_state.get('inf1_excel_sig') != _excel_sig or _excel_key not in st.session_state:
+                    buf2 = io.BytesIO()
+                    with pd.ExcelWriter(buf2, engine='openpyxl') as w:
+                        cols_excel = ['sku_producto','categoria_menu','nombre_producto','cant','venta',
+                                      'cmv_unitario','cmv_base','cmv_opciones','cmv_total','cmv_pct',
+                                      'mc_unitario','mc_total','margen_pct','mix_pct','umbral_pct','cuadrante']
+                        cols_excel = [c for c in cols_excel if c in _df_inf1_view.columns]
+                        _df_inf1_view[cols_excel].to_excel(w, sheet_name='Rentabilidad', index=False)
+                    st.session_state[_excel_key]    = buf2.getvalue()
+                    st.session_state['inf1_excel_sig'] = _excel_sig
+                st.download_button("📥 Descargar Informe 1",
+                                   st.session_state[_excel_key],
+                                   "Informe1_Rentabilidad.xlsx",
+                                   key='inf1_dl_btn')
 
             with _tab_rent2:
                 st.markdown("<br>", unsafe_allow_html=True)
@@ -8402,11 +8421,18 @@ elif modulo.startswith("📊"):
                     )
 
                 st.markdown("<br>", unsafe_allow_html=True)
-                buf3 = io.BytesIO()
-                export_cols = existing_cols
-                with pd.ExcelWriter(buf3, engine='openpyxl') as w:
-                    df_inf2[export_cols].to_excel(w, sheet_name='Desviacion', index=False)
-                st.download_button("📥 Descargar Excel", buf3.getvalue(), "Informe2_Desviacion.xlsx")
+                _inf2_sig = f"{f_inicio}|{f_fin}|{f_local}|{len(df_inf2)}"
+                if st.session_state.get('inf2_excel_sig') != _inf2_sig or 'inf2_excel_bytes' not in st.session_state:
+                    buf3 = io.BytesIO()
+                    export_cols = existing_cols
+                    with pd.ExcelWriter(buf3, engine='openpyxl') as w:
+                        df_inf2[export_cols].to_excel(w, sheet_name='Desviacion', index=False)
+                    st.session_state['inf2_excel_bytes'] = buf3.getvalue()
+                    st.session_state['inf2_excel_sig']   = _inf2_sig
+                st.download_button("📥 Descargar Excel",
+                                   st.session_state['inf2_excel_bytes'],
+                                   "Informe2_Desviacion.xlsx",
+                                   key='inf2_dl_btn')
 
     # ----------------------------------------------------------
     # INFORME 3 — IMPACTO DE PRECIOS SOBRE CANASTA DE INGREDIENTES
@@ -8657,13 +8683,20 @@ elif modulo.startswith("📊"):
 
                     # ── Botón 1: Excel ────────────────────────────────────
                     with d1:
-                        buf_inf3 = io.BytesIO()
-                        with pd.ExcelWriter(buf_inf3, engine='openpyxl') as w:
-                            df3[['sku','nombre','categoria','proveedor','cant_base',
-                                  'precio_base','precio_comp','impacto_base',
-                                  'impacto_comp','delta_dinero','delta_pct']].to_excel(w, sheet_name='Canasta', index=False)
-                        st.download_button("📥 Excel", buf_inf3.getvalue(),
-                            "Informe3_Canasta.xlsx", use_container_width=True)
+                        _inf3_sig = f"{mes_base3_str}|{mes_comp3_str}|{len(df3)}"
+                        if st.session_state.get('inf3_excel_sig') != _inf3_sig or 'inf3_excel_bytes' not in st.session_state:
+                            buf_inf3 = io.BytesIO()
+                            with pd.ExcelWriter(buf_inf3, engine='openpyxl') as w:
+                                df3[['sku','nombre','categoria','proveedor','cant_base',
+                                      'precio_base','precio_comp','impacto_base',
+                                      'impacto_comp','delta_dinero','delta_pct']].to_excel(w, sheet_name='Canasta', index=False)
+                            st.session_state['inf3_excel_bytes'] = buf_inf3.getvalue()
+                            st.session_state['inf3_excel_sig']   = _inf3_sig
+                        st.download_button("📥 Excel",
+                                           st.session_state['inf3_excel_bytes'],
+                                           "Informe3_Canasta.xlsx",
+                                           use_container_width=True,
+                                           key='inf3_dl_btn')
 
                     # ── Botón 2: PDF resumen de lo que está en pantalla (1 página) ──
                     with d2:
