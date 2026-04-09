@@ -9048,7 +9048,7 @@ elif modulo.startswith("📊"):
                     FROM compras ORDER BY 1 DESC LIMIT 12
                 """)
                 _ac_per_opts = _ac_meses_opts['periodo'].tolist() if not _ac_meses_opts.empty else []
-                _ac_periodo  = st.selectbox("Período a comparar", _ac_per_opts, key='ac_periodo')
+                _ac_periodo  = st.selectbox("Período a comparar", _ac_per_opts, key='ac_periodo_sel')
 
             if _ac_file and _ac_periodo:
                 if st.button("▶ Comparar con Acuerdos", key='ac_btn', use_container_width=True):
@@ -9110,12 +9110,12 @@ elif modulo.startswith("📊"):
                         df_merge['impacto'] = (df_merge['Δ $'] * df_merge['unidades'].fillna(0)).round(0)
                         df_merge = df_merge.sort_values('Δ %', ascending=False)
 
-                        st.session_state['ac_data']    = df_merge
-                        st.session_state['ac_periodo'] = _ac_periodo
+                        st.session_state['ac_data']       = df_merge
+                        st.session_state['ac_periodo_lbl'] = _ac_periodo
 
             if 'ac_data' in st.session_state:
                 df_merge   = st.session_state['ac_data']
-                _ac_per_lbl = st.session_state.get('ac_periodo','')
+                _ac_per_lbl = st.session_state.get('ac_periodo_lbl','')
 
                 # KPIs
                 _ac_sobre   = df_merge[df_merge['Δ %'] > 0]
