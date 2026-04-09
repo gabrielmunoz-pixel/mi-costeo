@@ -8458,7 +8458,12 @@ elif modulo.startswith("📊"):
     # ----------------------------------------------------------
     elif "Informe 3" in informe_sel:
 
-        _tab_var3, _tab_8020 = st.tabs(["🔀 Variación de Precios", "📊 80/20 Compras"])
+        _tab_var3, _tab_prov, _tab_acuerdo, _tab_8020 = st.tabs([
+            "🔀 Variación de Precios",
+            "🏢 Comportamiento Proveedores",
+            "🤝 Acuerdos Comerciales",
+            "📊 80/20 Compras"
+        ])
 
         with _tab_var3:
             # ── Selectores de mes ──────────────────────────────────
@@ -8763,6 +8768,435 @@ elif modulo.startswith("📊"):
                             st.session_state['pdf_locales_bytes'],
                             st.session_state['pdf_locales_nombre'],
                             mime="application/pdf", key="pdf_locales_dl", use_container_width=True)
+
+
+        # ══════════════════════════════════════════════════════
+        # TAB COMPORTAMIENTO PROVEEDORES
+        # ══════════════════════════════════════════════════════
+        with _tab_prov:
+            st.markdown("### 🏢 Comportamiento de Precios por Proveedor")
+            st.markdown("<div class='info-box'>Evolución mensual del gasto total y precio unitario ponderado por proveedor. Se muestran los <b>15 proveedores con mayor variación</b> en los últimos 6 meses.</div>", unsafe_allow_html=True)
+
+            # ── Filtros ───────────────────────────────────────
+            _pv_c1, _pv_c2, _pv_c3 = st.columns([2, 2, 1])
+            with _pv_c1:
+                _pv_locales = run_query("SELECT DISTINCT local FROM compras WHERE local IS NOT NULL ORDER BY local")
+                _pv_loc_opts = ['Todos'] + (_pv_locales['local'].tolist() if not _pv_locales.empty else [])
+                _pv_local = st.selectbox("Local", _pv_loc_opts, key='pv_local')
+            with _pv_c2:
+                _pv_cats = run_query("SELECT DISTINCT categoria_producto FROM compras WHERE categoria_producto IS NOT NULL ORDER BY 1")
+                _pv_cat_opts = ['Todas'] + (_pv_cats['categoria_producto'].tolist() if not _pv_cats.empty else [])
+                _pv_cat = st.selectbox("Categoría", _pv_cat_opts, key='pv_cat')
+            with _pv_c3:
+                _pv_meses = st.number_input("Meses historial", min_value=3, max_value=12, value=6, step=1, key='pv_meses')
+
+            if st.button("▶ Generar Análisis", key='pv_btn', use_container_width=True):
+                with st.spinner("Calculando..."):
+                    _pv_lf  = "AND UPPER(TRIM(local)) = UPPER(:loc)" if _pv_local != 'Todos' else ''
+                    _pv_cf  = "AND UPPER(TRIM(categoria_producto)) = UPPER(:cat)" if _pv_cat != 'Todas' else ''
+                    _pv_params = {}
+                    if _pv_local != 'Todos': _pv_params['loc'] = _pv_local
+                    if _pv_cat   != 'Todas': _pv_params['cat'] = _pv_cat
+
+                    # Gasto mensual por proveedor — últimos N meses
+                    _pv_q = f"""
+                        SELECT
+                            nombre_proveedor,
+                            rut_proveedor,
+                            DATE_TRUNC('month', fecha_dte::date) AS mes,
+                            SUM(costo_realfinal)                  AS gasto_total,
+                            SUM(costo_realfinal) / NULLIF(SUM(cant_conv * NULLIF(formato,0)),0) AS precio_ponderado,
+                            COUNT(DISTINCT sku)                   AS n_skus
+                        FROM compras
+                        WHERE fecha_dte::date >= DATE_TRUNC('month', NOW()) - INTERVAL '{_pv_meses} months'
+                          AND cant_conv > 0 AND costo_realfinal > 0 AND formato > 0
+                          {_pv_lf} {_pv_cf}
+                        GROUP BY nombre_proveedor, rut_proveedor, DATE_TRUNC('month', fecha_dte::date)
+                        ORDER BY nombre_proveedor, mes
+                    """
+                    df_pv = run_query(_pv_q, _pv_params)
+
+                    if df_pv.empty:
+                        st.warning("Sin datos para el período y filtros seleccionados.")
+                        st.stop()
+
+                    df_pv['mes'] = pd.to_datetime(df_pv['mes'])
+                    df_pv['gasto_total']      = pd.to_numeric(df_pv['gasto_total'],      errors='coerce').fillna(0)
+                    df_pv['precio_ponderado'] = pd.to_numeric(df_pv['precio_ponderado'], errors='coerce').fillna(0)
+
+                    # Calcular variación % del gasto entre primer y último mes por proveedor
+                    _pv_pivot = df_pv.pivot_table(
+                        index='nombre_proveedor', columns='mes',
+                        values='gasto_total', aggfunc='sum', fill_value=0
+                    )
+                    _pv_cols = sorted(_pv_pivot.columns)
+                    if len(_pv_cols) >= 2:
+                        _pv_primer = _pv_pivot[_pv_cols[0]].replace(0, pd.NA)
+                        _pv_ultimo = _pv_pivot[_pv_cols[-1]]
+                        _pv_var    = ((_pv_ultimo - _pv_primer) / _pv_primer.abs() * 100).fillna(0)
+                        # Top 15 con mayor ALZA
+                        _pv_top15  = _pv_var.sort_values(ascending=False).head(15).index.tolist()
+                    else:
+                        _pv_top15  = _pv_pivot.index.tolist()[:15]
+
+                    st.session_state['pv_data']  = df_pv
+                    st.session_state['pv_top15'] = _pv_top15
+                    st.session_state['pv_meses'] = int(_pv_meses)
+
+            if 'pv_data' in st.session_state:
+                df_pv   = st.session_state['pv_data']
+                _top15  = st.session_state['pv_top15']
+                df_top  = df_pv[df_pv['nombre_proveedor'].isin(_top15)].copy()
+
+                # ── Gráfico de líneas — gasto mensual top 15 ─────────
+                st.markdown("#### Evolución de gasto mensual — Top 15 proveedores con mayor alza")
+                try:
+                    import matplotlib.pyplot as _plt2
+                    import matplotlib.ticker as _mticker2
+                    _BG2   = '#0d0d0d'
+                    _meses_uniq = sorted(df_top['mes'].unique())
+                    _meses_lbl  = [m.strftime('%b %Y') for m in _meses_uniq]
+                    _provs      = sorted(_top15, key=lambda p:
+                        df_top[df_top['nombre_proveedor']==p]['gasto_total'].sum(), reverse=True)
+
+                    _cmap = _plt2.cm.get_cmap('tab20', len(_provs))
+                    fig_pv, ax_pv = _plt2.subplots(figsize=(14, 5), facecolor=_BG2)
+                    ax_pv.set_facecolor(_BG2)
+
+                    for i, prov in enumerate(_provs):
+                        _df_p = df_top[df_top['nombre_proveedor']==prov]
+                        _xs   = [_meses_uniq.index(m) for m in _df_p['mes']]
+                        _ys   = _df_p['gasto_total'].tolist()
+                        ax_pv.plot(_xs, _ys, marker='o', markersize=4, linewidth=1.8,
+                                   color=_cmap(i), label=prov[:30])
+
+                    ax_pv.set_xticks(range(len(_meses_lbl)))
+                    ax_pv.set_xticklabels(_meses_lbl, rotation=30, ha='right', fontsize=8, color='#aaa')
+                    ax_pv.yaxis.set_major_formatter(_mticker2.FuncFormatter(
+                        lambda x, _: f'${x/1_000_000:.1f}M' if x >= 1_000_000 else f'${x/1_000:.0f}K'))
+                    ax_pv.tick_params(colors='#aaa', labelsize=8)
+                    ax_pv.spines[:].set_color('#2a2a2a')
+                    ax_pv.grid(axis='y', color='#1e1e1e', linewidth=0.5)
+                    ax_pv.legend(facecolor='#111', edgecolor='#333', labelcolor='white',
+                                 fontsize=7, loc='upper left', ncol=2)
+                    ax_pv.set_title('GASTO MENSUAL POR PROVEEDOR — TOP 15 MAYOR ALZA',
+                                    color='white', fontsize=10, fontweight='bold', pad=10)
+                    fig_pv.tight_layout()
+                    st.pyplot(fig_pv)
+                    _plt2.close(fig_pv)
+                except Exception as _e_pv:
+                    st.error(f"Error al generar gráfico: {_e_pv}")
+
+                # ── Tabla resumen variación ───────────────────────────
+                st.markdown("#### Resumen de variación por proveedor")
+                _pv_pivot2 = df_top.pivot_table(
+                    index='nombre_proveedor', columns='mes',
+                    values='gasto_total', aggfunc='sum', fill_value=0
+                )
+                _cols_ord = sorted(_pv_pivot2.columns)
+                _pv_pivot2 = _pv_pivot2[_cols_ord]
+                _pv_pivot2.columns = [c.strftime('%b %Y') for c in _cols_ord]
+
+                if len(_cols_ord) >= 2:
+                    _col_ini = _pv_pivot2.columns[0]
+                    _col_fin = _pv_pivot2.columns[-1]
+                    _pv_pivot2['Δ $']  = _pv_pivot2[_col_fin] - _pv_pivot2[_col_ini]
+                    _pv_pivot2['Δ %']  = (_pv_pivot2['Δ $'] / _pv_pivot2[_col_ini].replace(0, pd.NA) * 100).fillna(0).round(1)
+                    _pv_pivot2 = _pv_pivot2.sort_values('Δ %', ascending=False)
+
+                def _color_var(val):
+                    if isinstance(val, str): return ''
+                    if val > 10:  return 'color:#e84545;font-weight:600'
+                    if val > 5:   return 'color:#e89c45;font-weight:600'
+                    if val > 0:   return 'color:#d4a853'
+                    return 'color:#4caf7d'
+
+                _hs_pv = 'padding:8px 12px;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
+                _rows_pv = ''
+                for prov, row_pv in _pv_pivot2.iterrows():
+                    _delta_pct = row_pv.get('Δ %', 0)
+                    _delta_clp = row_pv.get('Δ $', 0)
+                    _style_var = _color_var(_delta_pct)
+                    _mes_cells = ''.join(
+                        f'<td style="padding:7px 12px;text-align:right;color:#aaa;font-size:0.78rem">'
+                        f'${row_pv[c]:,.0f}</td>'
+                        for c in _pv_pivot2.columns if c not in ('Δ $','Δ %')
+                    )
+                    _rows_pv += (
+                        f'<tr style="border-bottom:1px solid #1a1a1a">'
+                        f'<td style="padding:7px 12px;color:#e8e4de;font-size:0.8rem;font-weight:500">{prov}</td>'
+                        f'{_mes_cells}'
+                        f'<td style="padding:7px 12px;text-align:right;{_style_var}">'
+                        f'{"+" if _delta_clp>=0 else ""}${_delta_clp:,.0f}</td>'
+                        f'<td style="padding:7px 12px;text-align:right;{_style_var}">'
+                        f'{"+" if _delta_pct>=0 else ""}{_delta_pct:.1f}%</td>'
+                        f'</tr>'
+                    )
+                _hdrs_pv = (['Proveedor'] +
+                            [c for c in _pv_pivot2.columns if c not in ('Δ $','Δ %')] +
+                            ['Δ $', 'Δ %'])
+                _th_pv = ''.join(f'<th style="{_hs_pv};text-align:{"left" if i==0 else "right"}">{h}</th>'
+                                 for i, h in enumerate(_hdrs_pv))
+                st.markdown(
+                    f'<div style="overflow-x:auto;border-radius:12px;border:1px solid #1e1e1e;background:#0d0d0d">'
+                    f'<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif">'
+                    f'<thead><tr style="background:#111">{_th_pv}</tr></thead>'
+                    f'<tbody>{_rows_pv}</tbody></table></div>'
+                    f'<div style="margin-top:6px;font-size:0.72rem;color:#555">'
+                    f'🔴 &gt;10%&nbsp;&nbsp;🟡 5-10%&nbsp;&nbsp;🟠 0-5%&nbsp;&nbsp;🟢 baja o estable</div>',
+                    unsafe_allow_html=True
+                )
+
+                # ── Tab 2: Detalle por SKU ────────────────────────────
+                st.markdown("---")
+                st.markdown("#### Detalle de variación por SKU")
+                _pv_prov_opts = sorted(df_pv['nombre_proveedor'].unique().tolist())
+                _pv_prov_sel  = st.selectbox("Seleccionar proveedor", _pv_prov_opts, key='pv_prov_det')
+
+                if _pv_prov_sel:
+                    _pv_params2 = {'prov': _pv_prov_sel}
+                    if _pv_local != 'Todos': _pv_params2['loc'] = _pv_local
+
+                    _pv_det_q = f"""
+                        SELECT
+                            sku,
+                            MAX(nombre_producto)  AS producto,
+                            DATE_TRUNC('month', fecha_dte::date) AS mes,
+                            SUM(costo_realfinal) / NULLIF(SUM(cant_conv * NULLIF(formato,0)),0) AS precio_unit
+                        FROM compras
+                        WHERE fecha_dte::date >= DATE_TRUNC('month', NOW()) - INTERVAL '{st.session_state["pv_meses"]} months'
+                          AND nombre_proveedor = :prov
+                          AND cant_conv > 0 AND costo_realfinal > 0 AND formato > 0
+                          {_pv_lf}
+                        GROUP BY sku, DATE_TRUNC('month', fecha_dte::date)
+                        ORDER BY sku, mes
+                    """
+                    df_det = run_query(_pv_det_q, _pv_params2)
+
+                    if not df_det.empty:
+                        df_det['mes']        = pd.to_datetime(df_det['mes'])
+                        df_det['precio_unit'] = pd.to_numeric(df_det['precio_unit'], errors='coerce').fillna(0)
+
+                        _det_pivot = df_det.pivot_table(
+                            index=['sku','producto'], columns='mes',
+                            values='precio_unit', aggfunc='mean'
+                        ).reset_index()
+                        _det_cols = sorted([c for c in _det_pivot.columns if c not in ('sku','producto')])
+
+                        if len(_det_cols) >= 2:
+                            _c_ini = _det_cols[0]
+                            _c_fin = _det_cols[-1]
+                            _det_pivot['Δ $']  = (_det_pivot[_c_fin] - _det_pivot[_c_ini]).round(0)
+                            _det_pivot['Δ %']  = ((_det_pivot[_c_fin] - _det_pivot[_c_ini]) /
+                                                   _det_pivot[_c_ini].replace(0, pd.NA) * 100).fillna(0).round(1)
+                            _det_pivot = _det_pivot.sort_values('Δ %', ascending=False)
+
+                        _hs_d = 'padding:7px 10px;font-size:0.67rem;text-transform:uppercase;letter-spacing:0.07em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
+                        _rows_d = ''
+                        for _, rd in _det_pivot.iterrows():
+                            _dp = float(rd.get('Δ %', 0) or 0)
+                            _dd = float(rd.get('Δ $', 0) or 0)
+                            _sc = _color_var(_dp)
+                            _sem = '🔴' if _dp > 10 else '🟡' if _dp > 5 else '🟠' if _dp > 0 else '🟢'
+                            _mes_d = ''.join(
+                                f'<td style="padding:6px 10px;text-align:right;color:#888;font-size:0.76rem">'
+                                f'{"—" if pd.isna(rd[c]) else f"${float(rd[c]):,.0f}"}</td>'
+                                for c in _det_cols
+                            )
+                            _rows_d += (
+                                f'<tr style="border-bottom:1px solid #1a1a1a">'
+                                f'<td style="padding:6px 10px;color:#666;font-size:0.72rem;font-family:monospace">{rd["sku"]}</td>'
+                                f'<td style="padding:6px 10px;color:#ccc;font-size:0.78rem">{str(rd["producto"])[:45]}</td>'
+                                f'{_mes_d}'
+                                f'<td style="padding:6px 10px;text-align:right;{_sc}">{"+" if _dd>=0 else ""}${_dd:,.0f}</td>'
+                                f'<td style="padding:6px 10px;text-align:right;{_sc}">{"+" if _dp>=0 else ""}{_dp:.1f}%</td>'
+                                f'<td style="padding:6px 10px;text-align:center">{_sem}</td>'
+                                f'</tr>'
+                            )
+                        _hdrs_d = (['SKU','Producto'] +
+                                   [c.strftime('%b %Y') for c in _det_cols] +
+                                   ['Δ $','Δ %',''])
+                        _th_d = ''.join(
+                            f'<th style="{_hs_d};text-align:{"left" if i<2 else "right" if i<len(_hdrs_d)-1 else "center"}">{h}</th>'
+                            for i, h in enumerate(_hdrs_d)
+                        )
+                        st.markdown(
+                            f'<div style="overflow-x:auto;border-radius:12px;border:1px solid #1e1e1e;background:#0d0d0d;margin-top:0.5rem">'
+                            f'<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif">'
+                            f'<thead><tr style="background:#111">{_th_d}</tr></thead>'
+                            f'<tbody>{_rows_d}</tbody></table></div>',
+                            unsafe_allow_html=True
+                        )
+                    else:
+                        st.caption("Sin detalle de SKUs para este proveedor en el período.")
+
+
+        # ══════════════════════════════════════════════════════
+        # TAB ACUERDOS COMERCIALES
+        # ══════════════════════════════════════════════════════
+        with _tab_acuerdo:
+            st.markdown("### 🤝 Acuerdos Comerciales vs Precio Real")
+            st.markdown("<div class='info-box'>Carga el archivo de precios negociados y compara contra el precio real pagado en el período seleccionado.</div>", unsafe_allow_html=True)
+
+            _ac_c1, _ac_c2 = st.columns([2, 2])
+            with _ac_c1:
+                _ac_file = st.file_uploader("📄 Archivo de acuerdos (.xlsx)", type=['xlsx'], key='ac_file_up',
+                                            help="Columnas esperadas: Nombre Local, Rut Proveedor, Nombre Proveedor, ItemCode, Descripción, Precio Negociado")
+            with _ac_c2:
+                _ac_meses_opts = run_query("""
+                    SELECT DISTINCT TO_CHAR(DATE_TRUNC('month', fecha_dte::date), 'YYYY-MM') AS periodo
+                    FROM compras ORDER BY 1 DESC LIMIT 12
+                """)
+                _ac_per_opts = _ac_meses_opts['periodo'].tolist() if not _ac_meses_opts.empty else []
+                _ac_periodo  = st.selectbox("Período a comparar", _ac_per_opts, key='ac_periodo')
+
+            if _ac_file and _ac_periodo:
+                if st.button("▶ Comparar con Acuerdos", key='ac_btn', use_container_width=True):
+                    with st.spinner("Procesando..."):
+                        # Leer archivo acuerdos
+                        import openpyxl as _opx2
+                        _wb_ac = _opx2.load_workbook(io.BytesIO(_ac_file.read()), data_only=True)
+                        _ws_ac = _wb_ac.active
+                        _ac_rows = []
+                        for _r in _ws_ac.iter_rows(min_row=2, values_only=True):
+                            if not _r[0]: continue
+                            _ac_rows.append({
+                                'local':            str(_r[0]).strip().upper(),
+                                'rut_proveedor':    str(_r[2]).strip() if _r[2] else '',
+                                'nombre_proveedor': str(_r[3]).strip() if _r[3] else '',
+                                'categoria':        str(_r[4]).strip() if _r[4] else '',
+                                'sku':              str(_r[5]).strip() if _r[5] else '',
+                                'producto':         str(_r[6]).strip() if _r[6] else '',
+                                'precio_acuerdo':   float(_r[7]) if _r[7] else 0,
+                                'um':               str(_r[8]).strip() if _r[8] else '',
+                            })
+                        df_ac = pd.DataFrame(_ac_rows)
+                        df_ac = df_ac[df_ac['precio_acuerdo'] > 0]
+
+                        # Precio real pagado en el período
+                        _ac_fi = _ac_periodo + '-01'
+                        _ac_ff_ts = pd.Timestamp(_ac_fi) + pd.offsets.MonthEnd(0)
+                        _ac_ff = str(_ac_ff_ts.date())
+
+                        df_real = run_query("""
+                            SELECT sku, nombre_producto,
+                                   nombre_proveedor, rut_proveedor,
+                                   SUM(costo_realfinal) / NULLIF(SUM(cant_conv * NULLIF(formato,0)),0) AS precio_real,
+                                   SUM(costo_realfinal) AS gasto_total,
+                                   SUM(cant_conv * NULLIF(formato,0)) AS unidades
+                            FROM compras
+                            WHERE fecha_dte::date BETWEEN :fi AND :ff
+                              AND cant_conv > 0 AND costo_realfinal > 0 AND formato > 0
+                            GROUP BY sku, nombre_producto, nombre_proveedor, rut_proveedor
+                        """, {'fi': _ac_fi, 'ff': _ac_ff})
+
+                        if df_real.empty:
+                            st.warning("Sin compras registradas para el período seleccionado.")
+                            st.stop()
+
+                        # Cruzar por SKU
+                        df_ac_grp = df_ac.groupby('sku', as_index=False).agg(
+                            producto=('producto','first'),
+                            nombre_proveedor=('nombre_proveedor','first'),
+                            precio_acuerdo=('precio_acuerdo','mean'),
+                            um=('um','first')
+                        )
+                        df_merge = pd.merge(df_ac_grp, df_real[['sku','precio_real','gasto_total','unidades']],
+                                            on='sku', how='left')
+                        df_merge['precio_real']   = pd.to_numeric(df_merge['precio_real'], errors='coerce')
+                        df_merge['precio_acuerdo']= pd.to_numeric(df_merge['precio_acuerdo'], errors='coerce')
+                        df_merge['Δ $']  = (df_merge['precio_real'] - df_merge['precio_acuerdo']).round(0)
+                        df_merge['Δ %']  = ((df_merge['Δ $'] / df_merge['precio_acuerdo'].replace(0,pd.NA)) * 100).fillna(0).round(1)
+                        df_merge['impacto'] = (df_merge['Δ $'] * df_merge['unidades'].fillna(0)).round(0)
+                        df_merge = df_merge.sort_values('Δ %', ascending=False)
+
+                        st.session_state['ac_data']    = df_merge
+                        st.session_state['ac_periodo'] = _ac_periodo
+
+            if 'ac_data' in st.session_state:
+                df_merge   = st.session_state['ac_data']
+                _ac_per_lbl = st.session_state.get('ac_periodo','')
+
+                # KPIs
+                _ac_sobre   = df_merge[df_merge['Δ %'] > 0]
+                _ac_bajo    = df_merge[df_merge['Δ %'] <= 0]
+                _ac_sin     = df_merge[df_merge['precio_real'].isna()]
+                _impacto_tot= _ac_sobre['impacto'].sum()
+
+                _kpi_html = f"""
+                <div class="kpi-grid">
+                    <div class="kpi-box alerta">
+                        <div class="k-label">SKUs sobre acuerdo</div>
+                        <div class="k-value">{len(_ac_sobre)}</div>
+                        <div class="k-delta">de {len(df_merge)} con acuerdo</div>
+                    </div>
+                    <div class="kpi-box">
+                        <div class="k-label">SKUs bajo/en acuerdo</div>
+                        <div class="k-value">{len(_ac_bajo)}</div>
+                    </div>
+                    <div class="kpi-box">
+                        <div class="k-label">SKUs sin compra en período</div>
+                        <div class="k-value">{len(_ac_sin)}</div>
+                    </div>
+                    <div class="kpi-box alerta">
+                        <div class="k-label">Impacto total sobre acuerdo</div>
+                        <div class="k-value">${_impacto_tot:,.0f}</div>
+                        <div class="k-delta">gasto adicional vs precio negociado</div>
+                    </div>
+                </div>
+                """
+                st.markdown(_kpi_html, unsafe_allow_html=True)
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                # Tabla detalle
+                _hs_ac = 'padding:8px 12px;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#444;border-bottom:1px solid #2a2a2a'
+                _rows_ac = ''
+                for _, ra in df_merge.iterrows():
+                    _dp_ac  = float(ra.get('Δ %', 0) or 0)
+                    _dd_ac  = float(ra.get('Δ $', 0) or 0)
+                    _imp_ac = float(ra.get('impacto', 0) or 0)
+                    _pr_ac  = ra.get('precio_real')
+                    _sc_ac  = _color_var(_dp_ac)
+                    _sem_ac = '🔴' if _dp_ac > 10 else '🟡' if _dp_ac > 5 else '🟠' if _dp_ac > 0 else '🟢' if _dp_ac <= 0 and not pd.isna(_pr_ac) else '⚪'
+                    _rows_ac += (
+                        f'<tr style="border-bottom:1px solid #1a1a1a">'
+                        f'<td style="padding:7px 12px;color:#666;font-size:0.72rem;font-family:monospace">{ra["sku"]}</td>'
+                        f'<td style="padding:7px 12px;color:#ccc;font-size:0.78rem">{str(ra["producto"])[:45]}</td>'
+                        f'<td style="padding:7px 12px;color:#888;font-size:0.75rem">{ra["nombre_proveedor"]}</td>'
+                        f'<td style="padding:7px 12px;text-align:right;color:#aaa">${float(ra["precio_acuerdo"]):,.0f}</td>'
+                        f'<td style="padding:7px 12px;text-align:right;color:#ccc">{"—" if pd.isna(_pr_ac) else f"${_pr_ac:,.0f}"}</td>'
+                        f'<td style="padding:7px 12px;text-align:right;{_sc_ac}">{"—" if pd.isna(_pr_ac) else ("+" if _dd_ac>=0 else "")+f"${_dd_ac:,.0f}"}</td>'
+                        f'<td style="padding:7px 12px;text-align:right;{_sc_ac}">{"—" if pd.isna(_pr_ac) else ("+" if _dp_ac>=0 else "")+f"{_dp_ac:.1f}%"}</td>'
+                        f'<td style="padding:7px 12px;text-align:right;{_sc_ac}">{"—" if pd.isna(_pr_ac) else ("+" if _imp_ac>=0 else "")+f"${_imp_ac:,.0f}"}</td>'
+                        f'<td style="padding:7px 12px;text-align:center">{_sem_ac}</td>'
+                        f'</tr>'
+                    )
+                _th_ac = ''.join(
+                    f'<th style="{_hs_ac};text-align:{"left" if i<3 else "right" if i<8 else "center"}">{h}</th>'
+                    for i, h in enumerate(['SKU','Producto','Proveedor','P. Acuerdo','P. Real','Δ $','Δ %','Impacto',''])
+                )
+                st.markdown(
+                    f'<div style="overflow-x:auto;border-radius:12px;border:1px solid #1e1e1e;background:#0d0d0d">'
+                    f'<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif">'
+                    f'<thead><tr style="background:#111">{_th_ac}</tr></thead>'
+                    f'<tbody>{_rows_ac}</tbody></table></div>'
+                    f'<div style="margin-top:6px;font-size:0.72rem;color:#555">'
+                    f'🔴 &gt;10% sobre acuerdo&nbsp;&nbsp;🟡 5-10%&nbsp;&nbsp;🟠 0-5%&nbsp;&nbsp;🟢 en/bajo acuerdo&nbsp;&nbsp;⚪ sin compra en período</div>',
+                    unsafe_allow_html=True
+                )
+
+                # Exportar
+                _ac_sig = f"{_ac_per_lbl}|{len(df_merge)}"
+                if st.session_state.get('ac_excel_sig') != _ac_sig or 'ac_excel_bytes' not in st.session_state:
+                    _buf_ac = io.BytesIO()
+                    with pd.ExcelWriter(_buf_ac, engine='openpyxl') as _w_ac:
+                        df_merge.to_excel(_w_ac, sheet_name='Acuerdos', index=False)
+                    st.session_state['ac_excel_bytes'] = _buf_ac.getvalue()
+                    st.session_state['ac_excel_sig']   = _ac_sig
+                st.download_button("📥 Exportar Excel",
+                                   st.session_state['ac_excel_bytes'],
+                                   f"Acuerdos_{_ac_per_lbl}.xlsx",
+                                   key='ac_dl_btn')
 
         # ══════════════════════════════════════════════════════
         # TAB 2 — 80/20 COMPRAS
