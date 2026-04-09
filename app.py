@@ -6964,18 +6964,16 @@ elif modulo.startswith("📊"):
                         for _app_row, _fp_list in _APPS.items():
                             _fp_in = "','".join(_fp_list)
                             _df_app_dia = run_query(f"""
-                                SELECT SUM(monto_venta_real) AS venta
+                                SELECT SUM(monto_venta_real + COALESCE(descuento,0)) AS venta
                                 FROM ventas
                                 WHERE fecha_venta = :f
                                   AND forma_pago IN ('{_fp_in}')
-                                  AND (es_opcion = false OR es_opcion IS NULL)
                             """, {'f': str(_exp_fecha)})
                             _df_app_acum = run_query(f"""
-                                SELECT SUM(monto_venta_real) AS venta
+                                SELECT SUM(monto_venta_real + COALESCE(descuento,0)) AS venta
                                 FROM ventas
                                 WHERE fecha_venta BETWEEN :fi AND :ff
                                   AND forma_pago IN ('{_fp_in}')
-                                  AND (es_opcion = false OR es_opcion IS NULL)
                             """, {'fi': str(_exp_fi), 'ff': str(_exp_ff)})
                             _app_dia  = float(_df_app_dia['venta'].iloc[0])  if not _df_app_dia.empty  and _df_app_dia['venta'].iloc[0]  else 0
                             _app_acum = float(_df_app_acum['venta'].iloc[0]) if not _df_app_acum.empty and _df_app_acum['venta'].iloc[0] else 0
@@ -9774,7 +9772,7 @@ elif modulo.startswith("📊"):
                         SELECT local,
                                SUM(CASE WHEN origen IS NULL OR origen='' THEN monto_venta_real ELSE 0 END) as venta_salon,
                                SUM(CASE WHEN origen IS NOT NULL AND origen!='' THEN monto_venta_real ELSE 0 END) as venta_delivery,
-                               SUM(monto_venta_real) as venta_total,
+                               SUM(monto_venta_real + COALESCE(descuento,0)) as venta_total,
                                SUM(CASE WHEN categoria_menu ILIKE '%cerveza%' OR categoria_menu ILIKE '%bebida%'
                                         OR categoria_menu ILIKE '%coctele%' OR categoria_menu ILIKE '%vino%'
                                         OR categoria_menu ILIKE '%pisco%' OR categoria_menu ILIKE '%vodka%'
@@ -10168,7 +10166,7 @@ elif modulo.startswith("📊"):
                 filas_cadena = []
                 for loc4 in todos_loc_cadena:
                     loc4_u = loc4.upper().strip()
-                    r_v4  = run_query("SELECT SUM(monto_venta_real) as vt FROM ventas WHERE fecha_venta BETWEEN :i AND :f AND UPPER(local)=:l", {'i': str(fecha_acum_i), 'f': str(fecha_acum_f), 'l': loc4_u})
+                    r_v4  = run_query("SELECT SUM(monto_venta_real + COALESCE(descuento,0)) as vt FROM ventas WHERE fecha_venta BETWEEN :i AND :f AND UPPER(local)=:l", {'i': str(fecha_acum_i), 'f': str(fecha_acum_f), 'l': loc4_u})
                     r_c4  = run_query("SELECT categoria_producto, SUM(costo_realfinal) as ct FROM compras WHERE fecha_dte::date BETWEEN :i AND :f AND UPPER(local)=:l GROUP BY categoria_producto", {'i': str(fecha_acum_i), 'f': str(fecha_acum_f), 'l': loc4_u})
                     venta4   = float(r_v4['vt'].iloc[0]) if not r_v4.empty and r_v4['vt'].iloc[0] else 0
                     compra4  = sum(float(r_c4.loc[r_c4['categoria_producto'].str.upper().str.strip()==cat,'ct'].sum()) for cat in cats_compra4) if not r_c4.empty else 0
