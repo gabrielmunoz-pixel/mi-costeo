@@ -9770,8 +9770,8 @@ elif modulo.startswith("📊"):
                     lf = "AND UPPER(local)=ANY(:ls)" if locales else ""
                     q = f"""
                         SELECT local,
-                               SUM(CASE WHEN origen IS NULL OR origen='' THEN monto_venta_real ELSE 0 END) as venta_salon,
-                               SUM(CASE WHEN origen IS NOT NULL AND origen!='' THEN monto_venta_real ELSE 0 END) as venta_delivery,
+                               SUM(CASE WHEN origen IS NULL OR origen='' THEN monto_venta_real + COALESCE(descuento,0) ELSE 0 END) as venta_salon,
+                               SUM(CASE WHEN origen IS NOT NULL AND origen!='' THEN monto_venta_real + COALESCE(descuento,0) ELSE 0 END) as venta_delivery,
                                SUM(monto_venta_real + COALESCE(descuento,0)) as venta_total,
                                SUM(CASE WHEN categoria_menu ILIKE '%cerveza%' OR categoria_menu ILIKE '%bebida%'
                                         OR categoria_menu ILIKE '%coctele%' OR categoria_menu ILIKE '%vino%'
@@ -12211,21 +12211,19 @@ elif informe_sel == "CuentasCasa":
             # ── Queries ───────────────────────────────────────
             _df_alem_dia = run_query("""
                 SELECT local, origen,
-                       SUM(monto_venta_real) AS venta
+                       SUM(monto_venta_real + COALESCE(descuento,0)) AS venta
                 FROM ventas
                 WHERE fecha_venta = :f
                   AND local IS NOT NULL
-                  AND (es_opcion = false OR es_opcion IS NULL)
                 GROUP BY local, origen
             """, {'f': str(_vd_fecha)})
 
             _df_alem_acum = run_query("""
                 SELECT local, origen,
-                       SUM(monto_venta_real) AS venta
+                       SUM(monto_venta_real + COALESCE(descuento,0)) AS venta
                 FROM ventas
                 WHERE fecha_venta BETWEEN :fi AND :ff
                   AND local IS NOT NULL
-                  AND (es_opcion = false OR es_opcion IS NULL)
                 GROUP BY local, origen
             """, {'fi': str(_vd_fi), 'ff': str(_vd_ff)})
 
