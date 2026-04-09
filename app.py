@@ -6440,7 +6440,7 @@ elif modulo.startswith("📊"):
                 # ── Queries ───────────────────────────────────────
                 _df_alem_dia = run_query("""
                     SELECT local, origen,
-                           SUM(monto_venta_real + COALESCE(descuento,0)) AS venta
+                           SUM(monto_venta_real) AS venta
                     FROM ventas
                     WHERE fecha_venta = :f
                       AND local IS NOT NULL
@@ -6449,7 +6449,7 @@ elif modulo.startswith("📊"):
 
                 _df_alem_acum = run_query("""
                     SELECT local, origen,
-                           SUM(monto_venta_real + COALESCE(descuento,0)) AS venta
+                           SUM(monto_venta_real) AS venta
                     FROM ventas
                     WHERE fecha_venta BETWEEN :fi AND :ff
                       AND local IS NOT NULL
@@ -6810,14 +6810,14 @@ elif modulo.startswith("📊"):
                         # Queries ventas Alemán
                         _df_exp_dia = run_query("""
                             SELECT local, origen,
-                                   SUM(monto_venta_real + COALESCE(descuento,0)) AS venta
+                                   SUM(monto_venta_real) AS venta
                             FROM ventas WHERE fecha_venta=:f AND local IS NOT NULL
                             GROUP BY local, origen
                         """, {'f': str(_exp_fecha)})
 
                         _df_exp_acum = run_query("""
                             SELECT local, origen,
-                                   SUM(monto_venta_real + COALESCE(descuento,0)) AS venta
+                                   SUM(monto_venta_real) AS venta
                             FROM ventas WHERE fecha_venta BETWEEN :fi AND :ff
                             AND local IS NOT NULL
                             GROUP BY local, origen
@@ -6964,13 +6964,13 @@ elif modulo.startswith("📊"):
                         for _app_row, _fp_list in _APPS.items():
                             _fp_in = "','".join(_fp_list)
                             _df_app_dia = run_query(f"""
-                                SELECT SUM(monto_venta_real + COALESCE(descuento,0)) AS venta
+                                SELECT SUM(monto_venta_real) AS venta
                                 FROM ventas
                                 WHERE fecha_venta = :f
                                   AND forma_pago IN ('{_fp_in}')
                             """, {'f': str(_exp_fecha)})
                             _df_app_acum = run_query(f"""
-                                SELECT SUM(monto_venta_real + COALESCE(descuento,0)) AS venta
+                                SELECT SUM(monto_venta_real) AS venta
                                 FROM ventas
                                 WHERE fecha_venta BETWEEN :fi AND :ff
                                   AND forma_pago IN ('{_fp_in}')
@@ -6983,8 +6983,8 @@ elif modulo.startswith("📊"):
                             _ws_out.cell(_app_row, 31).value = round(_app_proy)
 
                         # ── FILA 42: TOTAL GENERAL (locales + apps) ───────────────
-                        _df_apps_dia  = run_query("SELECT SUM(monto_venta_real + COALESCE(descuento,0)) AS v FROM ventas WHERE fecha_venta=:f AND forma_pago IN ('UberEats','PedidosYa','PedidosYa Vouchers','PedidosYa Cash Collection','Rappi')", {'f': str(_exp_fecha)})
-                        _df_apps_acum = run_query("SELECT SUM(monto_venta_real + COALESCE(descuento,0)) AS v FROM ventas WHERE fecha_venta BETWEEN :fi AND :ff AND forma_pago IN ('UberEats','PedidosYa','PedidosYa Vouchers','PedidosYa Cash Collection','Rappi')", {'fi': str(_exp_fi), 'ff': str(_exp_ff)})
+                        _df_apps_dia  = run_query("SELECT SUM(monto_venta_real) AS v FROM ventas WHERE fecha_venta=:f AND forma_pago IN ('UberEats','PedidosYa','PedidosYa Vouchers','PedidosYa Cash Collection','Rappi')", {'f': str(_exp_fecha)})
+                        _df_apps_acum = run_query("SELECT SUM(monto_venta_real) AS v FROM ventas WHERE fecha_venta BETWEEN :fi AND :ff AND forma_pago IN ('UberEats','PedidosYa','PedidosYa Vouchers','PedidosYa Cash Collection','Rappi')", {'fi': str(_exp_fi), 'ff': str(_exp_ff)})
                         _gt_apps_dia  = float(_df_apps_dia['v'].iloc[0]  or 0) if not _df_apps_dia.empty  else 0
                         _gt_apps_acum = float(_df_apps_acum['v'].iloc[0] or 0) if not _df_apps_acum.empty else 0
                         _ws_out.cell(42, 5).value  = round(_gt_dia_s + _gt_dia_d + _gt_apps_dia)
@@ -9770,9 +9770,9 @@ elif modulo.startswith("📊"):
                     lf = "AND UPPER(local)=ANY(:ls)" if locales else ""
                     q = f"""
                         SELECT local,
-                               SUM(CASE WHEN origen IS NULL OR origen='' THEN monto_venta_real + COALESCE(descuento,0) ELSE 0 END) as venta_salon,
-                               SUM(CASE WHEN origen IS NOT NULL AND origen!='' THEN monto_venta_real + COALESCE(descuento,0) ELSE 0 END) as venta_delivery,
-                               SUM(monto_venta_real + COALESCE(descuento,0)) as venta_total,
+                               SUM(CASE WHEN origen IS NULL OR origen='' THEN monto_venta_real ELSE 0 END) as venta_salon,
+                               SUM(CASE WHEN origen IS NOT NULL AND origen!='' THEN monto_venta_real ELSE 0 END) as venta_delivery,
+                               SUM(monto_venta_real) as venta_total,
                                SUM(CASE WHEN categoria_menu ILIKE '%cerveza%' OR categoria_menu ILIKE '%bebida%'
                                         OR categoria_menu ILIKE '%coctele%' OR categoria_menu ILIKE '%vino%'
                                         OR categoria_menu ILIKE '%pisco%' OR categoria_menu ILIKE '%vodka%'
@@ -9828,7 +9828,7 @@ elif modulo.startswith("📊"):
                                WHEN sku_producto IN ('WHI-001', 'WHI-002', 'WHI-003', 'WHI-004', 'WHI-006', 'WHI-007') THEN 'Whisky'
                                ELSE 'Otros'
                                END AS producto,
-                               SUM(monto_venta_real + COALESCE(descuento,0)) as venta
+                               SUM(monto_venta_real) as venta
                         FROM ventas
                         WHERE fecha_venta BETWEEN :i AND :f
                           AND sku_producto IN ('{sku_in}') {lf}
@@ -10166,7 +10166,7 @@ elif modulo.startswith("📊"):
                 filas_cadena = []
                 for loc4 in todos_loc_cadena:
                     loc4_u = loc4.upper().strip()
-                    r_v4  = run_query("SELECT SUM(monto_venta_real + COALESCE(descuento,0)) as vt FROM ventas WHERE fecha_venta BETWEEN :i AND :f AND UPPER(local)=:l", {'i': str(fecha_acum_i), 'f': str(fecha_acum_f), 'l': loc4_u})
+                    r_v4  = run_query("SELECT SUM(monto_venta_real) as vt FROM ventas WHERE fecha_venta BETWEEN :i AND :f AND UPPER(local)=:l", {'i': str(fecha_acum_i), 'f': str(fecha_acum_f), 'l': loc4_u})
                     r_c4  = run_query("SELECT categoria_producto, SUM(costo_realfinal) as ct FROM compras WHERE fecha_dte::date BETWEEN :i AND :f AND UPPER(local)=:l GROUP BY categoria_producto", {'i': str(fecha_acum_i), 'f': str(fecha_acum_f), 'l': loc4_u})
                     venta4   = float(r_v4['vt'].iloc[0]) if not r_v4.empty and r_v4['vt'].iloc[0] else 0
                     compra4  = sum(float(r_c4.loc[r_c4['categoria_producto'].str.upper().str.strip()==cat,'ct'].sum()) for cat in cats_compra4) if not r_c4.empty else 0
@@ -12211,7 +12211,7 @@ elif informe_sel == "CuentasCasa":
             # ── Queries ───────────────────────────────────────
             _df_alem_dia = run_query("""
                 SELECT local, origen,
-                       SUM(monto_venta_real + COALESCE(descuento,0)) AS venta
+                       SUM(monto_venta_real) AS venta
                 FROM ventas
                 WHERE fecha_venta = :f
                   AND local IS NOT NULL
@@ -12220,7 +12220,7 @@ elif informe_sel == "CuentasCasa":
 
             _df_alem_acum = run_query("""
                 SELECT local, origen,
-                       SUM(monto_venta_real + COALESCE(descuento,0)) AS venta
+                       SUM(monto_venta_real) AS venta
                 FROM ventas
                 WHERE fecha_venta BETWEEN :fi AND :ff
                   AND local IS NOT NULL
