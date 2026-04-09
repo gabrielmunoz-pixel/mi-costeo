@@ -1380,7 +1380,14 @@ def informe_rentabilidad(fecha_i, fecha_f, local):
                SUM(monto_venta_real) as venta
         FROM ventas
         WHERE fecha_venta BETWEEN :i AND :f
-          AND es_opcion = false
+          AND (
+              es_opcion = false
+              OR sku_producto IN (
+                  -- Incluir agregados con precio propio que tienen receta definida
+                  SELECT DISTINCT codigo_venta FROM recetas
+                  WHERE codigo_venta IS NOT NULL
+              )
+          )
           AND sku_producto NOT LIKE 'CP%'
           AND sku_producto NOT LIKE 'MEJ%'
           {filtro_local_r}
@@ -8959,21 +8966,36 @@ elif modulo.startswith("📊"):
                 _pv_prov_sel  = st.selectbox("Seleccionar proveedor", _pv_prov_opts, key='pv_prov_det')
 
                 if _pv_prov_sel:
+                    # Reconstruir filtros desde session_state (pueden no estar en scope)
+                    _pv_local_s = st.session_state.get('pv_local', 'Todos')
+                    _pv_lf_s    = "AND UPPER(TRIM(local)) = UPPER(:loc)" if _pv_local_s != 'Todos' else ''
+                    _pv_n_meses = st.session_state.get('pv_meses_val', 6)
                     _pv_params2 = {'prov': _pv_prov_sel}
-                    if _pv_local != 'Todos': _pv_params2['loc'] = _pv_local
+                    if _pv_local_s != 'Todos': _pv_params2['loc'] = _pv_local_s
 
                     _pv_det_q = f"""
                         SELECT
                             sku,
                             nombre_producto       AS producto,
                             DATE_TRUNC('month', fecha_dte::date) AS mes,
-                            SUM(costo_realfinal) / NULLIF(SUM(cant_conv * NULLIF(formato,0)),0) AS precio_unit
+                            SUM(costo_realfinal) / NULLIF(SUM(cant_conv * NULLIF(formato,0)),0) AS precio_unit,
+                            SUM(costo_realfinal) AS gasto_mes,
+                            COUNT(DISTINCT fecha_dte::date) AS n_compras
                         FROM compras
-                        WHERE fecha_dte::date >= DATE_TRUNC('month', NOW()) - INTERVAL '{st.session_state.get('pv_meses_val', 6)} months'
+                        WHERE fecha_dte::date >= DATE_TRUNC('month', NOW()) - INTERVAL '{_pv_n_meses} months'
                           AND nombre_proveedor = :prov
                           AND cant_conv > 0 AND costo_realfinal > 0 AND formato > 0
-                          {_pv_lf}
+                          AND UPPER(COALESCE(categoria_producto,'')) NOT LIKE '%ADMINISTR%'
+                          {_pv_lf_s}
                         GROUP BY sku, nombre_producto, DATE_TRUNC('month', fecha_dte::date)
+                        HAVING COUNT(DISTINCT fecha_dte::date) > 1
+                           OR SUM(costo_realfinal) >= (
+                               SELECT SUM(costo_realfinal) * 0.005
+                               FROM compras
+                               WHERE fecha_dte::date >= DATE_TRUNC('month', NOW()) - INTERVAL '{_pv_n_meses} months'
+                                 AND nombre_proveedor = :prov
+                                 AND cant_conv > 0 AND costo_realfinal > 0
+                           )
                         ORDER BY sku, nombre_producto, mes
                     """
                     df_det = run_query(_pv_det_q, _pv_params2)
