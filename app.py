@@ -7149,7 +7149,7 @@ elif modulo.startswith("📊"):
                         _APORTE_COLORS = ['#d4a853','#5b9bd5','#4caf7d','#e84545','#9b59b6',
                                           '#f39c12','#1abc9c','#e74c3c','#3498db','#2ecc71']
 
-                        fig2, ax2 = _plt.subplots(figsize=(5.2, 3.6), facecolor=_BG)
+                        fig2, ax2 = _plt.subplots(figsize=(3.6, 3.6), facecolor=_BG)  # cuadrado, no estirar
                         ax2.set_facecolor(_BG)
                         if _aporte_total > 0:
                             _filtered = [(v, l, c) for v, l, c in zip(_aporte_vals, _aporte_locs, _APORTE_COLORS) if v > 0]
@@ -7166,7 +7166,7 @@ elif modulo.startswith("📊"):
                         ax2.set_title('APORTE % LOCAL',
                                       color='white', fontsize=10, fontweight='bold', pad=10)
                         fig2.tight_layout()
-                        _insert_img(_ws_out, _img_bytes(fig2), 'S59', 666, 344)
+                        _insert_img(_ws_out, _img_bytes(fig2), 'S59')  # sin dimensiones → tamaño natural
 
                         # ── GRÁFICO 3: Participación delivery apps (torta) ────
                         _app_names = ['UberEats', 'PedidosYa', 'Rappi']
@@ -7174,7 +7174,7 @@ elif modulo.startswith("📊"):
                         _app_colors = [_GOLD, _GREEN, _RED]
                         _app_total = sum(_app_vals)
 
-                        fig3, ax3 = _plt.subplots(figsize=(6.9, 3.6), facecolor=_BG)
+                        fig3, ax3 = _plt.subplots(figsize=(3.6, 3.6), facecolor=_BG)  # cuadrado, no estirar
                         ax3.set_facecolor(_BG)
                         if _app_total > 0:
                             _wedges, _texts, _autotexts = ax3.pie(
@@ -7187,7 +7187,7 @@ elif modulo.startswith("📊"):
                         ax3.set_title('PARTICIPACIÓN DELIVERY APPS',
                                       color='white', fontsize=10, fontweight='bold', pad=10)
                         fig3.tight_layout()
-                        _insert_img(_ws_out, _img_bytes(fig3), 'N59', 500, 344)
+                        _insert_img(_ws_out, _img_bytes(fig3), 'N59')  # sin dimensiones → tamaño natural
 
                                                 # ── GRÁFICO 4: Total Aliva histórico (línea) ──────────
                         # Aliva usa cols I,K...AE fila 44 como categorías, fila 56 como valores
