@@ -7139,9 +7139,9 @@ elif modulo.startswith("📊"):
                         fig1.tight_layout()
                         _insert_img(_ws_out, _img_bytes(fig1), 'C59', 1396, 344)
 
-                        # ── GRÁFICO 2: Aporte % por local (torta) ─────────
+                        # ── GRÁFICO 2: Aporte % Local (torta) ─────────────
                         _APORTE_ROWS = [8,10,14,17,20,23,26,29,32,35]
-                        _aporte_vals = [_cell_float(_ws_out, _r, 7) for _r in _APORTE_ROWS]  # col G = acumulado
+                        _aporte_vals = [_cell_float(_ws_out, _r, 7) for _r in _APORTE_ROWS]
                         _aporte_locs = ['Vitacura','Las Condes','Chicureo','Macul',
                                         'La Dehesa','La Reina','Quilin',
                                         'N.Prov.','Providencia','L.Trapenses']
@@ -7149,8 +7149,7 @@ elif modulo.startswith("📊"):
                         _APORTE_COLORS = ['#d4a853','#5b9bd5','#4caf7d','#e84545','#9b59b6',
                                           '#f39c12','#1abc9c','#e74c3c','#3498db','#2ecc71']
 
-                        _G2_SIDE = 344 / 130
-                        fig2, ax2 = _plt.subplots(figsize=(_G2_SIDE, _G2_SIDE), facecolor=_BG)
+                        fig2, ax2 = _plt.subplots(figsize=(5.2, 3.6), facecolor=_BG)
                         ax2.set_facecolor(_BG)
                         if _aporte_total > 0:
                             _filtered = [(v, l, c) for v, l, c in zip(_aporte_vals, _aporte_locs, _APORTE_COLORS) if v > 0]
@@ -7166,7 +7165,8 @@ elif modulo.startswith("📊"):
                                 for _at in _autotexts2: _at.set_color('white'); _at.set_fontsize(7)
                         ax2.set_title('APORTE % LOCAL',
                                       color='white', fontsize=10, fontweight='bold', pad=10)
-                        _insert_img(_ws_out, _img_bytes_pie(fig2), 'S59')
+                        fig2.tight_layout()
+                        _insert_img(_ws_out, _img_bytes(fig2), 'S59', 666, 344)
 
                         # ── GRÁFICO 3: Participación delivery apps (torta) ────
                         _app_names = ['UberEats', 'PedidosYa', 'Rappi']
@@ -7174,9 +7174,7 @@ elif modulo.startswith("📊"):
                         _app_colors = [_GOLD, _GREEN, _RED]
                         _app_total = sum(_app_vals)
 
-                        # G3: torta cuadrada 344×344px — sin escalar en Excel
-                        _G3_SIDE = 344 / 130
-                        fig3, ax3 = _plt.subplots(figsize=(_G3_SIDE, _G3_SIDE), facecolor=_BG)
+                        fig3, ax3 = _plt.subplots(figsize=(6.9, 3.6), facecolor=_BG)
                         ax3.set_facecolor(_BG)
                         if _app_total > 0:
                             _wedges, _texts, _autotexts = ax3.pie(
@@ -7188,9 +7186,10 @@ elif modulo.startswith("📊"):
                             for _at in _autotexts: _at.set_color('white'); _at.set_fontsize(9)
                         ax3.set_title('PARTICIPACIÓN DELIVERY APPS',
                                       color='white', fontsize=10, fontweight='bold', pad=10)
-                        _insert_img(_ws_out, _img_bytes_pie(fig3), 'N59')  # sin escalar — cuadrada 344×344
+                        fig3.tight_layout()
+                        _insert_img(_ws_out, _img_bytes(fig3), 'N59', 500, 344)
 
-                        # ── GRÁFICO 4: Total Aliva histórico (línea) ──────────
+                                                # ── GRÁFICO 4: Total Aliva histórico (línea) ──────────
                         # Aliva usa cols I,K...AE fila 44 como categorías, fila 56 como valores
                         _ALIVA_HIST_COLS = list(range(9, 30, 2)) + [31]
                         _aliva_lbl_raw  = [str(_ws_out.cell(44, _c).value or '').strip() for _c in _ALIVA_HIST_COLS]
