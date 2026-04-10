@@ -7170,7 +7170,7 @@ elif modulo.startswith("📊"):
                         ax2.set_title('APORTE % LOCAL',
                                       color='white', fontsize=9, fontweight='bold', pad=6)
                         # Sin tight_layout ni subplots_adjust: la figura cuadrada preserva el círculo
-                        _insert_img(_ws_out, _img_bytes_pie(fig2), 'S59', 344, 344)
+                        _insert_img(_ws_out, _img_bytes_pie(fig2), 'S59')  # sin escalar — cuadrada 344×344
 
                         # ── GRÁFICO 3: Participación delivery apps (torta) ────
                         _app_names = ['UberEats', 'PedidosYa', 'Rappi']
@@ -7178,9 +7178,9 @@ elif modulo.startswith("📊"):
                         _app_colors = [_GOLD, _GREEN, _RED]
                         _app_total = sum(_app_vals)
 
-                        # G3: slot 500×344px — figsize exacto
-                        _G3_W, _G3_H, _G3_DPI = 500, 344, 130
-                        fig3, ax3 = _plt.subplots(figsize=(_G3_W/_G3_DPI, _G3_H/_G3_DPI), facecolor=_BG)
+                        # G3: torta cuadrada 344×344px — sin escalar en Excel
+                        _G3_SIDE = 344 / 130
+                        fig3, ax3 = _plt.subplots(figsize=(_G3_SIDE, _G3_SIDE), facecolor=_BG)
                         ax3.set_facecolor(_BG)
                         if _app_total > 0:
                             _wedges, _texts, _autotexts = ax3.pie(
@@ -7192,9 +7192,7 @@ elif modulo.startswith("📊"):
                             for _at in _autotexts: _at.set_color('white'); _at.set_fontsize(9)
                         ax3.set_title('PARTICIPACIÓN DELIVERY APPS',
                                       color='white', fontsize=10, fontweight='bold', pad=10)
-                        ax3.set_aspect('equal')  # torta circular, no ovalada
-                        fig3.subplots_adjust(left=0.05, right=0.95, top=0.88, bottom=0.05)
-                        _insert_img(_ws_out, _img_bytes(fig3), 'N59', _G3_W, _G3_H)
+                        _insert_img(_ws_out, _img_bytes_pie(fig3), 'N59')  # sin escalar — cuadrada 344×344
 
                         # ── GRÁFICO 4: Total Aliva histórico (línea) ──────────
                         # Aliva usa cols I,K...AE fila 44 como categorías, fila 56 como valores
