@@ -6932,7 +6932,7 @@ elif modulo.startswith("📊"):
                                 _proy_v = _acum_v / int(_exp_dias_cal) * _exp_dias_mes if int(_exp_dias_cal) > 0 else 0
                                 _ws_out.cell(_r, 5).value  = round(_dia_v)  if _dia_v  else 0
                                 _ws_out.cell(_r, 7).value  = round(_acum_v) if _acum_v else 0
-                                _ws_out.cell(_r, 31).value = round(_proy_v) if _proy_v else 0
+                                # AE6:AE35 — fórmulas de la plantilla (=G/_M$2*30), NO sobreescribir
                                 # Histórico mensual
                                 for _col_h, (_aa_h, _mm_h) in _EXP_COL_MES.items():
                                     _mv = _mens_val(_loc, _tipo.upper(), _aa_h, _mm_h)
@@ -6953,7 +6953,7 @@ elif modulo.startswith("📊"):
                             _tot_proy = (_tot_acum / int(_exp_dias_cal) * _exp_dias_mes) if int(_exp_dias_cal) > 0 else 0
                             _ws_out.cell(_r_tot, 5).value  = round(_tot_dia)
                             _ws_out.cell(_r_tot, 7).value  = round(_tot_acum)
-                            _ws_out.cell(_r_tot, 31).value = round(_tot_proy)
+                            # AE (col31) fila total — fórmula plantilla, NO sobreescribir
                             for _col_h, (_aa_h, _mm_h) in _EXP_COL_MES.items():
                                 _mv_s = _mens_val(_loc, 'SALON',    _aa_h, _mm_h)
                                 _mv_d = _mens_val(_loc, 'DELIVERY', _aa_h, _mm_h)
@@ -7083,6 +7083,17 @@ elif modulo.startswith("📊"):
                             _plt.close(fig)
                             return _buf_img
 
+                        def _img_bytes_pie(fig):
+                            """Exporta gráfico de torta SIN bbox_inches='tight'.
+                            El figsize ya es cuadrado, así que la imagen resultante
+                            conserva proporciones 1:1 y no se estira en Excel."""
+                            _buf_img = _io_exp.BytesIO()
+                            fig.savefig(_buf_img, format='png', dpi=130,
+                                        facecolor=_BG)
+                            _buf_img.seek(0)
+                            _plt.close(fig)
+                            return _buf_img
+
                         def _insert_img(ws, img_bytes, anchor_cell, width_px=None, height_px=None):
                             from openpyxl.drawing.image import Image as _OXLImg
                             _img = _OXLImg(img_bytes)
@@ -7138,9 +7149,11 @@ elif modulo.startswith("📊"):
                         _APORTE_COLORS = ['#d4a853','#5b9bd5','#4caf7d','#e84545','#9b59b6',
                                           '#f39c12','#1abc9c','#e74c3c','#3498db','#2ecc71']
 
-                        # G2: slot 666×344px — figsize exacto para que matplotlib genere esos píxeles
-                        _G2_W, _G2_H, _G2_DPI = 666, 344, 130
-                        fig2, ax2 = _plt.subplots(figsize=(_G2_W/_G2_DPI, _G2_H/_G2_DPI), facecolor=_BG)
+                        # G2 — APORTE % LOCAL: slot 666×344px en Excel
+                        # Figura CUADRADA (344px / 130dpi = 2.646") → torta circular garantizada
+                        # Excel recibe imagen cuadrada y la expande al ancho 666px (solo el fondo)
+                        _G2_SIDE = 344 / 130  # pulgadas cuadradas
+                        fig2, ax2 = _plt.subplots(figsize=(_G2_SIDE, _G2_SIDE), facecolor=_BG)
                         ax2.set_facecolor(_BG)
                         if _aporte_total > 0:
                             _filtered = [(v, l, c) for v, l, c in zip(_aporte_vals, _aporte_locs, _APORTE_COLORS) if v > 0]
@@ -7156,9 +7169,8 @@ elif modulo.startswith("📊"):
                                 for _at in _autotexts2: _at.set_color('white'); _at.set_fontsize(7)
                         ax2.set_title('APORTE % LOCAL',
                                       color='white', fontsize=9, fontweight='bold', pad=6)
-                        ax2.set_aspect('equal')  # torta circular, no ovalada
-                        fig2.subplots_adjust(left=0.05, right=0.95, top=0.88, bottom=0.05)
-                        _insert_img(_ws_out, _img_bytes(fig2), 'S59', _G2_W, _G2_H)
+                        # Sin tight_layout ni subplots_adjust: la figura cuadrada preserva el círculo
+                        _insert_img(_ws_out, _img_bytes_pie(fig2), 'S59', 344, 344)
 
                         # ── GRÁFICO 3: Participación delivery apps (torta) ────
                         _app_names = ['UberEats', 'PedidosYa', 'Rappi']
@@ -13211,7 +13223,7 @@ elif informe_sel == "CuentasCasa":
                             _proy_v = _acum_v / int(_exp_dias_cal) * _exp_dias_mes if int(_exp_dias_cal) > 0 else 0
                             _ws_out.cell(_r, 5).value  = round(_dia_v)  if _dia_v  else 0
                             _ws_out.cell(_r, 7).value  = round(_acum_v) if _acum_v else 0
-                            _ws_out.cell(_r, 31).value = round(_proy_v) if _proy_v else 0
+                            # AE6:AE35 — fórmulas de la plantilla (=G/_M$2*30), NO sobreescribir
                             # Histórico mensual
                             for _col_h, (_aa_h, _mm_h) in _EXP_COL_MES.items():
                                 _mv = _mens_val(_loc, _tipo.upper(), _aa_h, _mm_h)
