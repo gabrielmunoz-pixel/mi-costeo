@@ -7141,7 +7141,7 @@ elif modulo.startswith("📊"):
 
                         # ── GRÁFICO 2: Aporte % por local (torta) ─────────
                         _APORTE_ROWS = [8,10,14,17,20,23,26,29,32,35]
-                        _aporte_vals = [_cell_float(_ws_out, _r, 31) for _r in _APORTE_ROWS]
+                        _aporte_vals = [_cell_float(_ws_out, _r, 7) for _r in _APORTE_ROWS]  # col G = acumulado
                         _aporte_locs = ['Vitacura','Las Condes','Chicureo','Macul',
                                         'La Dehesa','La Reina','Quilin',
                                         'N.Prov.','Providencia','L.Trapenses']
@@ -7149,10 +7149,7 @@ elif modulo.startswith("📊"):
                         _APORTE_COLORS = ['#d4a853','#5b9bd5','#4caf7d','#e84545','#9b59b6',
                                           '#f39c12','#1abc9c','#e74c3c','#3498db','#2ecc71']
 
-                        # G2 — APORTE % LOCAL: slot 666×344px en Excel
-                        # Figura CUADRADA (344px / 130dpi = 2.646") → torta circular garantizada
-                        # Excel recibe imagen cuadrada y la expande al ancho 666px (solo el fondo)
-                        _G2_SIDE = 344 / 130  # pulgadas cuadradas
+                        _G2_SIDE = 344 / 130
                         fig2, ax2 = _plt.subplots(figsize=(_G2_SIDE, _G2_SIDE), facecolor=_BG)
                         ax2.set_facecolor(_BG)
                         if _aporte_total > 0:
@@ -7168,9 +7165,8 @@ elif modulo.startswith("📊"):
                                 for _t in _texts2:      _t.set_color(_GRAY)
                                 for _at in _autotexts2: _at.set_color('white'); _at.set_fontsize(7)
                         ax2.set_title('APORTE % LOCAL',
-                                      color='white', fontsize=9, fontweight='bold', pad=6)
-                        # Sin tight_layout ni subplots_adjust: la figura cuadrada preserva el círculo
-                        _insert_img(_ws_out, _img_bytes_pie(fig2), 'S59')  # sin escalar — cuadrada 344×344
+                                      color='white', fontsize=10, fontweight='bold', pad=10)
+                        _insert_img(_ws_out, _img_bytes_pie(fig2), 'S59')
 
                         # ── GRÁFICO 3: Participación delivery apps (torta) ────
                         _app_names = ['UberEats', 'PedidosYa', 'Rappi']
