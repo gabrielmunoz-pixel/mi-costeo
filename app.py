@@ -6813,6 +6813,12 @@ elif modulo.startswith("📊"):
                         # Actualizar M2 (días calendario) y N2 (días hábiles)
                         _ws_out.cell(2, 13).value = int(_exp_dias_cal)
                         _ws_out.cell(2, 14).value = int(_exp_dias_hab)
+                        # Texto M1:P2 en color blanco (oculto visualmente en la plantilla)
+                        from openpyxl.styles import Font as _Font, Color as _Color
+                        for _wr in range(1, 3):
+                            for _wc in range(13, 17):
+                                _cell = _ws_out.cell(_wr, _wc)
+                                _cell.font = _Font(color='FFFFFFFF', size=_cell.font.size or 11)
 
                         # Actualizar header col E (día) y col G (acumulado)
                         _ws_out.cell(5, 5).value  = f' {_mes_exp_str} {_exp_dia:02d}'
@@ -6961,6 +6967,10 @@ elif modulo.startswith("📊"):
                         _ws_out.cell(38, 5).value  = round(_gt_dia_d)
                         _ws_out.cell(38, 7).value  = round(_gt_acum_d)
                         _ws_out.cell(38, 31).value = round(_gt_proy_d)
+                        # E42=E38+E37, G42=G38+G37 (la plantilla tiene fórmulas pero openpyxl no las ejecuta)
+                        _ws_out.cell(42, 5).value  = round(_gt_dia_s)  + round(_gt_dia_d)
+                        _ws_out.cell(42, 7).value  = round(_gt_acum_s) + round(_gt_acum_d)
+                        _ws_out.cell(42, 31).value = round(_gt_proy_s) + round(_gt_proy_d)
                         # Histórico mensual de totales locales
                         for _col_h, (_aa_h, _mm_h) in _EXP_COL_MES.items():
                             _tot_s_h = sum(_mens_val(_loc, 'SALON',    _aa_h, _mm_h) for _loc in _EXP_LOCAL_ROWS.values())
@@ -6995,14 +7005,9 @@ elif modulo.startswith("📊"):
                             _ws_out.cell(_app_row, 7).value  = round(_app_acum)
                             _ws_out.cell(_app_row, 31).value = round(_app_proy)
 
-                        # ── FILA 42: TOTAL GENERAL (locales + apps) ───────────────
-                        _df_apps_dia  = run_query("SELECT SUM(monto_venta_real) AS v FROM ventas WHERE fecha_venta=:f AND forma_pago IN ('UberEats','PedidosYa','PedidosYa Vouchers','PedidosYa Cash Collection','Rappi')", {'f': str(_exp_fecha)})
-                        _df_apps_acum = run_query("SELECT SUM(monto_venta_real) AS v FROM ventas WHERE fecha_venta BETWEEN :fi AND :ff AND forma_pago IN ('UberEats','PedidosYa','PedidosYa Vouchers','PedidosYa Cash Collection','Rappi')", {'fi': str(_exp_fi), 'ff': str(_exp_ff)})
-                        _gt_apps_dia  = float(_df_apps_dia['v'].iloc[0]  or 0) if not _df_apps_dia.empty  else 0
-                        _gt_apps_acum = float(_df_apps_acum['v'].iloc[0] or 0) if not _df_apps_acum.empty else 0
-                        _ws_out.cell(42, 5).value  = round(_gt_dia_s + _gt_dia_d + _gt_apps_dia)
-                        _ws_out.cell(42, 7).value  = round(_gt_acum_s + _gt_acum_d + _gt_apps_acum)
-                        _ws_out.cell(42, 31).value = round((_gt_acum_s + _gt_acum_d + _gt_apps_acum) / int(_exp_dias_cal) * _exp_dias_mes) if int(_exp_dias_cal) > 0 else 0
+                        # ── FILA 42: TOTAL GENERAL ────────────────────────────────
+                        # E42=E38+E37 y G42=G38+G37 son fórmulas en la plantilla
+                        # No se sobreescriben para que calculen correctamente
 
                         # Escribir datos sección Aliva (filas 45-54)
                         _ALIVA_ROWS = {
@@ -13083,6 +13088,12 @@ elif informe_sel == "CuentasCasa":
                     # Actualizar M2 (días calendario) y N2 (días hábiles)
                     _ws_out.cell(2, 13).value = int(_exp_dias_cal)
                     _ws_out.cell(2, 14).value = int(_exp_dias_hab)
+                    # Texto M1:P2 en color blanco
+                    from openpyxl.styles import Font as _Font2
+                    for _wr2 in range(1, 3):
+                        for _wc2 in range(13, 17):
+                            _c2 = _ws_out.cell(_wr2, _wc2)
+                            _c2.font = _Font2(color='FFFFFFFF', size=_c2.font.size or 11)
 
                     # Actualizar header col E (día) y col G (acumulado)
                     _ws_out.cell(5, 5).value  = f' {_mes_exp_str} {_exp_dia:02d}'
