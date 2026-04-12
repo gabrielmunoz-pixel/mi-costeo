@@ -4934,11 +4934,28 @@ if modulo.startswith("📦"):
             with _t6c_tab1:
               st.markdown("<div class='info-box'>Compras que no pasaron por el facturador. Se suman al Real Utilizado y su <b>precio unitario</b> se usa para calcular el costo de desviación. Formato esperado: <code>Local, N° Factura, RUT Proveedor, Categoria Producto, fecha_dte, Fecha Vencimiento, Categoria Control, producto, cantidad, Precio Unitario</code>.</div>", unsafe_allow_html=True)
 
-              nr1, nr2 = st.columns([2,3])
+              nr1, nr2, nr3 = st.columns([2, 2, 3])
               with nr1:
-                periodo_nr = st.text_input("Período", key="nr_periodo", placeholder="ej: 2-8 Mar 2026")
+                _nr_fecha_ini = st.date_input("Fecha inicio", key="nr_fecha_ini", value=None, format="DD/MM/YYYY")
               with nr2:
+                _nr_fecha_fin = st.date_input("Fecha fin", key="nr_fecha_fin", value=None, format="DD/MM/YYYY")
+              with nr3:
                 f_nr = st.file_uploader("Archivo No Registrado (.xlsx)", type=["xlsx"], key="nr_file")
+
+              # Construir string de período a partir de las fechas seleccionadas
+              if _nr_fecha_ini and _nr_fecha_fin:
+                  import locale as _locale
+                  try:
+                      _locale.setlocale(_locale.LC_TIME, 'es_CL.UTF-8')
+                  except Exception:
+                      pass
+                  if _nr_fecha_ini.month == _nr_fecha_fin.month and _nr_fecha_ini.year == _nr_fecha_fin.year:
+                      periodo_nr = f"{_nr_fecha_ini.day}-{_nr_fecha_fin.day} {_nr_fecha_ini.strftime('%b')} {_nr_fecha_ini.year}"
+                  else:
+                      periodo_nr = f"{_nr_fecha_ini.day} {_nr_fecha_ini.strftime('%b')}-{_nr_fecha_fin.day} {_nr_fecha_fin.strftime('%b')} {_nr_fecha_fin.year}"
+                  st.caption(f"Período: **{periodo_nr}**")
+              else:
+                  periodo_nr = None
 
               if f_nr and periodo_nr:
                 if st.button("💾 Cargar No Registrado", key="btn_nr"):
@@ -5001,11 +5018,28 @@ if modulo.startswith("📦"):
             with _t6c_tab2:
               st.markdown("<div class='info-box'>Carga la planilla de venta entre locales en formato plano. Formato esperado: <code>Origen, Producto, UM, Cantidad, Destino, Fecha</code>. El sistema mapea cada producto a su <b>Categoria Control</b> usando la tabla de clasificación (<code>clas_nomb_prod</code>). Si no hay mapeo, usa el nombre del producto directamente.</div>", unsafe_allow_html=True)
 
-              _il_c1, _il_c2 = st.columns([2, 3])
+              _il_c1, _il_c2, _il_c3 = st.columns([2, 2, 3])
               with _il_c1:
-                  _il_periodo = st.text_input("Período", key="il_periodo", placeholder="ej: 31 Mar-5 Abr 2026")
+                  _il_fecha_ini = st.date_input("Fecha inicio", key="il_fecha_ini", value=None, format="DD/MM/YYYY")
               with _il_c2:
+                  _il_fecha_fin = st.date_input("Fecha fin", key="il_fecha_fin", value=None, format="DD/MM/YYYY")
+              with _il_c3:
                   _il_file = st.file_uploader("Planilla Venta Inter-empresa (.xlsx)", type=["xlsx"], key="il_file")
+
+              # Construir string de período a partir de las fechas seleccionadas
+              if _il_fecha_ini and _il_fecha_fin:
+                  import locale as _locale_il
+                  try:
+                      _locale_il.setlocale(_locale_il.LC_TIME, 'es_CL.UTF-8')
+                  except Exception:
+                      pass
+                  if _il_fecha_ini.month == _il_fecha_fin.month and _il_fecha_ini.year == _il_fecha_fin.year:
+                      _il_periodo = f"{_il_fecha_ini.day}-{_il_fecha_fin.day} {_il_fecha_ini.strftime('%b')} {_il_fecha_ini.year}"
+                  else:
+                      _il_periodo = f"{_il_fecha_ini.day} {_il_fecha_ini.strftime('%b')}-{_il_fecha_fin.day} {_il_fecha_fin.strftime('%b')} {_il_fecha_fin.year}"
+                  st.caption(f"Período: **{_il_periodo}**")
+              else:
+                  _il_periodo = None
 
               if _il_file and _il_periodo:
                   try:
