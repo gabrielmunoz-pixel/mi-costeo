@@ -5093,24 +5093,67 @@ if modulo.startswith("📦"):
                           _df_il = _df_il_raw[_df_il_raw['cantidad'] > 0].copy()
                           _df_il['periodo'] = _il_periodo
 
-                          # ── Preview con indicador de mapeo ──────────────
+                          # ── Detectar mapeados vs sin mapeo ───────────────
                           _df_il['_mapeado'] = _df_il['producto'] != _df_il['producto_raw'].str.upper().str.strip()
                           _n_mapeados = int(_df_il['_mapeado'].sum())
                           _n_sin_mapa = int((~_df_il['_mapeado']).sum())
-                          st.markdown(f"**Preview — {len(_df_il)} movimientos · ✅ {_n_mapeados} mapeados · ⚠️ {_n_sin_mapa} sin mapeo (usan nombre original):**")
+
+                          # ── Opciones de categoría control ─────────────────
+                          _cat_opts_il = [
+                              'POSTA','FILETE','PLATEADA','LOMO LISO','LOMO VETADO','GRASA DE WAGYU',
+                              'PECHUGA DE POLLO','COSTILLAS','CHULETA KASSLER','LOMO DE CENTRO','PERNIL','JAMÓN','TOCINO AHUMADO','PANCETA LAMINADA',
+                              'PALTA','TOMATE','LECHUGA','LECHUGA VERDE','MIX DE LECHUGA',
+                              'FILETE SALMON','SALMON SLICE LAMINADO','CAMARON','CAMARON APANADO','ATUN','LOCOS','ERIZOS',
+                              'QUESO RANCO','QUESO CHEDDAR','QUESO PARMESANO','PAPAS FRITAS',
+                              'FRICA 14 CMS','MOLDE BANQUETE','MOLDE BANQUETE INTEGRAL','PAN FRICA 12 CM','PAN FRICA N8','HOT - DOG 19 CM.',
+                              'SCHOP','JUGOS',
+                          ]
+
+                          # ── Asignación de productos sin mapeo ────────────
+                          if _n_sin_mapa > 0:
+                              _sin_mapa_prods = sorted(_df_il[~_df_il['_mapeado']]['producto_raw'].unique())
+                              st.warning(f"⚠️ {_n_sin_mapa} movimientos con {len(_sin_mapa_prods)} productos sin mapeo. Asigna una Categoría Control a cada uno (deja en blanco para ignorar en el informe).")
+
+                              # Inicializar asignaciones en session_state
+                              if 'il_asignaciones' not in st.session_state:
+                                  st.session_state['il_asignaciones'] = {}
+
+                              # Tabla de asignación: una fila por producto único sin mapeo
+                              st.markdown("**Asignar Categoría Control:**")
+                              _cols_asig = st.columns([3, 2])
+                              _cols_asig[0].markdown("**Producto**")
+                              _cols_asig[1].markdown("**Categoría Control**")
+                              for _pm in _sin_mapa_prods:
+                                  _c1, _c2 = st.columns([3, 2])
+                                  _c1.write(_pm)
+                                  _prev_val = st.session_state['il_asignaciones'].get(_pm, '')
+                                  _sel = _c2.selectbox(
+                                      label='cat',
+                                      options=[''] + _cat_opts_il,
+                                      index=([''] + _cat_opts_il).index(_prev_val) if _prev_val in _cat_opts_il else 0,
+                                      key=f"il_asig_{_pm}",
+                                      label_visibility='collapsed',
+                                  )
+                                  st.session_state['il_asignaciones'][_pm] = _sel
+
+                              # Aplicar asignaciones al df: reemplazar producto donde corresponde
+                              def _apply_asig(row):
+                                  if not row['_mapeado']:
+                                      asig = st.session_state['il_asignaciones'].get(row['producto_raw'], '')
+                                      return asig if asig else row['producto']
+                                  return row['producto']
+                              _df_il['producto'] = _df_il.apply(_apply_asig, axis=1)
+
+                          st.markdown(f"**Preview — {len(_df_il)} movimientos · ✅ {_n_mapeados} mapeados · ⚠️ {_n_sin_mapa} sin mapeo:**")
                           st.dataframe(
                               _df_il[['local_origen','local_destino','producto_raw','producto','cantidad','fecha']].head(15),
                               use_container_width=True, hide_index=True
                           )
-                          if _n_sin_mapa > 0:
-                              with st.expander(f"⚠️ {_n_sin_mapa} productos sin mapeo en clas_nomb_prod"):
-                                  _sin_mapa = _df_il[~_df_il['_mapeado']]['producto_raw'].unique()
-                                  st.write(sorted(_sin_mapa))
 
+                          # ── Botón guardar (habilitado siempre, sin mapeo queda con nombre raw) ──
                           if st.button("💾 Guardar venta inter-empresa", type="primary", key="btn_save_il"):
                               try:
                                   _eng_il = get_engine()
-                                  # Obtener todos los orígenes presentes para borrar solo esos
                                   _origenes = _df_il['local_origen'].unique().tolist()
                                   with _eng_il.connect() as _conn_il:
                                       for _orig in _origenes:
@@ -5137,6 +5180,8 @@ if modulo.startswith("📦"):
                                               'cant': float(_rr['cantidad']),
                                           })
                                       _conn_il.commit()
+                                  # Limpiar asignaciones tras guardar exitoso
+                                  st.session_state.pop('il_asignaciones', None)
                                   st.success(f"✅ {len(_df_il)} movimientos guardados · {len(_origenes)} locales origen · {_il_periodo}")
                               except Exception as _e_il:
                                   st.error(f"Error: {_e_il}")
