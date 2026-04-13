@@ -115,6 +115,20 @@ def _migrate_compras_no_registradas():
     except Exception:
         pass
 
+def _migrate_clas_nomb_prod():
+    """Agrega columna sku a clas_nomb_prod si no existe (migración)."""
+    engine = get_engine()
+    if engine is None: return
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("""
+                ALTER TABLE clas_nomb_prod
+                ADD COLUMN IF NOT EXISTS sku TEXT
+            """))
+            conn.commit()
+    except Exception:
+        pass
+
 def _ensure_sessions_table():
     engine = get_engine()
     if engine is None: return
@@ -2548,6 +2562,7 @@ def get_categorias_compras():
 # ── LOGIN GATE ────────────────────────────────────────────────
 _ensure_sessions_table()
 _migrate_compras_no_registradas()
+_migrate_clas_nomb_prod()
 
 # Intentar restaurar sesión si no hay login activo
 if not st.session_state.get("logged_in"):
@@ -5112,35 +5127,80 @@ if modulo.startswith("📦"):
                           # ── Asignación de productos sin mapeo ────────────
                           if _n_sin_mapa > 0:
                               _sin_mapa_prods = sorted(_df_il[~_df_il['_mapeado']]['producto_raw'].unique())
-                              st.warning(f"⚠️ {_n_sin_mapa} movimientos con {len(_sin_mapa_prods)} productos sin mapeo. Asigna una Categoría Control a cada uno (deja en blanco para ignorar en el informe).")
+                              st.warning(f"⚠️ {_n_sin_mapa} movimientos con {len(_sin_mapa_prods)} productos sin mapeo. Asigna SKU y Categoría Control a cada uno.")
 
                               # Inicializar asignaciones en session_state
                               if 'il_asignaciones' not in st.session_state:
                                   st.session_state['il_asignaciones'] = {}
 
+                              # Cargar SKUs únicos de compras para el buscador
+                              _df_skus = run_query("""
+                                  SELECT DISTINCT ON (sku)
+                                         sku,
+                                         nombre_producto
+                                  FROM compras
+                                  WHERE sku IS NOT NULL AND TRIM(sku) != ''
+                                  ORDER BY sku, nombre_producto
+                              """)
+                              if not _df_skus.empty:
+                                  _sku_options = [''] + [
+                                      f"{row['nombre_producto']} / SKU: {row['sku']}"
+                                      for _, row in _df_skus.iterrows()
+                                  ]
+                                  _sku_map = {
+                                      f"{row['nombre_producto']} / SKU: {row['sku']}": row['sku']
+                                      for _, row in _df_skus.iterrows()
+                                  }
+                              else:
+                                  _sku_options = ['']
+                                  _sku_map = {}
+
                               # Tabla de asignación: una fila por producto único sin mapeo
-                              st.markdown("**Asignar Categoría Control:**")
-                              _cols_asig = st.columns([3, 2])
-                              _cols_asig[0].markdown("**Producto**")
-                              _cols_asig[1].markdown("**Categoría Control**")
+                              st.markdown("**Asignar SKU y Categoría Control:**")
+                              _cols_asig = st.columns([3, 3, 2])
+                              _cols_asig[0].markdown("**Producto en archivo**")
+                              _cols_asig[1].markdown("**SKU**")
+                              _cols_asig[2].markdown("**Categoría Control**")
+
                               for _pm in _sin_mapa_prods:
-                                  _c1, _c2 = st.columns([3, 2])
+                                  _prev = st.session_state['il_asignaciones'].get(_pm, {})
+                                  _c1, _c2, _c3 = st.columns([3, 3, 2])
                                   _c1.write(_pm)
-                                  _prev_val = st.session_state['il_asignaciones'].get(_pm, '')
-                                  _sel = _c2.selectbox(
+
+                                  # Buscador SKU (selectbox con opciones nombre/sku)
+                                  _prev_sku_label = _prev.get('sku_label', '')
+                                  _sku_idx = _sku_options.index(_prev_sku_label) if _prev_sku_label in _sku_options else 0
+                                  _sel_sku_label = _c2.selectbox(
+                                      label='sku',
+                                      options=_sku_options,
+                                      index=_sku_idx,
+                                      key=f"il_sku_{_pm}",
+                                      label_visibility='collapsed',
+                                  )
+
+                                  # Categoría control
+                                  _prev_cat = _prev.get('cat', '')
+                                  _cat_idx = ([''] + _cat_opts_il).index(_prev_cat) if _prev_cat in _cat_opts_il else 0
+                                  _sel_cat = _c3.selectbox(
                                       label='cat',
                                       options=[''] + _cat_opts_il,
-                                      index=([''] + _cat_opts_il).index(_prev_val) if _prev_val in _cat_opts_il else 0,
+                                      index=_cat_idx,
                                       key=f"il_asig_{_pm}",
                                       label_visibility='collapsed',
                                   )
-                                  st.session_state['il_asignaciones'][_pm] = _sel
 
-                              # Aplicar asignaciones al df: reemplazar producto donde corresponde
+                                  st.session_state['il_asignaciones'][_pm] = {
+                                      'sku_label': _sel_sku_label,
+                                      'sku':       _sku_map.get(_sel_sku_label, ''),
+                                      'cat':       _sel_cat,
+                                  }
+
+                              # Aplicar asignaciones al df
                               def _apply_asig(row):
                                   if not row['_mapeado']:
-                                      asig = st.session_state['il_asignaciones'].get(row['producto_raw'], '')
-                                      return asig if asig else row['producto']
+                                      asig = st.session_state['il_asignaciones'].get(row['producto_raw'], {})
+                                      cat  = asig.get('cat', '')
+                                      return cat if cat else row['producto']
                                   return row['producto']
                               _df_il['producto'] = _df_il.apply(_apply_asig, axis=1)
 
@@ -5181,6 +5241,29 @@ if modulo.startswith("📦"):
                                           })
                                       _conn_il.commit()
                                   # Limpiar asignaciones tras guardar exitoso
+                                  # Persistir nuevos mapeos en clas_nomb_prod
+                                  _asignaciones = st.session_state.get('il_asignaciones', {})
+                                  if _asignaciones:
+                                      for _nom_raw, _asig_val in _asignaciones.items():
+                                          _sku_asig = _asig_val.get('sku', '') if isinstance(_asig_val, dict) else ''
+                                          _cat_asig = _asig_val.get('cat', '') if isinstance(_asig_val, dict) else ''
+                                          if not _sku_asig and not _cat_asig:
+                                              continue
+                                          _conn_il.execute(text("""
+                                              INSERT INTO clas_nomb_prod
+                                                  (nombre_producto, categoria_control, categoria, sku)
+                                              VALUES (:nom, :cat_ctrl, :cat, :sku)
+                                              ON CONFLICT (nombre_producto)
+                                              DO UPDATE SET
+                                                  categoria_control = EXCLUDED.categoria_control,
+                                                  sku = EXCLUDED.sku
+                                          """), {
+                                              'nom':      _nom_raw.strip().upper(),
+                                              'cat_ctrl': _cat_asig.strip().upper() if _cat_asig else None,
+                                              'cat':      _cat_asig.strip().upper() if _cat_asig else None,
+                                              'sku':      _sku_asig.strip() if _sku_asig else None,
+                                          })
+                                      _conn_il.commit()
                                   st.session_state.pop('il_asignaciones', None)
                                   st.success(f"✅ {len(_df_il)} movimientos guardados · {len(_origenes)} locales origen · {_il_periodo}")
                               except Exception as _e_il:
@@ -10379,7 +10462,23 @@ elif modulo.startswith("📊"):
                     if locales: params['ls'] = [l.lower().strip() for l in locales]
                     return run_query(q, params)
 
-                def get_no_registrado(periodo, locales):
+                def get_interlocal_detalle(periodo, locales):
+                    """Inter-local con detalle de local_origen para poder valorizar las entradas
+                    al precio de compra del local que envió el producto."""
+                    lf = "AND (LOWER(TRIM(local_destino))=ANY(:ls) OR LOWER(TRIM(local_origen))=ANY(:ls))" if locales else ""
+                    q = f"""
+                        SELECT LOWER(TRIM(local_origen))  AS local_origen,
+                               LOWER(TRIM(local_destino)) AS local_destino,
+                               UPPER(TRIM(producto))      AS producto_control,
+                               SUM(cantidad)              AS kg
+                        FROM venta_interlocal
+                        WHERE TRIM(periodo)=:p {lf}
+                        GROUP BY LOWER(TRIM(local_origen)), LOWER(TRIM(local_destino)),
+                                 UPPER(TRIM(producto))
+                    """
+                    params = {'p': periodo.strip()}
+                    if locales: params['ls'] = [l.lower().strip() for l in locales]
+                    return run_query(q, params)
                     """Compras no registradas — cantidad y costo por local + producto_control.
                     El costo se calcula como SUM(cantidad * precio_unitario) cuando hay precio_unitario.
                     Si no hay precio, el costo queda en 0 y el informe usa el precio promedio de compras."""
@@ -10404,7 +10503,52 @@ elif modulo.startswith("📊"):
                     if locales: params['ls'] = [l.lower() for l in locales]
                     return run_query(q, params)
 
-                def get_ventas_ic(fecha_i, fecha_f, locales):
+                def get_precio_interlocal(fecha_i, fecha_f):
+                    """Precio unitario para valorizar inter-empresa via SKU asignado en clas_nomb_prod.
+                    Retorna df con columnas: producto_control, local_origen, precio_u, prioridad
+                    Orden:
+                      1. Promedio ponderado del SKU en el local origen durante el período
+                      2. Última compra del SKU (cualquier local, más reciente)
+                    """
+                    q = """
+                        WITH
+                        -- SKUs asignados: nombre_raw → sku → categoria_control
+                        skus AS (
+                            SELECT UPPER(TRIM(categoria_control)) AS producto_control,
+                                   TRIM(sku)                      AS sku
+                            FROM clas_nomb_prod
+                            WHERE sku IS NOT NULL AND TRIM(sku) != ''
+                              AND categoria_control IS NOT NULL AND TRIM(categoria_control) != ''
+                        ),
+                        -- 1. Promedio ponderado del período por local origen
+                        p1 AS (
+                            SELECT sk.producto_control,
+                                   LOWER(TRIM(c.local)) AS local_origen,
+                                   SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv), 0) AS precio_u,
+                                   1 AS prioridad
+                            FROM compras c
+                            JOIN skus sk ON c.sku = sk.sku
+                            WHERE c.fecha_dte::date BETWEEN :i AND :f
+                              AND c.cant_conv > 0 AND c.costo_realfinal > 0
+                            GROUP BY sk.producto_control, LOWER(TRIM(c.local))
+                        ),
+                        -- 2. Última compra global (cualquier local, más reciente)
+                        p2 AS (
+                            SELECT DISTINCT ON (sk.producto_control)
+                                   sk.producto_control,
+                                   NULL::text AS local_origen,
+                                   c.costo_realfinal / NULLIF(c.cant_conv, 0) AS precio_u,
+                                   2 AS prioridad
+                            FROM compras c
+                            JOIN skus sk ON c.sku = sk.sku
+                            WHERE c.cant_conv > 0 AND c.costo_realfinal > 0
+                            ORDER BY sk.producto_control, c.fecha_dte DESC
+                        )
+                        SELECT producto_control, local_origen, precio_u, prioridad FROM p1
+                        UNION ALL
+                        SELECT producto_control, local_origen, precio_u, prioridad FROM p2
+                    """
+                    return run_query(q, {'i': str(fecha_i), 'f': str(fecha_f)})
                     lf = "AND UPPER(local)=ANY(:ls)" if locales else ""
                     q = f"""
                         SELECT local,
@@ -10501,6 +10645,8 @@ elif modulo.startswith("📊"):
                 df_bar_ven     = get_bar_ventas(fecha_acum_i, fecha_acum_f, locales_sel)  # acumulado
                 df_no_reg      = get_no_registrado(periodo_ic, locales_sel)
                 df_interlocal  = get_interlocal(periodo_ic, locales_sel)
+                df_il_detalle  = get_interlocal_detalle(periodo_ic, locales_sel)
+                df_precio_il   = get_precio_interlocal(fecha_acum_i, fecha_acum_f)
 
                 # Compras KG por producto_control usando clasificación
                 # Todos los nombres de producto_control conocidos en cat_labels
@@ -10582,6 +10728,8 @@ elif modulo.startswith("📊"):
                     'df_uso': df_uso_ic,
                     'df_no_reg': df_no_reg,
                     'df_interlocal': df_interlocal,
+                    'df_il_detalle': df_il_detalle,
+                    'df_precio_il': df_precio_il,
                     'cat_labels': cat_labels,
                     'fecha_i': fecha_ic_i,
                     'fecha_f': fecha_ic_f,
@@ -10600,6 +10748,8 @@ elif modulo.startswith("📊"):
             df_bv  = d['df_bar_ven']
             df_nr  = d.get('df_no_reg', pd.DataFrame())
             df_il  = d.get('df_interlocal', pd.DataFrame())
+            df_ild = d.get('df_il_detalle', pd.DataFrame())
+            df_pil = d.get('df_precio_il', pd.DataFrame())
             df_ckr = d.get('df_compras_kg', pd.DataFrame())
             df_nc  = d.get('df_nc', pd.DataFrame())
             cat_labels = d.get('cat_labels', {})
@@ -10656,13 +10806,94 @@ elif modulo.startswith("📊"):
                 compra_tot = float(cc['compra_total'].sum())   if not cc.empty else 0
                 pct_compra = compra_tot / v_total if v_total > 0 else 0
 
-                # Compra por categoría
+                # Compra por categoría — base: compras registradas
                 cat_map = {'ALIMENTOS': 0, 'VERDURAS': 0, 'BAR': 0, 'ART. LIMPIEZA': 0, 'DESECHABLES': 0}
                 if not cc.empty:
                     for _, row in cc.iterrows():
                         cat = str(row.get('categoria_producto','')).strip().upper()
                         val = float(row.get('compra_total', 0) or 0)
                         if cat in cat_map: cat_map[cat] += val
+
+                # ── Sumar No Registrados al cat_map ──────────────────────
+                # La categoria_producto viene en la tabla compras_no_registradas
+                _nr_cat_q = run_query("""
+                    SELECT UPPER(TRIM(categoria_producto)) as cat,
+                           SUM(cantidad * precio_unitario)  as costo_nr
+                    FROM compras_no_registradas
+                    WHERE TRIM(periodo)=:p
+                      AND precio_unitario IS NOT NULL AND precio_unitario > 0
+                      AND LOWER(TRIM(local))=:loc
+                    GROUP BY UPPER(TRIM(categoria_producto))
+                """, {'p': periodo_show, 'loc': local_show.strip().lower()})
+                if not _nr_cat_q.empty:
+                    for _, _nr_row in _nr_cat_q.iterrows():
+                        _nr_cat = str(_nr_row.get('cat', '') or '').strip().upper()
+                        _nr_val = float(_nr_row.get('costo_nr', 0) or 0)
+                        if _nr_cat in cat_map:
+                            cat_map[_nr_cat] += _nr_val
+
+                # ── Valorizar inter-empresa y ajustar cat_map ─────────────
+                # Mapeo producto_control → categoria_producto (para saber en qué fila del cat_map cae)
+                _ctrl_to_cat = {
+                    'POSTA':'ALIMENTOS','FILETE':'ALIMENTOS','PLATEADA':'ALIMENTOS',
+                    'LOMO LISO':'ALIMENTOS','LOMO VETADO':'ALIMENTOS','GRASA DE WAGYU':'ALIMENTOS',
+                    'PECHUGA DE POLLO':'ALIMENTOS','COSTILLAS':'ALIMENTOS','CHULETA KASSLER':'ALIMENTOS',
+                    'LOMO DE CENTRO':'ALIMENTOS','PERNIL':'ALIMENTOS','JAMÓN':'ALIMENTOS',
+                    'TOCINO AHUMADO':'ALIMENTOS','PANCETA LAMINADA':'ALIMENTOS',
+                    'FILETE SALMON':'ALIMENTOS','SALMON SLICE LAMINADO':'ALIMENTOS',
+                    'CAMARON':'ALIMENTOS','CAMARON APANADO':'ALIMENTOS',
+                    'ATUN':'ALIMENTOS','LOCOS':'ALIMENTOS','ERIZOS':'ALIMENTOS',
+                    'QUESO RANCO':'ALIMENTOS','QUESO CHEDDAR':'ALIMENTOS',
+                    'QUESO PARMESANO':'ALIMENTOS','PAPAS FRITAS':'ALIMENTOS',
+                    'PALTA':'VERDURAS','TOMATE':'VERDURAS','LECHUGA':'VERDURAS',
+                    'LECHUGA VERDE':'VERDURAS','MIX DE LECHUGA':'VERDURAS',
+                    'FRICA 14 CMS':'ALIMENTOS','MOLDE BANQUETE':'ALIMENTOS',
+                    'MOLDE BANQUETE INTEGRAL':'ALIMENTOS','PAN FRICA 12 CM':'ALIMENTOS',
+                    'PAN FRICA N8':'ALIMENTOS','HOT - DOG 19 CM.':'ALIMENTOS',
+                    'SCHOP':'BAR','JUGOS':'BAR',
+                }
+
+                def _get_precio_il(local_orig, prod_ctrl):
+                    """Precio unitario via SKU: promedio ponderado del período (local origen) → última compra global.
+                    prod_ctrl es el producto_control guardado en venta_interlocal (ya mapeado)."""
+                    if df_pil.empty: return 0.0
+                    prod_u = prod_ctrl.upper().strip()
+                    loc_l  = local_orig.lower().strip()
+                    # Prioridad 1: promedio ponderado del período en el local origen
+                    _m1 = (df_pil['producto_control'].astype(str).str.upper().str.strip() == prod_u) & \
+                          (df_pil['local_origen'].astype(str).str.lower().str.strip() == loc_l) & \
+                          (df_pil['prioridad'] == 1)
+                    _rows1 = df_pil[_m1].dropna(subset=['precio_u'])
+                    if not _rows1.empty:
+                        return float(_rows1.iloc[0]['precio_u'])
+                    # Fallback: última compra global (prioridad 2)
+                    _m2 = (df_pil['producto_control'].astype(str).str.upper().str.strip() == prod_u) & \
+                          (df_pil['prioridad'] == 2)
+                    _rows2 = df_pil[_m2].dropna(subset=['precio_u'])
+                    if not _rows2.empty:
+                        return float(_rows2.iloc[0]['precio_u'])
+                    return 0.0
+
+                if not df_ild.empty:
+                    _loc_l = local_show.strip().lower()
+                    # Entradas: este local es destino — precio del local_origen
+                    _ent = df_ild[df_ild['local_destino'] == _loc_l]
+                    for _, _r in _ent.iterrows():
+                        _prod = str(_r['producto_control']).upper().strip()
+                        _cat  = _ctrl_to_cat.get(_prod)
+                        if not _cat or _cat not in cat_map: continue
+                        _precio = _get_precio_il(str(_r['local_origen']), _prod)
+                        if _precio <= 0: continue
+                        cat_map[_cat] += float(_r['kg']) * _precio
+                    # Salidas: este local es origen — precio del propio local
+                    _sal = df_ild[df_ild['local_origen'] == _loc_l]
+                    for _, _r in _sal.iterrows():
+                        _prod = str(_r['producto_control']).upper().strip()
+                        _cat  = _ctrl_to_cat.get(_prod)
+                        if not _cat or _cat not in cat_map: continue
+                        _precio = _get_precio_il(local_show, _prod)
+                        if _precio <= 0: continue
+                        cat_map[_cat] -= float(_r['kg']) * _precio
 
                 # Uso por categoría de control
                 cat_uso = {}
