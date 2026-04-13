@@ -129,6 +129,22 @@ def _migrate_clas_nomb_prod():
     except Exception:
         pass
 
+def _migrate_venta_interlocal():
+    """Agrega columnas precio_unitario, categoria_producto, subcat a venta_interlocal si no existen."""
+    engine = get_engine()
+    if engine is None: return
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("""
+                ALTER TABLE venta_interlocal
+                ADD COLUMN IF NOT EXISTS precio_unitario    NUMERIC(12,2),
+                ADD COLUMN IF NOT EXISTS categoria_producto TEXT,
+                ADD COLUMN IF NOT EXISTS subcat             TEXT
+            """))
+            conn.commit()
+    except Exception:
+        pass
+
 def _ensure_sessions_table():
     engine = get_engine()
     if engine is None: return
@@ -2563,6 +2579,7 @@ def get_categorias_compras():
 _ensure_sessions_table()
 _migrate_compras_no_registradas()
 _migrate_clas_nomb_prod()
+_migrate_venta_interlocal()
 
 # Intentar restaurar sesión si no hay login activo
 if not st.session_state.get("logged_in"):
@@ -5031,7 +5048,7 @@ if modulo.startswith("📦"):
                 st.dataframe(df_nr_bd, use_container_width=True, hide_index=True)
 
             with _t6c_tab2:
-              st.markdown("<div class='info-box'>Carga la planilla de venta entre locales en formato plano. Formato esperado: <code>Origen, Producto, UM, Cantidad, Destino, Fecha</code>. El sistema mapea cada producto a su <b>Categoria Control</b> usando la tabla de clasificación (<code>clas_nomb_prod</code>). Si no hay mapeo, usa el nombre del producto directamente.</div>", unsafe_allow_html=True)
+              st.markdown("<div class='info-box'>Carga la planilla de venta entre locales en formato plano. Columnas requeridas: <code>Origen, Producto, UM, Cantidad, Destino, Fecha</code>. Columnas opcionales: <code>Precio Unitario, Categoria Producto, Subcat</code>. El sistema mapea cada producto a su <b>Categoria Control</b> usando la tabla de clasificación (<code>clas_nomb_prod</code>).</div>", unsafe_allow_html=True)
 
               _il_c1, _il_c2, _il_c3 = st.columns([2, 2, 3])
               with _il_c1:
@@ -5085,6 +5102,13 @@ if modulo.startswith("📦"):
                           _df_il_raw['fecha']         = pd.to_datetime(_df_il_raw['Fecha'], errors='coerce').dt.strftime('%Y-%m-%d')
                           _df_il_raw['formato']       = _df_il_raw.get('UM', pd.Series([''] * len(_df_il_raw))).fillna('').astype(str)
                           _df_il_raw['producto_raw']  = _df_il_raw['Producto'].fillna('').astype(str).str.strip()
+                          # Columnas opcionales
+                          _tiene_precio  = 'Precio Unitario'   in _df_il_raw.columns
+                          _tiene_catprod = 'Categoria Producto' in _df_il_raw.columns
+                          _tiene_subcat  = 'Subcat'             in _df_il_raw.columns
+                          _df_il_raw['precio_unitario']   = pd.to_numeric(_df_il_raw['Precio Unitario'],    errors='coerce').fillna(0) if _tiene_precio  else 0
+                          _df_il_raw['categoria_producto'] = _df_il_raw['Categoria Producto'].fillna('').astype(str).str.strip().str.upper() if _tiene_catprod else ''
+                          _df_il_raw['subcat']             = _df_il_raw['Subcat'].fillna('').astype(str).str.strip() if _tiene_subcat else ''
 
                           # ── Mapeo clas_nomb_prod → producto_control ──────
                           _df_clas = run_query("""
@@ -5222,8 +5246,12 @@ if modulo.startswith("📦"):
                               _df_il['producto'] = _df_il.apply(_apply_asig, axis=1)
 
                           st.markdown(f"**Preview — {len(_df_il)} movimientos · ✅ {_n_mapeados} mapeados · ⚠️ {_n_sin_mapa} sin mapeo:**")
+                          _cols_preview = ['local_origen','local_destino','producto_raw','producto','cantidad','fecha']
+                          if _tiene_precio:  _cols_preview.append('precio_unitario')
+                          if _tiene_catprod: _cols_preview.append('categoria_producto')
+                          if _tiene_subcat:  _cols_preview.append('subcat')
                           st.dataframe(
-                              _df_il[['local_origen','local_destino','producto_raw','producto','cantidad','fecha']].head(15),
+                              _df_il[_cols_preview].head(15),
                               use_container_width=True, hide_index=True
                           )
 
@@ -5242,19 +5270,28 @@ if modulo.startswith("📦"):
                                           _conn_il.execute(text("""
                                               INSERT INTO venta_interlocal
                                                   (periodo, fecha, local_origen, local_destino,
-                                                   categoria, producto, formato, cantidad)
-                                              VALUES (:p, :f, :o, :d, :cat, :prod, :fmt, :cant)
+                                                   categoria, producto, formato, cantidad,
+                                                   precio_unitario, categoria_producto, subcat)
+                                              VALUES (:p, :f, :o, :d, :cat, :prod, :fmt, :cant,
+                                                      :precio, :catprod, :subcat)
                                               ON CONFLICT (periodo, fecha, local_origen, local_destino, producto)
-                                              DO UPDATE SET cantidad=EXCLUDED.cantidad
+                                              DO UPDATE SET
+                                                  cantidad=EXCLUDED.cantidad,
+                                                  precio_unitario=EXCLUDED.precio_unitario,
+                                                  categoria_producto=EXCLUDED.categoria_producto,
+                                                  subcat=EXCLUDED.subcat
                                           """), {
-                                              'p':    _rr['periodo'],
-                                              'f':    _rr['fecha'],
-                                              'o':    _rr['local_origen'],
-                                              'd':    _rr['local_destino'],
-                                              'cat':  '',
-                                              'prod': _rr['producto'],
-                                              'fmt':  _rr['formato'],
-                                              'cant': float(_rr['cantidad']),
+                                              'p':       _rr['periodo'],
+                                              'f':       _rr['fecha'],
+                                              'o':       _rr['local_origen'],
+                                              'd':       _rr['local_destino'],
+                                              'cat':     '',
+                                              'prod':    _rr['producto'],
+                                              'fmt':     _rr['formato'],
+                                              'cant':    float(_rr['cantidad']),
+                                              'precio':  float(_rr['precio_unitario']) if _rr['precio_unitario'] else None,
+                                              'catprod': _rr['categoria_producto'] or None,
+                                              'subcat':  _rr['subcat'] or None,
                                           })
                                       _conn_il.commit()
                                   # Limpiar asignaciones tras guardar exitoso
