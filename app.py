@@ -10567,6 +10567,27 @@ elif modulo.startswith("📊"):
                     """
                     return run_query(q, {'i': str(fecha_i), 'f': str(fecha_f)})
 
+                def get_no_registrado(periodo, locales):
+                    """Compras no registradas — cantidad y costo por local + producto_control."""
+                    lf = "AND LOWER(TRIM(local))=ANY(:ls)" if locales else ""
+                    q = f"""
+                        SELECT TRIM(local) as local,
+                               UPPER(TRIM(producto_control)) as producto_control,
+                               SUM(cantidad) as kg,
+                               SUM(CASE WHEN precio_unitario IS NOT NULL AND precio_unitario > 0
+                                        THEN cantidad * precio_unitario ELSE 0 END) as costo_nr,
+                               COUNT(CASE WHEN precio_unitario IS NOT NULL AND precio_unitario > 0
+                                          THEN 1 END) as n_con_precio
+                        FROM compras_no_registradas
+                        WHERE TRIM(periodo)=:p
+                          AND producto_control IS NOT NULL
+                          AND TRIM(producto_control) != '' {lf}
+                        GROUP BY TRIM(local), UPPER(TRIM(producto_control))
+                    """
+                    params = {'p': periodo}
+                    if locales: params['ls'] = [l.lower() for l in locales]
+                    return run_query(q, params)
+
                 def get_ventas_ic(fecha_i, fecha_f, locales):
                     lf = "AND UPPER(local)=ANY(:ls)" if locales else ""
                     q = f"""
