@@ -5103,12 +5103,14 @@ if modulo.startswith("📦"):
                           _df_il_raw['formato']       = _df_il_raw.get('UM', pd.Series([''] * len(_df_il_raw))).fillna('').astype(str)
                           _df_il_raw['producto_raw']  = _df_il_raw['Producto'].fillna('').astype(str).str.strip()
                           # Columnas opcionales
-                          _tiene_precio  = 'Precio Unitario'   in _df_il_raw.columns
-                          _tiene_catprod = 'Categoria Producto' in _df_il_raw.columns
-                          _tiene_subcat  = 'Subcat'             in _df_il_raw.columns
-                          _df_il_raw['precio_unitario']   = pd.to_numeric(_df_il_raw['Precio Unitario'],    errors='coerce').fillna(0) if _tiene_precio  else 0
+                          _tiene_precio   = 'Precio Unitario'    in _df_il_raw.columns
+                          _tiene_catprod  = 'Categoria Producto'  in _df_il_raw.columns
+                          _tiene_subcat   = 'Subcat'              in _df_il_raw.columns
+                          _tiene_catctrl  = 'Categoria Control'   in _df_il_raw.columns
+                          _df_il_raw['precio_unitario']    = pd.to_numeric(_df_il_raw['Precio Unitario'],    errors='coerce').fillna(0) if _tiene_precio  else 0
                           _df_il_raw['categoria_producto'] = _df_il_raw['Categoria Producto'].fillna('').astype(str).str.strip().str.upper() if _tiene_catprod else ''
                           _df_il_raw['subcat']             = _df_il_raw['Subcat'].fillna('').astype(str).str.strip() if _tiene_subcat else ''
+                          _df_il_raw['cat_ctrl_archivo']   = _df_il_raw['Categoria Control'].fillna('').astype(str).str.strip().str.upper() if _tiene_catctrl else ''
 
                           # ── Mapeo clas_nomb_prod → producto_control ──────
                           _df_clas = run_query("""
@@ -5122,18 +5124,26 @@ if modulo.startswith("📦"):
                           else:
                               _map_ctrl = {}
 
-                          def _resolve_ctrl(nombre):
-                              k = nombre.upper().strip()
-                              return _map_ctrl.get(k, k)  # fallback: nombre en mayúsculas
+                          def _resolve_ctrl(row):
+                              # 1. Si viene Categoria Control en el archivo, usar esa
+                              if _tiene_catctrl and row.get('cat_ctrl_archivo', ''):
+                                  return row['cat_ctrl_archivo']
+                              # 2. Buscar en clas_nomb_prod
+                              k = row['producto_raw'].upper().strip()
+                              return _map_ctrl.get(k, k)
 
-                          _df_il_raw['producto'] = _df_il_raw['producto_raw'].apply(_resolve_ctrl)
+                          _df_il_raw['producto'] = _df_il_raw.apply(_resolve_ctrl, axis=1)
 
                           # ── Filtrar cantidad > 0 ────────────────────────
                           _df_il = _df_il_raw[_df_il_raw['cantidad'] > 0].copy()
                           _df_il['periodo'] = _il_periodo
 
                           # ── Detectar mapeados vs sin mapeo ───────────────
-                          _df_il['_mapeado'] = _df_il['producto'] != _df_il['producto_raw'].str.upper().str.strip()
+                          # Mapeado = tiene categoria_control (ya sea del archivo o de clas_nomb_prod)
+                          _df_il['_mapeado'] = (
+                              (_tiene_catctrl and _df_il['cat_ctrl_archivo'].str.strip() != '') |
+                              (_df_il['producto'] != _df_il['producto_raw'].str.upper().str.strip())
+                          )
                           _n_mapeados = int(_df_il['_mapeado'].sum())
                           _n_sin_mapa = int((~_df_il['_mapeado']).sum())
 
@@ -5247,9 +5257,10 @@ if modulo.startswith("📦"):
 
                           st.markdown(f"**Preview — {len(_df_il)} movimientos · ✅ {_n_mapeados} mapeados · ⚠️ {_n_sin_mapa} sin mapeo:**")
                           _cols_preview = ['local_origen','local_destino','producto_raw','producto','cantidad','fecha']
-                          if _tiene_precio:  _cols_preview.append('precio_unitario')
-                          if _tiene_catprod: _cols_preview.append('categoria_producto')
-                          if _tiene_subcat:  _cols_preview.append('subcat')
+                          if _tiene_precio:   _cols_preview.append('precio_unitario')
+                          if _tiene_catprod:  _cols_preview.append('categoria_producto')
+                          if _tiene_subcat:   _cols_preview.append('subcat')
+                          if _tiene_catctrl:  _cols_preview.append('cat_ctrl_archivo')
                           st.dataframe(
                               _df_il[_cols_preview].head(15),
                               use_container_width=True, hide_index=True
@@ -5294,30 +5305,46 @@ if modulo.startswith("📦"):
                                               'subcat':  _rr['subcat'] or None,
                                           })
                                       _conn_il.commit()
-                                  # Limpiar asignaciones tras guardar exitoso
-                                  # Persistir nuevos mapeos en clas_nomb_prod
-                                  _asignaciones = st.session_state.get('il_asignaciones', {})
-                                  if _asignaciones:
-                                      for _nom_raw, _asig_val in _asignaciones.items():
-                                          _sku_asig = _asig_val.get('sku', '') if isinstance(_asig_val, dict) else ''
-                                          _cat_asig = _asig_val.get('cat', '') if isinstance(_asig_val, dict) else ''
-                                          if not _sku_asig and not _cat_asig:
-                                              continue
-                                          _conn_il.execute(text("""
-                                              INSERT INTO clas_nomb_prod
-                                                  (nombre_producto, categoria_control, categoria, sku)
-                                              VALUES (:nom, :cat_ctrl, :cat, :sku)
-                                              ON CONFLICT (nombre_producto)
-                                              DO UPDATE SET
-                                                  categoria_control = EXCLUDED.categoria_control,
-                                                  sku = EXCLUDED.sku
-                                          """), {
-                                              'nom':      _nom_raw.strip().upper(),
-                                              'cat_ctrl': _cat_asig.strip().upper() if _cat_asig else None,
-                                              'cat':      _cat_asig.strip().upper() if _cat_asig else None,
-                                              'sku':      _sku_asig.strip() if _sku_asig else None,
-                                          })
-                                      _conn_il.commit()
+                                  # Persistir mapeos en clas_nomb_prod:
+                                  # 1. Los asignados manualmente en la app
+                                  # 2. Los que venían con Categoria Control en el archivo
+                                  with get_engine().connect() as _conn_clas:
+                                      _asignaciones = st.session_state.get('il_asignaciones', {})
+                                      if _asignaciones:
+                                          for _nom_raw, _asig_val in _asignaciones.items():
+                                              _sku_asig = _asig_val.get('sku', '') if isinstance(_asig_val, dict) else ''
+                                              _cat_asig = _asig_val.get('cat', '') if isinstance(_asig_val, dict) else ''
+                                              if not _sku_asig and not _cat_asig:
+                                                  continue
+                                              _conn_clas.execute(text("""
+                                                  INSERT INTO clas_nomb_prod
+                                                      (nombre_producto, categoria_control, categoria, sku)
+                                                  VALUES (:nom, :cat_ctrl, :cat, :sku)
+                                                  ON CONFLICT (nombre_producto)
+                                                  DO UPDATE SET
+                                                      categoria_control = EXCLUDED.categoria_control,
+                                                      sku = EXCLUDED.sku
+                                              """), {
+                                                  'nom':      _nom_raw.strip().upper(),
+                                                  'cat_ctrl': _cat_asig.strip().upper() if _cat_asig else None,
+                                                  'cat':      _cat_asig.strip().upper() if _cat_asig else None,
+                                                  'sku':      _sku_asig.strip() if _sku_asig else None,
+                                              })
+                                      # Persistir cat_ctrl del archivo
+                                      if _tiene_catctrl:
+                                          for _, _rr in _df_il.iterrows():
+                                              _cc = str(_rr.get('cat_ctrl_archivo', '') or '').strip().upper()
+                                              _np = str(_rr.get('producto_raw', '') or '').strip().upper()
+                                              if _cc and _np:
+                                                  _conn_clas.execute(text("""
+                                                      INSERT INTO clas_nomb_prod
+                                                          (nombre_producto, categoria_control, categoria)
+                                                      VALUES (:nom, :cat_ctrl, :cat)
+                                                      ON CONFLICT (nombre_producto)
+                                                      DO UPDATE SET
+                                                          categoria_control = EXCLUDED.categoria_control
+                                                  """), {'nom': _np, 'cat_ctrl': _cc, 'cat': _cc})
+                                      _conn_clas.commit()
                                   st.session_state.pop('il_asignaciones', None)
                                   st.success(f"✅ {len(_df_il)} movimientos guardados · {len(_origenes)} locales origen · {_il_periodo}")
                               except Exception as _e_il:
