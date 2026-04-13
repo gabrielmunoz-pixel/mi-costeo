@@ -5133,14 +5133,19 @@ if modulo.startswith("📦"):
                               if 'il_asignaciones' not in st.session_state:
                                   st.session_state['il_asignaciones'] = {}
 
-                              # Cargar SKUs únicos de compras para el buscador
+                              # Cargar SKUs únicos de compras + recetas para el buscador
                               _df_skus = run_query("""
-                                  SELECT DISTINCT ON (sku)
-                                         sku,
-                                         nombre_producto
-                                  FROM compras
-                                  WHERE sku IS NOT NULL AND TRIM(sku) != ''
-                                  ORDER BY sku, nombre_producto
+                                  SELECT sku, nombre_producto FROM (
+                                      SELECT DISTINCT ON (sku) sku, nombre_producto
+                                      FROM compras
+                                      WHERE sku IS NOT NULL AND TRIM(sku) != ''
+                                      ORDER BY sku, nombre_producto
+                                  ) c
+                                  UNION
+                                  SELECT DISTINCT sku_ingrediente AS sku, sku_ingrediente AS nombre_producto
+                                  FROM recetas
+                                  WHERE sku_ingrediente IS NOT NULL AND TRIM(sku_ingrediente) != ''
+                                  ORDER BY sku
                               """)
                               if not _df_skus.empty:
                                   _sku_options = [''] + [
@@ -5159,7 +5164,7 @@ if modulo.startswith("📦"):
                               st.markdown("**Asignar SKU y Categoría Control:**")
                               _cols_asig = st.columns([3, 3, 2])
                               _cols_asig[0].markdown("**Producto en archivo**")
-                              _cols_asig[1].markdown("**SKU**")
+                              _cols_asig[1].markdown("**SKU** *(selecciona o escribe si no aparece)*")
                               _cols_asig[2].markdown("**Categoría Control**")
 
                               for _pm in _sin_mapa_prods:
@@ -5167,7 +5172,7 @@ if modulo.startswith("📦"):
                                   _c1, _c2, _c3 = st.columns([3, 3, 2])
                                   _c1.write(_pm)
 
-                                  # Buscador SKU (selectbox con opciones nombre/sku)
+                                  # Buscador SKU (selectbox)
                                   _prev_sku_label = _prev.get('sku_label', '')
                                   _sku_idx = _sku_options.index(_prev_sku_label) if _prev_sku_label in _sku_options else 0
                                   _sel_sku_label = _c2.selectbox(
@@ -5177,6 +5182,17 @@ if modulo.startswith("📦"):
                                       key=f"il_sku_{_pm}",
                                       label_visibility='collapsed',
                                   )
+                                  # Texto libre si no aparece en la lista
+                                  _prev_sku_manual = _prev.get('sku_manual', '')
+                                  _sku_manual = _c2.text_input(
+                                      label='sku_manual',
+                                      value=_prev_sku_manual,
+                                      placeholder='O escribe SKU (ej: AL-AF-001)',
+                                      key=f"il_sku_manual_{_pm}",
+                                      label_visibility='collapsed',
+                                  )
+                                  # Manual tiene prioridad si está lleno
+                                  _sku_final = _sku_manual.strip() if _sku_manual.strip() else _sku_map.get(_sel_sku_label, '')
 
                                   # Categoría control
                                   _prev_cat = _prev.get('cat', '')
@@ -5190,9 +5206,10 @@ if modulo.startswith("📦"):
                                   )
 
                                   st.session_state['il_asignaciones'][_pm] = {
-                                      'sku_label': _sel_sku_label,
-                                      'sku':       _sku_map.get(_sel_sku_label, ''),
-                                      'cat':       _sel_cat,
+                                      'sku_label':  _sel_sku_label,
+                                      'sku_manual': _sku_manual.strip(),
+                                      'sku':        _sku_final,
+                                      'cat':        _sel_cat,
                                   }
 
                               # Aplicar asignaciones al df
@@ -10549,6 +10566,8 @@ elif modulo.startswith("📊"):
                         SELECT producto_control, local_origen, precio_u, prioridad FROM p2
                     """
                     return run_query(q, {'i': str(fecha_i), 'f': str(fecha_f)})
+
+                def get_ventas_ic(fecha_i, fecha_f, locales):
                     lf = "AND UPPER(local)=ANY(:ls)" if locales else ""
                     q = f"""
                         SELECT local,
