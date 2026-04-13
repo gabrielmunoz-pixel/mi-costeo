@@ -10598,15 +10598,15 @@ elif modulo.startswith("📊"):
                     return run_query(q, params)
 
                 def get_precio_interlocal(fecha_i, fecha_f):
-                    """Precio unitario para valorizar inter-empresa via SKU asignado en clas_nomb_prod.
-                    Retorna df con columnas: producto_control, local_origen, precio_u, prioridad
-                    Orden:
+                    """Precio unitario para valorizar inter-empresa.
+                    Orden de prioridad:
+                      0. Precio cargado directamente en el archivo inter-empresa (precio_unitario)
                       1. Promedio ponderado del SKU en el local origen durante el período
                       2. Última compra del SKU (cualquier local, más reciente)
                     """
                     q = """
                         WITH
-                        -- SKUs asignados: nombre_raw → sku → categoria_control
+                        -- SKUs asignados: categoria_control → sku
                         skus AS (
                             SELECT UPPER(TRIM(categoria_control)) AS producto_control,
                                    TRIM(sku)                      AS sku
@@ -10614,7 +10614,18 @@ elif modulo.startswith("📊"):
                             WHERE sku IS NOT NULL AND TRIM(sku) != ''
                               AND categoria_control IS NOT NULL AND TRIM(categoria_control) != ''
                         ),
-                        -- 1. Promedio ponderado del período por local origen
+                        -- 0. Precio directo del archivo inter-empresa (promedio ponderado por local_origen)
+                        p0 AS (
+                            SELECT UPPER(TRIM(producto))          AS producto_control,
+                                   LOWER(TRIM(local_origen))      AS local_origen,
+                                   SUM(precio_unitario * cantidad) / NULLIF(SUM(CASE WHEN precio_unitario > 0 THEN cantidad END), 0) AS precio_u,
+                                   0 AS prioridad
+                            FROM venta_interlocal
+                            WHERE TRIM(periodo) = :per
+                              AND precio_unitario IS NOT NULL AND precio_unitario > 0
+                            GROUP BY UPPER(TRIM(producto)), LOWER(TRIM(local_origen))
+                        ),
+                        -- 1. Promedio ponderado del SKU en el local origen durante el período
                         p1 AS (
                             SELECT sk.producto_control,
                                    LOWER(TRIM(c.local)) AS local_origen,
@@ -10638,11 +10649,13 @@ elif modulo.startswith("📊"):
                             WHERE c.cant_conv > 0 AND c.costo_realfinal > 0
                             ORDER BY sk.producto_control, c.fecha_dte DESC
                         )
+                        SELECT producto_control, local_origen, precio_u, prioridad FROM p0
+                        UNION ALL
                         SELECT producto_control, local_origen, precio_u, prioridad FROM p1
                         UNION ALL
                         SELECT producto_control, local_origen, precio_u, prioridad FROM p2
                     """
-                    return run_query(q, {'i': str(fecha_i), 'f': str(fecha_f)})
+                    return run_query(q, {'i': str(fecha_i), 'f': str(fecha_f), 'per': periodo_ic})
 
                 def get_no_registrado(periodo, locales):
                     """Compras no registradas — cantidad y costo por local + producto_control."""
