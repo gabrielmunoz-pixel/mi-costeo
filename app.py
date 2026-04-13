@@ -5110,7 +5110,7 @@ if modulo.startswith("📦"):
                           _df_il_raw['precio_unitario']    = pd.to_numeric(_df_il_raw['Precio Unitario'],    errors='coerce').fillna(0) if _tiene_precio  else 0
                           _df_il_raw['categoria_producto'] = _df_il_raw['Categoria Producto'].fillna('').astype(str).str.strip().str.upper() if _tiene_catprod else ''
                           _df_il_raw['subcat']             = _df_il_raw['Subcat'].fillna('').astype(str).str.strip() if _tiene_subcat else ''
-                          _df_il_raw['cat_ctrl_archivo']   = _df_il_raw['Categoria Control'].fillna('').astype(str).str.strip().str.upper() if _tiene_catctrl else ''
+                          _df_il_raw['cat_ctrl_archivo']   = _df_il_raw['Categoria Control'].fillna('').astype(str).str.strip().str.upper().replace('0', '') if _tiene_catctrl else ''
 
                           # ── Mapeo clas_nomb_prod → producto_control ──────
                           _df_clas = run_query("""
@@ -5125,9 +5125,11 @@ if modulo.startswith("📦"):
                               _map_ctrl = {}
 
                           def _resolve_ctrl(row):
-                              # 1. Si viene Categoria Control en el archivo, usar esa
-                              if _tiene_catctrl and row.get('cat_ctrl_archivo', ''):
-                                  return row['cat_ctrl_archivo']
+                              # 1. Si viene Categoria Control en el archivo, usar esa (ignorar '0' y vacíos)
+                              if _tiene_catctrl:
+                                  _cc = str(row.get('cat_ctrl_archivo', '') or '').strip()
+                                  if _cc and _cc != '0':
+                                      return _cc
                               # 2. Buscar en clas_nomb_prod
                               k = row['producto_raw'].upper().strip()
                               return _map_ctrl.get(k, k)
