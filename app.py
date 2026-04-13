@@ -11025,6 +11025,17 @@ elif modulo.startswith("📊"):
                         if _precio <= 0: continue
                         cat_map[_cat] -= float(_r['kg']) * _precio
 
+                # ── Restar Notas de Crédito al cat_map ───────────────────
+                if not df_nc.empty:
+                    _nc_local = df_nc[
+                        df_nc['local'].astype(str).str.upper().str.strip() == local_show.upper().strip()
+                    ]
+                    for _, _nc_row in _nc_local.iterrows():
+                        _nc_cat = str(_nc_row.get('categoria', '') or '').strip().upper()
+                        _nc_val = float(_nc_row.get('monto', 0) or 0)
+                        if _nc_cat in cat_map:
+                            cat_map[_nc_cat] -= _nc_val
+
                 # Uso por categoría de control
                 cat_uso = {}
                 cat_desv = {}
