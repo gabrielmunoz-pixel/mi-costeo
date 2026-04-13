@@ -5307,6 +5307,31 @@ if modulo.startswith("📦"):
                                               'subcat':  _rr['subcat'] or None,
                                           })
                                       _conn_il.commit()
+
+                                  def _upsert_clas(conn, nom, cat_ctrl, cat, sku):
+                                      """UPDATE si existe, INSERT si no — sin depender de UNIQUE constraint."""
+                                      nom = (nom or '').strip().upper()
+                                      if not nom: return
+                                      _ex = conn.execute(text(
+                                          "SELECT 1 FROM clas_nomb_prod WHERE UPPER(TRIM(nombre_producto))=:n LIMIT 1"
+                                      ), {'n': nom}).fetchone()
+                                      if _ex:
+                                          conn.execute(text("""
+                                              UPDATE clas_nomb_prod
+                                              SET categoria_control = COALESCE(:cc, categoria_control),
+                                                  categoria         = COALESCE(:cat, categoria),
+                                                  sku               = COALESCE(:sku, sku)
+                                              WHERE UPPER(TRIM(nombre_producto)) = :n
+                                          """), {'n': nom, 'cc': cat_ctrl or None,
+                                                 'cat': cat or None, 'sku': sku or None})
+                                      else:
+                                          conn.execute(text("""
+                                              INSERT INTO clas_nomb_prod
+                                                  (nombre_producto, categoria_control, categoria, sku)
+                                              VALUES (:n, :cc, :cat, :sku)
+                                          """), {'n': nom, 'cc': cat_ctrl or None,
+                                                 'cat': cat or None, 'sku': sku or None})
+
                                   # Persistir mapeos en clas_nomb_prod:
                                   # 1. Los asignados manualmente en la app
                                   # 2. Los que venían con Categoria Control en el archivo
@@ -5318,34 +5343,20 @@ if modulo.startswith("📦"):
                                               _cat_asig = _asig_val.get('cat', '') if isinstance(_asig_val, dict) else ''
                                               if not _sku_asig and not _cat_asig:
                                                   continue
-                                              _conn_clas.execute(text("""
-                                                  INSERT INTO clas_nomb_prod
-                                                      (nombre_producto, categoria_control, categoria, sku)
-                                                  VALUES (:nom, :cat_ctrl, :cat, :sku)
-                                                  ON CONFLICT (nombre_producto)
-                                                  DO UPDATE SET
-                                                      categoria_control = EXCLUDED.categoria_control,
-                                                      sku = EXCLUDED.sku
-                                              """), {
-                                                  'nom':      _nom_raw.strip().upper(),
-                                                  'cat_ctrl': _cat_asig.strip().upper() if _cat_asig else None,
-                                                  'cat':      _cat_asig.strip().upper() if _cat_asig else None,
-                                                  'sku':      _sku_asig.strip() if _sku_asig else None,
-                                              })
+                                              _upsert_clas(
+                                                  _conn_clas,
+                                                  _nom_raw,
+                                                  _cat_asig.strip().upper() if _cat_asig else None,
+                                                  _cat_asig.strip().upper() if _cat_asig else None,
+                                                  _sku_asig.strip() if _sku_asig else None,
+                                              )
                                       # Persistir cat_ctrl del archivo
                                       if _tiene_catctrl:
                                           for _, _rr in _df_il.iterrows():
                                               _cc = str(_rr.get('cat_ctrl_archivo', '') or '').strip().upper()
                                               _np = str(_rr.get('producto_raw', '') or '').strip().upper()
-                                              if _cc and _np:
-                                                  _conn_clas.execute(text("""
-                                                      INSERT INTO clas_nomb_prod
-                                                          (nombre_producto, categoria_control, categoria)
-                                                      VALUES (:nom, :cat_ctrl, :cat)
-                                                      ON CONFLICT (nombre_producto)
-                                                      DO UPDATE SET
-                                                          categoria_control = EXCLUDED.categoria_control
-                                                  """), {'nom': _np, 'cat_ctrl': _cc, 'cat': _cc})
+                                              if _cc and _np and _cc != '0':
+                                                  _upsert_clas(_conn_clas, _np, _cc, _cc, None)
                                       _conn_clas.commit()
                                   st.session_state.pop('il_asignaciones', None)
                                   st.success(f"✅ {len(_df_il)} movimientos guardados · {len(_origenes)} locales origen · {_il_periodo}")
