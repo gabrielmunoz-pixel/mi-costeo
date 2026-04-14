@@ -3464,13 +3464,11 @@ if modulo.startswith("📦"):
                         df_val   = df_proc
                         n_mixtos = 0
 
-                    # Calcular monto despacho por folio antes de agrupar
-                    _desp_mask = df_val['nombre_producto'].str.lower().str.contains(
-                        'despacho|flete|distribucion|envio|envío', na=False
-                    )
-                    _desp_por_folio = df_val[_desp_mask].groupby(
-                        ['folio','rut_proveedor']
-                    )['monto_real'].sum().reset_index().rename(columns={'monto_real': '_monto_desp'})
+                    # Monto de líneas de despacho por folio (costo_realfinal=0, tootal2>0)
+                    _desp_lines = df_val[
+                        (df_val['costo_realfinal'] == 0) & (df_val['tootal2'] > 0)
+                    ].groupby(['folio','rut_proveedor'])['tootal2'].sum().reset_index()
+                    _desp_lines.columns = ['folio','rut_proveedor','_desp_tootal2']
 
                     val = df_val.groupby(['folio','rut_proveedor']).agg(
                         nombre_proveedor=('nombre_proveedor', 'first'),
@@ -3479,11 +3477,11 @@ if modulo.startswith("📦"):
                         categoria=('categoria_producto', lambda x: x.dropna().mode().iloc[0] if not x.dropna().empty else ''),
                         productos=('nombre_producto', lambda x: ' / '.join(x.dropna().unique()[:3])),
                     ).reset_index()
-                    val = val.merge(_desp_por_folio, on=['folio','rut_proveedor'], how='left')
-                    val['_monto_desp'] = val['_monto_desp'].fillna(0)
-                    # Excluir despacho del total declarado — se distribuye entre líneas, costo_realfinal=0
-                    val['total_sin_despacho'] = (val['total_declarado'] - val['_monto_desp'] * 1.19).round(0)
-                    val['diferencia'] = val['total_sin_despacho'] - val['costo_calculado']
+                    val = val.merge(_desp_lines, on=['folio','rut_proveedor'], how='left')
+                    val['_desp_tootal2'] = val['_desp_tootal2'].fillna(0)
+                    # Comparar costo_calculado contra total neto sin despacho
+                    val['total_comparable'] = val['total_declarado'] - val['_desp_tootal2']
+                    val['diferencia'] = val['total_comparable'] - val['costo_calculado']
                     val['dif_abs'] = val['diferencia'].abs()
                     val_issues = val[val['dif_abs'] > 1].sort_values('dif_abs', ascending=False)
 
@@ -3498,7 +3496,7 @@ if modulo.startswith("📦"):
                     else:
                         st.warning(f"⚠️ {len(val_issues)} folio(s) con diferencia > $1 — revisar")
                         st.dataframe(
-                            val_issues[['folio','nombre_proveedor','categoria','productos','total_declarado','total_sin_despacho','costo_calculado','diferencia']],
+                            val_issues[['folio','nombre_proveedor','categoria','productos','total_declarado','total_comparable','costo_calculado','diferencia']],
                             use_container_width=True, hide_index=True
                         )
                     st.caption("ℹ️ Se validan todos los folios. Los folios mixtos (con líneas de distintas subcategorías) se muestran como información pero se incluyen en la validación.")
