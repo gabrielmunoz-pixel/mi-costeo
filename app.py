@@ -6014,6 +6014,17 @@ if modulo.startswith("📦"):
                 return df[['local','rut','proveedor','folio','fecha','monto','categoria']].reset_index(drop=True)
 
             # ── Detectar formato ──────────────────────────────────────
+            # Si el archivo tiene solo hojas de RG (sin hoja SII explícita)
+            # detectar si es archivo RG puro
+            _has_sii_sheet = any(s in xls.sheet_names for s in ['SII'])
+            _has_rg_sheet  = any(s in xls.sheet_names for s in ['Rinde Gastos', 'RindeGastos'])
+
+            # Archivo RG puro: no tiene hoja SII ni RindeGastos — solo Consolidado
+            if not _has_sii_sheet and not _has_rg_sheet:
+                _rg_sh = next((s for s in xls.sheet_names if 'consolidado' in s.lower()), xls.sheet_names[0])
+                _df_rg_raw = pd.read_excel(xls, sheet_name=_rg_sh)
+                return None, _norm_rg(_df_rg_raw)
+
             # SII: buscar hoja SII o Consolidado
             _sii_sheet = None
             for _s in ['SII', 'Consolidado', 'consolidado']:
@@ -6301,13 +6312,10 @@ if modulo.startswith("📦"):
                 # RG: usar archivo separado si se subió, sino usar el del archivo SII
                 if _conc_file_rg is not None:
                     _conc_file_rg.seek(0)
-                    import io as _io
-                    _rg_xls = pd.ExcelFile(_io.BytesIO(_conc_file_rg.read()))
-                    # Buscar hoja Consolidado o la primera disponible
-                    _rg_sh = next((s for s in ['Consolidado','consolidado'] if s in _rg_xls.sheet_names), _rg_xls.sheet_names[0])
-                    _df_rg_raw = pd.read_excel(_rg_xls, sheet_name=_rg_sh)
-                    _df_rg_raw.columns = [str(c).strip() for c in _df_rg_raw.columns]
-                    df_rg_c = _norm_rg(_df_rg_raw)
+                    _sii_from_rg, df_rg_c = _conc_leer_excel(_conc_file_rg.read())
+                    if df_rg_c is None or df_rg_c.empty:
+                        st.error("No se encontró hoja RindeGastos o Consolidado en el archivo RG.")
+                        st.stop()
                 else:
                     if df_rg_from_sii is None or df_rg_from_sii.empty:
                         st.error("No se encontró hoja RindeGastos en el archivo SII. Sube el archivo RG por separado.")
