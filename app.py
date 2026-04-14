@@ -6030,7 +6030,7 @@ if modulo.startswith("📦"):
                     _rg_sheet = _s
                     break
             if _rg_sheet is None:
-                raise ValueError(f"No se encontró hoja RindeGastos en el archivo. Hojas disponibles: {xls.sheet_names}")
+                return _norm_sii(pd.read_excel(xls, sheet_name=_sii_sheet)), None
 
             df_sii_raw = pd.read_excel(xls, sheet_name=_sii_sheet)
             df_rg_raw  = pd.read_excel(xls, sheet_name=_rg_sheet)
@@ -6257,9 +6257,9 @@ if modulo.startswith("📦"):
         _conc_fc1, _conc_fc2 = st.columns(2)
         with _conc_fc1:
             _conc_file_sii = st.file_uploader("📄 Archivo SII (.xlsx)", type=['xlsx'], key='conc_file_sii',
-                                               help="Columnas: LOCAL, FECHA, RUT PROVEEDOR, FOLIO, MONTO")
+                                               help="Puede contener ambas hojas (SII + RindeGastos) o solo SII")
         with _conc_fc2:
-            _conc_file_rg  = st.file_uploader("📄 Archivo RindeGastos (.xlsx)", type=['xlsx'], key='conc_file_rg',
+            _conc_file_rg  = st.file_uploader("📄 Archivo RindeGastos (.xlsx) — opcional si el SII ya lo incluye", type=['xlsx'], key='conc_file_rg',
                                                help="Hoja 'Consolidado': LOCAL, FECHA, RUT PROVEEDOR, PROVEEDOR, CATEGORIA, NÚMERO DE FOLIO, MONTO")
 
         _conc_tc1, _conc_tc2 = st.columns(2)
@@ -6284,9 +6284,6 @@ if modulo.startswith("📦"):
                 if _conc_file_sii is None:
                     st.error("Debes subir el archivo SII.")
                     st.stop()
-                if _conc_file_rg is None:
-                    st.error("Debes subir el archivo RindeGastos.")
-                    st.stop()
 
                 # Derivar rango de fechas del período
                 try:
@@ -6296,11 +6293,26 @@ if modulo.startswith("📦"):
                     st.error(f"Período inválido: '{_conc_periodo}'. Usa formato YYYY-MM.")
                     st.stop()
 
-                # Leer archivos por separado
+                # Leer SII — puede tener ambas hojas o solo SII
                 _conc_file_sii.seek(0)
-                _conc_file_rg.seek(0)
-                df_sii_c, _ = _conc_leer_excel(_conc_file_sii.read())
-                _, df_rg_c  = _conc_leer_excel(_conc_file_rg.read())
+                _sii_bytes = _conc_file_sii.read()
+                df_sii_c, df_rg_from_sii = _conc_leer_excel(_sii_bytes)
+
+                # RG: usar archivo separado si se subió, sino usar el del archivo SII
+                if _conc_file_rg is not None:
+                    _conc_file_rg.seek(0)
+                    import io as _io
+                    _rg_xls = pd.ExcelFile(_io.BytesIO(_conc_file_rg.read()))
+                    # Buscar hoja Consolidado o la primera disponible
+                    _rg_sh = next((s for s in ['Consolidado','consolidado'] if s in _rg_xls.sheet_names), _rg_xls.sheet_names[0])
+                    _df_rg_raw = pd.read_excel(_rg_xls, sheet_name=_rg_sh)
+                    _df_rg_raw.columns = [str(c).strip() for c in _df_rg_raw.columns]
+                    df_rg_c = _norm_rg(_df_rg_raw)
+                else:
+                    if df_rg_from_sii is None or df_rg_from_sii.empty:
+                        st.error("No se encontró hoja RindeGastos en el archivo SII. Sube el archivo RG por separado.")
+                        st.stop()
+                    df_rg_c = df_rg_from_sii
 
                 # Cargar compras BD
                 df_bd_c = _conc_cargar_compras(_conc_fi.date(), _conc_ff.date(), _conc_local)
