@@ -5995,7 +5995,6 @@ if modulo.startswith("📦"):
                 return df[['local','rut','proveedor','folio','fecha','monto','categoria']].reset_index(drop=True)
 
             def _norm_rg(df):
-                """Normaliza RG — mismo proceso pero con limpieza de prefijo en local."""
                 df = df.copy()
                 df.columns = [str(c).strip() for c in df.columns]
                 _cl = _detect_col(df, ['LOCAL','Local'])
@@ -6013,41 +6012,28 @@ if modulo.startswith("📦"):
                 df['categoria']= df[_cc].astype(str).str.strip() if _cc else ''
                 return df[['local','rut','proveedor','folio','fecha','monto','categoria']].reset_index(drop=True)
 
-            # ── Detectar formato ──────────────────────────────────────
-            # Si el archivo tiene solo hojas de RG (sin hoja SII explícita)
-            # detectar si es archivo RG puro
-            _has_sii_sheet = any(s in xls.sheet_names for s in ['SII'])
-            _has_rg_sheet  = any(s in xls.sheet_names for s in ['Rinde Gastos', 'RindeGastos'])
-
-            # Archivo RG puro: no tiene hoja SII ni RindeGastos — solo Consolidado
-            if not _has_sii_sheet and not _has_rg_sheet:
-                _rg_sh = next((s for s in xls.sheet_names if 'consolidado' in s.lower()), xls.sheet_names[0])
-                _df_rg_raw = pd.read_excel(xls, sheet_name=_rg_sh)
-                return None, _norm_rg(_df_rg_raw)
-
-            # SII: buscar hoja SII o Consolidado
-            _sii_sheet = None
-            for _s in ['SII', 'Consolidado', 'consolidado']:
-                if _s in xls.sheet_names:
-                    _sii_sheet = _s
-                    break
-            if _sii_sheet is None:
-                raise ValueError(f"No se encontró hoja SII en el archivo. Hojas disponibles: {xls.sheet_names}")
-
-            # RG: buscar hoja Rinde Gastos o Consolidado
-            _rg_sheet = None
-            for _s in ['Rinde Gastos', 'RindeGastos', 'Consolidado', 'consolidado']:
-                if _s in xls.sheet_names:
-                    _rg_sheet = _s
-                    break
-            if _rg_sheet is None:
-                return _norm_sii(pd.read_excel(xls, sheet_name=_sii_sheet)), None
-
-            df_sii_raw = pd.read_excel(xls, sheet_name=_sii_sheet)
-            df_rg_raw  = pd.read_excel(xls, sheet_name=_rg_sheet)
-
-            if df_sii_raw.empty:
-                raise ValueError(f"La hoja '{_sii_sheet}' no contiene datos.")
+            # ── Leer primera hoja disponible — sin condicionantes de nombre ──
+            # Si tiene exactamente 1 hoja: leer como SII o RG según contexto
+            # Si tiene 2+ hojas: primera como SII, segunda como RG
+            hojas = xls.sheet_names
+            if len(hojas) == 1:
+                df_raw = pd.read_excel(xls, sheet_name=hojas[0])
+                if df_raw.empty:
+                    raise ValueError(f"La hoja '{hojas[0]}' no contiene datos.")
+                # Intentar detectar si es SII o RG por columnas
+                cols_up = [str(c).upper().strip() for c in df_raw.columns]
+                if 'NÚMERO DE FOLIO' in cols_up or 'NUMERO DE FOLIO' in cols_up:
+                    return None, _norm_rg(df_raw)
+                else:
+                    return _norm_sii(df_raw), None
+            else:
+                df_sii_raw = pd.read_excel(xls, sheet_name=hojas[0])
+                df_rg_raw  = pd.read_excel(xls, sheet_name=hojas[1])
+                if df_sii_raw.empty:
+                    raise ValueError(f"La hoja '{hojas[0]}' no contiene datos.")
+                if df_rg_raw.empty:
+                    raise ValueError(f"La hoja '{hojas[1]}' no contiene datos.")
+                return _norm_sii(df_sii_raw), _norm_rg(df_rg_raw)
             if df_rg_raw.empty:
                 raise ValueError(f"La hoja '{_rg_sheet}' no contiene datos.")
 
@@ -6312,13 +6298,13 @@ if modulo.startswith("📦"):
                 # RG: usar archivo separado si se subió, sino usar el del archivo SII
                 if _conc_file_rg is not None:
                     _conc_file_rg.seek(0)
-                    _sii_from_rg, df_rg_c = _conc_leer_excel(_conc_file_rg.read())
+                    _, df_rg_c = _conc_leer_excel(_conc_file_rg.read())
                     if df_rg_c is None or df_rg_c.empty:
-                        st.error("No se encontró hoja RindeGastos o Consolidado en el archivo RG.")
+                        st.error("No se encontraron datos en el archivo RG.")
                         st.stop()
                 else:
                     if df_rg_from_sii is None or df_rg_from_sii.empty:
-                        st.error("No se encontró hoja RindeGastos en el archivo SII. Sube el archivo RG por separado.")
+                        st.error("No se encontró RindeGastos en el archivo SII. Sube el archivo RG por separado.")
                         st.stop()
                     df_rg_c = df_rg_from_sii
 
