@@ -2074,6 +2074,8 @@ def procesar_compras(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     df['descuento_global']= pd.to_numeric(_col(df, 'descuento_global', 0), errors='coerce').fillna(0)
     df['iva']             = pd.to_numeric(_col(df, 'iva', 0), errors='coerce').fillna(0)
     df['total']           = pd.to_numeric(_col(df, 'total', 0), errors='coerce').fillna(0)
+    # Para NC (tipo_dte=61) el total del folio debe ser negativo igual que monto_real
+    df['total']           = np.where(df['tipo_dte'] == 61, -df['total'].abs(), df['total'])
 
     # ── PASO 1: cant_conv ────────────────────────────────────────────────────
     df['cant_conv'] = df['cantidad'] * df['conversion']
@@ -3453,16 +3455,13 @@ if modulo.startswith("📦"):
                     subcat_col = next((c for c in df_proc.columns if c == 'subcat'), None)
 
                     if subcat_col:
-                        # Solo folios donde TODAS las líneas son Directo o Indirecto
-                        # (excluir folios mixtos donde el Total de factura incluye otras subcats)
-                        subcat_por_folio = df_proc.groupby('folio')[subcat_col].apply(
-                            lambda s: s.isin(['Directo','Indirecto']).all()
-                        )
-                        folios_puros = subcat_por_folio[subcat_por_folio].index
-                        df_val = df_proc[df_proc['folio'].isin(folios_puros)]
-                        n_mixtos = df_proc['folio'].nunique() - len(folios_puros)
+                        # Validar todos los folios — la subcat no afecta el total de factura
+                        df_val  = df_proc
+                        n_mixtos = df_proc.groupby('folio')[subcat_col].apply(
+                            lambda s: not s.isin(['Directo','Indirecto']).all()
+                        ).sum()
                     else:
-                        df_val = df_proc
+                        df_val   = df_proc
                         n_mixtos = 0
 
                     val = df_val.groupby(['folio','rut_proveedor']).agg(
@@ -3478,8 +3477,8 @@ if modulo.startswith("📦"):
 
                     c1v, c2v, c3v = st.columns(3)
                     c1v.metric("Folios validados", f"{len(val):,}")
-                    c2v.metric("Folios mixtos (excluidos)", f"{n_mixtos:,}",
-                               help="Folios con Directo/Indirecto + otras subcats — el Total de factura no es comparable con solo las líneas MRP")
+                    c2v.metric("Folios mixtos (info)", f"{n_mixtos:,}",
+                               help="Folios con líneas de distintas subcategorías — se validan igual contra el total declarado")
                     c3v.metric("Folios con diferencia > $1", f"{len(val_issues):,}")
 
                     if val_issues.empty:
@@ -3490,7 +3489,7 @@ if modulo.startswith("📦"):
                             val_issues[['folio','nombre_proveedor','categoria','productos','total_declarado','costo_calculado','diferencia']],
                             use_container_width=True, hide_index=True
                         )
-                    st.caption("ℹ️ Se validan solo folios donde el 100% de líneas son Directo o Indirecto. Los folios mixtos tienen un Total de factura que incluye otras categorías.")
+                    st.caption("ℹ️ Se validan todos los folios. Los folios mixtos (con líneas de distintas subcategorías) se muestran como información pero se incluyen en la validación.")
                 else:
                     st.info("No se encontró columna 'total' para validar.")
 
@@ -10705,7 +10704,10 @@ elif modulo.startswith("📊"):
                     lf = "AND UPPER(local)=ANY(:ls)" if locales else ""
                     q = f"""
                         SELECT local, categoria_producto,
-                               SUM(costo_realfinal) as compra_total
+                               SUM(CASE WHEN tipo_dte::integer = 61
+                                        THEN -costo_realfinal
+                                        ELSE  costo_realfinal
+                                   END) as compra_total
                         FROM compras
                         WHERE fecha_dte::date BETWEEN :i AND :f {lf}
                         GROUP BY local, categoria_producto
