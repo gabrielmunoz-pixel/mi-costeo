@@ -3467,11 +3467,15 @@ if modulo.startswith("📦"):
                     val = df_val.groupby(['folio','rut_proveedor']).agg(
                         nombre_proveedor=('nombre_proveedor', 'first'),
                         total_declarado=('total', 'max'),
+                        monto_despacho=('_desp_linea', 'sum'),
                         costo_calculado=('costo_realfinal', 'sum'),
                         categoria=('categoria_producto', lambda x: x.dropna().mode().iloc[0] if not x.dropna().empty else ''),
                         productos=('nombre_producto', lambda x: ' / '.join(x.dropna().unique()[:3])),
                     ).reset_index()
-                    val['diferencia'] = val['total_declarado'] - val['costo_calculado']
+                    # Excluir despacho del total declarado — el despacho se distribuye
+                    # entre líneas y su costo_realfinal es 0, no debe aparecer en la comparación
+                    val['total_sin_despacho'] = val['total_declarado'] - (val['monto_despacho'] * 1.19).round(0)
+                    val['diferencia'] = val['total_sin_despacho'] - val['costo_calculado']
                     val['dif_abs'] = val['diferencia'].abs()
                     val_issues = val[val['dif_abs'] > 1].sort_values('dif_abs', ascending=False)
 
@@ -3486,7 +3490,7 @@ if modulo.startswith("📦"):
                     else:
                         st.warning(f"⚠️ {len(val_issues)} folio(s) con diferencia > $1 — revisar")
                         st.dataframe(
-                            val_issues[['folio','nombre_proveedor','categoria','productos','total_declarado','costo_calculado','diferencia']],
+                            val_issues[['folio','nombre_proveedor','categoria','productos','total_declarado','total_sin_despacho','costo_calculado','diferencia']],
                             use_container_width=True, hide_index=True
                         )
                     st.caption("ℹ️ Se validan todos los folios. Los folios mixtos (con líneas de distintas subcategorías) se muestran como información pero se incluyen en la validación.")
