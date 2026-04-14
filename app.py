@@ -2120,8 +2120,8 @@ def procesar_compras(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
         nombre_lower.str.contains('envío',       na=False)
     )
 
-    # ── PASO 8: Desp_Folio = suma(monto_real de líneas despacho) × 1.19 ─────
-    df['_desp_linea'] = np.where(df['_es_despacho'], df['monto_real'] * 1.19, 0)
+    # ── PASO 8: Desp_Folio = suma(tootal2 de líneas despacho) ───────────────
+    df['_desp_linea'] = np.where(df['_es_despacho'], df['tootal2'], 0)
     df['_desp_folio'] = df.groupby(['folio','rut_proveedor'])['_desp_linea'].transform('sum')
 
     # ── PASO 9: ajuste redondeo = Total_factura - suma(tootal2) del folio ────
