@@ -4235,6 +4235,22 @@ if modulo.startswith("📦"):
                                 except Exception as e:
                                     st.error(f"Error: {e}")
 
+                            if st.button("🚨 Marcar como Emergencia", key='inspect_emerg', type='secondary'):
+                                engine = get_engine()
+                                try:
+                                    with engine.connect() as conn:
+                                        conn.execute(text(
+                                            'INSERT INTO compras_excluidas (compra_id, sku, motivo) '
+                                            'SELECT unnest(:ids), :sku, :motivo '
+                                            'ON CONFLICT (compra_id) DO NOTHING'
+                                        ), {'ids': ids_fix, 'sku': str(fila_fix['sku']) if 'sku' in fila_fix else sku_inspect, 'motivo': 'compra_emergencia'})
+                                        conn.commit()
+                                    st.success(f"✅ {len(ids_fix)} registros marcados como emergencia")
+                                    st.session_state.pop('audit_df', None)
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
+
 
 
                 # ══════════════════════════════════════════════════════════
