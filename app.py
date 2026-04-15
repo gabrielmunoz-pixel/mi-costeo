@@ -2763,6 +2763,7 @@ def _build_variacion_query(fecha_base_i, fecha_base_f,
               AND c.costo_realfinal > 0
               AND c.monto_real > 0
               AND c.cant_conv > 0
+              AND c.id NOT IN (SELECT compra_id FROM compras_excluidas)
               {filtro_cat}
               {filtro_local}
             GROUP BY 1
@@ -2778,6 +2779,7 @@ def _build_variacion_query(fecha_base_i, fecha_base_f,
               AND c.costo_realfinal > 0
               AND c.monto_real > 0
               AND c.cant_conv > 0
+              AND c.id NOT IN (SELECT compra_id FROM compras_excluidas)
               {filtro_local}
             GROUP BY 1
         )
