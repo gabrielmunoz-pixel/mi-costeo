@@ -4253,21 +4253,37 @@ if modulo.startswith("📦"):
                                 except Exception as e:
                                     st.error(f"Error: {e}")
 
-                            if st.button("🚨 Marcar como Emergencia", key='inspect_emerg', type='secondary'):
-                                engine = get_engine()
-                                try:
-                                    with engine.connect() as conn:
-                                        conn.execute(text(
-                                            'INSERT INTO compras_excluidas (compra_id, sku, motivo) '
-                                            'SELECT unnest(:ids), :sku, :motivo '
-                                            'ON CONFLICT (compra_id) DO NOTHING'
-                                        ), {'ids': ids_fix, 'sku': str(fila_fix['sku']) if 'sku' in fila_fix else sku_inspect, 'motivo': 'compra_emergencia'})
-                                        conn.commit()
-                                    st.success(f"✅ {len(ids_fix)} registros marcados como emergencia")
-                                    st.session_state.pop('audit_df', None)
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Error: {e}")
+                            _btn_emerg_c1, _btn_emerg_c2 = st.columns(2)
+                            with _btn_emerg_c1:
+                                if st.button("🚨 Marcar como Emergencia", key='inspect_emerg', type='secondary', use_container_width=True):
+                                    engine = get_engine()
+                                    try:
+                                        with engine.connect() as conn:
+                                            conn.execute(text(
+                                                'INSERT INTO compras_excluidas (compra_id, sku, motivo) '
+                                                'SELECT unnest(:ids), :sku, :motivo '
+                                                'ON CONFLICT (compra_id) DO NOTHING'
+                                            ), {'ids': ids_fix, 'sku': str(fila_fix['sku']) if 'sku' in fila_fix else sku_inspect, 'motivo': 'compra_emergencia'})
+                                            conn.commit()
+                                        st.success(f"✅ {len(ids_fix)} registros marcados como emergencia")
+                                        st.session_state.pop('audit_df', None)
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Error: {e}")
+                            with _btn_emerg_c2:
+                                if st.button("✅ Quitar de Emergencia", key='inspect_unemerg', type='secondary', use_container_width=True):
+                                    engine = get_engine()
+                                    try:
+                                        with engine.connect() as conn:
+                                            conn.execute(text(
+                                                'DELETE FROM compras_excluidas WHERE compra_id = ANY(:ids)'
+                                            ), {'ids': ids_fix})
+                                            conn.commit()
+                                        st.success(f"✅ {len(ids_fix)} registros removidos de emergencia")
+                                        st.session_state.pop('audit_df', None)
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Error: {e}")
 
 
 
@@ -4325,7 +4341,7 @@ if modulo.startswith("📦"):
                 # Panel de acciones ARRIBA de la tabla
                 if n_sel > 0:
                     st.markdown(f'**⚙️ {n_sel} grupo(s) — {len(ids_sel)} registros**')
-                    pa1, pa2, pa3, pa4, pa5 = st.columns([2, 2, 1, 1, 1])
+                    pa1, pa2, pa3, pa4, pa5, pa6 = st.columns([2, 2, 1, 1, 1, 1])
                     with pa1:
                         nuevo_conv = st.number_input('Nueva conversion', value=float(sel_rows.iloc[0]['conversion'] or 1), min_value=0.001, step=0.1, key='audit_conv_multi')
                     with pa2:
@@ -4370,6 +4386,20 @@ if modulo.startswith("📦"):
                                         conn.execute(text('INSERT INTO audit_revisados (sku, muc, nombre, n_registros, nota) VALUES (:sku, :muc, :nombre, :n, :nota)'), {'sku': r['sku'], 'muc': float(r['muc']), 'nombre': str(r['nombre_producto']), 'n': int(r['n_registros']), 'nota': nota_rev})
                                     conn.commit()
                                 st.success(f'✅ {n_sel} grupo(s) revisados')
+                                _limpiar_seleccion()
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f'Error: {e}')
+                    with pa6:
+                        if st.button('↩️ Quitar Emergencia', key='audit_unemerg_multi'):
+                            engine = get_engine()
+                            try:
+                                with engine.connect() as conn:
+                                    conn.execute(text(
+                                        'DELETE FROM compras_excluidas WHERE compra_id = ANY(:ids)'
+                                    ), {'ids': ids_sel})
+                                    conn.commit()
+                                st.success(f'✅ {len(ids_sel)} registros removidos de emergencia')
                                 _limpiar_seleccion()
                                 st.rerun()
                             except Exception as e:
