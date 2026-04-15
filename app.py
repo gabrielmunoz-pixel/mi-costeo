@@ -4144,8 +4144,14 @@ if modulo.startswith("📦"):
                                 precio_i = float(r['precio_factura'] or 0)
                                 conv_i   = r['conversion']
                                 fmt_i    = r['formato']
-                                # Dispersión dentro de este combo conv+fmt
-                                _grp = df_inspect[(df_inspect['conversion']==conv_i) & (df_inspect['formato']==fmt_i)]
+                                # Dispersión dentro de este combo conv+fmt — excluir emergencias
+                                _grp = df_inspect[
+                                    (df_inspect['conversion']==conv_i) &
+                                    (df_inspect['formato']==fmt_i) &
+                                    (~df_inspect['es_emergencia'].astype(bool))
+                                ]
+                                if _grp.empty:
+                                    _grp = df_inspect[(df_inspect['conversion']==conv_i) & (df_inspect['formato']==fmt_i)]
                                 _mn  = float(_grp['muc'].min()); _mx = float(_grp['muc'].max())
                                 _d   = round(_mx / _mn, 1) if _mn > 0 else 0
                                 if _d > 8:   sc = '#e84545'; sl = f'🔴 {_d:.1f}×'
