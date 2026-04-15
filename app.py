@@ -4061,7 +4061,7 @@ if modulo.startswith("📦"):
                 with st.expander("🔎 Inspeccionar cualquier SKU", expanded=False):
                     sku_inspect = st.text_input("SKU exacto", key='audit_inspect_sku', placeholder="ej: AL-AF-095")
                     if sku_inspect:
-                        # Query agrupada por conversion + formato + bin MUC (igual que el auditor principal)
+                        # Query agrupada — TODOS los registros (incluye emergencias) para mostrar
                         q_inspect = f"""
                             SELECT
                                 conversion,
@@ -4073,7 +4073,8 @@ if modulo.startswith("📦"):
                                 ROUND(AVG(monto_real / NULLIF(cantidad, 0))::numeric, 2)   AS precio_factura,
                                 MODE() WITHIN GROUP (ORDER BY nombre_producto)             AS nombre_producto,
                                 MAX(categoria_producto)                                    AS categoria,
-                                MODE() WITHIN GROUP (ORDER BY nombre_proveedor)            AS proveedor
+                                MODE() WITHIN GROUP (ORDER BY nombre_proveedor)            AS proveedor,
+                                BOOL_OR(id IN (SELECT compra_id FROM compras_excluidas))   AS es_emergencia
                             FROM compras
                             WHERE UPPER(sku) = UPPER('{sku_inspect}')
                               AND muc > 0
@@ -4083,23 +4084,25 @@ if modulo.startswith("📦"):
                             GROUP BY conversion, formato, FLOOR(muc / 0.1) * 0.1
                             ORDER BY conversion, formato, muc_bin
                         """
-                        # Query de detalle — registros individuales para debug
+                        # Query de detalle — registros individuales, señalizando emergencias
                         q_debug = f"""
                             SELECT
-                                id, local, fecha_dte::date AS fecha,
-                                folio, nombre_producto, nombre_proveedor,
-                                cantidad, conversion, formato, cant_conv,
-                                ROUND(monto_real::numeric, 0)       AS monto_real,
-                                ROUND(costo_realfinal::numeric, 0)  AS costo_realfinal,
-                                ROUND(muc::numeric, 4)              AS muc,
-                                tipo_dte
-                            FROM compras
-                            WHERE UPPER(sku) = UPPER('{sku_inspect}')
-                              AND muc > 0
-                              AND costo_realfinal > 0
-                              AND COALESCE(tipo_dte::text,'') != '61'
-                              {_filtro_fecha_audit}
-                            ORDER BY conversion, formato, muc, fecha_dte
+                                c.id, c.local, c.fecha_dte::date AS fecha,
+                                c.folio, c.nombre_producto, c.nombre_proveedor,
+                                c.cantidad, c.conversion, c.formato, c.cant_conv,
+                                ROUND(c.monto_real::numeric, 0)       AS monto_real,
+                                ROUND(c.costo_realfinal::numeric, 0)  AS costo_realfinal,
+                                ROUND(c.muc::numeric, 4)              AS muc,
+                                c.tipo_dte,
+                                CASE WHEN e.compra_id IS NOT NULL THEN '🚨 Emergencia' ELSE '' END AS estado
+                            FROM compras c
+                            LEFT JOIN compras_excluidas e ON c.id = e.compra_id
+                            WHERE UPPER(c.sku) = UPPER('{sku_inspect}')
+                              AND c.muc > 0
+                              AND c.costo_realfinal > 0
+                              AND COALESCE(c.tipo_dte::text,'') != '61'
+                              {_filtro_fecha_audit.replace('muc', 'c.muc').replace('fecha_dte', 'c.fecha_dte').replace('costo_realfinal', 'c.costo_realfinal')}
+                            ORDER BY c.conversion, c.formato, c.muc, c.fecha_dte
                         """
                         df_inspect = run_query(q_inspect)
                         df_debug   = run_query(q_debug)
@@ -4109,9 +4112,14 @@ if modulo.startswith("📦"):
                         else:
                             nombre_insp = df_inspect['nombre_producto'].iloc[0]
                             cat_insp    = df_inspect['categoria'].iloc[0]
-                            muc_min_i   = float(df_inspect['muc'].min())
-                            muc_max_i   = float(df_inspect['muc'].max())
+                            # Dispersión solo con registros NO emergencia
+                            df_no_emerg = df_inspect[~df_inspect['es_emergencia'].astype(bool)]
+                            if df_no_emerg.empty:
+                                df_no_emerg = df_inspect  # fallback si todos son emergencia
+                            muc_min_i   = float(df_no_emerg['muc'].min())
+                            muc_max_i   = float(df_no_emerg['muc'].max())
                             disp_i      = round(muc_max_i / muc_min_i, 1) if muc_min_i > 0 else 0
+                            n_emerg     = int(df_inspect['es_emergencia'].astype(bool).sum())
                             if disp_i > 8:
                                 badge = f'🔴 {disp_i:.0f}×'
                             elif disp_i > 2:
@@ -4120,11 +4128,12 @@ if modulo.startswith("📦"):
                                 badge = f'⚪ {disp_i:.1f}×'
 
                             _n_combos_i = df_inspect.groupby(['conversion','formato']).ngroups
+                            _emerg_note = f" · 🚨 {n_emerg} excluido(s) de dispersión" if n_emerg > 0 else ""
                             st.caption(
                                 f"**{nombre_insp}** | {cat_insp} | "
                                 f"{_n_combos_i} combo(s) conv+fmt | "
                                 f"{len(df_inspect)} grupo(s) MUC | "
-                                f"dispersión global {badge}"
+                                f"dispersión global {badge}{_emerg_note}"
                             )
 
                             # ── Tabla resumen por grupo ───────────────────
@@ -4144,9 +4153,12 @@ if modulo.startswith("📦"):
                                 else:        sc = '#aaa';    sl = f'⚪ {_d:.1f}×'
                                 # Resaltar conv+fmt que solo aparece en este SKU con valores atípicos
                                 conv_color = '#e84545' if float(conv_i) != 1.0 and float(conv_i) != float(fmt_i) else '#888'
+                                es_emerg_row = bool(r.get('es_emergencia', False))
+                                row_style = 'border-bottom:1px solid #1e1e1e;opacity:0.45' if es_emerg_row else 'border-bottom:1px solid #1e1e1e'
+                                emerg_badge = ' 🚨' if es_emerg_row else ''
                                 rows_i += (
-                                    f'<tr style="border-bottom:1px solid #1e1e1e">'
-                                    f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de;font-size:0.8rem">{r.get("nombre_producto","")}</td>'
+                                    f'<tr style="{row_style}">'
+                                    f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de;font-size:0.8rem">{r.get("nombre_producto","")}{emerg_badge}</td>'
                                     f'<td style="padding:9px 12px;color:#666;font-size:0.75rem">{r.get("proveedor","")}</td>'
                                     f'<td style="padding:9px 12px;text-align:right;color:{conv_color};font-weight:600">{conv_i}</td>'
                                     f'<td style="padding:9px 12px;text-align:right;color:#888">{fmt_i}</td>'
@@ -9135,6 +9147,7 @@ elif modulo.startswith("📊"):
                         FROM compras
                         WHERE fecha_dte::date >= DATE_TRUNC('month', NOW()) - INTERVAL '{_pv_meses} months'
                           AND cant_conv > 0 AND costo_realfinal > 0 AND formato > 0
+                          AND id NOT IN (SELECT compra_id FROM compras_excluidas)
                           {_pv_lf} {_pv_cf}
                         GROUP BY nombre_proveedor, rut_proveedor, DATE_TRUNC('month', fecha_dte::date)
                         ORDER BY nombre_proveedor, mes
