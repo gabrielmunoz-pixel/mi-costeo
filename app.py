@@ -2813,6 +2813,10 @@ def _procesar_variacion_df(df):
         if r['impacto_base'] > 0 else None, axis=1
     )
     df['sin_precio_comp'] = df['precio_comp'] == df['precio_base']
+    # Precio para visualización: si formato=1 → $/unidad, si no → $/kg o $/L (×1000)
+    _mult = df['formato'].apply(lambda f: 1 if float(f) == 1.0 else 1000)
+    df['precio_base_disp'] = df['precio_base'] * _mult
+    df['precio_comp_disp'] = df['precio_comp'] * _mult
     return df
 
 
@@ -2954,8 +2958,8 @@ def generar_pdf_variacion(df, mes_base, mes_comp, local='Cadena Completa'):
                 P(str(pos),                         6,   CM,  align=TA_CENTER),
                 P(r.get('sku', ''),                 5.5, CM,  align=TA_LEFT),
                 P(str(r.get('nombre', '')),         6.5, CT,  align=TA_LEFT),
-                P(f"${r.get('precio_base',0):,.0f}",6.5, CM),
-                P(f"${r.get('precio_comp',0):,.0f}",6.5, CT),
+                P(f"${r.get('precio_base_disp', r.get('precio_base',0)):,.0f}",6.5, CM),
+                P(f"${r.get('precio_comp_disp', r.get('precio_comp',0)):,.0f}",6.5, CT),
                 P(f"${dd:+,.0f}",                   6.5, dc,  bold=True),
                 P(f"{dp:+.1f}%",                    6.5, dc,  bold=True),
             ])
@@ -9051,8 +9055,8 @@ elif modulo.startswith("📊"):
                         else:
                             _bcls, _btxt = 'badge-neu',  f'{float(_pct):+.1f}%'
 
-                        _pb   = float(r.get('precio_base', 0) or 0)
-                        _pc   = float(r.get('precio_comp', 0) or 0)
+                        _pb   = float(r.get('precio_base_disp', r.get('precio_base', 0)) or 0)
+                        _pc   = float(r.get('precio_comp_disp', r.get('precio_comp', 0)) or 0)
                         _pcls = 'iv-up' if (_pct and float(_pct) > 3) else ('iv-down' if (_pct and float(_pct) < -3) else '')
                         _stag = ' · sin precio comp.' if _sinp else ''
 
@@ -9075,13 +9079,9 @@ elif modulo.startswith("📊"):
                             _cant_display = _cant_raw
                             _cant_label = f'{_cant_display:,.0f} {_um}'
 
-                        # Precio: si conversion=1000, el precio ya está por gramo → mostrar por kg
-                        if _conv == 1000:
-                            _pb_display = _pb * 1000  # $/gramo → $/kg
-                            _pc_display = _pc * 1000
-                        else:
-                            _pb_display = _pb
-                            _pc_display = _pc
+                        # Precio display ya normalizado por formato en _procesar_variacion_df
+                        _pb_display = _pb
+                        _pc_display = _pc
 
                         st.markdown(f"""
                         <div class="ing-card">
