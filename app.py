@@ -2862,18 +2862,23 @@ def _procesar_variacion_df(df):
     sobre un DataFrame crudo devuelto por _build_variacion_query.
     Retorna el DataFrame listo para visualización.
     """
-    df['precio_base']  = pd.to_numeric(df['precio_base'],  errors='coerce').fillna(0)
-    df['precio_comp']  = pd.to_numeric(df['precio_comp'],  errors='coerce').fillna(df['precio_base'])
-    df['cant_base']    = pd.to_numeric(df['cant_base'],    errors='coerce').fillna(0)
-    df['formato']      = pd.to_numeric(df['formato'],      errors='coerce').fillna(1)
-    df['impacto_base'] = pd.to_numeric(df['impacto_base'], errors='coerce').fillna(0)
-    df['impacto_comp'] = df['cant_base'] * df['precio_comp']
-    df['delta_dinero'] = df['impacto_comp'] - df['impacto_base']
-    df['delta_pct']    = df.apply(
+    df['precio_base']     = pd.to_numeric(df['precio_base'],  errors='coerce').fillna(0)
+    df['precio_comp_raw'] = pd.to_numeric(df['precio_comp'],  errors='coerce')
+    df['sin_precio_comp'] = df['precio_comp_raw'].isna() | (df['precio_comp_raw'] == 0)
+    # Para delta por SKU: usar precio_base como fallback cuando no hay precio comp
+    df['precio_comp']     = df['precio_comp_raw'].fillna(df['precio_base'])
+    df['cant_base']       = pd.to_numeric(df['cant_base'],    errors='coerce').fillna(0)
+    df['formato']         = pd.to_numeric(df['formato'],      errors='coerce').fillna(1)
+    df['impacto_base']    = pd.to_numeric(df['impacto_base'], errors='coerce').fillna(0)
+    df['impacto_comp']    = df['cant_base'] * df['precio_comp']
+    df['delta_dinero']    = df['impacto_comp'] - df['impacto_base']
+    df['delta_pct']       = df.apply(
         lambda r: (r['delta_dinero'] / r['impacto_base'] * 100)
-        if r['impacto_base'] > 0 else None, axis=1
+        if r['impacto_base'] > 0 and not r['sin_precio_comp'] else None, axis=1
     )
-    df['sin_precio_comp'] = df['precio_comp'] == df['precio_base']
+    # Para el total de canasta: solo SKUs con precio real en ambos meses
+    df['impacto_base_cf'] = df['impacto_base'].where(~df['sin_precio_comp'], 0)
+    df['impacto_comp_cf'] = df['impacto_comp'].where(~df['sin_precio_comp'], 0)
     # Precio para visualización: si formato=1 → $/unidad, si no → $/kg o $/L (×1000)
     _mult = df['formato'].apply(lambda f: 1 if float(f) == 1.0 else 1000)
     df['precio_base_disp'] = df['precio_base'] * _mult
@@ -2931,8 +2936,8 @@ def generar_pdf_variacion(df, mes_base, mes_comp, local='Cadena Completa'):
     top_alza = df_sig[df_sig['delta_dinero'] > 0].nlargest(10, 'delta_dinero')
     top_baja = df_sig[df_sig['delta_dinero'] < 0].nsmallest(10, 'delta_dinero')
 
-    tb = df['impacto_base'].sum()
-    tc = df['impacto_comp'].sum()
+    tb = df['impacto_base_cf'].sum()
+    tc = df['impacto_comp_cf'].sum()
     td = tc - tb
     tp = (td / tb * 100) if tb > 0 else 0
     n_alza  = int((df['delta_dinero'] > 0).sum())
@@ -9058,9 +9063,9 @@ elif modulo.startswith("📊"):
                         )
                         df3 = df3[mask3]
 
-                    # Métricas
-                    tot_base = df3['impacto_base'].sum()
-                    tot_comp = df3['impacto_comp'].sum()
+                    # Métricas — canasta fija: solo SKUs con precio en ambos meses
+                    tot_base  = df3['impacto_base_cf'].sum()
+                    tot_comp  = df3['impacto_comp_cf'].sum()
                     tot_delta = tot_comp - tot_base
                     tot_pct   = (tot_delta / tot_base * 100) if tot_base > 0 else 0
                     sin_precio = df3['sin_precio_comp'].sum()
