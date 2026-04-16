@@ -9758,6 +9758,57 @@ elif modulo.startswith("📊"):
                         _fi_str = _mes_i.strftime('%Y-%m-01')
                         _ff_str = (_mes_f + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
 
+                        # ── Normalizar días de compra entre mes inicio y fin ──
+                        _q_dias = f"""
+                            SELECT
+                                DATE_TRUNC('month', fecha_dte::date)::date AS mes,
+                                COUNT(DISTINCT fecha_dte::date)            AS n_dias,
+                                ARRAY_AGG(DISTINCT fecha_dte::date ORDER BY fecha_dte::date) AS dias
+                            FROM compras
+                            WHERE fecha_dte::date BETWEEN '{_fi_str}' AND '{_ff_str}'
+                              AND subcat IN ('Directo','Indirecto')
+                              AND costo_realfinal > 0
+                              {_filtro_local_8020}
+                            GROUP BY 1
+                        """
+                        _df_dias = run_query(_q_dias)
+
+                        # Obtener días de cada mes extremo
+                        _dias_i_row = _df_dias[_df_dias['mes'] == _mes_i_date]
+                        _dias_f_row = _df_dias[_df_dias['mes'] == _mes_f_date]
+                        _n_dias_i   = int(_dias_i_row['n_dias'].values[0]) if len(_dias_i_row) else 0
+                        _n_dias_f   = int(_dias_f_row['n_dias'].values[0]) if len(_dias_f_row) else 0
+                        _n_dias_min = min(_n_dias_i, _n_dias_f) if _n_dias_i > 0 and _n_dias_f > 0 else max(_n_dias_i, _n_dias_f)
+
+                        # Fechas límite por mes (primeros N días con compras)
+                        def _nth_day(dias_array, n):
+                            """Retorna la fecha del día N en la lista ordenada de días con compras."""
+                            if dias_array is None or len(dias_array) == 0:
+                                return None
+                            dias = sorted([pd.Timestamp(d).date() if not isinstance(d, type(pd.Timestamp('2020-01-01').date())) else d for d in dias_array])
+                            return dias[min(n-1, len(dias)-1)]
+
+                        _dias_i_arr = _dias_i_row['dias'].values[0] if len(_dias_i_row) else []
+                        _dias_f_arr = _dias_f_row['dias'].values[0] if len(_dias_f_row) else []
+                        _corte_i    = _nth_day(_dias_i_arr, _n_dias_min)
+                        _corte_f    = _nth_day(_dias_f_arr, _n_dias_min)
+
+                        _ajuste_note = ''
+                        if _n_dias_i != _n_dias_f and _n_dias_i > 0 and _n_dias_f > 0:
+                            _mes_menor  = _str_i if _n_dias_f < _n_dias_i else _str_f
+                            _ajuste_note = f"⚖️ Ajustado a {_n_dias_min} días de compra (menor: {_mes_menor})"
+
+                        # Filtro de fechas ajustado por mes
+                        _fecha_filtro_i = f"(DATE_TRUNC('month', c.fecha_dte::date) = '{_mes_i_date}' AND c.fecha_dte::date <= '{_corte_i}')" if _corte_i else f"DATE_TRUNC('month', c.fecha_dte::date) = '{_mes_i_date}'"
+                        _fecha_filtro_f = f"(DATE_TRUNC('month', c.fecha_dte::date) = '{_mes_f_date}' AND c.fecha_dte::date <= '{_corte_f}')" if _corte_f else f"DATE_TRUNC('month', c.fecha_dte::date) = '{_mes_f_date}'"
+                        # Para meses intermedios usar rango completo
+                        _fi_inter = (_mes_i + pd.offsets.MonthEnd(1) + pd.offsets.Day(1)).strftime('%Y-%m-%d')
+                        _ff_inter = (_mes_f - pd.offsets.MonthBegin(1)).strftime('%Y-%m-%d')
+                        if _fi_inter <= _ff_inter:
+                            _fecha_filtro_completo = f"({_fecha_filtro_i} OR (c.fecha_dte::date BETWEEN '{_fi_inter}' AND '{_ff_inter}') OR {_fecha_filtro_f})"
+                        else:
+                            _fecha_filtro_completo = f"({_fecha_filtro_i} OR {_fecha_filtro_f})"
+
                         _q_precios = f"""
                             SELECT
                                 COALESCE(e.sku_receta, c.sku)                          AS sku,
@@ -9769,7 +9820,7 @@ elif modulo.startswith("📊"):
                                 SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv), 0)   AS precio_mes
                             FROM compras c
                             LEFT JOIN sku_equivalencias e ON c.sku = e.sku_compra
-                            WHERE c.fecha_dte::date BETWEEN '{_fi_str}' AND '{_ff_str}'
+                            WHERE {_fecha_filtro_completo}
                               AND UPPER(REPLACE(REPLACE(REPLACE(REPLACE(
                                     c.categoria_producto,
                                     'Á','A'),'É','E'),'Í','I'),'Ó','O'))
@@ -9889,6 +9940,7 @@ elif modulo.startswith("📊"):
                             st.session_state['p8020_data']        = _rows_8020
                             st.session_state['p8020_labels']      = (_str_i, _str_f)
                             st.session_state['p8020_local_val']   = _local_8020
+                            st.session_state['p8020_ajuste_note'] = _ajuste_note
                             st.session_state['p8020_cadena']      = _gasto_cadena
                             st.session_state['p8020_meses_n']     = len(pd.date_range(
                                 _mes_i, _mes_f + pd.offsets.MonthEnd(1), freq='MS'
@@ -9945,7 +9997,9 @@ elif modulo.startswith("📊"):
                         _local_label   = st.session_state.get('p8020_local_val', 'Todos')
                         _venta_ini     = st.session_state.get('p8020_venta_ini', 0)
                         _venta_fin     = st.session_state.get('p8020_venta_fin', 0)
-
+                        _ajuste_note   = st.session_state.get('p8020_ajuste_note', '')
+                        if _ajuste_note:
+                            st.info(_ajuste_note)
                         # ── Cálculos KPI ──────────────────────────────────
                         _top15_gasto   = sum(r['gasto_total'] for r in _rows_8020)
                         _top15_pct     = (_top15_gasto / _gasto_cadena * 100) if _gasto_cadena > 0 else 0
