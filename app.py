@@ -9757,6 +9757,8 @@ elif modulo.startswith("📊"):
                         # ── Precio por SKU × mes en todo el rango ─────────
                         _fi_str = _mes_i.strftime('%Y-%m-01')
                         _ff_str = (_mes_f + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
+                        _mes_i_date = _mes_i.date() if hasattr(_mes_i, 'date') else _mes_i
+                        _mes_f_date = _mes_f.date() if hasattr(_mes_f, 'date') else _mes_f
 
                         # ── Normalizar días de compra entre mes inicio y fin ──
                         _q_dias = f"""
@@ -9850,8 +9852,6 @@ elif modulo.startswith("📊"):
                             _gasto_cadena = _df_pm['gasto_mes'].sum()
 
                             # ── Cant, nombre y gasto del mes inicial ──────
-                            _mes_i_date = _mes_i.date() if hasattr(_mes_i, 'date') else _mes_i
-                            _mes_f_date = _mes_f.date() if hasattr(_mes_f, 'date') else _mes_f
                             _df_mes1 = _df_pm[
                                 (_df_pm['sku'].isin(_top15_skus)) &
                                 (_df_pm['mes'] == _mes_i_date)
