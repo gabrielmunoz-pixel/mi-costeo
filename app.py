@@ -2721,15 +2721,72 @@ LOGO_PATH = '/mount/src/mi-costeo/Logo_AE.jpg'
 #   → expresa el precio en la unidad real del SKU (Kg, L, Un)
 #   → impacto = cant_base × precio  (sin × formato)
 # ============================================================
+def _calc_corte_dias(fi_str, ff_str, filtro_local=''):
+    """
+    Calcula el corte de fechas normalizado por días de compra.
+    Retorna (corte_base, corte_comp, n_dias_min, nota) donde:
+    - corte_base / corte_comp son strings YYYY-MM-DD del último día a incluir
+    - n_dias_min es el mínimo de días con compras entre ambos meses
+    - nota es un string descriptivo del ajuste (vacío si no hubo ajuste)
+    """
+    from sqlalchemy import text as _text
+    q = f"""
+        SELECT
+            DATE_TRUNC('month', fecha_dte::date)::date          AS mes,
+            COUNT(DISTINCT fecha_dte::date)                      AS n_dias,
+            ARRAY_AGG(DISTINCT fecha_dte::date ORDER BY fecha_dte::date) AS dias
+        FROM compras
+        WHERE fecha_dte::date BETWEEN '{fi_str}' AND '{ff_str}'
+          AND subcat IN ('Directo','Indirecto')
+          AND costo_realfinal > 0
+          {filtro_local}
+        GROUP BY 1
+    """
+    df_d = run_query(q)
+    if df_d.empty:
+        return fi_str, ff_str, None, ''
+
+    # Extraer meses extremos
+    import pandas as pd
+    fi_date = pd.Timestamp(fi_str).date()
+    ff_mes  = pd.Timestamp(ff_str).replace(day=1).date()
+
+    row_i = df_d[df_d['mes'] == fi_date]
+    row_f = df_d[df_d['mes'] == ff_mes]
+
+    n_i = int(row_i['n_dias'].values[0]) if len(row_i) else 0
+    n_f = int(row_f['n_dias'].values[0]) if len(row_f) else 0
+
+    if n_i == 0 or n_f == 0:
+        return fi_str, ff_str, None, ''
+
+    n_min = min(n_i, n_f)
+
+    def nth_day(dias_arr, n):
+        dias = sorted([pd.Timestamp(d).date() for d in dias_arr])
+        return dias[min(n - 1, len(dias) - 1)]
+
+    corte_i = str(nth_day(row_i['dias'].values[0], n_min))
+    corte_f = str(nth_day(row_f['dias'].values[0], n_min))
+
+    nota = ''
+    if n_i != n_f:
+        mes_menor = pd.Timestamp(fi_str).strftime('%B %Y').capitalize() if n_f < n_i \
+                    else pd.Timestamp(ff_str).strftime('%B %Y').capitalize()
+        nota = f"⚖️ Ajustado a {n_min} días de compra (menor: {mes_menor})"
+
+    return corte_i, corte_f, n_min, nota
+
+
 def _build_variacion_query(fecha_base_i, fecha_base_f,
                             fecha_comp_i, fecha_comp_f,
-                            filtro_cat="", filtro_local=""):
+                            filtro_cat="", filtro_local="",
+                            corte_base=None, corte_comp=None):
     """
     Construye la query SQL del Informe de Variación de Precios.
 
-    Precio unitario = SUM(costo_realfinal) / NULLIF(SUM(cant_conv), 0)
-    Esto expresa el precio en la unidad real del SKU (Kg / L / Un),
-    a diferencia del MUC que usa la unidad mínima de compra.
+    Precio unitario = SUM(costo_realfinal) / NULLIF(SUM(cant_conv * formato), 0)
+    Esto expresa el precio en la unidad base del SKU ($/gramo o $/unidad).
 
     El impacto monetario se calcula como:
         impacto = cant_base × precio_unitario
@@ -2741,7 +2798,11 @@ def _build_variacion_query(fecha_base_i, fecha_base_f,
     fecha_comp_i / fecha_comp_f : str  YYYY-MM-DD  mes de comparación
     filtro_cat   : str  fragmento SQL adicional, ej. "AND categoria_producto = 'X'"
     filtro_local : str  fragmento SQL adicional, ej. "AND UPPER(c.local) = UPPER('Y')"
+    corte_base   : str  YYYY-MM-DD  fecha límite del mes base (para ajuste de días)
+    corte_comp   : str  YYYY-MM-DD  fecha límite del mes comp (para ajuste de días)
     """
+    _fb_f = corte_base if corte_base else fecha_base_f
+    _fc_f = corte_comp if corte_comp else fecha_comp_f
     return f"""
         WITH equiv AS (
             SELECT sku_compra, sku_receta FROM sku_equivalencias
@@ -2758,7 +2819,7 @@ def _build_variacion_query(fecha_base_i, fecha_base_f,
                 SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv * NULLIF(c.formato, 0)), 0) AS precio_base
             FROM compras c
             LEFT JOIN equiv e ON c.sku = e.sku_compra
-            WHERE c.fecha_dte::date BETWEEN '{fecha_base_i}' AND '{fecha_base_f}'
+            WHERE c.fecha_dte::date BETWEEN '{fecha_base_i}' AND '{_fb_f}'
               AND c.subcat IN ('Directo','Indirecto')
               AND c.costo_realfinal > 0
               AND c.monto_real > 0
@@ -2774,7 +2835,7 @@ def _build_variacion_query(fecha_base_i, fecha_base_f,
                 SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv * NULLIF(c.formato, 0)), 0) AS precio_comp
             FROM compras c
             LEFT JOIN equiv e ON c.sku = e.sku_compra
-            WHERE c.fecha_dte::date BETWEEN '{fecha_comp_i}' AND '{fecha_comp_f}'
+            WHERE c.fecha_dte::date BETWEEN '{fecha_comp_i}' AND '{_fc_f}'
               AND c.subcat IN ('Directo','Indirecto')
               AND c.costo_realfinal > 0
               AND c.monto_real > 0
@@ -8950,9 +9011,12 @@ elif modulo.startswith("📊"):
                     comp_f = (mes_comp3 + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
                     filtro_cat3 = f"AND categoria_producto = '{cat3_sel}'" if cat3_sel != 'Todos' else ""
 
+                    _corte_b3, _corte_c3, _, _nota3 = _calc_corte_dias(base_i, comp_f)
+
                     q_ing = _build_variacion_query(
                         base_i, base_f, comp_i, comp_f,
-                        filtro_cat=filtro_cat3
+                        filtro_cat=filtro_cat3,
+                        corte_base=_corte_b3, corte_comp=_corte_c3
                     )
                     df3 = run_query(q_ing)
 
@@ -8964,10 +9028,14 @@ elif modulo.startswith("📊"):
                         st.session_state['inf3_labels'] = (mes_base3_str, mes_comp3_str)
                         st.session_state['inf3_fechas'] = (base_i, base_f, comp_i, comp_f)
                         st.session_state['inf3_local_label'] = f"Cadena — {cat3_sel}" if cat3_sel != 'Todos' else 'Cadena Completa'
+                        st.session_state['inf3_ajuste_nota'] = _nota3
 
                 if 'inf3_df' in st.session_state:
                     df3 = st.session_state['inf3_df'].copy()
                     mes_base3_str, mes_comp3_str = st.session_state['inf3_labels']
+                    _nota3_disp = st.session_state.get('inf3_ajuste_nota', '')
+                    if _nota3_disp:
+                        st.info(_nota3_disp)
 
                     # Ordenar
                     asc3 = ord3_dir == '↑'
@@ -9157,9 +9225,11 @@ elif modulo.startswith("📊"):
                                     for loc in [l for l in get_locales() if l not in ('Todos', None)]:
                                         try:
                                             _fl = f"AND UPPER(c.local) = UPPER('{loc}')"
+                                            _cb_loc, _cc_loc, _, _ = _calc_corte_dias(_bi, _cf, _fl)
                                             q_loc = _build_variacion_query(
                                                 _bi, _bf, _ci, _cf,
-                                                filtro_local=_fl
+                                                filtro_local=_fl,
+                                                corte_base=_cb_loc, corte_comp=_cc_loc
                                             )
                                             df_loc = run_query(q_loc)
                                             if df_loc.empty: continue
@@ -9760,45 +9830,10 @@ elif modulo.startswith("📊"):
                         _mes_i_date = _mes_i.date() if hasattr(_mes_i, 'date') else _mes_i
                         _mes_f_date = _mes_f.date() if hasattr(_mes_f, 'date') else _mes_f
 
-                        # ── Normalizar días de compra entre mes inicio y fin ──
-                        _q_dias = f"""
-                            SELECT
-                                DATE_TRUNC('month', fecha_dte::date)::date AS mes,
-                                COUNT(DISTINCT fecha_dte::date)            AS n_dias,
-                                ARRAY_AGG(DISTINCT fecha_dte::date ORDER BY fecha_dte::date) AS dias
-                            FROM compras
-                            WHERE fecha_dte::date BETWEEN '{_fi_str}' AND '{_ff_str}'
-                              AND subcat IN ('Directo','Indirecto')
-                              AND costo_realfinal > 0
-                              {_filtro_local_8020}
-                            GROUP BY 1
-                        """
-                        _df_dias = run_query(_q_dias)
-
-                        # Obtener días de cada mes extremo
-                        _dias_i_row = _df_dias[_df_dias['mes'] == _mes_i_date]
-                        _dias_f_row = _df_dias[_df_dias['mes'] == _mes_f_date]
-                        _n_dias_i   = int(_dias_i_row['n_dias'].values[0]) if len(_dias_i_row) else 0
-                        _n_dias_f   = int(_dias_f_row['n_dias'].values[0]) if len(_dias_f_row) else 0
-                        _n_dias_min = min(_n_dias_i, _n_dias_f) if _n_dias_i > 0 and _n_dias_f > 0 else max(_n_dias_i, _n_dias_f)
-
-                        # Fechas límite por mes (primeros N días con compras)
-                        def _nth_day(dias_array, n):
-                            """Retorna la fecha del día N en la lista ordenada de días con compras."""
-                            if dias_array is None or len(dias_array) == 0:
-                                return None
-                            dias = sorted([pd.Timestamp(d).date() if not isinstance(d, type(pd.Timestamp('2020-01-01').date())) else d for d in dias_array])
-                            return dias[min(n-1, len(dias)-1)]
-
-                        _dias_i_arr = _dias_i_row['dias'].values[0] if len(_dias_i_row) else []
-                        _dias_f_arr = _dias_f_row['dias'].values[0] if len(_dias_f_row) else []
-                        _corte_i    = _nth_day(_dias_i_arr, _n_dias_min)
-                        _corte_f    = _nth_day(_dias_f_arr, _n_dias_min)
-
-                        _ajuste_note = ''
-                        if _n_dias_i != _n_dias_f and _n_dias_i > 0 and _n_dias_f > 0:
-                            _mes_menor  = _str_i if _n_dias_f < _n_dias_i else _str_f
-                            _ajuste_note = f"⚖️ Ajustado a {_n_dias_min} días de compra (menor: {_mes_menor})"
+                        # ── Normalizar días de compra usando función centralizada ──
+                        _corte_i, _corte_f, _n_dias_min, _ajuste_note = _calc_corte_dias(
+                            _fi_str, _ff_str, _filtro_local_8020
+                        )
 
                         # Filtro de fechas ajustado por mes
                         _fecha_filtro_i = f"(DATE_TRUNC('month', c.fecha_dte::date) = '{_mes_i_date}' AND c.fecha_dte::date <= '{_corte_i}')" if _corte_i else f"DATE_TRUNC('month', c.fecha_dte::date) = '{_mes_i_date}'"
@@ -9965,7 +10000,13 @@ elif modulo.startswith("📊"):
                                     DATE_TRUNC('month', fecha_venta::timestamp)::date AS mes,
                                     SUM(monto_venta_real) AS venta_mes
                                 FROM ventas
-                                WHERE fecha_venta::date BETWEEN '{_fi_str}' AND '{_ff_str}'
+                                WHERE (
+                                    (DATE_TRUNC('month', fecha_venta::date) = '{_mes_i_date}'
+                                     AND fecha_venta::date <= '{_corte_i if _corte_i else _fi_str}')
+                                    OR
+                                    (DATE_TRUNC('month', fecha_venta::date) = '{_mes_f_date}'
+                                     AND fecha_venta::date <= '{_corte_f if _corte_f else _ff_str}')
+                                )
                                   {_filtro_local_venta}
                                 GROUP BY 1
                             """
