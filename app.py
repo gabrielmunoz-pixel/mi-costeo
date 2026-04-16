@@ -2754,8 +2754,8 @@ def _build_variacion_query(fecha_base_i, fecha_base_f,
                 MIN(c.categoria_producto)                                  AS categoria,
                 MAX(c.formato)                                             AS formato,
                 MAX(c.conversion)                                          AS conversion,
-                SUM(c.cant_conv)                                           AS cant_base,
-                SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv), 0)      AS precio_base
+                SUM(c.cant_conv * NULLIF(c.formato, 0))                   AS cant_base,
+                SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv * NULLIF(c.formato, 0)), 0) AS precio_base
             FROM compras c
             LEFT JOIN equiv e ON c.sku = e.sku_compra
             WHERE c.fecha_dte::date BETWEEN '{fecha_base_i}' AND '{fecha_base_f}'
@@ -2771,7 +2771,7 @@ def _build_variacion_query(fecha_base_i, fecha_base_f,
         comp AS (
             SELECT
                 COALESCE(e.sku_receta, c.sku)                              AS sku,
-                SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv), 0)      AS precio_comp
+                SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv * NULLIF(c.formato, 0)), 0) AS precio_comp
             FROM compras c
             LEFT JOIN equiv e ON c.sku = e.sku_compra
             WHERE c.fecha_dte::date BETWEEN '{fecha_comp_i}' AND '{fecha_comp_f}'
@@ -3049,7 +3049,7 @@ if modulo.startswith("📦"):
     </div>
     """, unsafe_allow_html=True)
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs(["📖 Recetario", "🛒 Compras", "📈 Ventas", "🔀 Equivalencias SKU", "🔍 Auditoría Compras", "📦 Inventario / Uso", "🗂️ Clasificación", "🏷️ Auditoría Categorías", "🔗 Conciliador"])
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs(["📖 Recetario", "🛒 Compras", "📈 Ventas", "🔀 Equivalencias SKU", "🔍 Auditoría Compras", "📦 Inventario / Uso", "🗂️ Clasificación", "🏷️ Auditoría Categorías", "🔗 Conciliador", "🏢 Proveedores"])
 
     with tab1:
         _rt1, _rt2 = st.tabs(["📥 Carga Masiva", "✏️ Editor de Recetas"])
@@ -6540,6 +6540,56 @@ if modulo.startswith("📦"):
                                     st.error("Errores: " + " | ".join(_err_lst[:5]))
                             except Exception as _ec2:
                                 st.error(f"Error al conectar con la base de datos: {_ec2}")
+
+    with tab10:
+        st.markdown("#### 🏢 Buscador de Proveedores")
+        st.markdown("<div class='info-box'>Busca un proveedor por nombre o RUT y ve las categorías de productos que vende.</div>", unsafe_allow_html=True)
+
+        _prov_busq = st.text_input("Nombre o RUT del proveedor", key='prov_busq', placeholder="ej: TRAVESIA o 76123456-7")
+
+        if _prov_busq and _prov_busq.strip():
+            _prov_q = """
+                SELECT
+                    rut_proveedor,
+                    nombre_proveedor,
+                    UPPER(TRIM(categoria_producto))  AS categoria,
+                    COUNT(DISTINCT sku)              AS n_skus,
+                    COUNT(*)                         AS n_compras,
+                    MAX(fecha_dte::date)             AS ultima_compra
+                FROM compras
+                WHERE (
+                    UPPER(nombre_proveedor) LIKE UPPER(:busq)
+                    OR UPPER(rut_proveedor) LIKE UPPER(:busq)
+                )
+                AND categoria_producto IS NOT NULL
+                AND UPPER(TRIM(categoria_producto)) NOT IN ('', 'NULL')
+                GROUP BY rut_proveedor, nombre_proveedor, UPPER(TRIM(categoria_producto))
+                ORDER BY nombre_proveedor, categoria
+            """
+            _prov_df = run_query(_prov_q, {'busq': f'%{_prov_busq.strip()}%'})
+
+            if _prov_df.empty:
+                st.warning(f"No se encontraron proveedores con '{_prov_busq}'.")
+            else:
+                # Mostrar resumen por proveedor
+                _proveedores = _prov_df[['rut_proveedor','nombre_proveedor']].drop_duplicates()
+                for _, _prow in _proveedores.iterrows():
+                    _cats = _prov_df[
+                        _prov_df['rut_proveedor'] == _prow['rut_proveedor']
+                    ][['categoria','n_skus','n_compras','ultima_compra']].reset_index(drop=True)
+
+                    st.markdown(f"**{_prow['nombre_proveedor']}** · `{_prow['rut_proveedor']}`")
+                    st.dataframe(
+                        _cats.rename(columns={
+                            'categoria':     'Categoría',
+                            'n_skus':        '# SKUs',
+                            'n_compras':     '# Compras',
+                            'ultima_compra': 'Última Compra',
+                        }),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                    st.markdown("---")
 
 # ============================================================
 # MÓDULO: EXPLOSIÓN MRP (eliminado — ahora en pestaña de Gestión de Datos)
