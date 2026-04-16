@@ -9011,12 +9011,11 @@ elif modulo.startswith("📊"):
                     comp_f = (mes_comp3 + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
                     filtro_cat3 = f"AND categoria_producto = '{cat3_sel}'" if cat3_sel != 'Todos' else ""
 
-                    _corte_b3, _corte_c3, _, _nota3 = _calc_corte_dias(base_i, comp_f)
+                    _corte_b3, _corte_c3, _, _nota3 = None, None, None, ''
 
                     q_ing = _build_variacion_query(
                         base_i, base_f, comp_i, comp_f,
-                        filtro_cat=filtro_cat3,
-                        corte_base=_corte_b3, corte_comp=_corte_c3
+                        filtro_cat=filtro_cat3
                     )
                     df3 = run_query(q_ing)
 
@@ -9225,11 +9224,9 @@ elif modulo.startswith("📊"):
                                     for loc in [l for l in get_locales() if l not in ('Todos', None)]:
                                         try:
                                             _fl = f"AND UPPER(c.local) = UPPER('{loc}')"
-                                            _cb_loc, _cc_loc, _, _ = _calc_corte_dias(_bi, _cf, _fl)
                                             q_loc = _build_variacion_query(
                                                 _bi, _bf, _ci, _cf,
-                                                filtro_local=_fl,
-                                                corte_base=_cb_loc, corte_comp=_cc_loc
+                                                filtro_local=_fl
                                             )
                                             df_loc = run_query(q_loc)
                                             if df_loc.empty: continue
