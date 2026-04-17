@@ -2989,10 +2989,10 @@ def generar_pdf_variacion(df, mes_base, mes_comp, local='Cadena Completa'):
     AVAIL = W - LM - RM          # 273mm
     COL   = (AVAIL - 4*mm) / 2   # 134.5mm por columna
 
-    # Columnas tabla (sin categoría para ganar espacio):
-    # #(5) | SKU(15) | Producto(flex) | MUCb(20) | MUCc(20) | Δ$(20) | Δ%(14)
-    _FIXED = (5 + 15 + 20 + 20 + 20 + 14) * mm
-    _PROD  = COL - _FIXED          # ~40.5mm
+    # Columnas tabla (sin SKU para ganar espacio):
+    # #(5) | Producto(flex) | Q(18) | P.base(20) | P.comp(20) | Δ$(20) | Δ%(14)
+    _FIXED = (5 + 18 + 20 + 20 + 20 + 14) * mm
+    _PROD  = COL - _FIXED          # ~37.5mm
 
     def sty(sz, col, bold=False, align=TA_LEFT):
         return ParagraphStyle('_', fontSize=sz, textColor=col,
@@ -3086,9 +3086,9 @@ def generar_pdf_variacion(df, mes_base, mes_comp, local='Cadena Completa'):
                     Spacer(1, 2*mm),
                     P("Sin movimientos significativos", 6.5, CM)]
         mb = mes_base[:3]; mc = mes_comp[:3]
-        cw   = [5*mm, 14*mm, _PROD, 18*mm, 18*mm, 18*mm, 18*mm, 13*mm]
-        hdrs = ['#', 'SKU', 'Producto', 'Q base', f'P.Unit {mb}', f'P.Unit {mc}', 'Δ$', 'Δ%']
-        rows = [[P(h, 6, CM, bold=True, align=TA_LEFT if i < 3 else TA_RIGHT)
+        cw   = [5*mm, _PROD, 18*mm, 20*mm, 20*mm, 20*mm, 14*mm]
+        hdrs = ['#', 'Producto', 'Q base', f'P.Unit {mb}', f'P.Unit {mc}', 'Δ$', 'Δ%']
+        rows = [[P(h, 6, CM, bold=True, align=TA_LEFT if i < 2 else TA_RIGHT)
                  for i, h in enumerate(hdrs)]]
         for pos, (_, r) in enumerate(df_sub.iterrows(), 1):
             dd = r.get('delta_dinero', 0) or 0
@@ -3104,7 +3104,6 @@ def generar_pdf_variacion(df, mes_base, mes_comp, local='Cadena Completa'):
                 _cant_str = f"{_cant_u:,.0f} un"
             rows.append([
                 P(str(pos),                         6,   CM,  align=TA_CENTER),
-                P(r.get('sku', ''),                 5.5, CM,  align=TA_LEFT),
                 P(str(r.get('nombre', '')),         6.5, CT,  align=TA_LEFT),
                 P(_cant_str,                        6.5, CM,  align=TA_RIGHT),
                 P(f"${r.get('precio_base_disp', r.get('precio_base',0)):,.0f}",6.5, CM),
