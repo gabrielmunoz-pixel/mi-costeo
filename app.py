@@ -10758,16 +10758,18 @@ elif modulo.startswith("📊"):
                 if _vp_sin > 0:
                     st.info(f"ℹ️ {_vp_sin} combinación(es) SKU+Proveedor sin precio en mes de comparación — excluidas del total.")
 
-                # Tabla detalle
-                _vp_df['Δ%'] = _vp_df['delta_pct'].apply(
-                    lambda x: f"{x:+.1f}%" if x is not None and not pd.isna(x) else "—"
-                )
-                _vp_df['Δ$'] = _vp_df['delta_dinero'].apply(lambda x: f"${x:+,.0f}")
-                _vp_df['precio_base_v'] = _vp_df['precio_base_disp'].apply(lambda x: f"${x:,.2f}")
-                _vp_df['precio_comp_v'] = _vp_df.apply(
-                    lambda r: "—" if r['sin_precio_comp'] else f"${r['precio_comp_disp']:,.2f}", axis=1
-                )
-                _vp_show = _vp_df[[
+                # Tabla detalle — solo SKU+proveedor con variación ≥ 1% en ambos meses
+                _vp_filtrado = _vp_df[
+                    (~_vp_df['sin_precio_comp']) &
+                    (_vp_df['delta_pct'].notna()) &
+                    (_vp_df['delta_pct'].abs() >= 1.0)
+                ].copy()
+
+                _vp_filtrado['Δ%'] = _vp_filtrado['delta_pct'].apply(lambda x: f"{x:+.1f}%")
+                _vp_filtrado['Δ$'] = _vp_filtrado['delta_dinero'].apply(lambda x: f"${x:+,.0f}")
+                _vp_filtrado['precio_base_v'] = _vp_filtrado['precio_base_disp'].apply(lambda x: f"${x:,.2f}")
+                _vp_filtrado['precio_comp_v'] = _vp_filtrado['precio_comp_disp'].apply(lambda x: f"${x:,.2f}")
+                _vp_show = _vp_filtrado[[
                     'sku','nombre','proveedor','categoria',
                     'precio_base_v','precio_comp_v','Δ%','Δ$'
                 ]].rename(columns={
@@ -10777,7 +10779,9 @@ elif modulo.startswith("📊"):
                     'categoria':     'Categoría',
                     'precio_base_v': f'Precio {_vp_base_l}',
                     'precio_comp_v': f'Precio {_vp_comp_l}',
-                })
+                }).sort_values('Δ$', key=lambda x: x.str.replace('$','').str.replace(',','').str.replace('+','').astype(float).abs(), ascending=False)
+
+                st.caption(f"{len(_vp_show)} combinación(es) SKU+Proveedor con variación ≥ 1%")
 
                 # Filtro de búsqueda
                 _vp_buscar = st.text_input("🔍 Filtrar producto o proveedor", key='vp_buscar', placeholder="ej: tomate o Travesia")
