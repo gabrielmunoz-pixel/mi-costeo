@@ -4224,7 +4224,9 @@ if modulo.startswith("📦"):
                                 MODE() WITHIN GROUP (ORDER BY nombre_producto)             AS nombre_producto,
                                 MAX(categoria_producto)                                    AS categoria,
                                 MODE() WITHIN GROUP (ORDER BY nombre_proveedor)            AS proveedor,
-                                BOOL_OR(id IN (SELECT compra_id FROM compras_excluidas))   AS es_emergencia
+                                BOOL_OR(id IN (SELECT compra_id FROM compras_excluidas))   AS es_emergencia,
+                                MIN(fecha_dte)::date                                       AS fecha_min,
+                                MAX(fecha_dte)::date                                       AS fecha_max
                             FROM compras
                             WHERE UPPER(sku) = UPPER('{sku_inspect}')
                               AND muc > 0
@@ -4312,6 +4314,18 @@ if modulo.startswith("📦"):
                                 es_emerg_row = bool(r.get('es_emergencia', False))
                                 row_style = 'border-bottom:1px solid #1e1e1e;opacity:0.45' if es_emerg_row else 'border-bottom:1px solid #1e1e1e'
                                 emerg_badge = ' 🚨' if es_emerg_row else ''
+                                # Rango de fechas
+                                _fmin_i = r.get('fecha_min', '')
+                                _fmax_i = r.get('fecha_max', '')
+                                if _fmin_i and str(_fmin_i) not in ('', 'NaT', 'None'):
+                                    try:
+                                        _fs = pd.Timestamp(_fmin_i).strftime('%d/%m/%y')
+                                        _fe = pd.Timestamp(_fmax_i).strftime('%d/%m/%y')
+                                        fecha_rango_i = _fs if _fs == _fe else f"{_fs}\u2013{_fe}"
+                                    except:
+                                        fecha_rango_i = ''
+                                else:
+                                    fecha_rango_i = ''
                                 rows_i += (
                                     f'<tr style="{row_style}">'
                                     f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de;font-size:0.8rem">{r.get("nombre_producto","")}{emerg_badge}</td>'
@@ -4321,10 +4335,11 @@ if modulo.startswith("📦"):
                                     f'<td style="padding:9px 12px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">${precio_i:,.2f}</td>'
                                     f'<td style="padding:9px 12px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">{muc_i:.4f}</td>'
                                     f'<td style="padding:9px 12px;text-align:right;color:#666">{int(r["n_registros"])}</td>'
+                                    f'<td style="padding:9px 12px;text-align:center;color:#555;font-size:0.72rem">{fecha_rango_i}</td>'
                                     f'<td style="padding:9px 12px;text-align:center;color:{sc};font-weight:600">{sl}</td>'
                                     f'</tr>'
                                 )
-                            hdrs_i = ['Producto','Proveedor','Conv.','Formato','Neto Fact/u','MUC','# Reg.','Dispersión']
+                            hdrs_i = ['Producto','Proveedor','Conv.','Formato','Neto Fact/u','MUC','# Reg.','Período','Dispersión']
                             st.markdown(
                                 '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
                                 '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
