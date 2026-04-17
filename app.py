@@ -8941,11 +8941,12 @@ elif modulo.startswith("📊"):
     # ----------------------------------------------------------
     elif "Informe 3" in informe_sel:
 
-        _tab_var3, _tab_prov, _tab_acuerdo, _tab_8020 = st.tabs([
+        _tab_var3, _tab_prov, _tab_acuerdo, _tab_8020, _tab_var_prov = st.tabs([
             "🔀 Variación de Precios",
             "🏢 Comportamiento Proveedores",
             "🤝 Acuerdos Comerciales",
-            "📊 80/20 Compras"
+            "📊 80/20 Compras",
+            "🔀📦 Variación SKU+Proveedor"
         ])
 
         with _tab_var3:
@@ -12186,6 +12187,154 @@ elif modulo.startswith("📊"):
                 b64 = base64.b64encode(buf.read()).decode()
                 periodo_safe = d['periodo'].replace(' ','_').replace('/','_')
                 nombre_file  = f"Informe_{local_rpt}_{periodo_safe}.xlsx"
+
+        with _tab_var_prov:
+            st.markdown("#### 🔀📦 Variación de Precios por SKU + Proveedor")
+            st.markdown("<div class='info-box'>Compara el precio por SKU <b>y proveedor</b> entre dos meses. Permite distinguir alzas reales de precio vs cambio de mix de proveedores.</div>", unsafe_allow_html=True)
+
+            _vp_c1, _vp_c2, _vp_c3 = st.columns([2, 2, 2])
+            with _vp_c1:
+                _vp_meses = run_query("""
+                    SELECT DISTINCT TO_CHAR(DATE_TRUNC('month', fecha_dte::date), 'YYYY-MM') AS mes
+                    FROM compras WHERE subcat IN ('Directo','Indirecto') ORDER BY 1
+                """)
+                _vp_opts = _vp_meses['mes'].tolist() if not _vp_meses.empty else []
+                _vp_base = st.selectbox("Mes base", _vp_opts, index=max(0, len(_vp_opts)-2), key='vp_base')
+            with _vp_c2:
+                _vp_comp = st.selectbox("Mes comparación", _vp_opts, index=max(0, len(_vp_opts)-1), key='vp_comp')
+            with _vp_c3:
+                _vp_locales = run_query("SELECT DISTINCT local FROM compras WHERE local IS NOT NULL ORDER BY 1")
+                _vp_loc_opts = ['Todos'] + (_vp_locales['local'].tolist() if not _vp_locales.empty else [])
+                _vp_local = st.selectbox("Local", _vp_loc_opts, key='vp_local')
+
+            if st.button("▶ Generar", key='vp_btn', use_container_width=True):
+                _vp_fi = f"{_vp_base}-01"
+                _vp_bf = (pd.Timestamp(_vp_fi) + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
+                _vp_ci = f"{_vp_comp}-01"
+                _vp_cf = (pd.Timestamp(_vp_ci) + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
+                _vp_lf = f"AND UPPER(TRIM(local)) = UPPER('{_vp_local}')" if _vp_local != 'Todos' else ''
+
+                _vp_q = f"""
+                    WITH base AS (
+                        SELECT
+                            COALESCE(e.sku_receta, c.sku)                                    AS sku,
+                            c.nombre_proveedor                                               AS proveedor,
+                            c.rut_proveedor,
+                            MIN(c.nombre_producto)                                           AS nombre,
+                            MIN(c.categoria_producto)                                        AS categoria,
+                            MAX(c.formato)                                                   AS formato,
+                            SUM(c.cant_conv * NULLIF(c.formato,0))                          AS cant_base,
+                            SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv * NULLIF(c.formato,0)),0) AS precio_base
+                        FROM compras c
+                        LEFT JOIN sku_equivalencias e ON c.sku = e.sku_compra
+                        WHERE c.fecha_dte::date BETWEEN '{_vp_fi}' AND '{_vp_bf}'
+                          AND c.subcat IN ('Directo','Indirecto')
+                          AND c.costo_realfinal > 0 AND c.monto_real > 0 AND c.cant_conv > 0
+                          AND c.id NOT IN (SELECT compra_id FROM compras_excluidas)
+                          {_vp_lf}
+                        GROUP BY 1,2,3
+                    ),
+                    comp AS (
+                        SELECT
+                            COALESCE(e.sku_receta, c.sku)                                    AS sku,
+                            c.nombre_proveedor                                               AS proveedor,
+                            SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv * NULLIF(c.formato,0)),0) AS precio_comp
+                        FROM compras c
+                        LEFT JOIN sku_equivalencias e ON c.sku = e.sku_compra
+                        WHERE c.fecha_dte::date BETWEEN '{_vp_ci}' AND '{_vp_cf}'
+                          AND c.subcat IN ('Directo','Indirecto')
+                          AND c.costo_realfinal > 0 AND c.monto_real > 0 AND c.cant_conv > 0
+                          AND c.id NOT IN (SELECT compra_id FROM compras_excluidas)
+                          {_vp_lf}
+                        GROUP BY 1,2
+                    )
+                    SELECT
+                        b.sku, b.nombre, b.proveedor, b.categoria, b.formato,
+                        b.cant_base, b.precio_base,
+                        c.precio_comp,
+                        b.cant_base * b.precio_base                                AS impacto_base,
+                        b.cant_base * COALESCE(c.precio_comp, b.precio_base)      AS impacto_comp
+                    FROM base b
+                    LEFT JOIN comp c ON b.sku = c.sku AND b.proveedor = c.proveedor
+                    ORDER BY b.nombre, b.proveedor
+                """
+                _vp_df = run_query(_vp_q)
+
+                if _vp_df.empty:
+                    st.warning("Sin datos para el período seleccionado.")
+                else:
+                    _vp_df = _procesar_variacion_df(_vp_df)
+                    st.session_state['vp_df']     = _vp_df
+                    st.session_state['vp_labels'] = (_vp_base, _vp_comp)
+
+            if 'vp_df' in st.session_state:
+                _vp_df = st.session_state['vp_df'].copy()
+                _vp_base_l, _vp_comp_l = st.session_state['vp_labels']
+
+                # Resumen global
+                _vp_tb = _vp_df['impacto_base_cf'].sum()
+                _vp_tc = _vp_df['impacto_comp_cf'].sum()
+                _vp_td = _vp_tc - _vp_tb
+                _vp_tp = (_vp_td / _vp_tb * 100) if _vp_tb > 0 else 0
+                _vp_sin = int(_vp_df['sin_precio_comp'].sum())
+                _col_vp = "#e84545" if _vp_td > 0 else "#4caf7d"
+
+                st.markdown(f"""
+                <div class="kpi-grid">
+                    <div class="kpi-box">
+                        <div class="k-label">Canasta {_vp_base_l}</div>
+                        <div class="k-value">${_vp_tb:,.0f}</div>
+                    </div>
+                    <div class="kpi-box">
+                        <div class="k-label">A precios {_vp_comp_l}</div>
+                        <div class="k-value">${_vp_tc:,.0f}</div>
+                    </div>
+                    <div class="kpi-box">
+                        <div class="k-label" style="color:{_col_vp}">Impacto Δ$</div>
+                        <div class="k-value" style="color:{_col_vp}">${_vp_td:+,.0f}</div>
+                    </div>
+                    <div class="kpi-box">
+                        <div class="k-label" style="color:{_col_vp}">Variación total</div>
+                        <div class="k-value" style="color:{_col_vp}">{_vp_tp:+.2f}%</div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                if _vp_sin > 0:
+                    st.info(f"ℹ️ {_vp_sin} combinación(es) SKU+Proveedor sin precio en mes de comparación — excluidas del total.")
+
+                # Tabla detalle
+                _vp_df['Δ%'] = _vp_df['delta_pct'].apply(
+                    lambda x: f"{x:+.1f}%" if x is not None and not pd.isna(x) else "—"
+                )
+                _vp_df['Δ$'] = _vp_df['delta_dinero'].apply(lambda x: f"${x:+,.0f}")
+                _vp_df['precio_base_v'] = _vp_df['precio_base_disp'].apply(lambda x: f"${x:,.2f}")
+                _vp_df['precio_comp_v'] = _vp_df.apply(
+                    lambda r: "—" if r['sin_precio_comp'] else f"${r['precio_comp_disp']:,.2f}", axis=1
+                )
+                _vp_show = _vp_df[[
+                    'sku','nombre','proveedor','categoria',
+                    'precio_base_v','precio_comp_v','Δ%','Δ$'
+                ]].rename(columns={
+                    'sku':           'SKU',
+                    'nombre':        'Producto',
+                    'proveedor':     'Proveedor',
+                    'categoria':     'Categoría',
+                    'precio_base_v': f'Precio {_vp_base_l}',
+                    'precio_comp_v': f'Precio {_vp_comp_l}',
+                })
+
+                # Filtro de búsqueda
+                _vp_buscar = st.text_input("🔍 Filtrar producto o proveedor", key='vp_buscar', placeholder="ej: tomate o Travesia")
+                if _vp_buscar:
+                    _mask = (
+                        _vp_show['Producto'].str.upper().str.contains(_vp_buscar.upper(), na=False) |
+                        _vp_show['Proveedor'].str.upper().str.contains(_vp_buscar.upper(), na=False) |
+                        _vp_show['SKU'].str.upper().str.contains(_vp_buscar.upper(), na=False)
+                    )
+                    _vp_show = _vp_show[_mask]
+
+                st.dataframe(_vp_show, use_container_width=True, hide_index=True)
 
 # ============================================================
 # MÓDULO: AUDITOR DE CATEGORÍAS
