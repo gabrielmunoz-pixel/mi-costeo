@@ -9104,17 +9104,24 @@ elif modulo.startswith("📊"):
 
                     st.markdown("<br>", unsafe_allow_html=True)
 
+                    # Filtrar solo productos con variación ≥ 1% y precio en ambos meses
+                    df3_display = df3[
+                        (~df3['sin_precio_comp']) &
+                        (df3['delta_pct'].notna()) &
+                        (df3['delta_pct'].abs() >= 1.0)
+                    ].copy()
+
                     # ── Conteo para footer ────────────────────────────────
-                    _n_suben = int((df3['delta_dinero'] > 0).sum())
-                    _n_bajan = int((df3['delta_dinero'] < 0).sum())
-                    _n_total = len(df3)
+                    _n_suben = int((df3_display['delta_dinero'] > 0).sum())
+                    _n_bajan = int((df3_display['delta_dinero'] < 0).sum())
+                    _n_total = len(df3_display)
 
                     st.markdown(
                         f'<div class="section-label">Ingredientes — {mes_base3_str} vs {mes_comp3_str}</div>',
                         unsafe_allow_html=True
                     )
 
-                    for _, r in df3.iterrows():
+                    for _, r in df3_display.iterrows():
                         _pct  = r.get('delta_pct', None)
                         _dd   = float(r.get('delta_dinero', 0) or 0)
                         _sinp = r.get('sin_precio_comp', False)
