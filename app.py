@@ -2880,7 +2880,7 @@ def _procesar_variacion_df(df):
     df['impacto_base_cf'] = df['impacto_base'].where(~df['sin_precio_comp'], 0)
     df['impacto_comp_cf'] = df['impacto_comp'].where(~df['sin_precio_comp'], 0)
     # Precio para visualización: si formato=1 → $/unidad, si no → $/kg o $/L (×1000)
-    _mult = df['formato'].apply(lambda f: 1 if float(f) == 1.0 else 1000)
+    _mult = df['formato'].apply(lambda f: float(f) if float(f) > 0 else 1)
     df['precio_base_disp'] = df['precio_base'] * _mult
     df['precio_comp_disp'] = df['precio_comp'] * _mult
     return df
