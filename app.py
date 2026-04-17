@@ -4093,7 +4093,9 @@ if modulo.startswith("📦"):
                         ROUND(AVG(b.monto_real / NULLIF(b.cantidad, 0))::numeric, 2)   AS precio_factura,
                         MODE() WITHIN GROUP (ORDER BY b.nombre_producto)               AS nombre_producto,
                         MODE() WITHIN GROUP (ORDER BY b.nombre_proveedor)              AS proveedor,
-                        MAX(b.categoria_producto)                                      AS categoria
+                        MAX(b.categoria_producto)                                      AS categoria,
+                        MIN(b.fecha_dte)::date                                         AS fecha_min,
+                        MAX(b.fecha_dte)::date                                         AS fecha_max
                     FROM base b
                     GROUP BY b.sku, b.conversion, b.formato, FLOOR(b.muc / 0.1) * 0.1
                 ),
@@ -4127,7 +4129,9 @@ if modulo.startswith("📦"):
                     sd.dispersion_ratio                                                 AS dispersion,
                     sd.n_bins_total                                                     AS n_bins_muc,
                     sc.n_combos_params,
-                    sc.n_registros_total
+                    sc.n_registros_total,
+                    mg.fecha_min,
+                    mg.fecha_max
                 FROM muc_grupos mg
                 JOIN sku_dispersion sd
                     ON mg.sku = sd.sku
@@ -4604,17 +4608,31 @@ if modulo.startswith("📦"):
                     mc = '#e84545' if es_extremo else '#aaa'
                     mw = '700'     if es_extremo else '400'
 
+                    # Rango de fechas del grupo
+                    fecha_min_r = r.get('fecha_min', '')
+                    fecha_max_r = r.get('fecha_max', '')
+                    if fecha_min_r and str(fecha_min_r) not in ('', 'NaT', 'None'):
+                        try:
+                            _fmin = pd.Timestamp(fecha_min_r).strftime('%d/%m/%y')
+                            _fmax = pd.Timestamp(fecha_max_r).strftime('%d/%m/%y')
+                            fecha_rango = _fmin if _fmin == _fmax else f"{_fmin}\u2013{_fmax}"
+                        except:
+                            fecha_rango = ''
+                    else:
+                        fecha_rango = ''
+
                     rows_html += (
                         f'<tr style="border-bottom:1px solid #1e1e1e">'
                         f'<td style="padding:9px 12px;color:#666;font-family:monospace;font-size:0.72rem;width:7%">{sku_r}</td>'
-                        f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de;font-size:0.8rem;width:20%">{nombre_r}</td>'
-                        f'<td style="padding:9px 12px;color:#777;font-size:0.75rem;width:15%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{r.get("proveedor","")}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:#888;width:6%">{r.get("conversion","")}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:#888;width:6%">{r.get("formato","")}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:#aaa;width:9%">${precio:,.2f}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:{mc};font-weight:{mw};width:9%">{muc:,.4f}</td>'
-                        f'<td style="padding:9px 12px;text-align:right;color:#666;width:5%">{n_reg}</td>'
-                        f'<td style="padding:9px 12px;text-align:center;color:{dc};font-weight:600;width:9%">{dl}</td>'
+                        f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de;font-size:0.8rem;width:17%">{nombre_r}</td>'
+                        f'<td style="padding:9px 12px;color:#777;font-size:0.75rem;width:13%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{r.get("proveedor","")}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#888;width:5%">{r.get("conversion","")}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#888;width:5%">{r.get("formato","")}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#aaa;width:8%">${precio:,.2f}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:{mc};font-weight:{mw};width:8%">{muc:,.4f}</td>'
+                        f'<td style="padding:9px 12px;text-align:right;color:#666;width:4%">{n_reg}</td>'
+                        f'<td style="padding:9px 12px;text-align:center;color:#555;font-size:0.72rem;width:10%">{fecha_rango}</td>'
+                        f'<td style="padding:9px 12px;text-align:center;color:{dc};font-weight:600;width:8%">{dl}</td>'
                         f'</tr>'
                     )
                     opciones_sel.append(f'{sku_r} | MUC {muc:.4f} | {n_reg} reg. | {dl}')
@@ -4623,8 +4641,8 @@ if modulo.startswith("📦"):
                     '<div style="overflow-x:auto;border-radius:14px;border:1px solid #1e1e1e;margin-top:0.5rem;background:#0d0d0d">'
                     '<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;font-size:0.82rem">'
                     '<thead><tr style="background:#111">'
-                    + ''.join([f'<th style="{hs_a};text-align:{"left" if i<3 else "right" if i in (3,4,6,7,8) else "center"}">{h}</th>'
-                               for i, h in enumerate(['SKU','Producto','Proveedor','Conv.','Formato','Neto Fact/u','MUC','# Reg.','Dispersión'])])
+                    + ''.join([f'<th style="{hs_a};text-align:{"left" if i<3 else "right" if i in (3,4,6,7) else "center"}">{h}</th>'
+                               for i, h in enumerate(['SKU','Producto','Proveedor','Conv.','Formato','Neto Fact/u','MUC','# Reg.','Período','Dispersión'])])
                     + f'</tr></thead><tbody>{rows_html}</tbody></table></div>'
                 )
                 st.markdown(tabla_html, unsafe_allow_html=True)
