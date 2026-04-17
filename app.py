@@ -4044,7 +4044,8 @@ if modulo.startswith("📦"):
                         cant_conv,
                         nombre_producto,
                         nombre_proveedor,
-                        categoria_producto
+                        categoria_producto,
+                        fecha_dte
                     FROM compras
                     WHERE muc > 0
                       AND costo_realfinal > 0
