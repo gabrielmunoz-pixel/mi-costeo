@@ -9936,7 +9936,7 @@ elif modulo.startswith("📊"):
                             SELECT DISTINCT ON (COALESCE(e.sku_receta, c.sku))
                                 COALESCE(e.sku_receta, c.sku)                          AS sku,
                                 SUM(c.costo_realfinal) OVER w
-                                    / NULLIF(SUM(c.cant_conv) OVER w, 0)               AS precio_fb
+                                    / NULLIF(SUM(c.cant_conv * NULLIF(c.formato, 0)) OVER w, 0) AS precio_fb
                             FROM compras c
                             LEFT JOIN sku_equivalencias e ON c.sku = e.sku_compra
                             WHERE UPPER(REPLACE(REPLACE(REPLACE(REPLACE(
@@ -9986,9 +9986,10 @@ elif modulo.startswith("📊"):
                                 DATE_TRUNC('month', c.fecha_dte::timestamp)::date     AS mes,
                                 MIN(c.nombre_producto)                                  AS nombre,
                                 MIN(c.categoria_producto)                               AS categoria,
-                                SUM(c.cant_conv)                                        AS cant_mes,
+                                MAX(c.formato)                                          AS formato,
+                                SUM(c.cant_conv * NULLIF(c.formato, 0))                AS cant_mes,
                                 SUM(c.costo_realfinal)                                  AS gasto_mes,
-                                SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv), 0)   AS precio_mes
+                                SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv * NULLIF(c.formato, 0)), 0) AS precio_mes
                             FROM compras c
                             LEFT JOIN sku_equivalencias e ON c.sku = e.sku_compra
                             WHERE {_fecha_filtro_completo}
@@ -10024,7 +10025,7 @@ elif modulo.startswith("📊"):
                             _df_mes1 = _df_pm[
                                 (_df_pm['sku'].isin(_top15_skus)) &
                                 (_df_pm['mes'] == _mes_i_date)
-                            ][['sku', 'nombre', 'categoria', 'cant_mes', 'gasto_mes']].drop_duplicates('sku')
+                            ][['sku', 'nombre', 'categoria', 'cant_mes', 'gasto_mes', 'formato']].drop_duplicates('sku')
 
                             # ── Construir filas ────────────────────────────
                             _rows_8020 = []
@@ -10034,6 +10035,7 @@ elif modulo.startswith("📊"):
                                 _cat     = _info['categoria'].values[0] if len(_info) else '—'
                                 _cant_q1 = float(_info['cant_mes'].values[0])  if len(_info) else 0.0
                                 _gasto_ini = float(_info['gasto_mes'].values[0]) if len(_info) else 0.0
+                                _fmt     = float(_info['formato'].values[0]) if len(_info) and _info['formato'].values[0] else 1.0
 
                                 # Gasto mes final
                                 _gs_fin = _df_pm[
@@ -10041,7 +10043,7 @@ elif modulo.startswith("📊"):
                                 ]['gasto_mes']
                                 _gasto_fin = float(_gs_fin.values[0]) if len(_gs_fin) else 0.0
 
-                                # Precio mes inicial
+                                # Precio mes inicial ($/unidad_base) → × formato para mostrar
                                 _ps_ini = _df_pm[
                                     (_df_pm['sku'] == _sku) & (_df_pm['mes'] == _mes_i_date)
                                 ]['precio_mes']
@@ -10049,7 +10051,7 @@ elif modulo.startswith("📊"):
                                 _p_ini_fb   = _p_ini_real is None
                                 _p_ini      = _p_ini_real if _p_ini_real is not None else _fb_map.get(_sku, 0.0)
 
-                                # Precio mes final
+                                # Precio mes final ($/unidad_base) → × formato para mostrar
                                 _ps_fin = _df_pm[
                                     (_df_pm['sku'] == _sku) & (_df_pm['mes'] == _mes_f_date)
                                 ]['precio_mes']
@@ -10059,6 +10061,9 @@ elif modulo.startswith("📊"):
 
                                 _delta_pct = ((_p_fin / _p_ini) - 1) * 100 if _p_ini > 0 else None
                                 _impacto   = (_p_fin - _p_ini) * _cant_q1
+                                # Precios para display: × formato
+                                _p_ini_disp = _p_ini * _fmt
+                                _p_fin_disp = _p_fin * _fmt
 
                                 _gasto_sku = float(
                                     _gasto_total[_gasto_total['sku'] == _sku]['gasto_total'].values[0]
@@ -10073,12 +10078,14 @@ elif modulo.startswith("📊"):
                                         (_df_pm['sku'] == _sku) & (_df_pm['mes'] == _md)
                                     ]['precio_mes']
                                     _p_real = float(_ps.values[0]) if len(_ps) else None
+                                    _p_real_disp = _p_real * _fmt if _p_real is not None else None
+                                    _fb_disp = _fb_map.get(_sku)
+                                    _fb_disp = _fb_disp * _fmt if _fb_disp is not None else None
                                     _evolucion.append({
                                         'mes_str':       _m.strftime('%b %Y').capitalize(),
-                                        'precio':        _p_real,
+                                        'precio':        _p_real_disp,
                                         'fb':            _p_real is None,
-                                        'precio_display': _p_real if _p_real is not None
-                                                           else _fb_map.get(_sku),
+                                        'precio_display': _p_real_disp if _p_real_disp is not None else _fb_disp,
                                     })
 
                                 _rows_8020.append({
@@ -10088,9 +10095,9 @@ elif modulo.startswith("📊"):
                                     'cant_q1':         _cant_q1,
                                     'gasto_ini':       _gasto_ini,
                                     'gasto_fin':       _gasto_fin,
-                                    'p_ini':           _p_ini,
+                                    'p_ini':           _p_ini_disp,
                                     'p_ini_fb':        _p_ini_fb,
-                                    'p_fin':           _p_fin,
+                                    'p_fin':           _p_fin_disp,
                                     'p_fin_fb':        _p_fin_fb,
                                     'delta_pct':       _delta_pct,
                                     'impacto':         _impacto,
@@ -10671,9 +10678,10 @@ elif modulo.startswith("📊"):
                                                         DATE_TRUNC('month', c.fecha_dte::timestamp)::date     AS mes,
                                                         MIN(c.nombre_producto)                                AS nombre,
                                                         MIN(c.categoria_producto)                             AS categoria,
-                                                        SUM(c.cant_conv)                                      AS cant_mes,
+                                                        MAX(c.formato)                                        AS formato,
+                                                        SUM(c.cant_conv * NULLIF(c.formato,0))               AS cant_mes,
                                                         SUM(c.costo_realfinal)                                AS gasto_mes,
-                                                        SUM(c.costo_realfinal)/NULLIF(SUM(c.cant_conv),0)     AS precio_mes
+                                                        SUM(c.costo_realfinal)/NULLIF(SUM(c.cant_conv * NULLIF(c.formato,0)),0) AS precio_mes
                                                     FROM compras c
                                                     LEFT JOIN sku_equivalencias e ON c.sku = e.sku_compra
                                                     WHERE c.fecha_dte::date BETWEEN '{_fi_str_pdf}' AND '{_ff_str_pdf}'
@@ -10708,6 +10716,7 @@ elif modulo.startswith("📊"):
                                                 for _sk in _skus_loc:
                                                     _nm = _df_loc[_df_loc['sku']==_sk]['nombre'].values
                                                     _nm = _nm[0] if len(_nm) else _sk
+                                                    _fmt_sk = float(_df_loc[_df_loc['sku']==_sk]['formato'].values[0]) if len(_df_loc[_df_loc['sku']==_sk]) else 1.0
                                                     _gi_s = _df_loc[(_df_loc['sku']==_sk)&(_df_loc['mes']==_mes_i_date_pdf)]['gasto_mes']
                                                     _gf_s = _df_loc[(_df_loc['sku']==_sk)&(_df_loc['mes']==_mes_f_date_pdf)]['gasto_mes']
                                                     _pi_s = _df_loc[(_df_loc['sku']==_sk)&(_df_loc['mes']==_mes_i_date_pdf)]['precio_mes']
@@ -10719,6 +10728,9 @@ elif modulo.startswith("📊"):
                                                     _dp   = ((_pf_v/_pi_v)-1)*100 if _pi_v>0 else None
                                                     _cq   = float(_df_loc[(_df_loc['sku']==_sk)&(_df_loc['mes']==_mes_i_date_pdf)]['cant_mes'].values[0]) if len(_df_loc[(_df_loc['sku']==_sk)&(_df_loc['mes']==_mes_i_date_pdf)]) else 0.0
                                                     _imp  = (_pf_v-_pi_v)*_cq
+                                                    # Multiplicar por formato para display
+                                                    _pi_v = _pi_v * _fmt_sk
+                                                    _pf_v = _pf_v * _fmt_sk
                                                     _gs_v = float(_gt_loc[_gt_loc['sku']==_sk]['gasto_total'].values[0])
                                                     _pt   = (_gs_v/_gc_loc*100) if _gc_loc>0 else 0
                                                     _acum_loc += _pt
