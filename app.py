@@ -2737,7 +2737,7 @@ def _calc_corte_dias(fi_str, ff_str, filtro_local=''):
             ARRAY_AGG(DISTINCT fecha_dte::date ORDER BY fecha_dte::date) AS dias
         FROM compras
         WHERE fecha_dte::date BETWEEN '{fi_str}' AND '{ff_str}'
-          AND UPPER(COALESCE(categoria_producto,'')) NOT LIKE '%ART%LIMPIEZA%' AND UPPER(COALESCE(categoria_producto,'')) NOT LIKE '%ADMINISTR%'
+          AND UPPER(COALESCE(categoria_producto,'')) NOT LIKE '%ART%LIMPIEZA%' AND UPPER(COALESCE(categoria_producto,'')) NOT LIKE '%ADMINISTR%' AND UPPER(COALESCE(subcat,'')) NOT IN ('NO VENDIBLE','NO VENDIBLES')
           AND costo_realfinal > 0
           {filtro_local}
         GROUP BY 1
@@ -2823,7 +2823,7 @@ def _build_variacion_query(fecha_base_i, fecha_base_f,
             FROM compras c
             LEFT JOIN equiv e ON c.sku = e.sku_compra
             WHERE c.fecha_dte::date BETWEEN '{_cant_i}' AND '{_cant_f}'
-              AND UPPER(COALESCE(c.categoria_producto,'')) NOT LIKE '%ART%LIMPIEZA%' AND UPPER(COALESCE(c.categoria_producto,'')) NOT LIKE '%ADMINISTR%'
+              AND UPPER(COALESCE(c.categoria_producto,'')) NOT LIKE '%ART%LIMPIEZA%' AND UPPER(COALESCE(c.categoria_producto,'')) NOT LIKE '%ADMINISTR%' AND UPPER(COALESCE(c.subcat,'')) NOT IN ('NO VENDIBLE','NO VENDIBLES')
               AND c.costo_realfinal > 0 AND c.monto_real > 0 AND c.cant_conv > 0
               AND c.id NOT IN (SELECT compra_id FROM compras_excluidas)
               {filtro_cat}
@@ -2839,7 +2839,7 @@ def _build_variacion_query(fecha_base_i, fecha_base_f,
             FROM compras c
             LEFT JOIN equiv e ON c.sku = e.sku_compra
             WHERE c.fecha_dte::date BETWEEN '{fecha_base_i}' AND '{_fb_f}'
-              AND UPPER(COALESCE(c.categoria_producto,'')) NOT LIKE '%ART%LIMPIEZA%' AND UPPER(COALESCE(c.categoria_producto,'')) NOT LIKE '%ADMINISTR%'
+              AND UPPER(COALESCE(c.categoria_producto,'')) NOT LIKE '%ART%LIMPIEZA%' AND UPPER(COALESCE(c.categoria_producto,'')) NOT LIKE '%ADMINISTR%' AND UPPER(COALESCE(c.subcat,'')) NOT IN ('NO VENDIBLE','NO VENDIBLES')
               AND c.costo_realfinal > 0 AND c.monto_real > 0 AND c.cant_conv > 0
               AND c.id NOT IN (SELECT compra_id FROM compras_excluidas)
               {filtro_local}
@@ -2854,7 +2854,7 @@ def _build_variacion_query(fecha_base_i, fecha_base_f,
             FROM compras c
             LEFT JOIN equiv e ON c.sku = e.sku_compra
             WHERE c.fecha_dte::date BETWEEN '{fecha_comp_i}' AND '{_fc_f}'
-              AND UPPER(COALESCE(c.categoria_producto,'')) NOT LIKE '%ART%LIMPIEZA%' AND UPPER(COALESCE(c.categoria_producto,'')) NOT LIKE '%ADMINISTR%'
+              AND UPPER(COALESCE(c.categoria_producto,'')) NOT LIKE '%ART%LIMPIEZA%' AND UPPER(COALESCE(c.categoria_producto,'')) NOT LIKE '%ADMINISTR%' AND UPPER(COALESCE(c.subcat,'')) NOT IN ('NO VENDIBLE','NO VENDIBLES')
               AND c.costo_realfinal > 0 AND c.monto_real > 0 AND c.cant_conv > 0
               AND c.id NOT IN (SELECT compra_id FROM compras_excluidas)
               {filtro_local}
@@ -2891,7 +2891,7 @@ def _build_variacion_query(fecha_base_i, fecha_base_f,
             FROM compras c
             LEFT JOIN equiv e ON c.sku = e.sku_compra
             WHERE c.fecha_dte::date BETWEEN '{fecha_base_i}' AND '{_fb_f}'
-              AND UPPER(COALESCE(c.categoria_producto,'')) NOT LIKE '%ART%LIMPIEZA%' AND UPPER(COALESCE(c.categoria_producto,'')) NOT LIKE '%ADMINISTR%'
+              AND UPPER(COALESCE(c.categoria_producto,'')) NOT LIKE '%ART%LIMPIEZA%' AND UPPER(COALESCE(c.categoria_producto,'')) NOT LIKE '%ADMINISTR%' AND UPPER(COALESCE(c.subcat,'')) NOT IN ('NO VENDIBLE','NO VENDIBLES')
               AND c.costo_realfinal > 0
               AND c.monto_real > 0
               AND c.cant_conv > 0
@@ -2908,7 +2908,7 @@ def _build_variacion_query(fecha_base_i, fecha_base_f,
             FROM compras c
             LEFT JOIN equiv e ON c.sku = e.sku_compra
             WHERE c.fecha_dte::date BETWEEN '{fecha_comp_i}' AND '{_fc_f}'
-              AND UPPER(COALESCE(c.categoria_producto,'')) NOT LIKE '%ART%LIMPIEZA%' AND UPPER(COALESCE(c.categoria_producto,'')) NOT LIKE '%ADMINISTR%'
+              AND UPPER(COALESCE(c.categoria_producto,'')) NOT LIKE '%ART%LIMPIEZA%' AND UPPER(COALESCE(c.categoria_producto,'')) NOT LIKE '%ADMINISTR%' AND UPPER(COALESCE(c.subcat,'')) NOT IN ('NO VENDIBLE','NO VENDIBLES')
               AND c.costo_realfinal > 0
               AND c.monto_real > 0
               AND c.cant_conv > 0
