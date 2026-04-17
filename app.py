@@ -2945,9 +2945,11 @@ def _procesar_variacion_df(df):
         lambda r: (r['delta_dinero'] / r['impacto_base'] * 100)
         if r['impacto_base'] > 0 and not r['sin_precio_comp'] else None, axis=1
     )
-    # Para el total de canasta: solo SKUs con precio real en ambos meses
-    df['impacto_base_cf'] = df['impacto_base'].where(~df['sin_precio_comp'], 0)
-    df['impacto_comp_cf'] = df['impacto_comp'].where(~df['sin_precio_comp'], 0)
+    # Para el total de canasta:
+    # - impacto_base_cf = siempre el total completo (canasta fija)
+    # - impacto_comp_cf = usa precio_comp donde existe, precio_base como fallback
+    df['impacto_base_cf'] = df['impacto_base']
+    df['impacto_comp_cf'] = df['impacto_comp']  # ya usa fallback precio_base cuando sin_precio_comp
     # Precio para visualización: si formato=1 → $/unidad, si no → $/kg o $/L (×1000)
     _mult = df['formato'].apply(lambda f: float(f) if float(f) > 0 else 1)
     df['precio_base_disp'] = df['precio_base'] * _mult
