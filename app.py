@@ -10708,6 +10708,17 @@ elif modulo.startswith("📊"):
                     st.warning("Sin datos para el período seleccionado.")
                 else:
                     _vp_df = _procesar_variacion_df(_vp_df)
+
+                    # Para el total de canasta: agrupar por SKU y verificar si hay
+                    # precio de comparación en CUALQUIER proveedor de ese SKU
+                    # Así el cambio de proveedor no excluye el SKU del total
+                    _vp_sku_comp = _vp_df.groupby('sku').apply(
+                        lambda g: not g['sin_precio_comp'].all()
+                    ).reset_index()
+                    _vp_sku_comp.columns = ['sku', 'tiene_precio_comp']
+                    _vp_df = _vp_df.merge(_vp_sku_comp, on='sku', how='left')
+                    _vp_df['impacto_base_cf'] = _vp_df['impacto_base'].where(_vp_df['tiene_precio_comp'], 0)
+                    _vp_df['impacto_comp_cf'] = _vp_df['impacto_comp'].where(_vp_df['tiene_precio_comp'], 0)
                     st.session_state['vp_df']     = _vp_df
                     st.session_state['vp_labels'] = (_vp_base, _vp_comp)
 
