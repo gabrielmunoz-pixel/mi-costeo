@@ -3097,10 +3097,11 @@ def generar_pdf_variacion(df, mes_base, mes_comp, local='Cadena Completa'):
             _cant = float(r.get('cant_base', 0) or 0)
             _fmt  = float(r.get('formato', 1) or 1)
             _conv = float(r.get('conversion', 1) or 1)
+            _cant_u = _cant / _fmt if _fmt > 0 else _cant
             if _conv == 1000:
-                _cant_str = f"{_cant/1000:,.1f} kg"
+                _cant_str = f"{_cant_u:,.1f} kg"
             else:
-                _cant_str = f"{_cant:,.0f} un"
+                _cant_str = f"{_cant_u:,.0f} un"
             rows.append([
                 P(str(pos),                         6,   CM,  align=TA_CENTER),
                 P(r.get('sku', ''),                 5.5, CM,  align=TA_LEFT),
@@ -9275,20 +9276,20 @@ elif modulo.startswith("📊"):
                         # Determinar unidad de medida según conversion
                         _conv = float(r.get('conversion', 1) or 1)
                         _fmt  = float(r.get('formato', 1) or 1)
+                        _fmt_r = float(r.get('formato', 1) or 1)
                         if _conv == 1000:
-                            _um = 'kg'    # conversion 1000 = gramos → precio por kg
-                        elif _conv == 1:
+                            _um = 'kg'
+                        elif _fmt_r > 1:
                             _um = 'un'
                         else:
-                            _um = 'un'    # conversion N = unidades por envase
+                            _um = 'un'
 
-                        # Cantidad: convertir cant_conv a unidad grande
+                        # Cantidad en unidades de compra = cant_base / formato
                         _cant_raw = float(r.get('cant_base', 0) or 0)
+                        _cant_display = _cant_raw / _fmt_r if _fmt_r > 0 else _cant_raw
                         if _conv == 1000:
-                            _cant_display = _cant_raw / 1000  # de gramos a kg
                             _cant_label = f'{_cant_display:,.1f} {_um}'
                         else:
-                            _cant_display = _cant_raw
                             _cant_label = f'{_cant_display:,.0f} {_um}'
 
                         # Precio display ya normalizado por formato en _procesar_variacion_df
@@ -10101,6 +10102,7 @@ elif modulo.startswith("📊"):
                                     'nombre':          _nombre,
                                     'categoria':       _cat,
                                     'cant_q1':         _cant_q1,
+                                    'fmt':             _fmt,
                                     'gasto_ini':       _gasto_ini,
                                     'gasto_fin':       _gasto_fin,
                                     'p_ini':           _p_ini_disp,
@@ -10355,7 +10357,7 @@ elif modulo.startswith("📊"):
                                 <div class="ing-grid">
                                     <div class="ing-kv">
                                         <div class="ik">Q base</div>
-                                        <div class="iv" style="color:#666">{_r.get('cant_q1', 0):,.0f}</div>
+                                        <div class="iv" style="color:#666">{_r.get('cant_q1', 0) / max(_r.get('fmt', 1), 1):,.0f}</div>
                                     </div>
                                     <div class="ing-kv">
                                         <div class="ik">P. {_str_i}</div>
@@ -10566,7 +10568,7 @@ elif modulo.startswith("📊"):
                                 tbl_rows.append([
                                     P(str(pos),6,CM,align=TA_CENTER),
                                     P(str(r.get('nombre','')),6.5,CT,align=TA_LEFT),
-                                    P(f"{r.get('cant_q1',0):,.0f}",6,CM),
+                                    P(f"{r.get('cant_q1',0) / max(r.get('fmt',1),1):,.0f}",6,CM),
                                     P(f"${r.get('p_ini',0):,.0f}",6,CM),
                                     P(f"${r.get('p_fin',0):,.0f}",6,CT),
                                     P(f"{(r.get('delta_pct') or 0):+.2f}%",6,dc,bold=True),
