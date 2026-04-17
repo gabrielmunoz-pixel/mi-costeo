@@ -2781,29 +2781,98 @@ def _calc_corte_dias(fi_str, ff_str, filtro_local=''):
 def _build_variacion_query(fecha_base_i, fecha_base_f,
                             fecha_comp_i, fecha_comp_f,
                             filtro_cat="", filtro_local="",
-                            corte_base=None, corte_comp=None):
+                            corte_base=None, corte_comp=None,
+                            fecha_cant_i=None, fecha_cant_f=None):
     """
     Construye la query SQL del Informe de Variación de Precios.
 
     Precio unitario = SUM(costo_realfinal) / NULLIF(SUM(cant_conv * formato), 0)
-    Esto expresa el precio en la unidad base del SKU ($/gramo o $/unidad).
-
-    El impacto monetario se calcula como:
-        impacto = cant_base × precio_unitario
-    Los totales de canasta son equivalentes a los del método MUC.
 
     Parámetros
     ----------
-    fecha_base_i / fecha_base_f : str  YYYY-MM-DD  mes de referencia
-    fecha_comp_i / fecha_comp_f : str  YYYY-MM-DD  mes de comparación
-    filtro_cat   : str  fragmento SQL adicional, ej. "AND categoria_producto = 'X'"
-    filtro_local : str  fragmento SQL adicional, ej. "AND UPPER(c.local) = UPPER('Y')"
-    corte_base   : str  YYYY-MM-DD  fecha límite del mes base (para ajuste de días)
-    corte_comp   : str  YYYY-MM-DD  fecha límite del mes comp (para ajuste de días)
+    fecha_base_i / fecha_base_f : str  YYYY-MM-DD  mes de precios de referencia
+    fecha_comp_i / fecha_comp_f : str  YYYY-MM-DD  mes de precios de comparación
+    fecha_cant_i / fecha_cant_f : str  YYYY-MM-DD  mes de cantidades (si None usa fecha_base)
+    filtro_cat   : str  fragmento SQL adicional
+    filtro_local : str  fragmento SQL adicional
+    corte_base / corte_comp : str  YYYY-MM-DD  fecha límite (ajuste de días)
     """
-    _fb_f = corte_base if corte_base else fecha_base_f
-    _fc_f = corte_comp if corte_comp else fecha_comp_f
-    return f"""
+    _fb_f   = corte_base  if corte_base  else fecha_base_f
+    _fc_f   = corte_comp  if corte_comp  else fecha_comp_f
+    # Mes de cantidades: si se especifica uno distinto, las cantidades vienen de ahí
+    _cant_i = fecha_cant_i if fecha_cant_i else fecha_base_i
+    _cant_f = fecha_cant_f if fecha_cant_f else fecha_base_f
+    _cant_diferente = (fecha_cant_i is not None and fecha_cant_i != fecha_base_i)
+
+    if _cant_diferente:
+        # Canasta fija: cantidades de un mes, precios de otro
+        return f"""
+        WITH equiv AS (
+            SELECT sku_compra, sku_receta FROM sku_equivalencias
+        ),
+        -- Cantidades fijas del mes base de cantidades (ej: enero)
+        cant AS (
+            SELECT
+                COALESCE(e.sku_receta, c.sku)                              AS sku,
+                MIN(c.nombre_producto)                                     AS nombre,
+                MIN(c.nombre_proveedor)                                    AS proveedor,
+                MIN(c.categoria_producto)                                  AS categoria,
+                MAX(c.formato)                                             AS formato,
+                MAX(c.conversion)                                          AS conversion,
+                SUM(c.cant_conv * NULLIF(c.formato, 0))                   AS cant_base
+            FROM compras c
+            LEFT JOIN equiv e ON c.sku = e.sku_compra
+            WHERE c.fecha_dte::date BETWEEN '{_cant_i}' AND '{_cant_f}'
+              AND c.subcat IN ('Directo','Indirecto')
+              AND c.costo_realfinal > 0 AND c.monto_real > 0 AND c.cant_conv > 0
+              AND c.id NOT IN (SELECT compra_id FROM compras_excluidas)
+              {filtro_cat}
+              {filtro_local}
+            GROUP BY 1
+        ),
+        -- Precios del mes de referencia (inicio)
+        precio_ref AS (
+            SELECT
+                COALESCE(e.sku_receta, c.sku)                              AS sku,
+                SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv * NULLIF(c.formato, 0)), 0) AS precio_base
+            FROM compras c
+            LEFT JOIN equiv e ON c.sku = e.sku_compra
+            WHERE c.fecha_dte::date BETWEEN '{fecha_base_i}' AND '{_fb_f}'
+              AND c.subcat IN ('Directo','Indirecto')
+              AND c.costo_realfinal > 0 AND c.monto_real > 0 AND c.cant_conv > 0
+              AND c.id NOT IN (SELECT compra_id FROM compras_excluidas)
+              {filtro_local}
+            GROUP BY 1
+        ),
+        -- Precios del mes de comparación (término)
+        comp AS (
+            SELECT
+                COALESCE(e.sku_receta, c.sku)                              AS sku,
+                SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv * NULLIF(c.formato, 0)), 0) AS precio_comp
+            FROM compras c
+            LEFT JOIN equiv e ON c.sku = e.sku_compra
+            WHERE c.fecha_dte::date BETWEEN '{fecha_comp_i}' AND '{_fc_f}'
+              AND c.subcat IN ('Directo','Indirecto')
+              AND c.costo_realfinal > 0 AND c.monto_real > 0 AND c.cant_conv > 0
+              AND c.id NOT IN (SELECT compra_id FROM compras_excluidas)
+              {filtro_local}
+            GROUP BY 1
+        )
+        SELECT
+            ca.sku, ca.nombre, ca.proveedor, ca.categoria,
+            ca.formato, ca.conversion, ca.cant_base,
+            pr.precio_base,
+            c.precio_comp,
+            ca.cant_base * pr.precio_base                              AS impacto_base,
+            ca.cant_base * COALESCE(c.precio_comp, pr.precio_base)    AS impacto_comp
+        FROM cant ca
+        LEFT JOIN precio_ref pr ON ca.sku = pr.sku
+        LEFT JOIN comp c        ON ca.sku = c.sku
+        ORDER BY ca.nombre
+        """
+    else:
+        # Lógica original: cantidades y precio base del mismo mes
+        return f"""
         WITH equiv AS (
             SELECT sku_compra, sku_receta FROM sku_equivalencias
         ),
@@ -2853,7 +2922,7 @@ def _build_variacion_query(fecha_base_i, fecha_base_f,
         FROM base b
         LEFT JOIN comp c ON b.sku = c.sku
         ORDER BY b.nombre
-    """
+        """
 
 
 def _procesar_variacion_df(df):
@@ -8962,20 +9031,30 @@ elif modulo.startswith("📊"):
                 meses_list3 = pd.to_datetime(meses_disp3['mes']).tolist()
                 meses_fmt3  = [m.strftime('%B %Y').capitalize() for m in meses_list3]
 
-                # ── Período: dos meses en fila con flecha ─────────
+                # Mes base fijo de cantidades: enero 2026
+                _enero = pd.Timestamp('2026-01-01')
+                _enero_idx = next((i for i, m in enumerate(meses_list3) if m.year == 2026 and m.month == 1), 0)
+
+                st.markdown(
+                    "<div class='info-box'>Las <b>cantidades son siempre las de Enero 2026</b>. "
+                    "El mes inicio define el precio de referencia (vacío = Enero 2026). "
+                    "El mes término define el precio a comparar.</div>",
+                    unsafe_allow_html=True
+                )
+
                 _p1, _arrow_col, _p2 = st.columns([10, 1, 10])
                 with _p1:
                     mes_base_idx3 = st.selectbox(
-                        "Mes muestra",
+                        "Mes inicio (precio referencia)",
                         range(len(meses_fmt3)),
                         format_func=lambda i: meses_fmt3[i],
-                        index=0, key='inf3_base'
+                        index=_enero_idx, key='inf3_base'
                     )
                 with _arrow_col:
                     st.markdown("<div style='text-align:center;padding-top:28px;color:#555;font-size:1rem'>→</div>", unsafe_allow_html=True)
                 with _p2:
                     mes_comp_idx3 = st.selectbox(
-                        "Mes comparación",
+                        "Mes término (precio comparación)",
                         range(len(meses_fmt3)),
                         format_func=lambda i: meses_fmt3[i],
                         index=len(meses_list3)-1, key='inf3_comp'
@@ -9011,17 +9090,24 @@ elif modulo.startswith("📊"):
 
 
                 if st.button("▶ Generar Informe 3"):
+                    # Cantidades: siempre enero 2026
+                    cant_i = '2026-01-01'
+                    cant_f = '2026-01-31'
+                    # Precios referencia: mes inicio seleccionado
                     base_i = mes_base3.strftime('%Y-%m-01')
                     base_f = (mes_base3 + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
+                    # Precios comparación: mes término seleccionado
                     comp_i = mes_comp3.strftime('%Y-%m-01')
                     comp_f = (mes_comp3 + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
                     filtro_cat3 = f"AND categoria_producto = '{cat3_sel}'" if cat3_sel != 'Todos' else ""
 
-                    _corte_b3, _corte_c3, _, _nota3 = None, None, None, ''
-
+                    # Canasta fija: pasar fechas de cantidades separadas del mes de precios
+                    _cant_diferente = (base_i != cant_i)
                     q_ing = _build_variacion_query(
                         base_i, base_f, comp_i, comp_f,
-                        filtro_cat=filtro_cat3
+                        filtro_cat=filtro_cat3,
+                        fecha_cant_i=cant_i if _cant_diferente else None,
+                        fecha_cant_f=cant_f if _cant_diferente else None,
                     )
                     df3 = run_query(q_ing)
 
@@ -9033,7 +9119,7 @@ elif modulo.startswith("📊"):
                         st.session_state['inf3_labels'] = (mes_base3_str, mes_comp3_str)
                         st.session_state['inf3_fechas'] = (base_i, base_f, comp_i, comp_f)
                         st.session_state['inf3_local_label'] = f"Cadena — {cat3_sel}" if cat3_sel != 'Todos' else 'Cadena Completa'
-                        st.session_state['inf3_ajuste_nota'] = _nota3
+                        st.session_state['inf3_ajuste_nota'] = ''
 
                 if 'inf3_df' in st.session_state:
                     df3 = st.session_state['inf3_df'].copy()
