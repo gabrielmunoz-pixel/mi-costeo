@@ -3007,8 +3007,8 @@ def generar_pdf_variacion(df, mes_base, mes_comp, local='Cadena Completa'):
     df['delta_pct_abs'] = df['delta_pct'].abs().fillna(0)
     df['delta_din_abs'] = df['delta_dinero'].abs().fillna(0)
     df_sig   = df[(df['delta_pct_abs'] >= 1.0) | (df['delta_din_abs'] >= 500)]
-    top_alza = df_sig[df_sig['delta_dinero'] > 0].nlargest(10, 'delta_dinero')
-    top_baja = df_sig[df_sig['delta_dinero'] < 0].nsmallest(10, 'delta_dinero')
+    top_alza = df_sig[df_sig['delta_dinero'] > 0].nlargest(15, 'delta_dinero')
+    top_baja = df_sig[df_sig['delta_dinero'] < 0].nsmallest(15, 'delta_dinero')
 
     tb = df['impacto_base_cf'].sum()
     tc = df['impacto_comp_cf'].sum()
@@ -3127,8 +3127,8 @@ def generar_pdf_variacion(df, mes_base, mes_comp, local='Cadena Completa'):
         return [P(titulo, 7, col_t, bold=True), Spacer(1, 1.5*mm), tbl]
 
     # ── DOS COLUMNAS LADO A LADO ──────────────────────────────
-    alza = tabla_top(top_alza, "▲  TOP 10 ALZAS  (mayor impacto $)", CR,  CBR)
-    baja = tabla_top(top_baja, "▼  TOP 10 BAJAS  (mayor ahorro $)",  CGr, CBG)
+    alza = tabla_top(top_alza, "▲  TOP 15 ALZAS  (mayor impacto $)", CR,  CBR)
+    baja = tabla_top(top_baja, "▼  TOP 15 BAJAS  (mayor ahorro $)",  CGr, CBG)
 
     dos_col = Table(
         [[alza, [Spacer(4*mm, 1)], baja]],
