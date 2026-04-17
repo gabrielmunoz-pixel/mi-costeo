@@ -3086,18 +3086,26 @@ def generar_pdf_variacion(df, mes_base, mes_comp, local='Cadena Completa'):
                     Spacer(1, 2*mm),
                     P("Sin movimientos significativos", 6.5, CM)]
         mb = mes_base[:3]; mc = mes_comp[:3]
-        cw   = [5*mm, 15*mm, _PROD, 20*mm, 20*mm, 20*mm, 14*mm]
-        hdrs = ['#', 'SKU', 'Producto', f'P.Unit {mb}', f'P.Unit {mc}', 'Δ$', 'Δ%']
+        cw   = [5*mm, 14*mm, _PROD, 18*mm, 18*mm, 18*mm, 18*mm, 13*mm]
+        hdrs = ['#', 'SKU', 'Producto', 'Q base', f'P.Unit {mb}', f'P.Unit {mc}', 'Δ$', 'Δ%']
         rows = [[P(h, 6, CM, bold=True, align=TA_LEFT if i < 3 else TA_RIGHT)
                  for i, h in enumerate(hdrs)]]
         for pos, (_, r) in enumerate(df_sub.iterrows(), 1):
             dd = r.get('delta_dinero', 0) or 0
             dp = r.get('delta_pct',    0) or 0
             dc = CR if dd > 0 else CGr
+            _cant = float(r.get('cant_base', 0) or 0)
+            _fmt  = float(r.get('formato', 1) or 1)
+            _conv = float(r.get('conversion', 1) or 1)
+            if _conv == 1000:
+                _cant_str = f"{_cant/1000:,.1f} kg"
+            else:
+                _cant_str = f"{_cant:,.0f} un"
             rows.append([
                 P(str(pos),                         6,   CM,  align=TA_CENTER),
                 P(r.get('sku', ''),                 5.5, CM,  align=TA_LEFT),
                 P(str(r.get('nombre', '')),         6.5, CT,  align=TA_LEFT),
+                P(_cant_str,                        6.5, CM,  align=TA_RIGHT),
                 P(f"${r.get('precio_base_disp', r.get('precio_base',0)):,.0f}",6.5, CM),
                 P(f"${r.get('precio_comp_disp', r.get('precio_comp',0)):,.0f}",6.5, CT),
                 P(f"${dd:+,.0f}",                   6.5, dc,  bold=True),
@@ -10346,6 +10354,10 @@ elif modulo.startswith("📊"):
                                 </div>
                                 <div class="ing-grid">
                                     <div class="ing-kv">
+                                        <div class="ik">Q base</div>
+                                        <div class="iv" style="color:#666">{_r.get('cant_q1', 0):,.0f}</div>
+                                    </div>
+                                    <div class="ing-kv">
                                         <div class="ik">P. {_str_i}</div>
                                         <div class="iv">{_fb_icon_8020(_r['p_ini_fb'])}${_r['p_ini']:,.0f}</div>
                                     </div>
@@ -10538,8 +10550,9 @@ elif modulo.startswith("📊"):
                             # Tabla top 15
                             _ini_l = str_i.split()[0][:3]
                             _fin_l = str_f.split()[0][:3]
-                            col_w = [8*mm, 70*mm, 22*mm, 22*mm, 18*mm, 28*mm, 22*mm, 22*mm, 18*mm, 18*mm]
+                            col_w = [8*mm, 60*mm, 20*mm, 20*mm, 20*mm, 18*mm, 25*mm, 20*mm, 20*mm, 16*mm, 16*mm]
                             hdrs_pdf = ['#','Producto',
+                                        'Q base',
                                         f'P.Unit {_ini_l}', f'P.Unit {_fin_l}',
                                         'Δ% Precio','Impacto $',
                                         f'$ {_ini_l}', f'$ {_fin_l}',
@@ -10553,6 +10566,7 @@ elif modulo.startswith("📊"):
                                 tbl_rows.append([
                                     P(str(pos),6,CM,align=TA_CENTER),
                                     P(str(r.get('nombre','')),6.5,CT,align=TA_LEFT),
+                                    P(f"{r.get('cant_q1',0):,.0f}",6,CM),
                                     P(f"${r.get('p_ini',0):,.0f}",6,CM),
                                     P(f"${r.get('p_fin',0):,.0f}",6,CT),
                                     P(f"{(r.get('delta_pct') or 0):+.2f}%",6,dc,bold=True),
