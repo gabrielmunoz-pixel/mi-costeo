@@ -2814,10 +2814,10 @@ def _build_variacion_query(fecha_base_i, fecha_base_f,
         cant AS (
             SELECT
                 COALESCE(e.sku_receta, c.sku)                              AS sku,
+                c.formato,
                 MIN(c.nombre_producto)                                     AS nombre,
                 MIN(c.nombre_proveedor)                                    AS proveedor,
                 MIN(c.categoria_producto)                                  AS categoria,
-                MAX(c.formato)                                             AS formato,
                 MAX(c.conversion)                                          AS conversion,
                 SUM(c.cant_conv * NULLIF(c.formato, 0))                   AS cant_base
             FROM compras c
@@ -2828,12 +2828,13 @@ def _build_variacion_query(fecha_base_i, fecha_base_f,
               AND c.id NOT IN (SELECT compra_id FROM compras_excluidas)
               {filtro_cat}
               {filtro_local}
-            GROUP BY 1
+            GROUP BY 1, 2
         ),
         -- Precios del mes de referencia (inicio)
         precio_ref AS (
             SELECT
                 COALESCE(e.sku_receta, c.sku)                              AS sku,
+                c.formato,
                 SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv * NULLIF(c.formato, 0)), 0) AS precio_base
             FROM compras c
             LEFT JOIN equiv e ON c.sku = e.sku_compra
@@ -2842,12 +2843,13 @@ def _build_variacion_query(fecha_base_i, fecha_base_f,
               AND c.costo_realfinal > 0 AND c.monto_real > 0 AND c.cant_conv > 0
               AND c.id NOT IN (SELECT compra_id FROM compras_excluidas)
               {filtro_local}
-            GROUP BY 1
+            GROUP BY 1, 2
         ),
         -- Precios del mes de comparación (término)
         comp AS (
             SELECT
                 COALESCE(e.sku_receta, c.sku)                              AS sku,
+                c.formato,
                 SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv * NULLIF(c.formato, 0)), 0) AS precio_comp
             FROM compras c
             LEFT JOIN equiv e ON c.sku = e.sku_compra
@@ -2856,7 +2858,7 @@ def _build_variacion_query(fecha_base_i, fecha_base_f,
               AND c.costo_realfinal > 0 AND c.monto_real > 0 AND c.cant_conv > 0
               AND c.id NOT IN (SELECT compra_id FROM compras_excluidas)
               {filtro_local}
-            GROUP BY 1
+            GROUP BY 1, 2
         )
         SELECT
             ca.sku, ca.nombre, ca.proveedor, ca.categoria,
@@ -2866,8 +2868,8 @@ def _build_variacion_query(fecha_base_i, fecha_base_f,
             ca.cant_base * pr.precio_base                              AS impacto_base,
             ca.cant_base * COALESCE(c.precio_comp, pr.precio_base)    AS impacto_comp
         FROM cant ca
-        LEFT JOIN precio_ref pr ON ca.sku = pr.sku
-        LEFT JOIN comp c        ON ca.sku = c.sku
+        LEFT JOIN precio_ref pr ON ca.sku = pr.sku AND ca.formato = pr.formato
+        LEFT JOIN comp c        ON ca.sku = c.sku  AND ca.formato = c.formato
         ORDER BY ca.nombre
         """
     else:
@@ -2879,10 +2881,10 @@ def _build_variacion_query(fecha_base_i, fecha_base_f,
         base AS (
             SELECT
                 COALESCE(e.sku_receta, c.sku)                              AS sku,
+                c.formato,
                 MIN(c.nombre_producto)                                     AS nombre,
                 MIN(c.nombre_proveedor)                                    AS proveedor,
                 MIN(c.categoria_producto)                                  AS categoria,
-                MAX(c.formato)                                             AS formato,
                 MAX(c.conversion)                                          AS conversion,
                 SUM(c.cant_conv * NULLIF(c.formato, 0))                   AS cant_base,
                 SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv * NULLIF(c.formato, 0)), 0) AS precio_base
@@ -2896,11 +2898,12 @@ def _build_variacion_query(fecha_base_i, fecha_base_f,
               AND c.id NOT IN (SELECT compra_id FROM compras_excluidas)
               {filtro_cat}
               {filtro_local}
-            GROUP BY 1
+            GROUP BY 1, 2
         ),
         comp AS (
             SELECT
                 COALESCE(e.sku_receta, c.sku)                              AS sku,
+                c.formato,
                 SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv * NULLIF(c.formato, 0)), 0) AS precio_comp
             FROM compras c
             LEFT JOIN equiv e ON c.sku = e.sku_compra
@@ -2911,7 +2914,7 @@ def _build_variacion_query(fecha_base_i, fecha_base_f,
               AND c.cant_conv > 0
               AND c.id NOT IN (SELECT compra_id FROM compras_excluidas)
               {filtro_local}
-            GROUP BY 1
+            GROUP BY 1, 2
         )
         SELECT
             b.sku, b.nombre, b.proveedor, b.categoria,
@@ -2920,7 +2923,7 @@ def _build_variacion_query(fecha_base_i, fecha_base_f,
             b.cant_base * b.precio_base                               AS impacto_base,
             b.cant_base * COALESCE(c.precio_comp, b.precio_base)     AS impacto_comp
         FROM base b
-        LEFT JOIN comp c ON b.sku = c.sku
+        LEFT JOIN comp c ON b.sku = c.sku AND b.formato = c.formato
         ORDER BY b.nombre
         """
 
