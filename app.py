@@ -6731,6 +6731,36 @@ if modulo.startswith("📦"):
         st.markdown("#### 🏢 Buscador de Proveedores")
         st.markdown("<div class='info-box'>Busca un proveedor por nombre o RUT y ve las categorías de productos que vende.</div>", unsafe_allow_html=True)
 
+        # ── Botón de descarga completa ─────────────────────────
+        if st.button("⬇️ Descargar RUT + Nombre + Categoría Principal", key='prov_dl_btn'):
+            _dl_q = """
+                SELECT
+                    rut_proveedor                                        AS "RUT",
+                    nombre_proveedor                                     AS "Nombre Proveedor",
+                    MODE() WITHIN GROUP (ORDER BY categoria_producto)    AS "Categoría Principal"
+                FROM compras
+                WHERE categoria_producto IS NOT NULL
+                  AND UPPER(TRIM(categoria_producto)) NOT IN ('', 'NULL')
+                GROUP BY rut_proveedor, nombre_proveedor
+                ORDER BY nombre_proveedor
+            """
+            _dl_df = run_query(_dl_q)
+            if not _dl_df.empty:
+                import io as _io
+                _buf = _io.BytesIO()
+                _dl_df.to_excel(_buf, index=False, engine='openpyxl')
+                _buf.seek(0)
+                st.download_button(
+                    "📥 Descargar Excel",
+                    _buf.getvalue(),
+                    "Proveedores_Categoria_Principal.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key='prov_dl_excel'
+                )
+                st.success(f"✅ {len(_dl_df)} proveedores listos para descargar.")
+
+        st.markdown("---")
+
         _prov_busq = st.text_input("Nombre o RUT del proveedor", key='prov_busq', placeholder="ej: TRAVESIA o 76123456-7")
 
         if _prov_busq and _prov_busq.strip():
