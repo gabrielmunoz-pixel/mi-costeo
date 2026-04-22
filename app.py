@@ -10022,9 +10022,12 @@ elif modulo.startswith("📊"):
 
 
                         # ── Lista de meses en el rango ────────────────────
-                        _rango_meses = pd.date_range(
-                            _mes_i, _mes_f + pd.offsets.MonthEnd(1), freq='MS'
-                        ).tolist()
+                        if _modo_semanal_8020:
+                            _rango_meses = [_mes_i]
+                        else:
+                            _rango_meses = pd.date_range(
+                                _mes_i, _mes_f + pd.offsets.MonthEnd(1), freq='MS'
+                            ).tolist()
 
                         # ── Último precio histórico por SKU (fallback) ────
                         _q_fallback = f"""
@@ -10211,7 +10214,8 @@ elif modulo.startswith("📊"):
 
                                 # Evolución mensual completa
                                 _evolucion = []
-                                for _m in pd.date_range(_mes_i, _mes_f + pd.offsets.MonthEnd(1), freq='MS'):
+                                _rango_evol = [_mes_i] if _modo_semanal_8020 else pd.date_range(_mes_i, _mes_f + pd.offsets.MonthEnd(1), freq='MS').tolist()
+                                for _m in _rango_evol:
                                     _md = _m.date() if hasattr(_m, 'date') else _m
                                     _ps = _df_pm[
                                         (_df_pm['sku'] == _sku) & (_df_pm['mes'] == _md)
@@ -10258,7 +10262,7 @@ elif modulo.startswith("📊"):
                             st.session_state['p8020_local_val']   = _local_8020
                             st.session_state['p8020_ajuste_note'] = _ajuste_note
                             st.session_state['p8020_cadena']      = _gasto_cadena
-                            st.session_state['p8020_meses_n']     = len(pd.date_range(
+                            st.session_state['p8020_meses_n']     = 1 if _modo_semanal_8020 else len(pd.date_range(
                                 _mes_i, _mes_f + pd.offsets.MonthEnd(1), freq='MS'
                             ))
                             # Gasto total cadena por mes ini y fin (para cuadro 1 y 4)
