@@ -4040,8 +4040,12 @@ if modulo.startswith("📦"):
         _audit_ff_cur     = str(st.session_state.get('audit_ff', ''))
         _audit_params_cur = (_audit_cat_cur, _audit_fi_cur, _audit_ff_cur)
 
-        # Solo re-ejecutar si no hay resultado o si cambiaron los parámetros
-        if 'audit_df' not in st.session_state or            st.session_state.get('audit_df_params') != _audit_params_cur:
+        # Solo re-ejecutar si se presionó el botón (audit_df fue eliminado) o cambiaron parámetros
+        _debe_ejecutar = (
+            'audit_df' not in st.session_state or
+            st.session_state.get('audit_df_params') != _audit_params_cur
+        )
+        if _debe_ejecutar:
             cat_sel = _audit_cat_cur
             umbral_audit = st.session_state.get('audit_umbral', 5.0)
             if cat_sel in ('Todas (sin Colación)', '── Colación ──'):
