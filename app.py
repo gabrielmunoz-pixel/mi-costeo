@@ -10294,7 +10294,7 @@ elif modulo.startswith("📊"):
                             st.session_state['p8020_data']        = _rows_8020
                             st.session_state['p8020_labels']      = (_str_i, _str_f)
                             st.session_state['p8020_local_val']   = _local_8020
-                            st.session_state['p8020_ajuste_note'] = _ajuste_note
+                            st.session_state['p8020_ajuste_note'] = _ajuste_note if not _modo_semanal_8020 else ''
                             st.session_state['p8020_cadena']      = _gasto_cadena
                             st.session_state['p8020_meses_n'] = 1 if _modo_semanal_8020 else len(pd.date_range(
                                 _mes_i, _mes_f + pd.offsets.MonthEnd(1), freq='MS'
