@@ -10058,18 +10058,49 @@ elif modulo.startswith("📊"):
 
                         # ── Precio por SKU × período ──────────────────────
                         if _modo_semanal_8020:
-                            # Modo semanal: mes referencia + semana como "mes fin"
-                            _fi_str     = _mes_i.strftime('%Y-%m-01')
-                            _ff_str     = _ff_sem  # hasta fin de semana para cubrir ambos
+                            _mes_i_fin_str = (_mes_i + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
+                            _q_precios = f"""
+                                SELECT sku, mes, nombre, categoria, formato, cant_mes, gasto_mes, precio_mes FROM (
+                                    SELECT
+                                        COALESCE(e.sku_receta, c.sku)                          AS sku,
+                                        '{_mes_i.strftime('%Y-%m-01')}'::date                  AS mes,
+                                        MIN(c.nombre_producto)                                  AS nombre,
+                                        MIN(c.categoria_producto)                               AS categoria,
+                                        MAX(c.formato)                                          AS formato,
+                                        SUM(c.cant_conv * NULLIF(c.formato, 0))                AS cant_mes,
+                                        SUM(c.costo_realfinal)                                  AS gasto_mes,
+                                        SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv * NULLIF(c.formato, 0)), 0) AS precio_mes
+                                    FROM compras c
+                                    LEFT JOIN sku_equivalencias e ON c.sku = e.sku_compra
+                                    WHERE c.fecha_dte::date BETWEEN '{_fi_str}' AND '{_mes_i_fin_str}'
+                                      AND UPPER(REPLACE(REPLACE(REPLACE(REPLACE(c.categoria_producto,'Á','A'),'É','E'),'Í','I'),'Ó','O'))
+                                          NOT IN ('ADMINISTRACION', 'ART. LIMPIEZA', 'ART LIMPIEZA')
+                                      AND c.costo_realfinal > 0 AND c.cant_conv > 0
+                                      {_filtro_local_8020}
+                                    GROUP BY 1
+                                    UNION ALL
+                                    SELECT
+                                        COALESCE(e.sku_receta, c.sku)                          AS sku,
+                                        '{_fi_sem}'::date                                       AS mes,
+                                        MIN(c.nombre_producto)                                  AS nombre,
+                                        MIN(c.categoria_producto)                               AS categoria,
+                                        MAX(c.formato)                                          AS formato,
+                                        SUM(c.cant_conv * NULLIF(c.formato, 0))                AS cant_mes,
+                                        SUM(c.costo_realfinal)                                  AS gasto_mes,
+                                        SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv * NULLIF(c.formato, 0)), 0) AS precio_mes
+                                    FROM compras c
+                                    LEFT JOIN sku_equivalencias e ON c.sku = e.sku_compra
+                                    WHERE c.fecha_dte::date BETWEEN '{_fi_sem}' AND '{_ff_sem}'
+                                      AND UPPER(REPLACE(REPLACE(REPLACE(REPLACE(c.categoria_producto,'Á','A'),'É','E'),'Í','I'),'Ó','O'))
+                                          NOT IN ('ADMINISTRACION', 'ART. LIMPIEZA', 'ART LIMPIEZA')
+                                      AND c.costo_realfinal > 0 AND c.cant_conv > 0
+                                      {_filtro_local_8020}
+                                    GROUP BY 1
+                                ) sub
+                                ORDER BY sku, mes
+                            """
                             _mes_i_date = _mes_i.date() if hasattr(_mes_i, 'date') else _mes_i
-                            _mes_f_date = pd.Timestamp(_fi_sem).date()  # inicio semana como referencia de mes
-                            _corte_i, _corte_f, _n_dias_min, _ajuste_note = None, None, None, ''
-                            # Filtro: mes referencia OR semana
-                            _mes_i_fin = (_mes_i + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
-                            _fecha_filtro_completo = (
-                                f"(c.fecha_dte::date BETWEEN '{_fi_str}' AND '{_mes_i_fin}'"
-                                f" OR c.fecha_dte::date BETWEEN '{_fi_sem}' AND '{_ff_sem}')"
-                            )
+                            _mes_f_date = pd.Timestamp(_fi_sem).date()
                         else:
                             _fi_str = _mes_i.strftime('%Y-%m-01')
                             _ff_str = (_mes_f + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
@@ -10091,29 +10122,32 @@ elif modulo.startswith("📊"):
                             else:
                                 _fecha_filtro_completo = f"({_fecha_filtro_i} OR {_fecha_filtro_f})"
 
-                        _q_precios = f"""
-                            SELECT
-                                COALESCE(e.sku_receta, c.sku)                          AS sku,
-                                DATE_TRUNC('month', c.fecha_dte::timestamp)::date     AS mes,
-                                MIN(c.nombre_producto)                                  AS nombre,
-                                MIN(c.categoria_producto)                               AS categoria,
-                                MAX(c.formato)                                          AS formato,
-                                SUM(c.cant_conv * NULLIF(c.formato, 0))                AS cant_mes,
-                                SUM(c.costo_realfinal)                                  AS gasto_mes,
-                                SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv * NULLIF(c.formato, 0)), 0) AS precio_mes
-                            FROM compras c
-                            LEFT JOIN sku_equivalencias e ON c.sku = e.sku_compra
-                            WHERE {_fecha_filtro_completo}
-                              AND UPPER(REPLACE(REPLACE(REPLACE(REPLACE(
-                                    c.categoria_producto,
-                                    'Á','A'),'É','E'),'Í','I'),'Ó','O'))
-                                  NOT IN ('ADMINISTRACION', 'ART. LIMPIEZA', 'ART LIMPIEZA')
-                              AND c.costo_realfinal > 0 AND c.cant_conv > 0
-                              {_filtro_local_8020}
-                            GROUP BY 1, 2
-                            ORDER BY 1, 2
-                        """
-                        _df_pm = run_query(_q_precios)
+                        if not _modo_semanal_8020:
+                            _q_precios = f"""
+                                SELECT
+                                    COALESCE(e.sku_receta, c.sku)                          AS sku,
+                                    DATE_TRUNC('month', c.fecha_dte::timestamp)::date     AS mes,
+                                    MIN(c.nombre_producto)                                  AS nombre,
+                                    MIN(c.categoria_producto)                               AS categoria,
+                                    MAX(c.formato)                                          AS formato,
+                                    SUM(c.cant_conv * NULLIF(c.formato, 0))                AS cant_mes,
+                                    SUM(c.costo_realfinal)                                  AS gasto_mes,
+                                    SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv * NULLIF(c.formato, 0)), 0) AS precio_mes
+                                FROM compras c
+                                LEFT JOIN sku_equivalencias e ON c.sku = e.sku_compra
+                                WHERE {_fecha_filtro_completo}
+                                  AND UPPER(REPLACE(REPLACE(REPLACE(REPLACE(
+                                        c.categoria_producto,
+                                        'Á','A'),'É','E'),'Í','I'),'Ó','O'))
+                                      NOT IN ('ADMINISTRACION', 'ART. LIMPIEZA', 'ART LIMPIEZA')
+                                  AND c.costo_realfinal > 0 AND c.cant_conv > 0
+                                  {_filtro_local_8020}
+                                GROUP BY 1, 2
+                                ORDER BY 1, 2
+                            """
+                            _df_pm = run_query(_q_precios)
+                        else:
+                            _df_pm = run_query(_q_precios)
 
                         if _df_pm.empty:
                             st.warning("Sin datos para el período seleccionado.")
@@ -10262,17 +10296,26 @@ elif modulo.startswith("📊"):
                             st.session_state['p8020_local_val']   = _local_8020
                             st.session_state['p8020_ajuste_note'] = _ajuste_note
                             st.session_state['p8020_cadena']      = _gasto_cadena
-                            st.session_state['p8020_meses_n']     = 1 if _modo_semanal_8020 else len(pd.date_range(
+                            st.session_state['p8020_meses_n'] = 1 if _modo_semanal_8020 else len(pd.date_range(
                                 _mes_i, _mes_f + pd.offsets.MonthEnd(1), freq='MS'
                             ))
-                            # Gasto total cadena por mes ini y fin (para cuadro 1 y 4)
-                            st.session_state['p8020_gasto_ini'] = float(
-                                _df_pm[_df_pm['mes'] == _mes_i_date]['gasto_mes'].sum()
-                            )
-                            st.session_state['p8020_gasto_fin'] = float(
-                                _df_pm[_df_pm['mes'] == _mes_f_date]['gasto_mes'].sum()
-                            )
-                            # Venta real por mes ini y fin (para cuadro 3)
+                            # Gasto total cadena por período ini y fin
+                            if _modo_semanal_8020:
+                                # mes ini = mes referencia, fin = semana
+                                st.session_state['p8020_gasto_ini'] = float(
+                                    _df_pm[_df_pm['mes'] == _mes_i_date]['gasto_mes'].sum()
+                                )
+                                st.session_state['p8020_gasto_fin'] = float(
+                                    _df_pm[_df_pm['mes'] == pd.Timestamp(_fi_sem).date()]['gasto_mes'].sum()
+                                )
+                            else:
+                                st.session_state['p8020_gasto_ini'] = float(
+                                    _df_pm[_df_pm['mes'] == _mes_i_date]['gasto_mes'].sum()
+                                )
+                                st.session_state['p8020_gasto_fin'] = float(
+                                    _df_pm[_df_pm['mes'] == _mes_f_date]['gasto_mes'].sum()
+                                )
+                            # Venta real por período ini y fin
                             _filtro_local_venta = (
                                 f"AND UPPER(REPLACE(REPLACE(REPLACE(REPLACE(local,"
                                 f"'Á','A'),'É','E'),'Í','I'),'Ó','O')) = "
@@ -10280,37 +10323,59 @@ elif modulo.startswith("📊"):
                                 f"'Á','A'),'É','E'),'Í','I'),'Ó','O'))"
                                 if _local_8020 != 'Todos' else ''
                             )
-                            _q_venta = f"""
-                                SELECT
-                                    DATE_TRUNC('month', fecha_venta::timestamp)::date AS mes,
-                                    SUM(monto_venta_real) AS venta_mes
-                                FROM ventas
-                                WHERE (
-                                    (DATE_TRUNC('month', fecha_venta::date) = '{_mes_i_date}'
-                                     AND fecha_venta::date <= '{_corte_i if _corte_i else _fi_str}')
-                                    OR
-                                    (DATE_TRUNC('month', fecha_venta::date) = '{_mes_f_date}'
-                                     AND fecha_venta::date <= '{_corte_f if _corte_f else _ff_str}')
-                                )
-                                  {_filtro_local_venta}
-                                GROUP BY 1
-                            """
-                            _df_venta = run_query(_q_venta)
-                            if not _df_venta.empty:
-                                _df_venta['mes'] = pd.to_datetime(
-                                    _df_venta['mes']).dt.date
-                                _df_venta['venta_mes'] = pd.to_numeric(
-                                    _df_venta['venta_mes'], errors='coerce').fillna(0)
-                                _vi = float(_df_venta[
-                                    _df_venta['mes'] == _mes_i_date]['venta_mes'].sum())
-                                _vf = float(_df_venta[
-                                    _df_venta['mes'] == _mes_f_date]['venta_mes'].sum())
+                            if _modo_semanal_8020:
+                                # Venta mes referencia: mismo nro de días que la semana, al final del mes
+                                _n_dias_sem = (pd.Timestamp(_ff_sem) - pd.Timestamp(_fi_sem)).days + 1
+                                _mes_i_fin  = (_mes_i + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
+                                _mes_i_ini_dias = (pd.Timestamp(_mes_i_fin) - pd.Timedelta(days=_n_dias_sem - 1)).strftime('%Y-%m-%d')
+                                _q_venta = f"""
+                                    SELECT
+                                        'ref'::text AS periodo,
+                                        SUM(monto_venta_real) AS venta_mes
+                                    FROM ventas
+                                    WHERE fecha_venta::date BETWEEN '{_mes_i_ini_dias}' AND '{_mes_i_fin}'
+                                      {_filtro_local_venta}
+                                    UNION ALL
+                                    SELECT
+                                        'sem'::text AS periodo,
+                                        SUM(monto_venta_real) AS venta_mes
+                                    FROM ventas
+                                    WHERE fecha_venta::date BETWEEN '{_fi_sem}' AND '{_ff_sem}'
+                                      {_filtro_local_venta}
+                                """
+                                _df_venta = run_query(_q_venta)
+                                if not _df_venta.empty:
+                                    _df_venta['venta_mes'] = pd.to_numeric(_df_venta['venta_mes'], errors='coerce').fillna(0)
+                                    _vi = float(_df_venta[_df_venta['periodo'] == 'ref']['venta_mes'].sum())
+                                    _vf = float(_df_venta[_df_venta['periodo'] == 'sem']['venta_mes'].sum())
+                                else:
+                                    _vi, _vf = 0.0, 0.0
                             else:
-                                _vi, _vf = 0.0, 0.0
+                                _q_venta = f"""
+                                    SELECT
+                                        DATE_TRUNC('month', fecha_venta::timestamp)::date AS mes,
+                                        SUM(monto_venta_real) AS venta_mes
+                                    FROM ventas
+                                    WHERE (
+                                        (DATE_TRUNC('month', fecha_venta::date) = '{_mes_i_date}'
+                                         AND fecha_venta::date <= '{_corte_i if _corte_i else _fi_str}')
+                                        OR
+                                        (DATE_TRUNC('month', fecha_venta::date) = '{_mes_f_date}'
+                                         AND fecha_venta::date <= '{_corte_f if _corte_f else _ff_str}')
+                                    )
+                                      {_filtro_local_venta}
+                                    GROUP BY 1
+                                """
+                                _df_venta = run_query(_q_venta)
+                                if not _df_venta.empty:
+                                    _df_venta['mes'] = pd.to_datetime(_df_venta['mes']).dt.date
+                                    _df_venta['venta_mes'] = pd.to_numeric(_df_venta['venta_mes'], errors='coerce').fillna(0)
+                                    _vi = float(_df_venta[_df_venta['mes'] == _mes_i_date]['venta_mes'].sum())
+                                    _vf = float(_df_venta[_df_venta['mes'] == _mes_f_date]['venta_mes'].sum())
+                                else:
+                                    _vi, _vf = 0.0, 0.0
                             st.session_state['p8020_venta_ini'] = _vi
                             st.session_state['p8020_venta_fin'] = _vf
-
-                    # ── RENDERIZADO (fuera del botón, persiste con session_state) ──
                     _p8020_keys = ('p8020_data', 'p8020_labels', 'p8020_cadena',
                                    'p8020_meses_n')
                     if all(k in st.session_state for k in _p8020_keys):
