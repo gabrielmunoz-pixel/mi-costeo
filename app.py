@@ -2041,6 +2041,27 @@ def procesar_compras(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
             lambda x: _LOCAL_ALIAS_C.get(str(x).strip().lower(), str(x).strip()) if pd.notna(x) else x
         )
 
+    # ── Mapeo RUT empresa → local (cuando no viene columna local) ──────────
+    _RUT_LOCAL_MAP = {
+        '76376098-7': 'PROVIDENCIA',
+        '76439807-6': 'VITACURA',
+        '76450253-1': 'LA DEHESA',
+        '77009575-1': 'LAS CONDES',
+        '77116729-2': 'CHICUREO',
+        '77531748-5': 'MACUL',
+        '77726513-K': 'LA REINA',
+        '77773363-K': 'QUILIN',
+        '77887201-3': 'NUEVA PROVIDENCIA',
+        '77847982-6': 'LOS TRAPENSES',
+    }
+    if 'local' not in df.columns and 'rut_empresa' in df.columns:
+        df['local'] = df['rut_empresa'].apply(
+            lambda x: _RUT_LOCAL_MAP.get(str(x).strip().upper(), 'DESCONOCIDO') if pd.notna(x) else 'DESCONOCIDO'
+        )
+        _desconocidos = df[df['local'] == 'DESCONOCIDO']['rut_empresa'].unique().tolist()
+        if _desconocidos:
+            warnings.append(f"⚠️ RUT sin local asignado: {', '.join(str(r) for r in _desconocidos)}")
+
     faltantes = [c for c in COLS_REQUERIDAS if c not in df.columns]
     if faltantes:
         warnings.append(
@@ -12638,36 +12659,23 @@ elif informe_sel == "Auditor":
     </div>""", unsafe_allow_html=True)
 
     # ── Filtros ─────────────────────────────────────────────────
-    fa1, fa2, fa3, fa4 = st.columns([2, 1.2, 1.2, 2])
+    fa1, fa2, fa3 = st.columns([2, 2, 1])
     with fa1:
-        busq_ac = st.text_input("🔍 Buscar nombre o SKU", key="ac_busq", placeholder="ej: POSTA, AL-CA-010...")
-    with fa2:
-        fi_ac = st.date_input("Desde", key="ac_fi", value=f_inicio)
-    with fa3:
-        ff_ac = st.date_input("Hasta", key="ac_ff", value=f_fin)
-    with fa4:
-        cats_ac = ["Todas"] + get_categorias_compras()
-        cat_ac = st.selectbox("Categoría", cats_ac, key="ac_cat")
-
-    fa5, fa6, fa7 = st.columns([2, 2, 2])
-    with fa5:
-        solo_sin_ctrl = st.toggle("⚠️ Solo sin Categoría Control", key="ac_solo_sin")
-    with fa6:
         sku_exacto = st.text_input("🎯 SKU exacto", key="ac_sku_exacto", placeholder="ej: AL-CA-010")
-    with fa7:
-        st.caption("Haz clic en un grupo para editar su Categoría Control")
+    with fa2:
+        cats_ac = ["Todas"] + get_categorias_compras()
+        cat_ac = st.selectbox("Categoría Producto", cats_ac, key="ac_cat")
+    with fa3:
+        solo_sin_ctrl = st.toggle("⚠️ Sin Ctrl", key="ac_solo_sin")
 
     if st.button("🔎 Buscar", key="btn_ac_buscar", type="primary"):
         with st.spinner("Cargando datos..."):
-            where = ["c.fecha_dte::date BETWEEN :fi AND :ff"]
-            params_ac = {'fi': str(fi_ac), 'ff': str(ff_ac)}
+            where = ["1=1"]
+            params_ac = {}
 
             if sku_exacto.strip():
                 where.append("UPPER(c.sku) = UPPER(:sku_exacto)")
                 params_ac['sku_exacto'] = sku_exacto.strip()
-            elif busq_ac.strip():
-                where.append("(UPPER(c.nombre_producto) LIKE :busq OR UPPER(c.sku) LIKE :busq)")
-                params_ac['busq'] = f'%{busq_ac.strip().upper()}%'
 
             if cat_ac != "Todas":
                 where.append("c.categoria_producto = :cat")
@@ -12683,8 +12691,8 @@ elif informe_sel == "Auditor":
                     c.subcat,
                     cn.categoria_control,
                     cn.categoria as cat_clasificada,
-                    COUNT(*)           as n_registros,
-                    SUM(c.cant_conv)   as cant_total,
+                    COUNT(*)               as n_registros,
+                    SUM(c.cant_conv)       as cant_total,
                     SUM(c.costo_realfinal) as costo_total,
                     MIN(c.fecha_dte::date) as primera_compra,
                     MAX(c.fecha_dte::date) as ultima_compra
@@ -12695,7 +12703,7 @@ elif informe_sel == "Auditor":
                 GROUP BY c.sku, c.nombre_producto, c.categoria_producto, c.subcat,
                          cn.categoria_control, cn.categoria
                 ORDER BY c.nombre_producto, c.sku
-            """, params_ac)
+            """, params_ac if params_ac else None)
 
             if solo_sin_ctrl:
                 df_ac = df_ac[df_ac['categoria_control'].isna() | (df_ac['categoria_control'] == '')]
@@ -12758,9 +12766,9 @@ elif informe_sel == "Auditor":
 
                 st.markdown(f"**⚙️ {len(nombres_sel)} grupo(s) seleccionado(s) — se actualizarán todos los registros históricos**")
 
-                ed1, ed2, ed3, ed4 = st.columns([2, 2, 2, 1])
+                ed1, ed2, ed3, ed4, ed5 = st.columns([2, 2, 2, 2, 1])
                 with ed1:
-                    ctrl_opts = ['POSTA','FILETE','PLATEADA','LOMO LISO','LOMO VETADO','GRASA DE WAGYU',
+                    ctrl_opts = ['(sin cambio)','POSTA','FILETE','PLATEADA','LOMO LISO','LOMO VETADO','GRASA DE WAGYU',
                                  'PECHUGA DE POLLO','COSTILLAS','CHULETA KASSLER','LOMO DE CENTRO',
                                  'PERNIL','JAMÓN','TOCINO AHUMADO','PANCETA LAMINADA',
                                  'PALTA','TOMATE','LECHUGA',
@@ -12770,14 +12778,18 @@ elif informe_sel == "Auditor":
                                  'PAN','SCHOP','JUGOS','ACEITE FREIR','ACEITE MAYONESA',
                                  'ACEITE DE OLIVA','ACEITE SESAMO','ACETO BALSAMICO','LIMÓN',
                                  'HIELO','(sin categoría control)']
-                    nueva_ctrl = st.selectbox("Nueva Categoría Control", ctrl_opts, key="ac_nueva_ctrl")
+                    nueva_ctrl = st.selectbox("Cat. Control", ctrl_opts, key="ac_nueva_ctrl")
                 with ed2:
-                    cat_opts2 = ['ALIMENTOS','VERDURAS','BAR','ART. LIMPIEZA','DESECHABLES','ADMINISTRACION']
-                    nueva_cat = st.selectbox("Nueva Categoría Producto", cat_opts2, key="ac_nueva_cat")
+                    cat_opts2 = ['(sin cambio)','ALIMENTOS','VERDURAS','BAR','ART. LIMPIEZA','DESECHABLES','ADMINISTRACION']
+                    nueva_cat = st.selectbox("Categoría Producto", cat_opts2, key="ac_nueva_cat")
                 with ed3:
-                    subcat_opts = ['Directo','Indirecto','Desechables','ART. LIMPIEZA','ADMINISTRACION','No Vendible']
-                    nueva_subcat = st.selectbox("Nueva Subcat", subcat_opts, key="ac_nueva_subcat")
+                    subcat_opts = ['(sin cambio)','Directo','Indirecto','Desechables','ART. LIMPIEZA','ADMINISTRACION','No Vendible']
+                    nueva_subcat = st.selectbox("Subcat", subcat_opts, key="ac_nueva_subcat")
                 with ed4:
+                    nuevo_sku = st.text_input("Nuevo SKU", key="ac_nuevo_sku",
+                        placeholder="Dejar vacío para no cambiar",
+                        help="Solo aplica si seleccionas UN grupo")
+                with ed5:
                     st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
                     if st.button("💾 Aplicar", key="btn_ac_apply", use_container_width=True):
                         try:
@@ -12787,32 +12799,57 @@ elif informe_sel == "Auditor":
 
                             with engine.connect() as conn:
                                 for nombre in nombres_sel:
-                                    # 1. UPDATE histórico en compras
-                                    res = conn.execute(text("""
-                                        UPDATE compras
-                                        SET categoria_producto = :cat,
-                                            subcat = :subcat
-                                        WHERE UPPER(nombre_producto) = UPPER(:n)
-                                    """), {'cat': nueva_cat, 'subcat': nueva_subcat, 'n': nombre})
-                                    n_compras_upd += res.rowcount
+                                    # Construir SET dinámico solo con campos que cambian
+                                    set_parts = []
+                                    upd_params = {'n': nombre}
 
-                                    # 2. Upsert en clas_nomb_prod
-                                    existe = pd.read_sql(
-                                        text("SELECT COUNT(*) as n FROM clas_nomb_prod WHERE UPPER(nombre_producto)=UPPER(:n)"),
-                                        conn, params={'n': nombre})
-                                    if existe['n'].iloc[0] > 0:
-                                        conn.execute(text(
-                                            "UPDATE clas_nomb_prod SET categoria_control=:ctrl, categoria=:cat "
-                                            "WHERE UPPER(nombre_producto)=UPPER(:n)"),
-                                            {'ctrl': ctrl_val, 'cat': nueva_cat, 'n': nombre})
-                                    else:
-                                        conn.execute(text(
-                                            "INSERT INTO clas_nomb_prod (nombre_producto, categoria_control, categoria) "
-                                            "VALUES (:n, :ctrl, :cat)"),
-                                            {'n': nombre, 'ctrl': ctrl_val, 'cat': nueva_cat})
+                                    if nueva_cat != '(sin cambio)':
+                                        set_parts.append("categoria_producto = :cat")
+                                        upd_params['cat'] = nueva_cat
+
+                                    if nueva_subcat != '(sin cambio)':
+                                        set_parts.append("subcat = :subcat")
+                                        upd_params['subcat'] = nueva_subcat
+
+                                    if nuevo_sku.strip() and len(nombres_sel) == 1:
+                                        set_parts.append("sku = :nuevo_sku")
+                                        upd_params['nuevo_sku'] = nuevo_sku.strip()
+
+                                    if set_parts:
+                                        res = conn.execute(text(f"""
+                                            UPDATE compras
+                                            SET {', '.join(set_parts)}
+                                            WHERE UPPER(nombre_producto) = UPPER(:n)
+                                        """), upd_params)
+                                        n_compras_upd += res.rowcount
+
+                                    # Upsert en clas_nomb_prod si cambia categoría o ctrl
+                                    if nueva_ctrl != '(sin cambio)' or nueva_cat != '(sin cambio)':
+                                        existe = pd.read_sql(
+                                            text("SELECT COUNT(*) as n FROM clas_nomb_prod WHERE UPPER(nombre_producto)=UPPER(:n)"),
+                                            conn, params={'n': nombre})
+                                        if existe['n'].iloc[0] > 0:
+                                            cn_parts = []
+                                            cn_params = {'n': nombre}
+                                            if nueva_ctrl != '(sin cambio)':
+                                                cn_parts.append("categoria_control=:ctrl")
+                                                cn_params['ctrl'] = ctrl_val
+                                            if nueva_cat != '(sin cambio)':
+                                                cn_parts.append("categoria=:cat")
+                                                cn_params['cat'] = nueva_cat
+                                            conn.execute(text(
+                                                f"UPDATE clas_nomb_prod SET {', '.join(cn_parts)} WHERE UPPER(nombre_producto)=UPPER(:n)"),
+                                                cn_params)
+                                        else:
+                                            conn.execute(text(
+                                                "INSERT INTO clas_nomb_prod (nombre_producto, categoria_control, categoria) "
+                                                "VALUES (:n, :ctrl, :cat)"),
+                                                {'n': nombre,
+                                                 'ctrl': ctrl_val if nueva_ctrl != '(sin cambio)' else None,
+                                                 'cat': nueva_cat if nueva_cat != '(sin cambio)' else None})
                                 conn.commit()
 
-                            st.success(f"✅ {len(nombres_sel)} grupo(s) · {n_compras_upd:,} registros históricos actualizados en compras")
+                            st.success(f"✅ {len(nombres_sel)} grupo(s) · {n_compras_upd:,} registros históricos actualizados")
                             for k in ['ac_data', 'ic_data']:
                                 if k in st.session_state:
                                     del st.session_state[k]
