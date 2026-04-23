@@ -9074,14 +9074,51 @@ elif modulo.startswith("📊"):
                                 _costo_proteina_map[sku_p]   = costo_p
                                 _detalle_proteina_map[sku_p] = detalle
 
-                        # ── Mapa de ingredientes fijos del plato (es_opcion=0) ────────────
-                        _fijos_plato_map = {}  # sku_plato → [{sku, nombre, cant, muc, costo}]
+                        # ── Mapa de ingredientes fijos del plato (es_opcion=0) + pan moda (es_opcion=2) ──
+                        _fijos_plato_map = {}
                         if not _df_rec.empty:
                             _skus_platos = _df_platos_prot['sku_producto'].tolist()
+
+                            # Ingredientes fijos (es_opcion=0)
                             _rec_fijos = _df_rec[
                                 (_df_rec['codigo_venta'].isin(_skus_platos)) &
                                 (pd.to_numeric(_df_rec['es_opcion'], errors='coerce').fillna(0) == 0)
                             ].copy()
+
+                            # Opciones de pan (es_opcion=2) por plato
+                            _rec_pan = _df_rec[
+                                (_df_rec['codigo_venta'].isin(_skus_platos)) &
+                                (pd.to_numeric(_df_rec['es_opcion'], errors='coerce').fillna(0) == 2)
+                            ].copy()
+
+                            # Moda de pan en ventas del período por plato
+                            _pan_moda_map = {}  # sku_plato → sku_pan_mas_elegido
+                            if not _rec_pan.empty:
+                                _skus_pan = _rec_pan['sku_ingrediente'].unique().tolist()
+                                _q_pan_moda = f"""
+                                    SELECT v_padre.sku_producto AS sku_plato,
+                                           v_op.sku_producto    AS sku_pan,
+                                           SUM(v_op.cantidad_vendida) AS ventas_pan
+                                    FROM ventas v_padre
+                                    JOIN ventas v_op
+                                      ON v_padre.id_orden     = v_op.id_orden
+                                     AND v_padre.ab_categoria = v_op.ab_categoria
+                                     AND v_op.es_opcion       = true
+                                     AND v_op.ba_opcion       = 'BA.019'
+                                    WHERE v_padre.es_opcion = false
+                                      AND v_padre.sku_producto IN ({','.join(f"'{s}'" for s in _skus_platos)})
+                                      AND v_padre.fecha_venta BETWEEN '{_prot_fi}' AND '{_prot_ff}'
+                                      {_fl_prot}
+                                    GROUP BY v_padre.sku_producto, v_op.sku_producto
+                                """
+                                _df_pan_ventas = run_query(_q_pan_moda)
+                                if not _df_pan_ventas.empty:
+                                    _df_pan_ventas['ventas_pan'] = pd.to_numeric(_df_pan_ventas['ventas_pan'], errors='coerce').fillna(0)
+                                    for _sp in _skus_platos:
+                                        _pv = _df_pan_ventas[_df_pan_ventas['sku_plato'] == _sp]
+                                        if not _pv.empty:
+                                            _pan_moda_map[_sp] = _pv.loc[_pv['ventas_pan'].idxmax(), 'sku_pan']
+
                             for _sp, _grp in _rec_fijos.groupby('codigo_venta'):
                                 _fijos = []
                                 for _, _f in _grp.iterrows():
@@ -9089,10 +9126,7 @@ elif modulo.startswith("📊"):
                                     _cr  = float(_f.get('cant_real',0) or 0)
                                     _nom = str(_f.get('nombre_ingrediente', _si))
                                     _epr = bool(_f.get('es_procesado', False)) or _si.startswith('PRO-')
-                                    if _epr:
-                                        _cu = _costo_pro_map.get(_si, 0)
-                                    else:
-                                        _cu = _muc_map.get(_si, 0) or 0
+                                    _cu  = _costo_pro_map.get(_si, 0) if _epr else (_muc_map.get(_si, 0) or 0)
                                     _fijos.append({
                                         'sku_ingrediente':    _si,
                                         'nombre_ingrediente': _nom,
@@ -9100,6 +9134,39 @@ elif modulo.startswith("📊"):
                                         'muc':                _cu,
                                         'costo':              _cr * _cu,
                                     })
+
+                                # Agregar pan moda si existe para este plato
+                                _sku_pan = _pan_moda_map.get(_sp)
+                                if _sku_pan:
+                                    _pan_rows = _rec_pan[
+                                        (_rec_pan['codigo_venta'] == _sp) &
+                                        (_rec_pan['sku_ingrediente'] == _sku_pan)
+                                    ]
+                                    if not _pan_rows.empty:
+                                        _pr = _pan_rows.iloc[0]
+                                        _cr_pan = float(_pr.get('cant_real', 0) or 0)
+                                        _cu_pan = _muc_map.get(_sku_pan, 0) or 0
+                                        _fijos.append({
+                                            'sku_ingrediente':    _sku_pan,
+                                            'nombre_ingrediente': str(_pr.get('nombre_ingrediente', _sku_pan)) + ' (moda)',
+                                            'cant_real':          _cr_pan,
+                                            'muc':                _cu_pan,
+                                            'costo':              _cr_pan * _cu_pan,
+                                        })
+                                elif not _rec_pan[_rec_pan['codigo_venta'] == _sp].empty:
+                                    # Sin datos de ventas: usar el primero de la receta
+                                    _pr = _rec_pan[_rec_pan['codigo_venta'] == _sp].iloc[0]
+                                    _si_pan = str(_pr.get('sku_ingrediente',''))
+                                    _cr_pan = float(_pr.get('cant_real', 0) or 0)
+                                    _cu_pan = _muc_map.get(_si_pan, 0) or 0
+                                    _fijos.append({
+                                        'sku_ingrediente':    _si_pan,
+                                        'nombre_ingrediente': str(_pr.get('nombre_ingrediente', _si_pan)) + ' (default)',
+                                        'cant_real':          _cr_pan,
+                                        'muc':                _cu_pan,
+                                        'costo':              _cr_pan * _cu_pan,
+                                    })
+
                                 _fijos_plato_map[_sp] = _fijos
 
                         # Detectar SKUs de filete para ajuste de precio de venta
@@ -9116,6 +9183,9 @@ elif modulo.startswith("📊"):
                             sku_plato  = plato['sku_producto']
                             nom_plato  = plato['nombre_producto']
                             costo_base = _costo_base_map.get(sku_plato, 0)
+                            # Sumar costo del pan moda a costo_base
+                            _pan_en_fijos = [f for f in _fijos_plato_map.get(sku_plato, []) if '(moda)' in f.get('nombre_ingrediente','') or '(default)' in f.get('nombre_ingrediente','')]
+                            costo_base += sum(f['costo'] for f in _pan_en_fijos)
                             proteinas_plato = _df_proteinas[_df_proteinas['sku_plato'] == sku_plato]
                             total_ventas_prot = proteinas_plato['ventas_proteina'].sum()
 
