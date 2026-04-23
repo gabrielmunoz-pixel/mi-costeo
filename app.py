@@ -2041,27 +2041,6 @@ def procesar_compras(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
             lambda x: _LOCAL_ALIAS_C.get(str(x).strip().lower(), str(x).strip()) if pd.notna(x) else x
         )
 
-    # ── Mapeo RUT empresa → local (cuando no viene columna local) ──────────
-    _RUT_LOCAL_MAP = {
-        '76376098-7': 'PROVIDENCIA',
-        '76439807-6': 'VITACURA',
-        '76450253-1': 'LA DEHESA',
-        '77009575-1': 'LAS CONDES',
-        '77116729-2': 'CHICUREO',
-        '77531748-5': 'MACUL',
-        '77726513-K': 'LA REINA',
-        '77773363-K': 'QUILIN',
-        '77887201-3': 'NUEVA PROVIDENCIA',
-        '77847982-6': 'LOS TRAPENSES',
-    }
-    if 'local' not in df.columns and 'rut_empresa' in df.columns:
-        df['local'] = df['rut_empresa'].apply(
-            lambda x: _RUT_LOCAL_MAP.get(str(x).strip().upper(), 'DESCONOCIDO') if pd.notna(x) else 'DESCONOCIDO'
-        )
-        _desconocidos = df[df['local'] == 'DESCONOCIDO']['rut_empresa'].unique().tolist()
-        if _desconocidos:
-            warnings.append(f"⚠️ RUT sin local asignado: {', '.join(str(r) for r in _desconocidos)}")
-
     faltantes = [c for c in COLS_REQUERIDAS if c not in df.columns]
     if faltantes:
         warnings.append(
@@ -4040,12 +4019,8 @@ if modulo.startswith("📦"):
         _audit_ff_cur     = str(st.session_state.get('audit_ff', ''))
         _audit_params_cur = (_audit_cat_cur, _audit_fi_cur, _audit_ff_cur)
 
-        # Solo re-ejecutar si se presionó el botón (audit_df fue eliminado) o cambiaron parámetros
-        _debe_ejecutar = (
-            'audit_df' not in st.session_state or
-            st.session_state.get('audit_df_params') != _audit_params_cur
-        )
-        if _debe_ejecutar:
+        # Solo re-ejecutar si no hay resultado o si cambiaron los parámetros
+        if 'audit_df' not in st.session_state or            st.session_state.get('audit_df_params') != _audit_params_cur:
             cat_sel = _audit_cat_cur
             umbral_audit = st.session_state.get('audit_umbral', 5.0)
             if cat_sel in ('Todas (sin Colación)', '── Colación ──'):
@@ -6756,36 +6731,6 @@ if modulo.startswith("📦"):
         st.markdown("#### 🏢 Buscador de Proveedores")
         st.markdown("<div class='info-box'>Busca un proveedor por nombre o RUT y ve las categorías de productos que vende.</div>", unsafe_allow_html=True)
 
-        # ── Botón de descarga completa ─────────────────────────
-        if st.button("⬇️ Descargar RUT + Nombre + Categoría Principal", key='prov_dl_btn'):
-            _dl_q = """
-                SELECT
-                    rut_proveedor                                        AS "RUT",
-                    nombre_proveedor                                     AS "Nombre Proveedor",
-                    MODE() WITHIN GROUP (ORDER BY categoria_producto)    AS "Categoría Principal"
-                FROM compras
-                WHERE categoria_producto IS NOT NULL
-                  AND UPPER(TRIM(categoria_producto)) NOT IN ('', 'NULL')
-                GROUP BY rut_proveedor, nombre_proveedor
-                ORDER BY nombre_proveedor
-            """
-            _dl_df = run_query(_dl_q)
-            if not _dl_df.empty:
-                import io as _io
-                _buf = _io.BytesIO()
-                _dl_df.to_excel(_buf, index=False, engine='openpyxl')
-                _buf.seek(0)
-                st.download_button(
-                    "📥 Descargar Excel",
-                    _buf.getvalue(),
-                    "Proveedores_Categoria_Principal.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key='prov_dl_excel'
-                )
-                st.success(f"✅ {len(_dl_df)} proveedores listos para descargar.")
-
-        st.markdown("---")
-
         _prov_busq = st.text_input("Nombre o RUT del proveedor", key='prov_busq', placeholder="ej: TRAVESIA o 76123456-7")
 
         if _prov_busq and _prov_busq.strip():
@@ -7945,7 +7890,7 @@ elif modulo.startswith("📊"):
                 st.session_state.pop('inf1_excel_bytes', None)  # invalidar Excel cacheado
 
         # ── Tabs always visible ───────────────────────────────
-        _tab_rent1, _tab_rent2, _tab_rent3, _tab_rent4 = st.tabs(["📊 Detalle por Producto", "🔲 Cuadrantes", "📸 Snapshots", "📑 Informe Ejecutivo"])
+        _tab_rent1, _tab_rent2, _tab_rent3, _tab_rent4, _tab_rent5 = st.tabs(["📊 Detalle por Producto", "🔲 Cuadrantes", "📸 Snapshots", "📑 Informe Ejecutivo", "🥩 Costo por Proteína"])
 
         if 'inf1_data' in st.session_state:
             df_inf1         = st.session_state['inf1_data']
@@ -8969,6 +8914,267 @@ elif modulo.startswith("📊"):
                                 _render_grupo(_df_g, _df_b, _gcfg, _df_rec_sens,
                                               _vt_total, _mct_total, _cmvp_total, _mg_total)
 
+        with _tab_rent5:
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown("### 🥩 Costo por Proteína")
+            st.markdown("""<div class='info-box'>
+            Muestra solo los platos con opciones de proteína. Por cada plato calcula el costo total
+            usando cada proteína disponible. El rango de fechas define los precios de compra usados.
+            </div>""", unsafe_allow_html=True)
+
+            _prot_c1, _prot_c2, _prot_c3 = st.columns([2, 2, 1])
+            with _prot_c1:
+                _prot_fi = st.date_input("Fecha inicio (precios)", key='prot_fi', value=f_inicio)
+            with _prot_c2:
+                _prot_ff = st.date_input("Fecha fin (precios)", key='prot_ff', value=f_fin)
+            with _prot_c3:
+                _prot_local = st.selectbox("Local", ["Todos"] + (
+                    run_query("SELECT DISTINCT local FROM ventas WHERE local IS NOT NULL ORDER BY 1")['local'].tolist()
+                ), key='prot_local')
+
+            if st.button("▶ Calcular Costo por Proteína", key='btn_prot'):
+                with st.spinner("Calculando..."):
+                    # 1. Obtener platos con opciones de proteína (BA.020, BA.250, BA.260)
+                    _fl_prot = f"AND UPPER(local) = UPPER('{_prot_local}')" if _prot_local != 'Todos' else ''
+                    _q_platos_prot = f"""
+                        SELECT DISTINCT v_padre.sku_producto, v_padre.nombre_producto,
+                               v_padre.ab_categoria
+                        FROM ventas v_padre
+                        JOIN ventas v_op
+                          ON v_padre.id_orden = v_op.id_orden
+                         AND v_padre.ab_categoria = v_op.ab_categoria
+                         AND v_op.es_opcion = true
+                         AND v_op.ba_opcion IN ('BA.020','BA.250','BA.260')
+                        WHERE v_padre.es_opcion = false
+                          AND v_padre.fecha_venta BETWEEN '{_prot_fi}' AND '{_prot_ff}'
+                          {_fl_prot}
+                        ORDER BY v_padre.nombre_producto
+                    """
+                    _df_platos_prot = run_query(_q_platos_prot)
+
+                    if _df_platos_prot.empty:
+                        st.warning("No se encontraron platos con opciones de proteína en el período.")
+                        st.session_state.pop('prot_data', None)
+                    else:
+                        # 2. Obtener proteínas disponibles por plato
+                        _q_proteinas = f"""
+                            SELECT DISTINCT v_padre.sku_producto AS sku_plato,
+                                   v_op.sku_producto AS sku_proteina,
+                                   v_op.nombre_producto AS nombre_proteina,
+                                   SUM(v_op.cantidad_vendida) AS ventas_proteina
+                            FROM ventas v_padre
+                            JOIN ventas v_op
+                              ON v_padre.id_orden = v_op.id_orden
+                             AND v_padre.ab_categoria = v_op.ab_categoria
+                             AND v_op.es_opcion = true
+                             AND v_op.ba_opcion IN ('BA.020','BA.250','BA.260')
+                            WHERE v_padre.es_opcion = false
+                              AND v_padre.fecha_venta BETWEEN '{_prot_fi}' AND '{_prot_ff}'
+                              {_fl_prot}
+                            GROUP BY v_padre.sku_producto, v_op.sku_producto, v_op.nombre_producto
+                            ORDER BY v_padre.sku_producto, ventas_proteina DESC
+                        """
+                        _df_proteinas = run_query(_q_proteinas)
+
+                        # 3. Calcular costo base (sin proteína) por plato
+                        _costo_base = calcular_costo_platos(str(_prot_fi), str(_prot_ff), _prot_local)
+                        _costo_base_map = {}
+                        if not _costo_base.empty:
+                            _costo_base_map = dict(zip(_costo_base['sku_producto'], _costo_base['cmv_base']))
+
+                        # 4. Calcular precio de cada proteína (MUC del período)
+                        _q_muc_prot = f"""
+                            SELECT
+                                COALESCE(e.sku_receta, c.sku) AS sku,
+                                SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv * NULLIF(c.formato,0)),0) AS muc
+                            FROM compras c
+                            LEFT JOIN sku_equivalencias e ON c.sku = e.sku_compra
+                            WHERE c.fecha_dte::date BETWEEN '{_prot_fi}' AND '{_prot_ff}'
+                              AND c.costo_realfinal > 0 AND c.cant_conv > 0
+                              {_fl_prot.replace('local', 'c.local')}
+                            GROUP BY 1
+                        """
+                        _df_muc = run_query(_q_muc_prot)
+                        _muc_map = {}
+                        if not _df_muc.empty:
+                            _muc_map = dict(zip(_df_muc['sku'], pd.to_numeric(_df_muc['muc'], errors='coerce')))
+
+                        # 5b. Obtener precio de venta promedio por plato
+                        _q_pventa = f"""
+                            SELECT sku_producto,
+                                   SUM(monto_venta_real) / NULLIF(SUM(cantidad_vendida),0) AS precio_venta
+                            FROM ventas
+                            WHERE fecha_venta BETWEEN '{_prot_fi}' AND '{_prot_ff}'
+                              AND es_opcion = false
+                              {_fl_prot}
+                            GROUP BY sku_producto
+                        """
+                        _df_pventa = run_query(_q_pventa)
+                        _pventa_map = {}
+                        if not _df_pventa.empty:
+                            _pventa_map = dict(zip(_df_pventa['sku_producto'], pd.to_numeric(_df_pventa['precio_venta'], errors='coerce')))
+                        _df_rec = get_recetas()
+                        _rec_prot = {}  # sku_plato → {sku_proteina: cant_real}
+                        if not _df_rec.empty:
+                            _df_rec_op = _df_rec[pd.to_numeric(_df_rec['es_opcion'], errors='coerce').isin([1,2,3,6])].copy()
+                            for _, row in _df_rec_op.iterrows():
+                                sku_p = str(row['codigo_venta'])
+                                sku_i = str(row['sku_ingrediente'])
+                                cant  = float(row.get('cant_real', 0) or 0)
+                                if sku_p not in _rec_prot:
+                                    _rec_prot[sku_p] = {}
+                                _rec_prot[sku_p][sku_i] = cant
+
+                        # 6. Construir resultado
+                        _prot_rows = []
+                        _excel_rows = []
+                        for _, plato in _df_platos_prot.iterrows():
+                            sku_plato  = plato['sku_producto']
+                            nom_plato  = plato['nombre_producto']
+                            costo_base = _costo_base_map.get(sku_plato, 0)
+                            proteinas_plato = _df_proteinas[_df_proteinas['sku_plato'] == sku_plato]
+                            total_ventas_prot = proteinas_plato['ventas_proteina'].sum()
+
+                            plato_proteinas = []
+                            for _, prot in proteinas_plato.iterrows():
+                                sku_prot  = prot['sku_proteina']
+                                nom_prot  = prot['nombre_proteina']
+                                ventas_p  = float(prot['ventas_proteina'] or 0)
+                                pct_elect = (ventas_p / total_ventas_prot * 100) if total_ventas_prot > 0 else 0
+
+                                # Buscar gramaje en receta
+                                cant_receta = _rec_prot.get(sku_plato, {}).get(sku_prot, 0)
+                                muc_prot    = _muc_map.get(sku_prot, 0)
+                                costo_prot  = cant_receta * muc_prot if cant_receta and muc_prot else 0
+                                costo_total = costo_base + costo_prot
+
+                                precio_venta = _pventa_map.get(sku_plato, 0) or 0
+                                mc_prot      = precio_venta - costo_total if precio_venta > 0 else 0
+                                margen_prot  = (mc_prot / precio_venta * 100) if precio_venta > 0 else 0
+
+                                plato_proteinas.append({
+                                    'sku_proteina':    sku_prot,
+                                    'nombre_proteina': nom_prot,
+                                    'pct_eleccion':    pct_elect,
+                                    'cant_receta':     cant_receta,
+                                    'muc':             muc_prot,
+                                    'costo_proteina':  costo_prot,
+                                    'costo_total':     costo_total,
+                                    'precio_venta':    precio_venta,
+                                    'mc':              mc_prot,
+                                    'margen_pct':      margen_prot,
+                                })
+                                _excel_rows.append({
+                                    'Plato':               nom_plato,
+                                    'SKU Plato':           sku_plato,
+                                    'Proteína':            nom_prot,
+                                    'SKU Proteína':        sku_prot,
+                                    '% Elección':          round(pct_elect, 1),
+                                    'Gramaje (g/un)':      cant_receta,
+                                    'MUC ($/g)':           round(muc_prot, 4),
+                                    'Costo Proteína':      round(costo_prot, 0),
+                                    'Costo Base':          round(costo_base, 0),
+                                    'Costo Total Plato':   round(costo_total, 0),
+                                    'Precio Venta':        round(precio_venta, 0),
+                                    'Margen Contribución': round(mc_prot, 0),
+                                    'Margen %':            round(margen_prot, 1),
+                                })
+
+                            _prot_rows.append({
+                                'sku_plato': sku_plato,
+                                'nombre_plato': nom_plato,
+                                'costo_base': costo_base,
+                                'proteinas': plato_proteinas,
+                            })
+
+                        st.session_state['prot_data']      = _prot_rows
+                        st.session_state['prot_excel_rows'] = _excel_rows
+                        st.session_state['prot_periodo']   = (str(_prot_fi), str(_prot_ff), _prot_local)
+
+            # ── Renderizado ──────────────────────────────────────
+            if 'prot_data' in st.session_state:
+                _prot_rows = st.session_state['prot_data']
+                _fi_p, _ff_p, _loc_p = st.session_state['prot_periodo']
+
+                # Botón Excel
+                _excel_rows = st.session_state.get('prot_excel_rows', [])
+                if _excel_rows:
+                    import io as _io2
+                    _wb_buf = _io2.BytesIO()
+                    _df_excel_det = pd.DataFrame(_excel_rows)
+                    # Resumen por plato
+                    _df_resumen = _df_excel_det.groupby(['Plato','SKU Plato']).apply(lambda x: pd.Series({
+                        'N° Proteínas':          len(x),
+                        'Precio Venta':          x['Precio Venta'].iloc[0],
+                        'Costo Base':            x['Costo Base'].iloc[0],
+                        'Costo Mín':             x['Costo Total Plato'].min(),
+                        'Costo Máx':             x['Costo Total Plato'].max(),
+                        'Costo Prom Ponderado':  (x['Costo Total Plato'] * x['% Elección']).sum() / x['% Elección'].sum() if x['% Elección'].sum() > 0 else 0,
+                        'MC Mín':                x['Margen Contribución'].min(),
+                        'MC Máx':                x['Margen Contribución'].max(),
+                        'Margen % Mín':          x['Margen %'].min(),
+                        'Margen % Máx':          x['Margen %'].max(),
+                        'Margen % Ponderado':    (x['Margen %'] * x['% Elección']).sum() / x['% Elección'].sum() if x['% Elección'].sum() > 0 else 0,
+                    })).reset_index()
+                    with pd.ExcelWriter(_wb_buf, engine='openpyxl') as _wr:
+                        _df_excel_det.to_excel(_wr, sheet_name='Base Ingredientes', index=False)
+                        _df_resumen.to_excel(_wr, sheet_name='Resumen por Plato', index=False)
+                    _wb_buf.seek(0)
+                    st.download_button(
+                        "📥 Exportar Excel",
+                        _wb_buf.getvalue(),
+                        f"Costo_Proteinas_{_fi_p}_{_ff_p}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key='prot_dl'
+                    )
+
+                # Cards por plato
+                for _pr in _prot_rows:
+                    st.markdown(f"""
+                    <div class="ing-card">
+                        <div class="ing-card-top">
+                            <div>
+                                <div class="ing-nombre">{_pr['nombre_plato']}</div>
+                                <div class="ing-sku">{_pr['sku_plato']} &nbsp;·&nbsp; Costo base: ${_pr['costo_base']:,.0f}</div>
+                            </div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                    with st.expander(f"↳ Proteínas de {_pr['nombre_plato']}"):
+                        _prot_html = '<div style="background:#0d0d0d;padding:8px 12px;border-radius:8px">'
+                        _prot_html += (
+                            f'<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr;'
+                            f'gap:4px 8px;padding:4px 0;border-bottom:1px solid #222;'
+                            f'font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;color:#555">'
+                            f'<span>Proteína</span>'
+                            f'<span style="text-align:right">% Elección</span>'
+                            f'<span style="text-align:right">Gramaje</span>'
+                            f'<span style="text-align:right">MUC</span>'
+                            f'<span style="text-align:right">Costo Prot.</span>'
+                            f'<span style="text-align:right">Costo Total</span>'
+                            f'<span style="text-align:right">P. Venta</span>'
+                            f'<span style="text-align:right">Margen %</span>'
+                            f'</div>'
+                        )
+                        for _pt in _pr['proteinas']:
+                            _mg = _pt['margen_pct']
+                            _mc = '#4caf7d' if _mg >= 40 else '#e89c45' if _mg >= 20 else '#e84545'
+                            _prot_html += (
+                                f'<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr;'
+                                f'gap:4px 8px;padding:5px 0;border-bottom:1px solid #111;align-items:center">'
+                                f'<span style="color:#e8e4de;font-size:0.8rem">{_pt["nombre_proteina"]}</span>'
+                                f'<span style="color:#d4a853;text-align:right;font-size:0.78rem">{_pt["pct_eleccion"]:.1f}%</span>'
+                                f'<span style="color:#888;text-align:right;font-size:0.78rem">{_pt["cant_receta"]:,.1f}g</span>'
+                                f'<span style="color:#666;text-align:right;font-size:0.78rem">${_pt["muc"]:,.4f}</span>'
+                                f'<span style="color:#aaa;text-align:right;font-size:0.78rem">${_pt["costo_proteina"]:,.0f}</span>'
+                                f'<span style="color:#aaa;text-align:right;font-size:0.78rem">${_pt["costo_total"]:,.0f}</span>'
+                                f'<span style="color:#aaa;text-align:right;font-size:0.78rem">${_pt["precio_venta"]:,.0f}</span>'
+                                f'<span style="color:{_mc};font-weight:600;text-align:right;font-size:0.78rem">{_pt["margen_pct"]:.1f}%</span>'
+                                f'</div>'
+                            )
+                        _prot_html += '</div>'
+                        st.markdown(_prot_html, unsafe_allow_html=True)
 
 
     elif "Informe 2" in informe_sel:
@@ -9139,13 +9345,10 @@ elif modulo.startswith("📊"):
 
                 st.markdown(
                     "<div class='info-box'>Las <b>cantidades son siempre las de Enero 2026</b>. "
-                    "El mes inicio define el precio de referencia. "
-                    "El mes término define el precio a comparar — o activa el modo semanal.</div>",
+                    "El mes inicio define el precio de referencia (vacío = Enero 2026). "
+                    "El mes término define el precio a comparar.</div>",
                     unsafe_allow_html=True
                 )
-
-                # ── Toggle modo semanal ────────────────────────────
-                _modo_semanal3 = st.checkbox("📅 Modo semanal — comparar contra una semana específica", key='inf3_semanal')
 
                 _p1, _arrow_col, _p2 = st.columns([10, 1, 10])
                 with _p1:
@@ -9158,17 +9361,12 @@ elif modulo.startswith("📊"):
                 with _arrow_col:
                     st.markdown("<div style='text-align:center;padding-top:28px;color:#555;font-size:1rem'>→</div>", unsafe_allow_html=True)
                 with _p2:
-                    if _modo_semanal3:
-                        _sem_i3 = st.date_input("Semana — fecha inicio", key='inf3_sem_i', value=pd.Timestamp.now().date() - pd.Timedelta(days=13))
-                        _sem_f3 = st.date_input("Semana — fecha fin",    key='inf3_sem_f', value=pd.Timestamp.now().date() - pd.Timedelta(days=7))
-                        mes_comp3_str = f"{_sem_i3.strftime('%d/%m')} – {_sem_f3.strftime('%d/%m/%y')}"
-                    else:
-                        mes_comp_idx3 = st.selectbox(
-                            "Mes término (precio comparación)",
-                            range(len(meses_fmt3)),
-                            format_func=lambda i: meses_fmt3[i],
-                            index=len(meses_list3)-1, key='inf3_comp'
-                        )
+                    mes_comp_idx3 = st.selectbox(
+                        "Mes término (precio comparación)",
+                        range(len(meses_fmt3)),
+                        format_func=lambda i: meses_fmt3[i],
+                        index=len(meses_list3)-1, key='inf3_comp'
+                    )
 
                 # ── Categoría + Ordenar en 2 columnas ─────────────
                 cat3_q = run_query("SELECT DISTINCT categoria_producto FROM compras WHERE categoria_producto IS NOT NULL AND subcat IN ('Directo','Indirecto') ORDER BY 1")
@@ -9179,10 +9377,9 @@ elif modulo.startswith("📊"):
                     cat3_sel = st.selectbox("Categoría", cats3, key='inf3_cat')
 
                 mes_base3     = meses_list3[mes_base_idx3]
+                mes_comp3     = meses_list3[mes_comp_idx3]
                 mes_base3_str = mes_base3.strftime('%B %Y').capitalize()
-                if not _modo_semanal3:
-                    mes_comp3     = meses_list3[mes_comp_idx3]
-                    mes_comp3_str = mes_comp3.strftime('%B %Y').capitalize()
+                mes_comp3_str = mes_comp3.strftime('%B %Y').capitalize()
 
                 with _cf2:
                     ord3_col_sel = st.selectbox("Ordenar por", [
@@ -9207,13 +9404,9 @@ elif modulo.startswith("📊"):
                     # Precios referencia: mes inicio seleccionado
                     base_i = mes_base3.strftime('%Y-%m-01')
                     base_f = (mes_base3 + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
-                    # Precios comparación: semana o mes término
-                    if _modo_semanal3:
-                        comp_i = str(_sem_i3)
-                        comp_f = str(_sem_f3)
-                    else:
-                        comp_i = mes_comp3.strftime('%Y-%m-01')
-                        comp_f = (mes_comp3 + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
+                    # Precios comparación: mes término seleccionado
+                    comp_i = mes_comp3.strftime('%Y-%m-01')
+                    comp_f = (mes_comp3 + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
                     filtro_cat3 = f"AND categoria_producto = '{cat3_sel}'" if cat3_sel != 'Todos' else ""
 
                     # Canasta fija: pasar fechas de cantidades separadas del mes de precios
@@ -9972,46 +10165,28 @@ elif modulo.startswith("📊"):
                     </div>
                     """, unsafe_allow_html=True)
                     # Selectores dentro del container
-                    _modo_semanal_8020 = st.checkbox("📅 Modo semanal", key='p8020_semanal',
-                        help="Compara cantidades y precios de la semana vs precio del mes de referencia")
                     _col_i, _col_f = st.columns(2)
                     with _col_i:
                         _idx_i = st.selectbox(
-                            "Mes referencia (precio)", range(len(_mf)),
+                            "Mes inicio", range(len(_mf)),
                             format_func=lambda i: _mf[i],
                             index=0, key='p8020_inicio'
                         )
                     with _col_f:
-                        if _modo_semanal_8020:
-                            _sem_i_8020 = st.date_input("Semana inicio", key='p8020_sem_i',
-                                value=pd.Timestamp.now().date() - pd.Timedelta(days=13))
-                            _sem_f_8020 = st.date_input("Semana fin",    key='p8020_sem_f',
-                                value=pd.Timestamp.now().date() - pd.Timedelta(days=7))
-                        else:
-                            _idx_f = st.selectbox(
-                                "Mes fin", range(len(_mf)),
-                                format_func=lambda i: _mf[i],
-                                index=len(_ml) - 1, key='p8020_fin'
-                            )
+                        _idx_f = st.selectbox(
+                            "Mes fin", range(len(_mf)),
+                            format_func=lambda i: _mf[i],
+                            index=len(_ml) - 1, key='p8020_fin'
+                        )
                     _local_8020 = st.selectbox("Local", _locales_8020, key='p8020_local')
 
 
                 _mes_i  = _ml[_idx_i]
+                _mes_f  = _ml[_idx_f]
                 _str_i  = _mes_i.strftime('%B %Y').capitalize()
+                _str_f  = _mes_f.strftime('%B %Y').capitalize()
 
-                if _modo_semanal_8020:
-                    _str_f     = f"{_sem_i_8020.strftime('%d/%m')}–{_sem_f_8020.strftime('%d/%m/%y')}"
-                    _fi_str    = _mes_i.strftime('%Y-%m-01')
-                    _ff_str    = (_mes_i + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
-                    _fi_sem    = str(_sem_i_8020)
-                    _ff_sem    = str(_sem_f_8020)
-                else:
-                    _mes_f  = _ml[_idx_f]
-                    _str_f  = _mes_f.strftime('%B %Y').capitalize()
-                    _fi_str = _mes_i.strftime('%Y-%m-01')
-                    _ff_str = (_mes_f + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
-
-                if not _modo_semanal_8020 and _mes_f < _mes_i:
+                if _mes_f < _mes_i:
                     st.warning("⚠️ El mes fin debe ser igual o posterior al mes inicio.")
                 else:
                     if st.button("▶ Generar 80/20", key="btn_8020", use_container_width=True):
@@ -10022,12 +10197,9 @@ elif modulo.startswith("📊"):
 
 
                         # ── Lista de meses en el rango ────────────────────
-                        if _modo_semanal_8020:
-                            _rango_meses = [_mes_i]
-                        else:
-                            _rango_meses = pd.date_range(
-                                _mes_i, _mes_f + pd.offsets.MonthEnd(1), freq='MS'
-                            ).tolist()
+                        _rango_meses = pd.date_range(
+                            _mes_i, _mes_f + pd.offsets.MonthEnd(1), freq='MS'
+                        ).tolist()
 
                         # ── Último precio histórico por SKU (fallback) ────
                         _q_fallback = f"""
@@ -10056,98 +10228,51 @@ elif modulo.startswith("📊"):
                             _df_fb['precio_fb'] = pd.to_numeric(_df_fb['precio_fb'], errors='coerce')
                             _fb_map = dict(zip(_df_fb['sku'], _df_fb['precio_fb']))
 
-                        # ── Precio por SKU × período ──────────────────────
-                        if _modo_semanal_8020:
-                            _mes_i_fin_str = (_mes_i + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
-                            _q_precios = f"""
-                                SELECT sku, mes, nombre, categoria, formato, cant_mes, gasto_mes, precio_mes FROM (
-                                    SELECT
-                                        COALESCE(e.sku_receta, c.sku)                          AS sku,
-                                        '{_mes_i.strftime('%Y-%m-01')}'::date                  AS mes,
-                                        MIN(c.nombre_producto)                                  AS nombre,
-                                        MIN(c.categoria_producto)                               AS categoria,
-                                        MAX(c.formato)                                          AS formato,
-                                        SUM(c.cant_conv * NULLIF(c.formato, 0))                AS cant_mes,
-                                        SUM(c.costo_realfinal)                                  AS gasto_mes,
-                                        SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv * NULLIF(c.formato, 0)), 0) AS precio_mes
-                                    FROM compras c
-                                    LEFT JOIN sku_equivalencias e ON c.sku = e.sku_compra
-                                    WHERE c.fecha_dte::date BETWEEN '{_fi_str}' AND '{_mes_i_fin_str}'
-                                      AND UPPER(REPLACE(REPLACE(REPLACE(REPLACE(c.categoria_producto,'Á','A'),'É','E'),'Í','I'),'Ó','O'))
-                                          NOT IN ('ADMINISTRACION', 'ART. LIMPIEZA', 'ART LIMPIEZA')
-                                      AND c.costo_realfinal > 0 AND c.cant_conv > 0
-                                      {_filtro_local_8020}
-                                    GROUP BY 1
-                                    UNION ALL
-                                    SELECT
-                                        COALESCE(e.sku_receta, c.sku)                          AS sku,
-                                        '{_fi_sem}'::date                                       AS mes,
-                                        MIN(c.nombre_producto)                                  AS nombre,
-                                        MIN(c.categoria_producto)                               AS categoria,
-                                        MAX(c.formato)                                          AS formato,
-                                        SUM(c.cant_conv * NULLIF(c.formato, 0))                AS cant_mes,
-                                        SUM(c.costo_realfinal)                                  AS gasto_mes,
-                                        SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv * NULLIF(c.formato, 0)), 0) AS precio_mes
-                                    FROM compras c
-                                    LEFT JOIN sku_equivalencias e ON c.sku = e.sku_compra
-                                    WHERE c.fecha_dte::date BETWEEN '{_fi_sem}' AND '{_ff_sem}'
-                                      AND UPPER(REPLACE(REPLACE(REPLACE(REPLACE(c.categoria_producto,'Á','A'),'É','E'),'Í','I'),'Ó','O'))
-                                          NOT IN ('ADMINISTRACION', 'ART. LIMPIEZA', 'ART LIMPIEZA')
-                                      AND c.costo_realfinal > 0 AND c.cant_conv > 0
-                                      {_filtro_local_8020}
-                                    GROUP BY 1
-                                ) sub
-                                ORDER BY sku, mes
-                            """
-                            _mes_i_date = _mes_i.date() if hasattr(_mes_i, 'date') else _mes_i
-                            _mes_f_date = pd.Timestamp(_fi_sem).date()
+                        # ── Precio por SKU × mes en todo el rango ─────────
+                        _fi_str = _mes_i.strftime('%Y-%m-01')
+                        _ff_str = (_mes_f + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
+                        _mes_i_date = _mes_i.date() if hasattr(_mes_i, 'date') else _mes_i
+                        _mes_f_date = _mes_f.date() if hasattr(_mes_f, 'date') else _mes_f
+
+                        # ── Normalizar días de compra usando función centralizada ──
+                        _corte_i, _corte_f, _n_dias_min, _ajuste_note = _calc_corte_dias(
+                            _fi_str, _ff_str, _filtro_local_8020
+                        )
+
+                        # Filtro de fechas ajustado por mes
+                        _fecha_filtro_i = f"(DATE_TRUNC('month', c.fecha_dte::date) = '{_mes_i_date}' AND c.fecha_dte::date <= '{_corte_i}')" if _corte_i else f"DATE_TRUNC('month', c.fecha_dte::date) = '{_mes_i_date}'"
+                        _fecha_filtro_f = f"(DATE_TRUNC('month', c.fecha_dte::date) = '{_mes_f_date}' AND c.fecha_dte::date <= '{_corte_f}')" if _corte_f else f"DATE_TRUNC('month', c.fecha_dte::date) = '{_mes_f_date}'"
+                        # Para meses intermedios usar rango completo
+                        _fi_inter = (_mes_i + pd.offsets.MonthEnd(1) + pd.offsets.Day(1)).strftime('%Y-%m-%d')
+                        _ff_inter = (_mes_f - pd.offsets.MonthBegin(1)).strftime('%Y-%m-%d')
+                        if _fi_inter <= _ff_inter:
+                            _fecha_filtro_completo = f"({_fecha_filtro_i} OR (c.fecha_dte::date BETWEEN '{_fi_inter}' AND '{_ff_inter}') OR {_fecha_filtro_f})"
                         else:
-                            _fi_str = _mes_i.strftime('%Y-%m-01')
-                            _ff_str = (_mes_f + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
-                            _mes_i_date = _mes_i.date() if hasattr(_mes_i, 'date') else _mes_i
-                            _mes_f_date = _mes_f.date() if hasattr(_mes_f, 'date') else _mes_f
+                            _fecha_filtro_completo = f"({_fecha_filtro_i} OR {_fecha_filtro_f})"
 
-                            # ── Normalizar días de compra usando función centralizada ──
-                            _corte_i, _corte_f, _n_dias_min, _ajuste_note = _calc_corte_dias(
-                                _fi_str, _ff_str, _filtro_local_8020
-                            )
-
-                            # Filtro de fechas ajustado por mes
-                            _fecha_filtro_i = f"(DATE_TRUNC('month', c.fecha_dte::date) = '{_mes_i_date}' AND c.fecha_dte::date <= '{_corte_i}')" if _corte_i else f"DATE_TRUNC('month', c.fecha_dte::date) = '{_mes_i_date}'"
-                            _fecha_filtro_f = f"(DATE_TRUNC('month', c.fecha_dte::date) = '{_mes_f_date}' AND c.fecha_dte::date <= '{_corte_f}')" if _corte_f else f"DATE_TRUNC('month', c.fecha_dte::date) = '{_mes_f_date}'"
-                            _fi_inter = (_mes_i + pd.offsets.MonthEnd(1) + pd.offsets.Day(1)).strftime('%Y-%m-%d')
-                            _ff_inter = (_mes_f - pd.offsets.MonthBegin(1)).strftime('%Y-%m-%d')
-                            if _fi_inter <= _ff_inter:
-                                _fecha_filtro_completo = f"({_fecha_filtro_i} OR (c.fecha_dte::date BETWEEN '{_fi_inter}' AND '{_ff_inter}') OR {_fecha_filtro_f})"
-                            else:
-                                _fecha_filtro_completo = f"({_fecha_filtro_i} OR {_fecha_filtro_f})"
-
-                        if not _modo_semanal_8020:
-                            _q_precios = f"""
-                                SELECT
-                                    COALESCE(e.sku_receta, c.sku)                          AS sku,
-                                    DATE_TRUNC('month', c.fecha_dte::timestamp)::date     AS mes,
-                                    MIN(c.nombre_producto)                                  AS nombre,
-                                    MIN(c.categoria_producto)                               AS categoria,
-                                    MAX(c.formato)                                          AS formato,
-                                    SUM(c.cant_conv * NULLIF(c.formato, 0))                AS cant_mes,
-                                    SUM(c.costo_realfinal)                                  AS gasto_mes,
-                                    SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv * NULLIF(c.formato, 0)), 0) AS precio_mes
-                                FROM compras c
-                                LEFT JOIN sku_equivalencias e ON c.sku = e.sku_compra
-                                WHERE {_fecha_filtro_completo}
-                                  AND UPPER(REPLACE(REPLACE(REPLACE(REPLACE(
-                                        c.categoria_producto,
-                                        'Á','A'),'É','E'),'Í','I'),'Ó','O'))
-                                      NOT IN ('ADMINISTRACION', 'ART. LIMPIEZA', 'ART LIMPIEZA')
-                                  AND c.costo_realfinal > 0 AND c.cant_conv > 0
-                                  {_filtro_local_8020}
-                                GROUP BY 1, 2
-                                ORDER BY 1, 2
-                            """
-                            _df_pm = run_query(_q_precios)
-                        else:
-                            _df_pm = run_query(_q_precios)
+                        _q_precios = f"""
+                            SELECT
+                                COALESCE(e.sku_receta, c.sku)                          AS sku,
+                                DATE_TRUNC('month', c.fecha_dte::timestamp)::date     AS mes,
+                                MIN(c.nombre_producto)                                  AS nombre,
+                                MIN(c.categoria_producto)                               AS categoria,
+                                MAX(c.formato)                                          AS formato,
+                                SUM(c.cant_conv * NULLIF(c.formato, 0))                AS cant_mes,
+                                SUM(c.costo_realfinal)                                  AS gasto_mes,
+                                SUM(c.costo_realfinal) / NULLIF(SUM(c.cant_conv * NULLIF(c.formato, 0)), 0) AS precio_mes
+                            FROM compras c
+                            LEFT JOIN sku_equivalencias e ON c.sku = e.sku_compra
+                            WHERE {_fecha_filtro_completo}
+                              AND UPPER(REPLACE(REPLACE(REPLACE(REPLACE(
+                                    c.categoria_producto,
+                                    'Á','A'),'É','E'),'Í','I'),'Ó','O'))
+                                  NOT IN ('ADMINISTRACION', 'ART. LIMPIEZA', 'ART LIMPIEZA')
+                              AND c.costo_realfinal > 0 AND c.cant_conv > 0
+                              {_filtro_local_8020}
+                            GROUP BY 1, 2
+                            ORDER BY 1, 2
+                        """
+                        _df_pm = run_query(_q_precios)
 
                         if _df_pm.empty:
                             st.warning("Sin datos para el período seleccionado.")
@@ -10156,52 +10281,21 @@ elif modulo.startswith("📊"):
                             for _col in ['cant_mes', 'gasto_mes', 'precio_mes']:
                                 _df_pm[_col] = pd.to_numeric(_df_pm[_col], errors='coerce').fillna(0)
 
-                            # En modo semanal: top 15 por gasto de la semana
-                            # En modo mensual: top 15 por gasto total del período
-                            if _modo_semanal_8020:
-                                _sem_i_date = pd.Timestamp(_fi_sem).date()
-                                _sem_f_date = pd.Timestamp(_ff_sem).date()
-                                # Filtrar solo filas de la semana para ranking
-                                _df_sem = _df_pm[
-                                    (_df_pm['mes'] >= _sem_i_date) &
-                                    (_df_pm['mes'] <= _sem_f_date)
-                                ]
-                                _gasto_total = (
-                                    _df_sem.groupby('sku')['gasto_mes'].sum()
-                                    .reset_index().rename(columns={'gasto_mes': 'gasto_total'})
-                                    .sort_values('gasto_total', ascending=False)
-                                    .head(15)
-                                )
-                                _mes_f_date  = _sem_i_date  # usar inicio semana para lookup precio fin
-                            else:
-                                _gasto_total = (
-                                    _df_pm.groupby('sku')['gasto_mes'].sum()
-                                    .reset_index().rename(columns={'gasto_mes': 'gasto_total'})
-                                    .sort_values('gasto_total', ascending=False)
-                                    .head(15)
-                                )
+                            # ── Top 15 por gasto total en el período ──────
+                            _gasto_total = (
+                                _df_pm.groupby('sku')['gasto_mes'].sum()
+                                .reset_index().rename(columns={'gasto_mes': 'gasto_total'})
+                                .sort_values('gasto_total', ascending=False)
+                                .head(15)
+                            )
                             _top15_skus   = _gasto_total['sku'].tolist()
                             _gasto_cadena = _df_pm['gasto_mes'].sum()
 
-                            # ── Cant, nombre y gasto del período base ──────
-                            if _modo_semanal_8020:
-                                # En modo semanal: cantidades y gasto de la semana
-                                _df_mes1 = _df_pm[
-                                    (_df_pm['sku'].isin(_top15_skus)) &
-                                    (_df_pm['mes'] >= _sem_i_date) &
-                                    (_df_pm['mes'] <= _sem_f_date)
-                                ].groupby('sku').agg(
-                                    nombre=('nombre','first'),
-                                    categoria=('categoria','first'),
-                                    cant_mes=('cant_mes','sum'),
-                                    gasto_mes=('gasto_mes','sum'),
-                                    formato=('formato','first')
-                                ).reset_index()
-                            else:
-                                _df_mes1 = _df_pm[
-                                    (_df_pm['sku'].isin(_top15_skus)) &
-                                    (_df_pm['mes'] == _mes_i_date)
-                                ][['sku', 'nombre', 'categoria', 'cant_mes', 'gasto_mes', 'formato']].drop_duplicates('sku')
+                            # ── Cant, nombre y gasto del mes inicial ──────
+                            _df_mes1 = _df_pm[
+                                (_df_pm['sku'].isin(_top15_skus)) &
+                                (_df_pm['mes'] == _mes_i_date)
+                            ][['sku', 'nombre', 'categoria', 'cant_mes', 'gasto_mes', 'formato']].drop_duplicates('sku')
 
                             # ── Construir filas ────────────────────────────
                             _rows_8020 = []
@@ -10248,8 +10342,7 @@ elif modulo.startswith("📊"):
 
                                 # Evolución mensual completa
                                 _evolucion = []
-                                _rango_evol = [_mes_i] if _modo_semanal_8020 else pd.date_range(_mes_i, _mes_f + pd.offsets.MonthEnd(1), freq='MS').tolist()
-                                for _m in _rango_evol:
+                                for _m in pd.date_range(_mes_i, _mes_f + pd.offsets.MonthEnd(1), freq='MS'):
                                     _md = _m.date() if hasattr(_m, 'date') else _m
                                     _ps = _df_pm[
                                         (_df_pm['sku'] == _sku) & (_df_pm['mes'] == _md)
@@ -10294,28 +10387,19 @@ elif modulo.startswith("📊"):
                             st.session_state['p8020_data']        = _rows_8020
                             st.session_state['p8020_labels']      = (_str_i, _str_f)
                             st.session_state['p8020_local_val']   = _local_8020
-                            st.session_state['p8020_ajuste_note'] = _ajuste_note if not _modo_semanal_8020 else ''
+                            st.session_state['p8020_ajuste_note'] = _ajuste_note
                             st.session_state['p8020_cadena']      = _gasto_cadena
-                            st.session_state['p8020_meses_n'] = 1 if _modo_semanal_8020 else len(pd.date_range(
+                            st.session_state['p8020_meses_n']     = len(pd.date_range(
                                 _mes_i, _mes_f + pd.offsets.MonthEnd(1), freq='MS'
                             ))
-                            # Gasto total cadena por período ini y fin
-                            if _modo_semanal_8020:
-                                # mes ini = mes referencia, fin = semana
-                                st.session_state['p8020_gasto_ini'] = float(
-                                    _df_pm[_df_pm['mes'] == _mes_i_date]['gasto_mes'].sum()
-                                )
-                                st.session_state['p8020_gasto_fin'] = float(
-                                    _df_pm[_df_pm['mes'] == pd.Timestamp(_fi_sem).date()]['gasto_mes'].sum()
-                                )
-                            else:
-                                st.session_state['p8020_gasto_ini'] = float(
-                                    _df_pm[_df_pm['mes'] == _mes_i_date]['gasto_mes'].sum()
-                                )
-                                st.session_state['p8020_gasto_fin'] = float(
-                                    _df_pm[_df_pm['mes'] == _mes_f_date]['gasto_mes'].sum()
-                                )
-                            # Venta real por período ini y fin
+                            # Gasto total cadena por mes ini y fin (para cuadro 1 y 4)
+                            st.session_state['p8020_gasto_ini'] = float(
+                                _df_pm[_df_pm['mes'] == _mes_i_date]['gasto_mes'].sum()
+                            )
+                            st.session_state['p8020_gasto_fin'] = float(
+                                _df_pm[_df_pm['mes'] == _mes_f_date]['gasto_mes'].sum()
+                            )
+                            # Venta real por mes ini y fin (para cuadro 3)
                             _filtro_local_venta = (
                                 f"AND UPPER(REPLACE(REPLACE(REPLACE(REPLACE(local,"
                                 f"'Á','A'),'É','E'),'Í','I'),'Ó','O')) = "
@@ -10323,59 +10407,37 @@ elif modulo.startswith("📊"):
                                 f"'Á','A'),'É','E'),'Í','I'),'Ó','O'))"
                                 if _local_8020 != 'Todos' else ''
                             )
-                            if _modo_semanal_8020:
-                                # Venta mes referencia: mismo nro de días que la semana, al final del mes
-                                _n_dias_sem = (pd.Timestamp(_ff_sem) - pd.Timestamp(_fi_sem)).days + 1
-                                _mes_i_fin  = (_mes_i + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
-                                _mes_i_ini_dias = (pd.Timestamp(_mes_i_fin) - pd.Timedelta(days=_n_dias_sem - 1)).strftime('%Y-%m-%d')
-                                _q_venta = f"""
-                                    SELECT
-                                        'ref'::text AS periodo,
-                                        SUM(monto_venta_real) AS venta_mes
-                                    FROM ventas
-                                    WHERE fecha_venta::date BETWEEN '{_mes_i_ini_dias}' AND '{_mes_i_fin}'
-                                      {_filtro_local_venta}
-                                    UNION ALL
-                                    SELECT
-                                        'sem'::text AS periodo,
-                                        SUM(monto_venta_real) AS venta_mes
-                                    FROM ventas
-                                    WHERE fecha_venta::date BETWEEN '{_fi_sem}' AND '{_ff_sem}'
-                                      {_filtro_local_venta}
-                                """
-                                _df_venta = run_query(_q_venta)
-                                if not _df_venta.empty:
-                                    _df_venta['venta_mes'] = pd.to_numeric(_df_venta['venta_mes'], errors='coerce').fillna(0)
-                                    _vi = float(_df_venta[_df_venta['periodo'] == 'ref']['venta_mes'].sum())
-                                    _vf = float(_df_venta[_df_venta['periodo'] == 'sem']['venta_mes'].sum())
-                                else:
-                                    _vi, _vf = 0.0, 0.0
+                            _q_venta = f"""
+                                SELECT
+                                    DATE_TRUNC('month', fecha_venta::timestamp)::date AS mes,
+                                    SUM(monto_venta_real) AS venta_mes
+                                FROM ventas
+                                WHERE (
+                                    (DATE_TRUNC('month', fecha_venta::date) = '{_mes_i_date}'
+                                     AND fecha_venta::date <= '{_corte_i if _corte_i else _fi_str}')
+                                    OR
+                                    (DATE_TRUNC('month', fecha_venta::date) = '{_mes_f_date}'
+                                     AND fecha_venta::date <= '{_corte_f if _corte_f else _ff_str}')
+                                )
+                                  {_filtro_local_venta}
+                                GROUP BY 1
+                            """
+                            _df_venta = run_query(_q_venta)
+                            if not _df_venta.empty:
+                                _df_venta['mes'] = pd.to_datetime(
+                                    _df_venta['mes']).dt.date
+                                _df_venta['venta_mes'] = pd.to_numeric(
+                                    _df_venta['venta_mes'], errors='coerce').fillna(0)
+                                _vi = float(_df_venta[
+                                    _df_venta['mes'] == _mes_i_date]['venta_mes'].sum())
+                                _vf = float(_df_venta[
+                                    _df_venta['mes'] == _mes_f_date]['venta_mes'].sum())
                             else:
-                                _q_venta = f"""
-                                    SELECT
-                                        DATE_TRUNC('month', fecha_venta::timestamp)::date AS mes,
-                                        SUM(monto_venta_real) AS venta_mes
-                                    FROM ventas
-                                    WHERE (
-                                        (DATE_TRUNC('month', fecha_venta::date) = '{_mes_i_date}'
-                                         AND fecha_venta::date <= '{_corte_i if _corte_i else _fi_str}')
-                                        OR
-                                        (DATE_TRUNC('month', fecha_venta::date) = '{_mes_f_date}'
-                                         AND fecha_venta::date <= '{_corte_f if _corte_f else _ff_str}')
-                                    )
-                                      {_filtro_local_venta}
-                                    GROUP BY 1
-                                """
-                                _df_venta = run_query(_q_venta)
-                                if not _df_venta.empty:
-                                    _df_venta['mes'] = pd.to_datetime(_df_venta['mes']).dt.date
-                                    _df_venta['venta_mes'] = pd.to_numeric(_df_venta['venta_mes'], errors='coerce').fillna(0)
-                                    _vi = float(_df_venta[_df_venta['mes'] == _mes_i_date]['venta_mes'].sum())
-                                    _vf = float(_df_venta[_df_venta['mes'] == _mes_f_date]['venta_mes'].sum())
-                                else:
-                                    _vi, _vf = 0.0, 0.0
+                                _vi, _vf = 0.0, 0.0
                             st.session_state['p8020_venta_ini'] = _vi
                             st.session_state['p8020_venta_fin'] = _vf
+
+                    # ── RENDERIZADO (fuera del botón, persiste con session_state) ──
                     _p8020_keys = ('p8020_data', 'p8020_labels', 'p8020_cadena',
                                    'p8020_meses_n')
                     if all(k in st.session_state for k in _p8020_keys):
@@ -12732,23 +12794,32 @@ elif informe_sel == "Auditor":
     </div>""", unsafe_allow_html=True)
 
     # ── Filtros ─────────────────────────────────────────────────
-    fa1, fa2, fa3 = st.columns([2, 2, 1])
+    fa1, fa2, fa3, fa4 = st.columns([2, 1.2, 1.2, 2])
     with fa1:
-        sku_exacto = st.text_input("🎯 SKU exacto", key="ac_sku_exacto", placeholder="ej: AL-CA-010")
+        busq_ac = st.text_input("🔍 Buscar nombre o SKU", key="ac_busq", placeholder="ej: POSTA, AL-CA-010...")
     with fa2:
-        cats_ac = ["Todas"] + get_categorias_compras()
-        cat_ac = st.selectbox("Categoría Producto", cats_ac, key="ac_cat")
+        fi_ac = st.date_input("Desde", key="ac_fi", value=f_inicio)
     with fa3:
-        solo_sin_ctrl = st.toggle("⚠️ Sin Ctrl", key="ac_solo_sin")
+        ff_ac = st.date_input("Hasta", key="ac_ff", value=f_fin)
+    with fa4:
+        cats_ac = ["Todas"] + get_categorias_compras()
+        cat_ac = st.selectbox("Categoría", cats_ac, key="ac_cat")
+
+    fa5, fa6 = st.columns([2, 2])
+    with fa5:
+        solo_sin_ctrl = st.toggle("⚠️ Solo sin Categoría Control", key="ac_solo_sin")
+    with fa6:
+        st.caption("Haz clic en un grupo para editar su Categoría Control")
 
     if st.button("🔎 Buscar", key="btn_ac_buscar", type="primary"):
         with st.spinner("Cargando datos..."):
-            where = ["1=1"]
-            params_ac = {}
+            # Construir query con filtros
+            where = ["c.fecha_dte::date BETWEEN :fi AND :ff"]
+            params_ac = {'fi': str(fi_ac), 'ff': str(ff_ac)}
 
-            if sku_exacto.strip():
-                where.append("UPPER(c.sku) = UPPER(:sku_exacto)")
-                params_ac['sku_exacto'] = sku_exacto.strip()
+            if busq_ac.strip():
+                where.append("(UPPER(c.nombre_producto) LIKE :busq OR UPPER(c.sku) LIKE :busq)")
+                params_ac['busq'] = f'%{busq_ac.strip().upper()}%'
 
             if cat_ac != "Todas":
                 where.append("c.categoria_producto = :cat")
@@ -12764,8 +12835,8 @@ elif informe_sel == "Auditor":
                     c.subcat,
                     cn.categoria_control,
                     cn.categoria as cat_clasificada,
-                    COUNT(*)               as n_registros,
-                    SUM(c.cant_conv)       as cant_total,
+                    COUNT(*)           as n_registros,
+                    SUM(c.cant_conv)   as cant_total,
                     SUM(c.costo_realfinal) as costo_total,
                     MIN(c.fecha_dte::date) as primera_compra,
                     MAX(c.fecha_dte::date) as ultima_compra
@@ -12776,7 +12847,7 @@ elif informe_sel == "Auditor":
                 GROUP BY c.sku, c.nombre_producto, c.categoria_producto, c.subcat,
                          cn.categoria_control, cn.categoria
                 ORDER BY c.nombre_producto, c.sku
-            """, params_ac if params_ac else None)
+            """, params_ac)
 
             if solo_sin_ctrl:
                 df_ac = df_ac[df_ac['categoria_control'].isna() | (df_ac['categoria_control'] == '')]
@@ -12805,43 +12876,32 @@ elif informe_sel == "Auditor":
 
             st.markdown("---")
 
-            # Selector de grupos agrupados por nombre_producto
-            # Construir opciones únicas por nombre (agrupando SKUs)
-            _grupos_ac = (
-                df_ac.groupby('nombre_producto').agg(
-                    skus=('sku', lambda x: ', '.join(sorted(x.unique()))),
-                    n_registros=('n_registros', 'sum'),
-                    categoria_producto=('categoria_producto', lambda x: x.mode()[0] if len(x) else ''),
-                    subcat=('subcat', lambda x: x.mode()[0] if len(x) else ''),
-                    categoria_control=('categoria_control', 'first'),
-                ).reset_index()
-            )
-
+            # Selector de grupos (igual que auditor MUC)
             opciones_ac = []
-            for _, r in _grupos_ac.iterrows():
+            for _, r in df_ac.iterrows():
                 ctrl  = r.get('categoria_control','') or '⚠️ SIN CONTROL'
                 ctrl  = ctrl if ctrl and str(ctrl) != 'nan' else '⚠️ SIN CONTROL'
-                label = f"{r['nombre_producto'][:45]} | SKU: {r['skus'][:30]} | Cat: {r.get('categoria_producto','')} | {int(r['n_registros'])} reg."
+                label = f"{r['sku']} | {r['nombre_producto'][:40]} | Ctrl: {ctrl} | Cat: {r.get('categoria_producto','')}"
                 opciones_ac.append(label)
 
             sel_ac = st.multiselect(
-                "Selecciona grupos de productos para reclasificar",
+                "Selecciona productos para reclasificar",
                 opciones_ac,
                 key="ac_multisel",
-                placeholder="Busca por nombre, SKU o categoría..."
+                placeholder="Busca por SKU, nombre o categoría control..."
             )
 
             # Panel de edición si hay selección
             if sel_ac:
-                sel_idx    = [opciones_ac.index(l) for l in sel_ac if l in opciones_ac]
-                df_grp_sel = _grupos_ac.iloc[sel_idx].reset_index(drop=True)
-                nombres_sel = df_grp_sel['nombre_producto'].tolist()
+                sel_idx = [opciones_ac.index(l) for l in sel_ac if l in opciones_ac]
+                df_sel  = df_ac.iloc[sel_idx].reset_index(drop=True)
 
-                st.markdown(f"**⚙️ {len(nombres_sel)} grupo(s) seleccionado(s) — se actualizarán todos los registros históricos**")
+                st.markdown(f"**⚙️ {len(df_sel)} producto(s) seleccionado(s)**")
 
-                ed1, ed2, ed3, ed4, ed5 = st.columns([2, 2, 2, 2, 1])
+                ed1, ed2, ed3 = st.columns([2, 2, 1])
                 with ed1:
-                    ctrl_opts = ['(sin cambio)','POSTA','FILETE','PLATEADA','LOMO LISO','LOMO VETADO','GRASA DE WAGYU',
+                    # Opciones de categoría control
+                    ctrl_opts = ['POSTA','FILETE','PLATEADA','LOMO LISO','LOMO VETADO','GRASA DE WAGYU',
                                  'PECHUGA DE POLLO','COSTILLAS','CHULETA KASSLER','LOMO DE CENTRO',
                                  'PERNIL','JAMÓN','TOCINO AHUMADO','PANCETA LAMINADA',
                                  'PALTA','TOMATE','LECHUGA',
@@ -12851,81 +12911,42 @@ elif informe_sel == "Auditor":
                                  'PAN','SCHOP','JUGOS','ACEITE FREIR','ACEITE MAYONESA',
                                  'ACEITE DE OLIVA','ACEITE SESAMO','ACETO BALSAMICO','LIMÓN',
                                  'HIELO','(sin categoría control)']
-                    nueva_ctrl = st.selectbox("Cat. Control", ctrl_opts, key="ac_nueva_ctrl")
+                    nueva_ctrl = st.selectbox("Nueva Categoría Control", ctrl_opts, key="ac_nueva_ctrl")
                 with ed2:
-                    cat_opts2 = ['(sin cambio)','ALIMENTOS','VERDURAS','BAR','ART. LIMPIEZA','DESECHABLES','ADMINISTRACION']
-                    nueva_cat = st.selectbox("Categoría Producto", cat_opts2, key="ac_nueva_cat")
+                    cat_opts2 = ['ALIMENTOS','VERDURAS','BAR','ART. LIMPIEZA','DESECHABLES','ADMINISTRACION']
+                    nueva_cat = st.selectbox("Nueva Categoría", cat_opts2, key="ac_nueva_cat")
                 with ed3:
-                    subcat_opts = ['(sin cambio)','Directo','Indirecto','Desechables','ART. LIMPIEZA','ADMINISTRACION','No Vendible']
-                    nueva_subcat = st.selectbox("Subcat", subcat_opts, key="ac_nueva_subcat")
-                with ed4:
-                    nuevo_sku = st.text_input("Nuevo SKU", key="ac_nuevo_sku",
-                        placeholder="Dejar vacío para no cambiar",
-                        help="Solo aplica si seleccionas UN grupo")
-                with ed5:
                     st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
                     if st.button("💾 Aplicar", key="btn_ac_apply", use_container_width=True):
                         try:
                             engine = get_engine()
                             ctrl_val = None if nueva_ctrl == '(sin categoría control)' else nueva_ctrl
-                            n_compras_upd = 0
 
+                            # Actualizar clas_nomb_prod para cada nombre de producto seleccionado
+                            nombres_sel = df_sel['nombre_producto'].unique().tolist()
                             with engine.connect() as conn:
                                 for nombre in nombres_sel:
-                                    # Construir SET dinámico solo con campos que cambian
-                                    set_parts = []
-                                    upd_params = {'n': nombre}
-
-                                    if nueva_cat != '(sin cambio)':
-                                        set_parts.append("categoria_producto = :cat")
-                                        upd_params['cat'] = nueva_cat
-
-                                    if nueva_subcat != '(sin cambio)':
-                                        set_parts.append("subcat = :subcat")
-                                        upd_params['subcat'] = nueva_subcat
-
-                                    if nuevo_sku.strip() and len(nombres_sel) == 1:
-                                        set_parts.append("sku = :nuevo_sku")
-                                        upd_params['nuevo_sku'] = nuevo_sku.strip()
-
-                                    if set_parts:
-                                        res = conn.execute(text(f"""
-                                            UPDATE compras
-                                            SET {', '.join(set_parts)}
-                                            WHERE UPPER(nombre_producto) = UPPER(:n)
-                                        """), upd_params)
-                                        n_compras_upd += res.rowcount
-
-                                    # Upsert en clas_nomb_prod si cambia categoría o ctrl
-                                    if nueva_ctrl != '(sin cambio)' or nueva_cat != '(sin cambio)':
-                                        existe = pd.read_sql(
-                                            text("SELECT COUNT(*) as n FROM clas_nomb_prod WHERE UPPER(nombre_producto)=UPPER(:n)"),
-                                            conn, params={'n': nombre})
-                                        if existe['n'].iloc[0] > 0:
-                                            cn_parts = []
-                                            cn_params = {'n': nombre}
-                                            if nueva_ctrl != '(sin cambio)':
-                                                cn_parts.append("categoria_control=:ctrl")
-                                                cn_params['ctrl'] = ctrl_val
-                                            if nueva_cat != '(sin cambio)':
-                                                cn_parts.append("categoria=:cat")
-                                                cn_params['cat'] = nueva_cat
-                                            conn.execute(text(
-                                                f"UPDATE clas_nomb_prod SET {', '.join(cn_parts)} WHERE UPPER(nombre_producto)=UPPER(:n)"),
-                                                cn_params)
-                                        else:
-                                            conn.execute(text(
-                                                "INSERT INTO clas_nomb_prod (nombre_producto, categoria_control, categoria) "
-                                                "VALUES (:n, :ctrl, :cat)"),
-                                                {'n': nombre,
-                                                 'ctrl': ctrl_val if nueva_ctrl != '(sin cambio)' else None,
-                                                 'cat': nueva_cat if nueva_cat != '(sin cambio)' else None})
+                                    # Verificar si ya existe en la tabla
+                                    existe = pd.read_sql(
+                                        text("SELECT COUNT(*) as n FROM clas_nomb_prod WHERE UPPER(nombre_producto)=UPPER(:n)"),
+                                        conn, params={'n': nombre})
+                                    if existe['n'].iloc[0] > 0:
+                                        conn.execute(text(
+                                            "UPDATE clas_nomb_prod SET categoria_control=:ctrl, categoria=:cat "
+                                            "WHERE UPPER(nombre_producto)=UPPER(:n)"),
+                                            {'ctrl': ctrl_val, 'cat': nueva_cat, 'n': nombre})
+                                    else:
+                                        conn.execute(text(
+                                            "INSERT INTO clas_nomb_prod (nombre_producto, categoria_control, categoria) "
+                                            "VALUES (:n, :ctrl, :cat)"),
+                                            {'n': nombre, 'ctrl': ctrl_val, 'cat': nueva_cat})
                                 conn.commit()
 
-                            st.success(f"✅ {len(nombres_sel)} grupo(s) · {n_compras_upd:,} registros históricos actualizados")
-                            for k in ['ac_data', 'ic_data']:
-                                if k in st.session_state:
-                                    del st.session_state[k]
+                            st.success(f"✅ {len(nombres_sel)} producto(s) actualizados en clasificación")
+                            # Limpiar cache para que el informe tome los nuevos datos
+                            if 'ic_data' in st.session_state:
+                                del st.session_state['ic_data']
+                            del st.session_state['ac_data']
                             st.rerun()
                         except Exception as e:
                             st.error(f"Error: {e}")
