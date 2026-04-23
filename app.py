@@ -1063,25 +1063,27 @@ def calcular_costo_platos(fecha_i, fecha_f, local):
 
             UNION ALL
 
-            -- Fallback: último precio histórico (directo, global)
+            -- Fallback: último precio histórico (directo, global) — últimos 90 días
             SELECT sku, precio_unitario, 3 AS prioridad FROM (
                 SELECT DISTINCT ON (sku) sku,
                        costo_realfinal / NULLIF(cant_conv * NULLIF(formato,0), 0) AS precio_unitario
                 FROM compras
                 WHERE cant_conv > 0 AND costo_realfinal > 0 AND formato > 0
+                  AND fecha_dte::date >= CURRENT_DATE - INTERVAL '90 days'
                   AND sku IN (SELECT DISTINCT sku_ingrediente FROM recetas WHERE sku_ingrediente IS NOT NULL)
                 ORDER BY sku, fecha_dte DESC
             ) fb1
 
             UNION ALL
 
-            -- Fallback: último precio histórico (via equivalencia, global)
+            -- Fallback: último precio histórico (via equivalencia, global) — últimos 90 días
             SELECT sku, precio_unitario, 4 AS prioridad FROM (
                 SELECT DISTINCT ON (e.sku_receta) e.sku_receta AS sku,
                        c.costo_realfinal / NULLIF(c.cant_conv * NULLIF(c.formato,0), 0) AS precio_unitario
                 FROM compras c
                 JOIN sku_equivalencias e ON c.sku = e.sku_compra
                 WHERE c.cant_conv > 0 AND c.costo_realfinal > 0 AND c.formato > 0
+                  AND c.fecha_dte::date >= CURRENT_DATE - INTERVAL '90 days'
                   AND e.sku_receta IN (SELECT DISTINCT sku_ingrediente FROM recetas WHERE sku_ingrediente IS NOT NULL)
                 ORDER BY e.sku_receta, c.fecha_dte DESC
             ) fb2
@@ -8936,7 +8938,7 @@ elif modulo.startswith("📊"):
                 with st.spinner("Calculando..."):
                     # 1. Obtener platos con opciones de proteína (BA.020, BA.250, BA.260)
                     _fl_prot = f"AND UPPER(v_padre.local) = UPPER('{_prot_local}')" if _prot_local != 'Todos' else ''
-                    # Solo platos con al menos 1 ingrediente es_opcion=1 en recetas
+                    # Query fusionada: proteínas + pan en un solo join
                     _q_combo = f"""
                         WITH platos_con_opcion AS (
                             SELECT DISTINCT codigo_venta
@@ -8949,6 +8951,7 @@ elif modulo.startswith("📊"):
                             v_padre.ab_categoria,
                             v_op.sku_producto          AS sku_proteina,
                             v_op.nombre_producto       AS nombre_proteina,
+                            v_op.ba_opcion             AS ba_opcion,
                             SUM(v_op.cantidad_vendida) AS ventas_proteina
                         FROM ventas v_padre
                         JOIN platos_con_opcion pco ON v_padre.sku_producto = pco.codigo_venta
@@ -8956,12 +8959,12 @@ elif modulo.startswith("📊"):
                           ON v_padre.id_orden     = v_op.id_orden
                          AND v_padre.ab_categoria = v_op.ab_categoria
                          AND v_op.es_opcion       = true
-                         AND v_op.ba_opcion       IN ('BA.020','BA.250','BA.260')
+                         AND v_op.ba_opcion       IN ('BA.020','BA.250','BA.260','BA.019')
                         WHERE v_padre.es_opcion = false
                           AND v_padre.fecha_venta BETWEEN '{_prot_fi}' AND '{_prot_ff}'
                           {_fl_prot}
                         GROUP BY v_padre.sku_producto, v_padre.nombre_producto,
-                                 v_padre.ab_categoria, v_op.sku_producto, v_op.nombre_producto
+                                 v_padre.ab_categoria, v_op.sku_producto, v_op.nombre_producto, v_op.ba_opcion
                         ORDER BY v_padre.nombre_producto, ventas_proteina DESC
                     """
                     _df_combo = run_query(_q_combo)
@@ -8970,10 +8973,14 @@ elif modulo.startswith("📊"):
                         st.warning("No se encontraron platos con opciones de proteína en el período.")
                         st.session_state.pop('prot_data', None)
                     else:
+                        # Separar proteínas y pan desde la misma query
+                        _df_proteinas = _df_combo[_df_combo['ba_opcion'].isin(['BA.020','BA.250','BA.260'])][
+                            ['sku_plato','sku_proteina','nombre_proteina','ventas_proteina']].copy()
+                        _df_pan_combo = _df_combo[_df_combo['ba_opcion'] == 'BA.019'][
+                            ['sku_plato','sku_proteina','ventas_proteina']].rename(
+                            columns={'sku_proteina':'sku_pan','ventas_proteina':'ventas_pan'}).copy()
                         _df_platos_prot = _df_combo[['sku_plato','nombre_plato','ab_categoria']].drop_duplicates().rename(
                             columns={'sku_plato':'sku_producto','nombre_plato':'nombre_producto'})
-                        _df_proteinas = _df_combo[['sku_plato','sku_proteina','nombre_proteina','ventas_proteina']].copy()
-
                         # 3. Calcular costo base (sin proteína) por plato
                         _costo_base = calcular_costo_platos(str(_prot_fi), str(_prot_ff), _prot_local)
                         _costo_base_map = {}
@@ -9118,33 +9125,14 @@ elif modulo.startswith("📊"):
                                 (pd.to_numeric(_df_rec['es_opcion'], errors='coerce').fillna(0) == 2)
                             ].copy()
 
-                            # Moda de pan en ventas del período por plato
-                            _pan_moda_map = {}  # sku_plato → sku_pan_mas_elegido
-                            if not _rec_pan.empty:
-                                _skus_pan = _rec_pan['sku_ingrediente'].unique().tolist()
-                                _q_pan_moda = f"""
-                                    SELECT v_padre.sku_producto AS sku_plato,
-                                           v_op.sku_producto    AS sku_pan,
-                                           SUM(v_op.cantidad_vendida) AS ventas_pan
-                                    FROM ventas v_padre
-                                    JOIN ventas v_op
-                                      ON v_padre.id_orden     = v_op.id_orden
-                                     AND v_padre.ab_categoria = v_op.ab_categoria
-                                     AND v_op.es_opcion       = true
-                                     AND v_op.ba_opcion       = 'BA.019'
-                                    WHERE v_padre.es_opcion = false
-                                      AND v_padre.sku_producto IN ({','.join(f"'{s}'" for s in _skus_platos)})
-                                      AND v_padre.fecha_venta BETWEEN '{_prot_fi}' AND '{_prot_ff}'
-                                      {_fl_prot}
-                                    GROUP BY v_padre.sku_producto, v_op.sku_producto
-                                """
-                                _df_pan_ventas = run_query(_q_pan_moda)
-                                if not _df_pan_ventas.empty:
-                                    _df_pan_ventas['ventas_pan'] = pd.to_numeric(_df_pan_ventas['ventas_pan'], errors='coerce').fillna(0)
-                                    for _sp in _skus_platos:
-                                        _pv = _df_pan_ventas[_df_pan_ventas['sku_plato'] == _sp]
-                                        if not _pv.empty:
-                                            _pan_moda_map[_sp] = _pv.loc[_pv['ventas_pan'].idxmax(), 'sku_pan']
+                            # Moda de pan desde _df_pan_combo (ya viene de la query principal)
+                            _pan_moda_map = {}
+                            if not _df_pan_combo.empty:
+                                _df_pan_combo['ventas_pan'] = pd.to_numeric(_df_pan_combo['ventas_pan'], errors='coerce').fillna(0)
+                                for _sp in _skus_platos:
+                                    _pv = _df_pan_combo[_df_pan_combo['sku_plato'] == _sp]
+                                    if not _pv.empty:
+                                        _pan_moda_map[_sp] = _pv.loc[_pv['ventas_pan'].idxmax(), 'sku_pan']
 
                             for _sp, _grp in _rec_fijos.groupby('codigo_venta'):
                                 _fijos = []
