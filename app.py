@@ -2696,7 +2696,7 @@ with st.sidebar:
     modulo_actual  = st.session_state.get('modulo','')
     submenu_actual = st.session_state.get('submenu','')
     # El Informe de Costos tiene sus propios filtros — los globales no aplican
-    es_informe_costos = 'Informe de Costos' in submenu_actual or 'Informe de Costos' in modulo_actual
+    es_informe_costos = ('Informe de Costos' in submenu_actual or 'Informe de Costos' in modulo_actual) and 'Rentabilidad' not in modulo_actual
     locales = get_locales()
     if not es_informe_costos:
         st.markdown("<div style='font-size:0.75rem; color:#666; text-transform:uppercase; letter-spacing:0.08em;'>Filtros globales</div>", unsafe_allow_html=True)
@@ -9033,23 +9033,45 @@ elif modulo.startswith("📊"):
                                     _costo_pro_map[_pro_sku] = _costo_lote / max(_cant_lote, 1)  # costo por g/ml
 
                         # ── Calcular costo de cada proteína usando su receta propia ───────
-                        _costo_proteina_map  = {}
-                        _detalle_proteina_map = {}
+                        # Clave: (sku_plato, sku_proteina) para capturar cant del plato padre
+                        _costo_proteina_map  = {}  # (sku_plato, sku_prot) → costo
+                        _detalle_proteina_map = {}  # (sku_plato, sku_prot) → detalle
                         _skus_proteinas = _df_proteinas['sku_proteina'].unique().tolist()
+                        _skus_platos_prot = _df_platos_prot['sku_producto'].tolist()
+
+                        # Receta del plato padre: cant_real de cada proteína en el plato
+                        _rec_padre = _df_rec[
+                            (_df_rec['codigo_venta'].isin(_skus_platos_prot)) &
+                            (_df_rec['sku_ingrediente'].isin(_skus_proteinas))
+                        ].copy() if not _df_rec.empty else pd.DataFrame()
+
                         if not _df_rec.empty:
                             _rec_propias = _df_rec[_df_rec['codigo_venta'].isin(_skus_proteinas)].copy()
-                            for sku_p in _skus_proteinas:
+
+                            for _, _combo in _df_proteinas[['sku_plato','sku_proteina']].drop_duplicates().iterrows():
+                                sku_plato_c = _combo['sku_plato']
+                                sku_p       = _combo['sku_proteina']
+
+                                # Cantidad que el plato padre usa de esta proteína
+                                _cant_en_plato = 1.0
+                                if not _rec_padre.empty:
+                                    _rp = _rec_padre[
+                                        (_rec_padre['codigo_venta'] == sku_plato_c) &
+                                        (_rec_padre['sku_ingrediente'] == sku_p)
+                                    ]
+                                    if not _rp.empty:
+                                        _cant_en_plato = float(_rp.iloc[0].get('cant_real', 1) or 1)
+
                                 _rec_p = _rec_propias[_rec_propias['codigo_venta'] == sku_p]
                                 costo_p = 0.0
                                 detalle = []
                                 for _, ing in _rec_p.iterrows():
                                     sku_ing  = str(ing.get('sku_ingrediente', ''))
-                                    cant_ing = float(ing.get('cant_real', 0) or 0)
+                                    cant_ing = float(ing.get('cant_real', 0) or 0) * _cant_en_plato
                                     nom_ing  = str(ing.get('nombre_ingrediente', sku_ing))
                                     es_proc  = bool(ing.get('es_procesado', False)) or sku_ing.startswith('PRO-')
 
                                     if es_proc:
-                                        # Costo unitario del procesado × cantidad — NO explotar receta
                                         _cu = _costo_pro_map.get(sku_ing, 0)
                                         costo_ing = cant_ing * _cu
                                         costo_p  += costo_ing
@@ -9071,8 +9093,8 @@ elif modulo.startswith("📊"):
                                             'muc':                muc_ing,
                                             'costo':              costo_ing,
                                         })
-                                _costo_proteina_map[sku_p]   = costo_p
-                                _detalle_proteina_map[sku_p] = detalle
+                                _costo_proteina_map[(sku_plato_c, sku_p)]   = costo_p
+                                _detalle_proteina_map[(sku_plato_c, sku_p)] = detalle
 
                         # ── Mapa de ingredientes fijos del plato (es_opcion=0) + pan moda (es_opcion=2) ──
                         _fijos_plato_map = {}
@@ -9196,8 +9218,8 @@ elif modulo.startswith("📊"):
                                 ventas_p  = float(prot['ventas_proteina'] or 0)
                                 pct_elect = (ventas_p / total_ventas_prot * 100) if total_ventas_prot > 0 else 0
 
-                                costo_prot  = _costo_proteina_map.get(sku_prot, 0)
-                                detalle_ing = _detalle_proteina_map.get(sku_prot, [])
+                                costo_prot  = _costo_proteina_map.get((sku_plato, sku_prot), 0)
+                                detalle_ing = _detalle_proteina_map.get((sku_plato, sku_prot), [])
                                 # Nivel 3: ingredientes fijos del plato + ingredientes de la proteína
                                 _fijos = _fijos_plato_map.get(sku_plato, [])
                                 detalle_completo = _fijos + detalle_ing
