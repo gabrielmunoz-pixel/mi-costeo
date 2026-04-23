@@ -9012,52 +9012,54 @@ elif modulo.startswith("📊"):
                         if not _df_pventa.empty:
                             _pventa_map = dict(zip(_df_pventa['sku_producto'], pd.to_numeric(_df_pventa['precio_venta'], errors='coerce')))
                         _df_rec = get_recetas()
-                        # Construir mapa: sku_proteina → costo total (suma gramaje × MUC de sus ingredientes)
-                        _costo_proteina_map = {}  # sku_proteina → costo calculado
-                        _detalle_proteina_map = {}  # sku_proteina → [{ingrediente, cant, muc, costo}]
+                        # ── Calcular costo unitario de cada PRO- (lote o unidad) ──────────
+                        _costo_pro_map = {}  # sku_pro → costo por unidad o por g/ml
                         if not _df_rec.empty:
-                            # Recetas propias de cada proteína (codigo_venta = sku_proteina)
-                            _skus_proteinas = _df_proteinas['sku_proteina'].unique().tolist()
+                            _df_proc_rec = _df_rec[_df_rec['codigo_venta'].astype(str).str.startswith('PRO-')].copy()
+                            for _pro_sku, _grp in _df_proc_rec.groupby('codigo_venta'):
+                                _porcion_pro = int(_grp['porcion'].iloc[0] or 0)
+                                _costo_lote  = 0.0
+                                _cant_lote   = 0.0
+                                for _, _ing in _grp.iterrows():
+                                    _si  = str(_ing.get('sku_ingrediente',''))
+                                    _ce  = float(_ing.get('cant_efic',0) or _ing.get('cant_real',0) or 0)
+                                    _cr  = float(_ing.get('cant_real',0) or 0)
+                                    _muc = _muc_map.get(_si, 0) or 0
+                                    _costo_lote += _ce * _muc
+                                    _cant_lote  += _cr
+                                if _porcion_pro == 1:
+                                    _costo_pro_map[_pro_sku] = _costo_lote           # costo por unidad
+                                else:
+                                    _costo_pro_map[_pro_sku] = _costo_lote / max(_cant_lote, 1)  # costo por g/ml
+
+                        # ── Calcular costo de cada proteína usando su receta propia ───────
+                        _costo_proteina_map  = {}
+                        _detalle_proteina_map = {}
+                        _skus_proteinas = _df_proteinas['sku_proteina'].unique().tolist()
+                        if not _df_rec.empty:
                             _rec_propias = _df_rec[_df_rec['codigo_venta'].isin(_skus_proteinas)].copy()
                             for sku_p in _skus_proteinas:
                                 _rec_p = _rec_propias[_rec_propias['codigo_venta'] == sku_p]
                                 costo_p = 0.0
                                 detalle = []
                                 for _, ing in _rec_p.iterrows():
-                                    sku_ing   = str(ing.get('sku_ingrediente', ''))
-                                    cant_ing  = float(ing.get('cant_real', 0) or 0)
-                                    es_proc   = bool(ing.get('es_procesado', False))
-                                    nom_ing   = str(ing.get('nombre_ingrediente', sku_ing))
+                                    sku_ing  = str(ing.get('sku_ingrediente', ''))
+                                    cant_ing = float(ing.get('cant_real', 0) or 0)
+                                    nom_ing  = str(ing.get('nombre_ingrediente', sku_ing))
+                                    es_proc  = bool(ing.get('es_procesado', False)) or sku_ing.startswith('PRO-')
 
-                                    if es_proc or sku_ing.startswith('PRO-'):
-                                        # Explotar procesado: buscar su receta propia
-                                        _rec_proc = _df_rec[_df_rec['codigo_venta'] == sku_ing].copy()
-                                        if not _rec_proc.empty:
-                                            _rend_exp = float(_rec_proc['rendimiento'].max() or 0)
-                                            _rend_sum = float(_rec_proc['cant_real'].sum() or 0)
-                                            _rend_tot = _rend_exp if pd.notna(_rend_exp) and _rend_exp > 1 else _rend_sum
-                                            if _rend_tot == 0: _rend_tot = 1
-                                            _porcion  = int(_rec_proc['porcion'].iloc[0] or 0)
-
-                                            for _, sub in _rec_proc.iterrows():
-                                                sku_sub   = str(sub.get('sku_ingrediente', ''))
-                                                cant_sub  = float(sub.get('cant_real', 0) or 0)
-                                                muc_sub   = _muc_map.get(sku_sub, 0) or 0
-                                                # porcion==1: unidad → cant_ing unidades × cant_sub/unidad
-                                                # porcion!=1: lote  → fracción del lote = cant_ing / rendimiento
-                                                if _porcion == 1:
-                                                    cant_efec = cant_ing * cant_sub
-                                                else:
-                                                    cant_efec = (cant_ing / _rend_tot) * cant_sub
-                                                costo_sub = cant_efec * muc_sub
-                                                costo_p  += costo_sub
-                                                detalle.append({
-                                                    'sku_ingrediente':    sku_sub,
-                                                    'nombre_ingrediente': f"{nom_ing} → {sub.get('nombre_ingrediente', sku_sub)}",
-                                                    'cant_real':          cant_efec,
-                                                    'muc':                muc_sub,
-                                                    'costo':              costo_sub,
-                                                })
+                                    if es_proc:
+                                        # Costo unitario del procesado × cantidad — NO explotar receta
+                                        _cu = _costo_pro_map.get(sku_ing, 0)
+                                        costo_ing = cant_ing * _cu
+                                        costo_p  += costo_ing
+                                        detalle.append({
+                                            'sku_ingrediente':    sku_ing,
+                                            'nombre_ingrediente': nom_ing,
+                                            'cant_real':          cant_ing,
+                                            'muc':                _cu,
+                                            'costo':              costo_ing,
+                                        })
                                     else:
                                         muc_ing   = _muc_map.get(sku_ing, 0) or 0
                                         costo_ing = cant_ing * muc_ing
@@ -9069,8 +9071,36 @@ elif modulo.startswith("📊"):
                                             'muc':                muc_ing,
                                             'costo':              costo_ing,
                                         })
-                                _costo_proteina_map[sku_p]  = costo_p
+                                _costo_proteina_map[sku_p]   = costo_p
                                 _detalle_proteina_map[sku_p] = detalle
+
+                        # ── Mapa de ingredientes fijos del plato (es_opcion=0) ────────────
+                        _fijos_plato_map = {}  # sku_plato → [{sku, nombre, cant, muc, costo}]
+                        if not _df_rec.empty:
+                            _skus_platos = _df_platos_prot['sku_producto'].tolist()
+                            _rec_fijos = _df_rec[
+                                (_df_rec['codigo_venta'].isin(_skus_platos)) &
+                                (pd.to_numeric(_df_rec['es_opcion'], errors='coerce').fillna(0) == 0)
+                            ].copy()
+                            for _sp, _grp in _rec_fijos.groupby('codigo_venta'):
+                                _fijos = []
+                                for _, _f in _grp.iterrows():
+                                    _si  = str(_f.get('sku_ingrediente',''))
+                                    _cr  = float(_f.get('cant_real',0) or 0)
+                                    _nom = str(_f.get('nombre_ingrediente', _si))
+                                    _epr = bool(_f.get('es_procesado', False)) or _si.startswith('PRO-')
+                                    if _epr:
+                                        _cu = _costo_pro_map.get(_si, 0)
+                                    else:
+                                        _cu = _muc_map.get(_si, 0) or 0
+                                    _fijos.append({
+                                        'sku_ingrediente':    _si,
+                                        'nombre_ingrediente': _nom,
+                                        'cant_real':          _cr,
+                                        'muc':                _cu,
+                                        'costo':              _cr * _cu,
+                                    })
+                                _fijos_plato_map[_sp] = _fijos
 
                         # Detectar SKUs de filete para ajuste de precio de venta
                         _FILETE_KEYWORDS = ['filete', 'FILETE']
@@ -9098,6 +9128,9 @@ elif modulo.startswith("📊"):
 
                                 costo_prot  = _costo_proteina_map.get(sku_prot, 0)
                                 detalle_ing = _detalle_proteina_map.get(sku_prot, [])
+                                # Nivel 3: ingredientes fijos del plato + ingredientes de la proteína
+                                _fijos = _fijos_plato_map.get(sku_plato, [])
+                                detalle_completo = _fijos + detalle_ing
                                 costo_total = costo_base + costo_prot
 
                                 # Precio de venta: +2900 si es filete
@@ -9125,10 +9158,10 @@ elif modulo.startswith("📊"):
                                     'es_filete':       es_filete,
                                     'mc':              mc_prot,
                                     'margen_pct':      margen_prot,
-                                    'detalle_ing':     detalle_ing,
+                                    'detalle_ing':     detalle_completo,
                                 })
                                 # Filas BD: una por ingrediente con todos los campos
-                                ing_list = detalle_ing if detalle_ing else [{'nombre_ingrediente':'⚠️ Sin receta','sku_ingrediente':'','cant_real':0,'muc':0,'costo':0}]
+                                ing_list = detalle_completo if detalle_completo else [{'nombre_ingrediente':'⚠️ Sin receta','sku_ingrediente':'','cant_real':0,'muc':0,'costo':0}]
                                 for _ing in ing_list:
                                     _excel_rows.append({
                                         'Nivel':               'Ingrediente',
