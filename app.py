@@ -9018,20 +9018,58 @@ elif modulo.startswith("📊"):
                                 costo_p = 0.0
                                 detalle = []
                                 for _, ing in _rec_p.iterrows():
-                                    sku_ing  = str(ing.get('sku_ingrediente', ''))
-                                    cant_ing = float(ing.get('cant_real', 0) or 0)
-                                    muc_ing  = _muc_map.get(sku_ing, 0) or 0
-                                    costo_ing = cant_ing * muc_ing
-                                    costo_p  += costo_ing
-                                    detalle.append({
-                                        'sku_ingrediente':    sku_ing,
-                                        'nombre_ingrediente': str(ing.get('nombre_ingrediente', sku_ing)),
-                                        'cant_real':          cant_ing,
-                                        'muc':                muc_ing,
-                                        'costo':              costo_ing,
-                                    })
+                                    sku_ing   = str(ing.get('sku_ingrediente', ''))
+                                    cant_ing  = float(ing.get('cant_real', 0) or 0)
+                                    es_proc   = bool(ing.get('es_procesado', False))
+                                    nom_ing   = str(ing.get('nombre_ingrediente', sku_ing))
+
+                                    if es_proc or sku_ing.startswith('PRO-'):
+                                        # Explotar procesado: buscar su receta propia
+                                        _rec_proc = _df_rec[_df_rec['codigo_venta'] == sku_ing].copy()
+                                        if not _rec_proc.empty:
+                                            _rend_exp = float(_rec_proc['rendimiento'].max() or 0)
+                                            _rend_sum = float(_rec_proc['cant_real'].sum() or 0)
+                                            _rend_tot = _rend_exp if _rend_exp > 1 else _rend_sum
+                                            if _rend_tot == 0: _rend_tot = 1
+                                            _porcion  = int(_rec_proc['porcion'].iloc[0] or 0)
+
+                                            for _, sub in _rec_proc.iterrows():
+                                                sku_sub   = str(sub.get('sku_ingrediente', ''))
+                                                cant_sub  = float(sub.get('cant_real', 0) or 0)
+                                                muc_sub   = _muc_map.get(sku_sub, 0) or 0
+                                                if _porcion == 1:
+                                                    cant_efec = cant_ing * cant_sub
+                                                else:
+                                                    cant_efec = (cant_ing / _rend_tot) * cant_sub
+                                                costo_sub = cant_efec * muc_sub
+                                                costo_p  += costo_sub
+                                                detalle.append({
+                                                    'sku_ingrediente':    sku_sub,
+                                                    'nombre_ingrediente': f"{nom_ing} → {sub.get('nombre_ingrediente', sku_sub)}",
+                                                    'cant_real':          cant_efec,
+                                                    'muc':                muc_sub,
+                                                    'costo':              costo_sub,
+                                                })
+                                    else:
+                                        muc_ing   = _muc_map.get(sku_ing, 0) or 0
+                                        costo_ing = cant_ing * muc_ing
+                                        costo_p  += costo_ing
+                                        detalle.append({
+                                            'sku_ingrediente':    sku_ing,
+                                            'nombre_ingrediente': nom_ing,
+                                            'cant_real':          cant_ing,
+                                            'muc':                muc_ing,
+                                            'costo':              costo_ing,
+                                        })
                                 _costo_proteina_map[sku_p]  = costo_p
                                 _detalle_proteina_map[sku_p] = detalle
+
+                        # Detectar SKUs de filete para ajuste de precio de venta
+                        _FILETE_KEYWORDS = ['filete', 'FILETE']
+                        _skus_filete = set(
+                            r['sku_proteina'] for _, r in _df_proteinas.iterrows()
+                            if any(k.lower() in str(r.get('nombre_proteina','')).lower() for k in _FILETE_KEYWORDS)
+                        )
 
                         # 6. Construir resultado
                         _prot_rows = []
@@ -9054,24 +9092,29 @@ elif modulo.startswith("📊"):
                                 detalle_ing = _detalle_proteina_map.get(sku_prot, [])
                                 costo_total = costo_base + costo_prot
 
-                                # Para display: gramaje y MUC del ingrediente principal de la proteína
+                                # Precio de venta: +2900 si es filete
+                                precio_venta_base = _pventa_map.get(sku_plato, 0) or 0
+                                es_filete = sku_prot in _skus_filete
+                                precio_venta = precio_venta_base + (2900 if es_filete else 0)
+
+                                mc_prot     = precio_venta - costo_total if precio_venta > 0 else 0
+                                margen_prot = (mc_prot / precio_venta * 100) if precio_venta > 0 else 0
+
+                                # Para display: gramaje y MUC del ingrediente principal
                                 _ing_principal = detalle_ing[0] if detalle_ing else {}
                                 cant_receta = _ing_principal.get('cant_real', 0)
-                                muc_prot    = _ing_principal.get('muc', 0)
-
-                                precio_venta = _pventa_map.get(sku_plato, 0) or 0
-                                mc_prot      = precio_venta - costo_total if precio_venta > 0 else 0
-                                margen_prot  = (mc_prot / precio_venta * 100) if precio_venta > 0 else 0
+                                muc_prot_disp = _ing_principal.get('muc', 0)
 
                                 plato_proteinas.append({
                                     'sku_proteina':    sku_prot,
                                     'nombre_proteina': nom_prot,
                                     'pct_eleccion':    pct_elect,
                                     'cant_receta':     cant_receta,
-                                    'muc':             muc_prot,
+                                    'muc':             muc_prot_disp,
                                     'costo_proteina':  costo_prot,
                                     'costo_total':     costo_total,
                                     'precio_venta':    precio_venta,
+                                    'es_filete':       es_filete,
                                     'mc':              mc_prot,
                                     'margen_pct':      margen_prot,
                                     'detalle_ing':     detalle_ing,
@@ -9171,53 +9214,56 @@ elif modulo.startswith("📊"):
                         key='prot_dl'
                     )
 
-                # Cards por plato
+                # Cards por plato — cada proteína es una "versión" del plato
                 for _pr in _prot_rows:
+                    _nom = _pr['nombre_plato']
+                    _base = _pr['costo_base']
+
                     st.markdown(f"""
-                    <div class="ing-card">
-                        <div class="ing-card-top">
-                            <div>
-                                <div class="ing-nombre">{_pr['nombre_plato']}</div>
-                                <div class="ing-sku">{_pr['sku_plato']} &nbsp;·&nbsp; Costo base: ${_pr['costo_base']:,.0f}</div>
-                            </div>
-                        </div>
+                    <div style="font-family:'DM Serif Display',serif;font-size:1.1rem;color:#f0ede8;
+                                margin:1.2rem 0 0.4rem 0;letter-spacing:-0.01em">
+                        {_nom}
+                        <span style="font-family:'DM Sans',sans-serif;font-size:0.72rem;
+                                     color:#555;font-weight:400;margin-left:8px">
+                            {_pr['sku_plato']} &nbsp;·&nbsp; Costo base (sin proteína): ${_base:,.0f}
+                        </span>
                     </div>
                     """, unsafe_allow_html=True)
 
-                    with st.expander(f"↳ Proteínas de {_pr['nombre_plato']}"):
-                        _prot_html = '<div style="background:#0d0d0d;padding:8px 12px;border-radius:8px">'
+                    _prot_html = '<div style="background:#0d0d0d;border-radius:10px;border:1px solid #1e1e1e;overflow:hidden;margin-bottom:1rem">'
+                    # Header
+                    _prot_html += (
+                        '<div style="display:grid;grid-template-columns:2.5fr 1fr 1fr 1fr 1fr 1fr 1fr;'
+                        'gap:4px 8px;padding:8px 14px;background:#111;'
+                        'font-size:0.66rem;text-transform:uppercase;letter-spacing:0.09em;color:#444">'
+                        '<span>Versión</span>'
+                        '<span style="text-align:right">% Elección</span>'
+                        '<span style="text-align:right">Costo Prot.</span>'
+                        '<span style="text-align:right">Costo Total</span>'
+                        '<span style="text-align:right">P. Venta</span>'
+                        '<span style="text-align:right">MC $</span>'
+                        '<span style="text-align:right">Margen %</span>'
+                        '</div>'
+                    )
+                    for _pt in _pr['proteinas']:
+                        _mg  = _pt['margen_pct']
+                        _mc_color = '#4caf7d' if _mg >= 40 else '#e89c45' if _mg >= 25 else '#e84545'
+                        _filete_badge = ' <span style="font-size:0.65rem;background:#1a1a2e;color:#7b7bc4;padding:1px 5px;border-radius:3px;margin-left:4px">+$2.900 filete</span>' if _pt.get('es_filete') else ''
                         _prot_html += (
-                            f'<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr;'
-                            f'gap:4px 8px;padding:4px 0;border-bottom:1px solid #222;'
-                            f'font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;color:#555">'
-                            f'<span>Proteína</span>'
-                            f'<span style="text-align:right">% Elección</span>'
-                            f'<span style="text-align:right">Gramaje</span>'
-                            f'<span style="text-align:right">MUC</span>'
-                            f'<span style="text-align:right">Costo Prot.</span>'
-                            f'<span style="text-align:right">Costo Total</span>'
-                            f'<span style="text-align:right">P. Venta</span>'
-                            f'<span style="text-align:right">Margen %</span>'
+                            f'<div style="display:grid;grid-template-columns:2.5fr 1fr 1fr 1fr 1fr 1fr 1fr;'
+                            f'gap:4px 8px;padding:8px 14px;border-top:1px solid #161616;align-items:center">'
+                            f'<span style="color:#e8e4de;font-size:0.82rem;font-weight:500">'
+                            f'{_nom} — {_pt["nombre_proteina"]}{_filete_badge}</span>'
+                            f'<span style="color:#d4a853;text-align:right;font-size:0.78rem">{_pt["pct_eleccion"]:.1f}%</span>'
+                            f'<span style="color:#888;text-align:right;font-size:0.78rem">${_pt["costo_proteina"]:,.0f}</span>'
+                            f'<span style="color:#aaa;text-align:right;font-size:0.78rem">${_pt["costo_total"]:,.0f}</span>'
+                            f'<span style="color:#666;text-align:right;font-size:0.78rem">${_pt["precio_venta"]:,.0f}</span>'
+                            f'<span style="color:{_mc_color};text-align:right;font-size:0.78rem">${_pt["mc"]:,.0f}</span>'
+                            f'<span style="color:{_mc_color};font-weight:700;text-align:right;font-size:0.82rem">{_mg:.1f}%</span>'
                             f'</div>'
                         )
-                        for _pt in _pr['proteinas']:
-                            _mg = _pt['margen_pct']
-                            _mc = '#4caf7d' if _mg >= 40 else '#e89c45' if _mg >= 20 else '#e84545'
-                            _prot_html += (
-                                f'<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr;'
-                                f'gap:4px 8px;padding:5px 0;border-bottom:1px solid #111;align-items:center">'
-                                f'<span style="color:#e8e4de;font-size:0.8rem">{_pt["nombre_proteina"]}</span>'
-                                f'<span style="color:#d4a853;text-align:right;font-size:0.78rem">{_pt["pct_eleccion"]:.1f}%</span>'
-                                f'<span style="color:#888;text-align:right;font-size:0.78rem">{_pt["cant_receta"]:,.1f}g</span>'
-                                f'<span style="color:#666;text-align:right;font-size:0.78rem">${_pt["muc"]:,.4f}</span>'
-                                f'<span style="color:#aaa;text-align:right;font-size:0.78rem">${_pt["costo_proteina"]:,.0f}</span>'
-                                f'<span style="color:#aaa;text-align:right;font-size:0.78rem">${_pt["costo_total"]:,.0f}</span>'
-                                f'<span style="color:#aaa;text-align:right;font-size:0.78rem">${_pt["precio_venta"]:,.0f}</span>'
-                                f'<span style="color:{_mc};font-weight:600;text-align:right;font-size:0.78rem">{_pt["margen_pct"]:.1f}%</span>'
-                                f'</div>'
-                            )
-                        _prot_html += '</div>'
-                        st.markdown(_prot_html, unsafe_allow_html=True)
+                    _prot_html += '</div>'
+                    st.markdown(_prot_html, unsafe_allow_html=True)
 
 
     elif "Informe 2" in informe_sel:
