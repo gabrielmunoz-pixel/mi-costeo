@@ -9119,44 +9119,26 @@ elif modulo.startswith("📊"):
                                     'margen_pct':      margen_prot,
                                     'detalle_ing':     detalle_ing,
                                 })
-                                # Una fila por ingrediente de la proteína (base de datos)
-                                if detalle_ing:
-                                    for _ing in detalle_ing:
-                                        _excel_rows.append({
-                                            'Plato':               nom_plato,
-                                            'SKU Plato':           sku_plato,
-                                            'Proteína':            nom_prot,
-                                            'SKU Proteína':        sku_prot,
-                                            '% Elección':          round(pct_elect, 1),
-                                            'Ingrediente':         _ing['nombre_ingrediente'],
-                                            'SKU Ingrediente':     _ing['sku_ingrediente'],
-                                            'Gramaje (g/un)':      _ing['cant_real'],
-                                            'MUC ($/g)':           round(_ing['muc'], 4),
-                                            'Costo Ingrediente':   round(_ing['costo'], 0),
-                                            'Costo Proteína Total':round(costo_prot, 0),
-                                            'Costo Base Plato':    round(costo_base, 0),
-                                            'Costo Total Plato':   round(costo_total, 0),
-                                            'Precio Venta':        round(precio_venta, 0),
-                                            'Margen Contribución': round(mc_prot, 0),
-                                            'Margen %':            round(margen_prot, 1),
-                                        })
-                                else:
+                                # Filas BD: una por ingrediente con todos los campos
+                                ing_list = detalle_ing if detalle_ing else [{'nombre_ingrediente':'⚠️ Sin receta','sku_ingrediente':'','cant_real':0,'muc':0,'costo':0}]
+                                for _ing in ing_list:
                                     _excel_rows.append({
+                                        'Nivel':               'Ingrediente',
                                         'Plato':               nom_plato,
                                         'SKU Plato':           sku_plato,
                                         'Proteína':            nom_prot,
                                         'SKU Proteína':        sku_prot,
                                         '% Elección':          round(pct_elect, 1),
-                                        'Ingrediente':         '⚠️ Sin receta',
-                                        'SKU Ingrediente':     '',
-                                        'Gramaje (g/un)':      0,
-                                        'MUC ($/g)':           0,
-                                        'Costo Ingrediente':   0,
-                                        'Costo Proteína Total':0,
+                                        'Ingrediente':         _ing['nombre_ingrediente'],
+                                        'SKU Ingrediente':     _ing['sku_ingrediente'],
+                                        'Gramaje (g/un)':      round(_ing['cant_real'], 4),
+                                        'MUC ($/g)':           round(_ing['muc'], 4),
+                                        'Costo Ingrediente':   round(_ing['costo'], 0),
+                                        'Costo Proteína':      round(costo_prot, 0),
                                         'Costo Base Plato':    round(costo_base, 0),
                                         'Costo Total Plato':   round(costo_total, 0),
                                         'Precio Venta':        round(precio_venta, 0),
-                                        'Margen Contribución': round(mc_prot, 0),
+                                        'MC $':                round(mc_prot, 0),
                                         'Margen %':            round(margen_prot, 1),
                                     })
 
@@ -9214,56 +9196,232 @@ elif modulo.startswith("📊"):
                         key='prot_dl'
                     )
 
-                # Cards por plato — cada proteína es una "versión" del plato
+                # ── Tabla dinámica 3 niveles ──────────────────────
+                import json as _json
+
+                # Construir estructura de datos para JS
+                _tree_data = []
                 for _pr in _prot_rows:
-                    _nom = _pr['nombre_plato']
-                    _base = _pr['costo_base']
+                    _nom    = _pr['nombre_plato']
+                    _base   = _pr['costo_base']
+                    _prots  = _pr['proteinas']
+                    _tot_v  = sum(p['pct_eleccion'] for p in _prots)
 
-                    st.markdown(f"""
-                    <div style="font-family:'DM Serif Display',serif;font-size:1.1rem;color:#f0ede8;
-                                margin:1.2rem 0 0.4rem 0;letter-spacing:-0.01em">
-                        {_nom}
-                        <span style="font-family:'DM Sans',sans-serif;font-size:0.72rem;
-                                     color:#555;font-weight:400;margin-left:8px">
-                            {_pr['sku_plato']} &nbsp;·&nbsp; Costo base (sin proteína): ${_base:,.0f}
-                        </span>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    # Nivel 1: ponderados
+                    _ct_pond  = sum(p['costo_total']  * p['pct_eleccion'] for p in _prots) / _tot_v if _tot_v else 0
+                    _cp_pond  = sum(p['costo_proteina'] * p['pct_eleccion'] for p in _prots) / _tot_v if _tot_v else 0
+                    _mc_pond  = sum(p['mc']           * p['pct_eleccion'] for p in _prots) / _tot_v if _tot_v else 0
+                    _mg_pond  = sum(p['margen_pct']   * p['pct_eleccion'] for p in _prots) / _tot_v if _tot_v else 0
+                    _pv_pond  = sum(p['precio_venta'] * p['pct_eleccion'] for p in _prots) / _tot_v if _tot_v else 0
 
-                    _prot_html = '<div style="background:#0d0d0d;border-radius:10px;border:1px solid #1e1e1e;overflow:hidden;margin-bottom:1rem">'
-                    # Header
-                    _prot_html += (
-                        '<div style="display:grid;grid-template-columns:2.5fr 1fr 1fr 1fr 1fr 1fr 1fr;'
-                        'gap:4px 8px;padding:8px 14px;background:#111;'
-                        'font-size:0.66rem;text-transform:uppercase;letter-spacing:0.09em;color:#444">'
-                        '<span>Versión</span>'
-                        '<span style="text-align:right">% Elección</span>'
-                        '<span style="text-align:right">Costo Prot.</span>'
-                        '<span style="text-align:right">Costo Total</span>'
-                        '<span style="text-align:right">P. Venta</span>'
-                        '<span style="text-align:right">MC $</span>'
-                        '<span style="text-align:right">Margen %</span>'
-                        '</div>'
-                    )
-                    for _pt in _pr['proteinas']:
-                        _mg  = _pt['margen_pct']
-                        _mc_color = '#4caf7d' if _mg >= 40 else '#e89c45' if _mg >= 25 else '#e84545'
-                        _filete_badge = ' <span style="font-size:0.65rem;background:#1a1a2e;color:#7b7bc4;padding:1px 5px;border-radius:3px;margin-left:4px">+$2.900 filete</span>' if _pt.get('es_filete') else ''
-                        _prot_html += (
-                            f'<div style="display:grid;grid-template-columns:2.5fr 1fr 1fr 1fr 1fr 1fr 1fr;'
-                            f'gap:4px 8px;padding:8px 14px;border-top:1px solid #161616;align-items:center">'
-                            f'<span style="color:#e8e4de;font-size:0.82rem;font-weight:500">'
-                            f'{_nom} — {_pt["nombre_proteina"]}{_filete_badge}</span>'
-                            f'<span style="color:#d4a853;text-align:right;font-size:0.78rem">{_pt["pct_eleccion"]:.1f}%</span>'
-                            f'<span style="color:#888;text-align:right;font-size:0.78rem">${_pt["costo_proteina"]:,.0f}</span>'
-                            f'<span style="color:#aaa;text-align:right;font-size:0.78rem">${_pt["costo_total"]:,.0f}</span>'
-                            f'<span style="color:#666;text-align:right;font-size:0.78rem">${_pt["precio_venta"]:,.0f}</span>'
-                            f'<span style="color:{_mc_color};text-align:right;font-size:0.78rem">${_pt["mc"]:,.0f}</span>'
-                            f'<span style="color:{_mc_color};font-weight:700;text-align:right;font-size:0.82rem">{_mg:.1f}%</span>'
-                            f'</div>'
-                        )
-                    _prot_html += '</div>'
-                    st.markdown(_prot_html, unsafe_allow_html=True)
+                    plato_node = {
+                        'id':        _pr['sku_plato'],
+                        'label':     _nom,
+                        'sub':       f"{_pr['sku_plato']} · Costo base: ${_base:,.0f}",
+                        'pct':       100.0,
+                        'cprot':     _cp_pond,
+                        'ctotal':    _ct_pond,
+                        'pventa':    _pv_pond,
+                        'mc':        _mc_pond,
+                        'margen':    _mg_pond,
+                        'children':  []
+                    }
+
+                    for _pt in _prots:
+                        _fl = ' (+$2.900 filete)' if _pt.get('es_filete') else ''
+                        prot_node = {
+                            'id':       f"{_pr['sku_plato']}_{_pt['sku_proteina']}",
+                            'label':    f"{_nom} — {_pt['nombre_proteina']}{_fl}",
+                            'sub':      _pt['sku_proteina'],
+                            'pct':      round(_pt['pct_eleccion'], 1),
+                            'cprot':    _pt['costo_proteina'],
+                            'ctotal':   _pt['costo_total'],
+                            'pventa':   _pt['precio_venta'],
+                            'mc':       _pt['mc'],
+                            'margen':   _pt['margen_pct'],
+                            'children': []
+                        }
+
+                        for _ing in _pt.get('detalle_ing', []):
+                            prot_node['children'].append({
+                                'id':     f"{_pr['sku_plato']}_{_pt['sku_proteina']}_{_ing['sku_ingrediente']}",
+                                'label':  _ing['nombre_ingrediente'],
+                                'sub':    f"{_ing['sku_ingrediente']} · {_ing['cant_real']:,.2f}g · MUC ${_ing['muc']:,.4f}",
+                                'pct':    '',
+                                'cprot':  _ing['costo'],
+                                'ctotal': _pt['costo_total'],
+                                'pventa': _pt['precio_venta'],
+                                'mc':     _pt['mc'],
+                                'margen': _pt['margen_pct'],
+                                'children': []
+                            })
+
+                        plato_node['children'].append(prot_node)
+                    _tree_data.append(plato_node)
+
+                _tree_json = _json.dumps(_tree_data)
+
+                st.components.v1.html(f"""
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  body {{ margin:0; background:transparent; font-family:'DM Sans',sans-serif; color:#e8e4de; }}
+  table {{ width:100%; border-collapse:collapse; font-size:0.8rem; }}
+  th {{ background:#111; color:#444; font-size:0.65rem; text-transform:uppercase;
+        letter-spacing:0.09em; padding:8px 10px; text-align:right; border-bottom:1px solid #222; }}
+  th:first-child {{ text-align:left; }}
+  td {{ padding:7px 10px; border-bottom:1px solid #161616; text-align:right; vertical-align:middle; }}
+  td:first-child {{ text-align:left; }}
+  .toggle {{ cursor:pointer; display:inline-flex; align-items:center; gap:6px; }}
+  .toggle:hover .lbl {{ color:#d4a853; }}
+  .icon {{ font-size:0.7rem; color:#555; width:14px; display:inline-block; transition:transform 0.15s; }}
+  .lbl {{ color:#e8e4de; }}
+  .sub {{ font-size:0.68rem; color:#555; margin-top:2px; }}
+  .l1 td:first-child {{ padding-left:10px; }}
+  .l2 td:first-child {{ padding-left:28px; background:rgba(255,255,255,0.01); }}
+  .l3 td:first-child {{ padding-left:46px; background:rgba(255,255,255,0.02); color:#888; }}
+  .l3 td {{ color:#666; font-size:0.75rem; }}
+  .green {{ color:#4caf7d; font-weight:600; }}
+  .amber {{ color:#e89c45; font-weight:600; }}
+  .red   {{ color:#e84545; font-weight:600; }}
+  .dim   {{ color:#555; }}
+  .pct   {{ color:#d4a853; }}
+</style>
+</head>
+<body>
+<table>
+  <thead>
+    <tr>
+      <th style="text-align:left;width:38%">Versión</th>
+      <th>% Elec.</th>
+      <th>Costo Prot.</th>
+      <th>Costo Total</th>
+      <th>P. Venta</th>
+      <th>MC $</th>
+      <th>Margen %</th>
+    </tr>
+  </thead>
+  <tbody id="tbody"></tbody>
+</table>
+<script>
+const data = {_tree_json};
+const tbody = document.getElementById('tbody');
+const state = {{}};
+
+function fmt(n) {{ return '$' + Math.round(n).toLocaleString('es-CL'); }}
+function fmtPct(n) {{ return typeof n === 'number' ? n.toFixed(1) + '%' : ''; }}
+function colorCls(m) {{ return m >= 40 ? 'green' : m >= 25 ? 'amber' : 'red'; }}
+
+function renderRows(nodes, level) {{
+  nodes.forEach(node => {{
+    const hasChildren = node.children && node.children.length > 0;
+    const open = state[node.id] || false;
+    const tr = document.createElement('tr');
+    tr.className = 'l' + level;
+
+    const labelCell = document.createElement('td');
+    if (hasChildren) {{
+      labelCell.innerHTML = `<div class="toggle" onclick="toggle('${{node.id}}')">
+        <span class="icon" id="icon_${{node.id}}">${{open ? '▼' : '▶'}}</span>
+        <div><div class="lbl">${{node.label}}</div><div class="sub">${{node.sub}}</div></div>
+      </div>`;
+    }} else {{
+      labelCell.innerHTML = `<div style="padding-left:4px"><div class="lbl dim">${{node.label}}</div><div class="sub">${{node.sub}}</div></div>`;
+    }}
+    tr.appendChild(labelCell);
+
+    const pctCell = document.createElement('td');
+    pctCell.className = 'pct';
+    pctCell.textContent = typeof node.pct === 'number' ? node.pct.toFixed(1) + '%' : '';
+    tr.appendChild(pctCell);
+
+    [node.cprot, node.ctotal, node.pventa, node.mc].forEach(v => {{
+      const td = document.createElement('td');
+      td.className = 'dim';
+      td.textContent = typeof v === 'number' ? fmt(v) : '';
+      tr.appendChild(td);
+    }});
+
+    const mgTd = document.createElement('td');
+    mgTd.className = typeof node.margen === 'number' ? colorCls(node.margen) : 'dim';
+    mgTd.textContent = typeof node.margen === 'number' ? node.margen.toFixed(1) + '%' : '';
+    tr.appendChild(mgTd);
+
+    tbody.appendChild(tr);
+    tr.id = 'row_' + node.id;
+
+    if (hasChildren) {{
+      const childGroup = document.createElement('tbody');
+      childGroup.id = 'grp_' + node.id;
+      childGroup.style.display = open ? '' : 'none';
+      tbody.parentElement.appendChild(childGroup);
+      renderInto(childGroup, node.children, level + 1);
+    }}
+  }});
+}}
+
+function renderInto(container, nodes, level) {{
+  nodes.forEach(node => {{
+    const hasChildren = node.children && node.children.length > 0;
+    const open = state[node.id] || false;
+    const tr = document.createElement('tr');
+    tr.className = 'l' + level;
+    tr.id = 'row_' + node.id;
+
+    const labelCell = document.createElement('td');
+    if (hasChildren) {{
+      labelCell.innerHTML = `<div class="toggle" onclick="toggle('${{node.id}}')">
+        <span class="icon" id="icon_${{node.id}}">${{open ? '▼' : '▶'}}</span>
+        <div><div class="lbl">${{node.label}}</div><div class="sub">${{node.sub}}</div></div>
+      </div>`;
+    }} else {{
+      labelCell.innerHTML = `<div style="padding-left:4px"><div class="lbl">${{node.label}}</div><div class="sub">${{node.sub}}</div></div>`;
+    }}
+    tr.appendChild(labelCell);
+
+    const pctCell = document.createElement('td');
+    pctCell.className = 'pct';
+    pctCell.textContent = typeof node.pct === 'number' ? node.pct.toFixed(1) + '%' : '';
+    tr.appendChild(pctCell);
+
+    [node.cprot, node.ctotal, node.pventa, node.mc].forEach(v => {{
+      const td = document.createElement('td');
+      td.className = 'dim';
+      td.textContent = typeof v === 'number' ? fmt(v) : '';
+      tr.appendChild(td);
+    }});
+
+    const mgTd = document.createElement('td');
+    mgTd.className = typeof node.margen === 'number' ? colorCls(node.margen) : 'dim';
+    mgTd.textContent = typeof node.margen === 'number' ? node.margen.toFixed(1) + '%' : '';
+    tr.appendChild(mgTd);
+
+    container.appendChild(tr);
+
+    if (hasChildren) {{
+      const childGroup = document.createElement('tbody');
+      childGroup.id = 'grp_' + node.id;
+      childGroup.style.display = open ? '' : 'none';
+      container.parentElement.appendChild(childGroup);
+      renderInto(childGroup, node.children, level + 1);
+    }}
+  }});
+}}
+
+function toggle(id) {{
+  state[id] = !state[id];
+  const grp = document.getElementById('grp_' + id);
+  const icon = document.getElementById('icon_' + id);
+  if (grp) grp.style.display = state[id] ? '' : 'none';
+  if (icon) icon.textContent = state[id] ? '▼' : '▶';
+}}
+
+renderRows(data, 1);
+</script>
+</body>
+</html>
+""", height=min(80 + len(_prot_rows) * 120, 800), scrolling=True)
 
 
     elif "Informe 2" in informe_sel:
