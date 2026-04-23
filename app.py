@@ -9310,9 +9310,121 @@ elif modulo.startswith("📊"):
                         'Margen % Máx':         x['Margen %'].max(),
                         'Margen % Ponderado':   (x['Margen %'] * x['% Elección']).sum() / x['% Elección'].sum() if x['% Elección'].sum() > 0 else 0,
                     })).reset_index()
-                    with pd.ExcelWriter(_wb_buf, engine='openpyxl') as _wr:
-                        _df_excel_det.to_excel(_wr, sheet_name='Base Ingredientes', index=False)
-                        _df_resumen.to_excel(_wr, sheet_name='Resumen por Plato', index=False)
+                    # ── Excel profesional 3 hojas ─────────────────────────
+                    from openpyxl import Workbook as _WB
+                    from openpyxl.styles import Font as _Font, PatternFill as _PFill, Alignment as _Aln, Border as _Border, Side as _Side
+                    from openpyxl.utils import get_column_letter as _gcl
+                    from openpyxl.worksheet.table import Table as _Tbl, TableStyleInfo as _TblStyle
+
+                    # Hoja 2: Plato+Proteína
+                    _prot_cols = ['Plato','SKU Plato','Proteína','SKU Proteína','% Elección',
+                                  'Costo Proteína','Costo Base Plato','Costo Total Plato',
+                                  'Precio Venta','MC $','Margen %']
+                    _df_prot_sheet = _df_resumen_src[_prot_cols].drop_duplicates(
+                        subset=['SKU Plato','SKU Proteína']).sort_values(
+                        ['Plato','% Elección'], ascending=[True,False]).reset_index(drop=True)
+
+                    _wb2 = _WB()
+
+                    def _xfill(c): return _PFill('solid', start_color=c, end_color=c)
+                    def _xfont(bold=False, size=9, color='000000', italic=False):
+                        return _Font(name='Calibri', bold=bold, size=size, color=color, italic=italic)
+                    def _xaln(h='left', wrap=False): return _Aln(horizontal=h, vertical='center', wrap_text=wrap)
+                    def _xbot(c='D0D0D0'): return _Border(bottom=_Side(style='thin', color=c))
+                    NAVY='1F3864'; NAVY2='2E5090'; LGRAY='F5F5F5'; WHITE='FFFFFF'
+                    GFG='1A6B3C'; GBG='D6EFDF'; AFG='7D5A00'; ABG='FFF3CD'; RFG='8B1A1A'; RBG='FADADD'
+
+                    def _margin_style(v):
+                        try:
+                            f = float(v)
+                            return (GFG,GBG) if f>=40 else (AFG,ABG) if f>=25 else (RFG,RBG)
+                        except: return ('000000',WHITE)
+
+                    def _write_sheet(ws, df, title, money_cols, pct_cols, num_cols=set(), group_col=None):
+                        ws.sheet_view.showGridLines = False
+                        headers = df.columns.tolist()
+                        ws.merge_cells(f'A1:{_gcl(len(headers))}1')
+                        tc = ws.cell(row=1, column=1, value=title)
+                        tc.font = _xfont(bold=True, size=13, color=WHITE)
+                        tc.fill = _xfill(NAVY); tc.alignment = _xaln('left')
+                        ws.row_dimensions[1].height = 30
+                        for ci, h in enumerate(headers, 1):
+                            cell = ws.cell(row=2, column=ci, value=h)
+                            cell.font = _xfont(bold=True, size=9, color=WHITE)
+                            cell.fill = _xfill(NAVY2)
+                            cell.alignment = _xaln('center' if h in money_cols|pct_cols|num_cols else 'left', True)
+                            cell.border = _Border(bottom=_Side(style='medium', color=WHITE))
+                        ws.row_dimensions[2].height = 28
+                        prev_g = None
+                        for ri, row in df.iterrows():
+                            er = ri+3
+                            is_new = group_col and row.get(group_col) != prev_g
+                            if group_col: prev_g = row.get(group_col)
+                            bg = LGRAY if ri%2==0 else WHITE
+                            for ci, h in enumerate(headers, 1):
+                                val = row[h]
+                                cell = ws.cell(row=er, column=ci, value=val)
+                                cell.border = _Border(
+                                    top=_Side(style='thin', color='D0D0D0') if is_new else _Side(style=None),
+                                    bottom=_Side(style='thin', color='E8E8E8'))
+                                if h == 'Margen %':
+                                    fg, bgm = _margin_style(val)
+                                    cell.fill = _xfill(bgm); cell.font = _xfont(bold=True, size=9, color=fg)
+                                    cell.number_format = '0.0"%"'; cell.alignment = _xaln('center')
+                                elif h in money_cols:
+                                    cell.fill = _xfill(bg); cell.font = _xfont(size=9)
+                                    cell.number_format = '$#,##0'; cell.alignment = _xaln('right')
+                                elif h in pct_cols:
+                                    cell.fill = _xfill(bg); cell.font = _xfont(size=9, color='555555')
+                                    cell.number_format = '0.0"%"'; cell.alignment = _xaln('right')
+                                elif h in num_cols:
+                                    cell.fill = _xfill(bg); cell.font = _xfont(size=9)
+                                    cell.number_format = '#,##0.0000'; cell.alignment = _xaln('right')
+                                elif h in ('SKU Plato','SKU Proteína','SKU Ingrediente','Nivel'):
+                                    cell.fill = _xfill(bg); cell.font = _xfont(size=8, color='888888', italic=True)
+                                    cell.alignment = _xaln('left')
+                                elif h == 'Plato':
+                                    cell.fill = _xfill(LGRAY if is_new else bg)
+                                    cell.font = _xfont(bold=is_new, size=9); cell.alignment = _xaln('left')
+                                else:
+                                    cell.fill = _xfill(bg); cell.font = _xfont(size=9)
+                                    cell.alignment = _xaln('left')
+                                ws.row_dimensions[er].height = 16
+                        tref = f'A2:{_gcl(len(headers))}{len(df)+2}'
+                        tname = ''.join(c for c in title if c.isalnum())[:28]
+                        tbl = _Tbl(displayName=tname, ref=tref)
+                        tbl.tableStyleInfo = _TblStyle(name='TableStyleLight1', showRowStripes=False)
+                        ws.add_table(tbl)
+                        ws.freeze_panes = 'A3'
+
+                    # Hoja 1: Resumen
+                    ws1 = _wb2.active; ws1.title = 'Resumen por Plato'
+                    ws1.sheet_properties.tabColor = NAVY
+                    _write_sheet(ws1, _df_resumen, 'Resumen por Plato',
+                        money_cols={'Precio Venta','Costo Base Plato','Costo Mín','Costo Máx','Costo Prom Ponderado','MC Mín','MC Máx'},
+                        pct_cols={'Margen % Mín','Margen % Máx','Margen % Ponderado'})
+                    for col,w in [('A',35),('B',10),('C',12),('D',13),('E',15),('F',11),('G',11),('H',20),('I',10),('J',10),('K',13),('L',13),('M',20)]:
+                        ws1.column_dimensions[col].width = w
+
+                    # Hoja 2: Plato+Proteína
+                    ws2 = _wb2.create_sheet('Plato + Proteína')
+                    ws2.sheet_properties.tabColor = '2E7D32'
+                    _write_sheet(ws2, _df_prot_sheet, 'Rentabilidad por Plato y Proteína',
+                        money_cols={'Costo Proteína','Costo Base Plato','Costo Total Plato','Precio Venta','MC $'},
+                        pct_cols={'% Elección'}, group_col='Plato')
+                    for col,w in [('A',32),('B',10),('C',28),('D',13),('E',11),('F',14),('G',15),('H',16),('I',13),('J',11),('K',11)]:
+                        ws2.column_dimensions[col].width = w
+
+                    # Hoja 3: Base Ingredientes
+                    ws3 = _wb2.create_sheet('Base Ingredientes')
+                    ws3.sheet_properties.tabColor = '546E7A'
+                    _write_sheet(ws3, _df_excel_det, 'Base de Datos — Ingredientes',
+                        money_cols={'Costo Ingrediente','Costo Proteína','Costo Base Plato','Costo Total Plato','Precio Venta','MC $'},
+                        pct_cols={'% Elección'}, num_cols={'Gramaje (g/un)','MUC ($/g)'}, group_col='Plato')
+                    for col,w in [('A',10),('B',30),('C',10),('D',26),('E',13),('F',11),('G',30),('H',14),('I',13),('J',11),('K',15),('L',14),('M',15),('N',16),('O',13),('P',11),('Q',11)]:
+                        ws3.column_dimensions[col].width = w
+
+                    _wb2.save(_wb_buf)
                     _wb_buf.seek(0)
                     st.download_button(
                         "📥 Exportar Excel",
