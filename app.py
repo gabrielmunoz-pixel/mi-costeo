@@ -8936,8 +8936,13 @@ elif modulo.startswith("📊"):
                 with st.spinner("Calculando..."):
                     # 1. Obtener platos con opciones de proteína (BA.020, BA.250, BA.260)
                     _fl_prot = f"AND UPPER(v_padre.local) = UPPER('{_prot_local}')" if _prot_local != 'Todos' else ''
-                    # Una sola query fusionada para platos y proteínas
+                    # Solo platos con al menos 1 ingrediente es_opcion=1 en recetas
                     _q_combo = f"""
+                        WITH platos_con_opcion AS (
+                            SELECT DISTINCT codigo_venta
+                            FROM recetas
+                            WHERE es_opcion = 1
+                        )
                         SELECT
                             v_padre.sku_producto       AS sku_plato,
                             v_padre.nombre_producto    AS nombre_plato,
@@ -8946,6 +8951,7 @@ elif modulo.startswith("📊"):
                             v_op.nombre_producto       AS nombre_proteina,
                             SUM(v_op.cantidad_vendida) AS ventas_proteina
                         FROM ventas v_padre
+                        JOIN platos_con_opcion pco ON v_padre.sku_producto = pco.codigo_venta
                         JOIN ventas v_op
                           ON v_padre.id_orden     = v_op.id_orden
                          AND v_padre.ab_categoria = v_op.ab_categoria
@@ -9029,7 +9035,7 @@ elif modulo.startswith("📊"):
                                         if not _rec_proc.empty:
                                             _rend_exp = float(_rec_proc['rendimiento'].max() or 0)
                                             _rend_sum = float(_rec_proc['cant_real'].sum() or 0)
-                                            _rend_tot = _rend_exp if _rend_exp > 1 else _rend_sum
+                                            _rend_tot = _rend_exp if pd.notna(_rend_exp) and _rend_exp > 1 else _rend_sum
                                             if _rend_tot == 0: _rend_tot = 1
                                             _porcion  = int(_rec_proc['porcion'].iloc[0] or 0)
 
@@ -9037,6 +9043,8 @@ elif modulo.startswith("📊"):
                                                 sku_sub   = str(sub.get('sku_ingrediente', ''))
                                                 cant_sub  = float(sub.get('cant_real', 0) or 0)
                                                 muc_sub   = _muc_map.get(sku_sub, 0) or 0
+                                                # porcion==1: unidad → cant_ing unidades × cant_sub/unidad
+                                                # porcion!=1: lote  → fracción del lote = cant_ing / rendimiento
                                                 if _porcion == 1:
                                                     cant_efec = cant_ing * cant_sub
                                                 else:
@@ -9275,17 +9283,17 @@ elif modulo.startswith("📊"):
   td:first-child {{ text-align:left; }}
   .toggle {{ cursor:pointer; display:inline-flex; align-items:center; gap:6px; }}
   .toggle:hover .lbl {{ color:#d4a853; }}
-  .icon {{ font-size:0.7rem; color:#555; width:14px; display:inline-block; transition:transform 0.15s; }}
+  .icon {{ font-size:0.7rem; color:#555; width:14px; display:inline-block; }}
   .lbl {{ color:#e8e4de; }}
   .sub {{ font-size:0.68rem; color:#555; margin-top:2px; }}
-  .l1 td:first-child {{ padding-left:10px; }}
-  .l2 td:first-child {{ padding-left:28px; background:rgba(255,255,255,0.01); }}
-  .l3 td:first-child {{ padding-left:46px; background:rgba(255,255,255,0.02); color:#888; }}
+  .l1 td:first-child {{ padding-left:10px; font-weight:600; }}
+  .l2 td:first-child {{ padding-left:28px; }}
+  .l2 td {{ color:#aaa; }}
+  .l3 td:first-child {{ padding-left:46px; }}
   .l3 td {{ color:#666; font-size:0.75rem; }}
-  .green {{ color:#4caf7d; font-weight:600; }}
-  .amber {{ color:#e89c45; font-weight:600; }}
-  .red   {{ color:#e84545; font-weight:600; }}
-  .dim   {{ color:#555; }}
+  .green {{ color:#4caf7d !important; font-weight:600; }}
+  .amber {{ color:#e89c45 !important; font-weight:600; }}
+  .red   {{ color:#e84545 !important; font-weight:600; }}
   .pct   {{ color:#d4a853; }}
 </style>
 </head>
@@ -9307,117 +9315,84 @@ elif modulo.startswith("📊"):
 <script>
 const data = {_tree_json};
 const tbody = document.getElementById('tbody');
-const state = {{}};
 
 function fmt(n) {{ return '$' + Math.round(n).toLocaleString('es-CL'); }}
-function fmtPct(n) {{ return typeof n === 'number' ? n.toFixed(1) + '%' : ''; }}
 function colorCls(m) {{ return m >= 40 ? 'green' : m >= 25 ? 'amber' : 'red'; }}
 
-function renderRows(nodes, level) {{
-  nodes.forEach(node => {{
-    const hasChildren = node.children && node.children.length > 0;
-    const open = state[node.id] || false;
-    const tr = document.createElement('tr');
-    tr.className = 'l' + level;
+function makeRow(node, level, parentId) {{
+  const tr = document.createElement('tr');
+  tr.className = 'l' + level;
+  tr.dataset.parent = parentId || '';
+  tr.dataset.id = node.id;
+  if (level > 1) tr.style.display = 'none';
 
-    const labelCell = document.createElement('td');
-    if (hasChildren) {{
-      labelCell.innerHTML = `<div class="toggle" onclick="toggle('${{node.id}}')">
-        <span class="icon" id="icon_${{node.id}}">${{open ? '▼' : '▶'}}</span>
-        <div><div class="lbl">${{node.label}}</div><div class="sub">${{node.sub}}</div></div>
-      </div>`;
-    }} else {{
-      labelCell.innerHTML = `<div style="padding-left:4px"><div class="lbl dim">${{node.label}}</div><div class="sub">${{node.sub}}</div></div>`;
-    }}
-    tr.appendChild(labelCell);
+  const hasChildren = node.children && node.children.length > 0;
+  const labelCell = document.createElement('td');
+  if (hasChildren) {{
+    labelCell.innerHTML = `<div class="toggle" onclick="toggle('${{node.id}}')">
+      <span class="icon" id="icon_${{node.id}}">▶</span>
+      <div><div class="lbl">${{node.label}}</div><div class="sub">${{node.sub}}</div></div>
+    </div>`;
+  }} else {{
+    labelCell.innerHTML = `<div style="padding-left:4px">
+      <div class="lbl">${{node.label}}</div>
+      <div class="sub">${{node.sub}}</div>
+    </div>`;
+  }}
+  tr.appendChild(labelCell);
 
-    const pctCell = document.createElement('td');
-    pctCell.className = 'pct';
-    pctCell.textContent = typeof node.pct === 'number' ? node.pct.toFixed(1) + '%' : '';
-    tr.appendChild(pctCell);
+  const pctCell = document.createElement('td');
+  pctCell.className = 'pct';
+  pctCell.textContent = typeof node.pct === 'number' ? node.pct.toFixed(1) + '%' : '';
+  tr.appendChild(pctCell);
 
-    [node.cprot, node.ctotal, node.pventa, node.mc].forEach(v => {{
-      const td = document.createElement('td');
-      td.className = 'dim';
-      td.textContent = typeof v === 'number' ? fmt(v) : '';
-      tr.appendChild(td);
-    }});
-
-    const mgTd = document.createElement('td');
-    mgTd.className = typeof node.margen === 'number' ? colorCls(node.margen) : 'dim';
-    mgTd.textContent = typeof node.margen === 'number' ? node.margen.toFixed(1) + '%' : '';
-    tr.appendChild(mgTd);
-
-    tbody.appendChild(tr);
-    tr.id = 'row_' + node.id;
-
-    if (hasChildren) {{
-      const childGroup = document.createElement('tbody');
-      childGroup.id = 'grp_' + node.id;
-      childGroup.style.display = open ? '' : 'none';
-      tbody.parentElement.appendChild(childGroup);
-      renderInto(childGroup, node.children, level + 1);
-    }}
+  [node.cprot, node.ctotal, node.pventa, node.mc].forEach(v => {{
+    const td = document.createElement('td');
+    td.textContent = typeof v === 'number' ? fmt(v) : '';
+    tr.appendChild(td);
   }});
+
+  const mgTd = document.createElement('td');
+  if (typeof node.margen === 'number') {{
+    mgTd.className = colorCls(node.margen);
+    mgTd.textContent = node.margen.toFixed(1) + '%';
+  }}
+  tr.appendChild(mgTd);
+  return tr;
 }}
 
-function renderInto(container, nodes, level) {{
+function buildTree(nodes, level, parentId) {{
   nodes.forEach(node => {{
-    const hasChildren = node.children && node.children.length > 0;
-    const open = state[node.id] || false;
-    const tr = document.createElement('tr');
-    tr.className = 'l' + level;
-    tr.id = 'row_' + node.id;
-
-    const labelCell = document.createElement('td');
-    if (hasChildren) {{
-      labelCell.innerHTML = `<div class="toggle" onclick="toggle('${{node.id}}')">
-        <span class="icon" id="icon_${{node.id}}">${{open ? '▼' : '▶'}}</span>
-        <div><div class="lbl">${{node.label}}</div><div class="sub">${{node.sub}}</div></div>
-      </div>`;
-    }} else {{
-      labelCell.innerHTML = `<div style="padding-left:4px"><div class="lbl">${{node.label}}</div><div class="sub">${{node.sub}}</div></div>`;
-    }}
-    tr.appendChild(labelCell);
-
-    const pctCell = document.createElement('td');
-    pctCell.className = 'pct';
-    pctCell.textContent = typeof node.pct === 'number' ? node.pct.toFixed(1) + '%' : '';
-    tr.appendChild(pctCell);
-
-    [node.cprot, node.ctotal, node.pventa, node.mc].forEach(v => {{
-      const td = document.createElement('td');
-      td.className = 'dim';
-      td.textContent = typeof v === 'number' ? fmt(v) : '';
-      tr.appendChild(td);
-    }});
-
-    const mgTd = document.createElement('td');
-    mgTd.className = typeof node.margen === 'number' ? colorCls(node.margen) : 'dim';
-    mgTd.textContent = typeof node.margen === 'number' ? node.margen.toFixed(1) + '%' : '';
-    tr.appendChild(mgTd);
-
-    container.appendChild(tr);
-
-    if (hasChildren) {{
-      const childGroup = document.createElement('tbody');
-      childGroup.id = 'grp_' + node.id;
-      childGroup.style.display = open ? '' : 'none';
-      container.parentElement.appendChild(childGroup);
-      renderInto(childGroup, node.children, level + 1);
+    tbody.appendChild(makeRow(node, level, parentId));
+    if (node.children && node.children.length > 0) {{
+      buildTree(node.children, level + 1, node.id);
     }}
   }});
 }}
 
 function toggle(id) {{
-  state[id] = !state[id];
-  const grp = document.getElementById('grp_' + id);
   const icon = document.getElementById('icon_' + id);
-  if (grp) grp.style.display = state[id] ? '' : 'none';
-  if (icon) icon.textContent = state[id] ? '▼' : '▶';
+  const isOpen = icon.textContent === '▼';
+  icon.textContent = isOpen ? '▶' : '▼';
+
+  // Mostrar/ocultar hijos directos
+  const rows = tbody.querySelectorAll('tr[data-parent="' + id + '"]');
+  rows.forEach(r => {{
+    r.style.display = isOpen ? 'none' : '';
+    // Si estamos cerrando, cerrar también nietos
+    if (isOpen) {{
+      const childId = r.dataset.id;
+      const childIcon = document.getElementById('icon_' + childId);
+      if (childIcon && childIcon.textContent === '▼') {{
+        childIcon.textContent = '▶';
+        const grandchildren = tbody.querySelectorAll('tr[data-parent="' + childId + '"]');
+        grandchildren.forEach(g => g.style.display = 'none');
+      }}
+    }}
+  }});
 }}
 
-renderRows(data, 1);
+buildTree(data, 1, null);
 </script>
 </body>
 </html>
