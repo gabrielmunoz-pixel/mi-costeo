@@ -9167,8 +9167,8 @@ elif modulo.startswith("📊"):
                     # Resumen por plato — agrupa por proteína (no por ingrediente)
                     _df_resumen_src = _df_excel_det.groupby(
                         ['Plato','SKU Plato','Proteína','SKU Proteína','% Elección',
-                         'Costo Proteína Total','Costo Base Plato','Costo Total Plato',
-                         'Precio Venta','Margen Contribución','Margen %']
+                         'Costo Proteína','Costo Base Plato','Costo Total Plato',
+                         'Precio Venta','MC $','Margen %']
                     ).size().reset_index(name='n_ing')
 
                     _df_resumen = _df_resumen_src.groupby(['Plato','SKU Plato']).apply(lambda x: pd.Series({
@@ -9178,8 +9178,8 @@ elif modulo.startswith("📊"):
                         'Costo Mín':            x['Costo Total Plato'].min(),
                         'Costo Máx':            x['Costo Total Plato'].max(),
                         'Costo Prom Ponderado': (x['Costo Total Plato'] * x['% Elección']).sum() / x['% Elección'].sum() if x['% Elección'].sum() > 0 else 0,
-                        'MC Mín':               x['Margen Contribución'].min(),
-                        'MC Máx':               x['Margen Contribución'].max(),
+                        'MC Mín':               x['MC $'].min(),
+                        'MC Máx':               x['MC $'].max(),
                         'Margen % Mín':         x['Margen %'].min(),
                         'Margen % Máx':         x['Margen %'].max(),
                         'Margen % Ponderado':   (x['Margen %'] * x['% Elección']).sum() / x['% Elección'].sum() if x['% Elección'].sum() > 0 else 0,
