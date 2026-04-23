@@ -9014,16 +9014,32 @@ elif modulo.startswith("📊"):
                         if not _df_pventa.empty:
                             _pventa_map = dict(zip(_df_pventa['sku_producto'], pd.to_numeric(_df_pventa['precio_venta'], errors='coerce')))
                         _df_rec = get_recetas()
-                        _rec_prot = {}  # sku_plato → {sku_proteina: cant_real}
+                        # Construir mapa: sku_proteina → costo total (suma gramaje × MUC de sus ingredientes)
+                        _costo_proteina_map = {}  # sku_proteina → costo calculado
+                        _detalle_proteina_map = {}  # sku_proteina → [{ingrediente, cant, muc, costo}]
                         if not _df_rec.empty:
-                            _df_rec_op = _df_rec[pd.to_numeric(_df_rec['es_opcion'], errors='coerce').isin([1,2,3,6])].copy()
-                            for _, row in _df_rec_op.iterrows():
-                                sku_p = str(row['codigo_venta'])
-                                sku_i = str(row['sku_ingrediente'])
-                                cant  = float(row.get('cant_real', 0) or 0)
-                                if sku_p not in _rec_prot:
-                                    _rec_prot[sku_p] = {}
-                                _rec_prot[sku_p][sku_i] = cant
+                            # Recetas propias de cada proteína (codigo_venta = sku_proteina)
+                            _skus_proteinas = _df_proteinas['sku_proteina'].unique().tolist()
+                            _rec_propias = _df_rec[_df_rec['codigo_venta'].isin(_skus_proteinas)].copy()
+                            for sku_p in _skus_proteinas:
+                                _rec_p = _rec_propias[_rec_propias['codigo_venta'] == sku_p]
+                                costo_p = 0.0
+                                detalle = []
+                                for _, ing in _rec_p.iterrows():
+                                    sku_ing  = str(ing.get('sku_ingrediente', ''))
+                                    cant_ing = float(ing.get('cant_real', 0) or 0)
+                                    muc_ing  = _muc_map.get(sku_ing, 0) or 0
+                                    costo_ing = cant_ing * muc_ing
+                                    costo_p  += costo_ing
+                                    detalle.append({
+                                        'sku_ingrediente':    sku_ing,
+                                        'nombre_ingrediente': str(ing.get('nombre_ingrediente', sku_ing)),
+                                        'cant_real':          cant_ing,
+                                        'muc':                muc_ing,
+                                        'costo':              costo_ing,
+                                    })
+                                _costo_proteina_map[sku_p]  = costo_p
+                                _detalle_proteina_map[sku_p] = detalle
 
                         # 6. Construir resultado
                         _prot_rows = []
@@ -9042,11 +9058,14 @@ elif modulo.startswith("📊"):
                                 ventas_p  = float(prot['ventas_proteina'] or 0)
                                 pct_elect = (ventas_p / total_ventas_prot * 100) if total_ventas_prot > 0 else 0
 
-                                # Buscar gramaje en receta
-                                cant_receta = _rec_prot.get(sku_plato, {}).get(sku_prot, 0)
-                                muc_prot    = _muc_map.get(sku_prot, 0)
-                                costo_prot  = cant_receta * muc_prot if cant_receta and muc_prot else 0
+                                costo_prot  = _costo_proteina_map.get(sku_prot, 0)
+                                detalle_ing = _detalle_proteina_map.get(sku_prot, [])
                                 costo_total = costo_base + costo_prot
+
+                                # Para display: gramaje y MUC del ingrediente principal de la proteína
+                                _ing_principal = detalle_ing[0] if detalle_ing else {}
+                                cant_receta = _ing_principal.get('cant_real', 0)
+                                muc_prot    = _ing_principal.get('muc', 0)
 
                                 precio_venta = _pventa_map.get(sku_plato, 0) or 0
                                 mc_prot      = precio_venta - costo_total if precio_venta > 0 else 0
@@ -9063,22 +9082,48 @@ elif modulo.startswith("📊"):
                                     'precio_venta':    precio_venta,
                                     'mc':              mc_prot,
                                     'margen_pct':      margen_prot,
+                                    'detalle_ing':     detalle_ing,
                                 })
-                                _excel_rows.append({
-                                    'Plato':               nom_plato,
-                                    'SKU Plato':           sku_plato,
-                                    'Proteína':            nom_prot,
-                                    'SKU Proteína':        sku_prot,
-                                    '% Elección':          round(pct_elect, 1),
-                                    'Gramaje (g/un)':      cant_receta,
-                                    'MUC ($/g)':           round(muc_prot, 4),
-                                    'Costo Proteína':      round(costo_prot, 0),
-                                    'Costo Base':          round(costo_base, 0),
-                                    'Costo Total Plato':   round(costo_total, 0),
-                                    'Precio Venta':        round(precio_venta, 0),
-                                    'Margen Contribución': round(mc_prot, 0),
-                                    'Margen %':            round(margen_prot, 1),
-                                })
+                                # Una fila por ingrediente de la proteína (base de datos)
+                                if detalle_ing:
+                                    for _ing in detalle_ing:
+                                        _excel_rows.append({
+                                            'Plato':               nom_plato,
+                                            'SKU Plato':           sku_plato,
+                                            'Proteína':            nom_prot,
+                                            'SKU Proteína':        sku_prot,
+                                            '% Elección':          round(pct_elect, 1),
+                                            'Ingrediente':         _ing['nombre_ingrediente'],
+                                            'SKU Ingrediente':     _ing['sku_ingrediente'],
+                                            'Gramaje (g/un)':      _ing['cant_real'],
+                                            'MUC ($/g)':           round(_ing['muc'], 4),
+                                            'Costo Ingrediente':   round(_ing['costo'], 0),
+                                            'Costo Proteína Total':round(costo_prot, 0),
+                                            'Costo Base Plato':    round(costo_base, 0),
+                                            'Costo Total Plato':   round(costo_total, 0),
+                                            'Precio Venta':        round(precio_venta, 0),
+                                            'Margen Contribución': round(mc_prot, 0),
+                                            'Margen %':            round(margen_prot, 1),
+                                        })
+                                else:
+                                    _excel_rows.append({
+                                        'Plato':               nom_plato,
+                                        'SKU Plato':           sku_plato,
+                                        'Proteína':            nom_prot,
+                                        'SKU Proteína':        sku_prot,
+                                        '% Elección':          round(pct_elect, 1),
+                                        'Ingrediente':         '⚠️ Sin receta',
+                                        'SKU Ingrediente':     '',
+                                        'Gramaje (g/un)':      0,
+                                        'MUC ($/g)':           0,
+                                        'Costo Ingrediente':   0,
+                                        'Costo Proteína Total':0,
+                                        'Costo Base Plato':    round(costo_base, 0),
+                                        'Costo Total Plato':   round(costo_total, 0),
+                                        'Precio Venta':        round(precio_venta, 0),
+                                        'Margen Contribución': round(mc_prot, 0),
+                                        'Margen %':            round(margen_prot, 1),
+                                    })
 
                             _prot_rows.append({
                                 'sku_plato': sku_plato,
