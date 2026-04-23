@@ -8935,46 +8935,38 @@ elif modulo.startswith("📊"):
             if st.button("▶ Calcular Costo por Proteína", key='btn_prot'):
                 with st.spinner("Calculando..."):
                     # 1. Obtener platos con opciones de proteína (BA.020, BA.250, BA.260)
-                    _fl_prot = f"AND UPPER(local) = UPPER('{_prot_local}')" if _prot_local != 'Todos' else ''
-                    _q_platos_prot = f"""
-                        SELECT DISTINCT v_padre.sku_producto, v_padre.nombre_producto,
-                               v_padre.ab_categoria
+                    _fl_prot = f"AND UPPER(v_padre.local) = UPPER('{_prot_local}')" if _prot_local != 'Todos' else ''
+                    # Una sola query fusionada para platos y proteínas
+                    _q_combo = f"""
+                        SELECT
+                            v_padre.sku_producto       AS sku_plato,
+                            v_padre.nombre_producto    AS nombre_plato,
+                            v_padre.ab_categoria,
+                            v_op.sku_producto          AS sku_proteina,
+                            v_op.nombre_producto       AS nombre_proteina,
+                            SUM(v_op.cantidad_vendida) AS ventas_proteina
                         FROM ventas v_padre
                         JOIN ventas v_op
-                          ON v_padre.id_orden = v_op.id_orden
+                          ON v_padre.id_orden     = v_op.id_orden
                          AND v_padre.ab_categoria = v_op.ab_categoria
-                         AND v_op.es_opcion = true
-                         AND v_op.ba_opcion IN ('BA.020','BA.250','BA.260')
+                         AND v_op.es_opcion       = true
+                         AND v_op.ba_opcion       IN ('BA.020','BA.250','BA.260')
                         WHERE v_padre.es_opcion = false
                           AND v_padre.fecha_venta BETWEEN '{_prot_fi}' AND '{_prot_ff}'
                           {_fl_prot}
-                        ORDER BY v_padre.nombre_producto
+                        GROUP BY v_padre.sku_producto, v_padre.nombre_producto,
+                                 v_padre.ab_categoria, v_op.sku_producto, v_op.nombre_producto
+                        ORDER BY v_padre.nombre_producto, ventas_proteina DESC
                     """
-                    _df_platos_prot = run_query(_q_platos_prot)
+                    _df_combo = run_query(_q_combo)
 
-                    if _df_platos_prot.empty:
+                    if _df_combo.empty:
                         st.warning("No se encontraron platos con opciones de proteína en el período.")
                         st.session_state.pop('prot_data', None)
                     else:
-                        # 2. Obtener proteínas disponibles por plato
-                        _q_proteinas = f"""
-                            SELECT DISTINCT v_padre.sku_producto AS sku_plato,
-                                   v_op.sku_producto AS sku_proteina,
-                                   v_op.nombre_producto AS nombre_proteina,
-                                   SUM(v_op.cantidad_vendida) AS ventas_proteina
-                            FROM ventas v_padre
-                            JOIN ventas v_op
-                              ON v_padre.id_orden = v_op.id_orden
-                             AND v_padre.ab_categoria = v_op.ab_categoria
-                             AND v_op.es_opcion = true
-                             AND v_op.ba_opcion IN ('BA.020','BA.250','BA.260')
-                            WHERE v_padre.es_opcion = false
-                              AND v_padre.fecha_venta BETWEEN '{_prot_fi}' AND '{_prot_ff}'
-                              {_fl_prot}
-                            GROUP BY v_padre.sku_producto, v_op.sku_producto, v_op.nombre_producto
-                            ORDER BY v_padre.sku_producto, ventas_proteina DESC
-                        """
-                        _df_proteinas = run_query(_q_proteinas)
+                        _df_platos_prot = _df_combo[['sku_plato','nombre_plato','ab_categoria']].drop_duplicates().rename(
+                            columns={'sku_plato':'sku_producto','nombre_plato':'nombre_producto'})
+                        _df_proteinas = _df_combo[['sku_plato','sku_proteina','nombre_proteina','ventas_proteina']].copy()
 
                         # 3. Calcular costo base (sin proteína) por plato
                         _costo_base = calcular_costo_platos(str(_prot_fi), str(_prot_ff), _prot_local)
@@ -9147,19 +9139,25 @@ elif modulo.startswith("📊"):
                     import io as _io2
                     _wb_buf = _io2.BytesIO()
                     _df_excel_det = pd.DataFrame(_excel_rows)
-                    # Resumen por plato
-                    _df_resumen = _df_excel_det.groupby(['Plato','SKU Plato']).apply(lambda x: pd.Series({
-                        'N° Proteínas':          len(x),
-                        'Precio Venta':          x['Precio Venta'].iloc[0],
-                        'Costo Base':            x['Costo Base'].iloc[0],
-                        'Costo Mín':             x['Costo Total Plato'].min(),
-                        'Costo Máx':             x['Costo Total Plato'].max(),
-                        'Costo Prom Ponderado':  (x['Costo Total Plato'] * x['% Elección']).sum() / x['% Elección'].sum() if x['% Elección'].sum() > 0 else 0,
-                        'MC Mín':                x['Margen Contribución'].min(),
-                        'MC Máx':                x['Margen Contribución'].max(),
-                        'Margen % Mín':          x['Margen %'].min(),
-                        'Margen % Máx':          x['Margen %'].max(),
-                        'Margen % Ponderado':    (x['Margen %'] * x['% Elección']).sum() / x['% Elección'].sum() if x['% Elección'].sum() > 0 else 0,
+                    # Resumen por plato — agrupa por proteína (no por ingrediente)
+                    _df_resumen_src = _df_excel_det.groupby(
+                        ['Plato','SKU Plato','Proteína','SKU Proteína','% Elección',
+                         'Costo Proteína Total','Costo Base Plato','Costo Total Plato',
+                         'Precio Venta','Margen Contribución','Margen %']
+                    ).size().reset_index(name='n_ing')
+
+                    _df_resumen = _df_resumen_src.groupby(['Plato','SKU Plato']).apply(lambda x: pd.Series({
+                        'N° Proteínas':         x['Proteína'].nunique(),
+                        'Precio Venta':         x['Precio Venta'].iloc[0],
+                        'Costo Base Plato':     x['Costo Base Plato'].iloc[0],
+                        'Costo Mín':            x['Costo Total Plato'].min(),
+                        'Costo Máx':            x['Costo Total Plato'].max(),
+                        'Costo Prom Ponderado': (x['Costo Total Plato'] * x['% Elección']).sum() / x['% Elección'].sum() if x['% Elección'].sum() > 0 else 0,
+                        'MC Mín':               x['Margen Contribución'].min(),
+                        'MC Máx':               x['Margen Contribución'].max(),
+                        'Margen % Mín':         x['Margen %'].min(),
+                        'Margen % Máx':         x['Margen %'].max(),
+                        'Margen % Ponderado':   (x['Margen %'] * x['% Elección']).sum() / x['% Elección'].sum() if x['% Elección'].sum() > 0 else 0,
                     })).reset_index()
                     with pd.ExcelWriter(_wb_buf, engine='openpyxl') as _wr:
                         _df_excel_det.to_excel(_wr, sheet_name='Base Ingredientes', index=False)
