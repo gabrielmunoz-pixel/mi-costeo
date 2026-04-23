@@ -9054,7 +9054,12 @@ elif modulo.startswith("📊"):
 
                                 # Cantidad que el plato padre usa de esta proteína
                                 _cant_en_plato = 1.0
-                                if not _rec_padre.empty:
+                                # HAC-021 y HAC-022 llevan doble hamburguesa (no otras proteínas)
+                                _DOBLE_PROT = {'HAC-021', 'HAC-022'}
+                                _nom_prot_lower = str(_df_proteinas[_df_proteinas['sku_proteina']==sku_p]['nombre_proteina'].values[0] if len(_df_proteinas[_df_proteinas['sku_proteina']==sku_p]) else '').lower()
+                                if sku_plato_c in _DOBLE_PROT and 'hamburgues' in _nom_prot_lower:
+                                    _cant_en_plato = 2.0
+                                elif not _rec_padre.empty:
                                     _rp = _rec_padre[
                                         (_rec_padre['codigo_venta'] == sku_plato_c) &
                                         (_rec_padre['sku_ingrediente'] == sku_p)
