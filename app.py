@@ -6837,7 +6837,15 @@ if modulo.startswith("📦"):
                           AND local IS NOT NULL
                         GROUP BY local, origen, sku_producto
                     """, {'fi': str(_rv_fi), 'ff': str(_rv_ff)})
+                    _rv_df_aliva = run_query("""
+                        SELECT local, SUM(monto_total) AS monto
+                        FROM ventas_aliva
+                        WHERE fecha BETWEEN :fi AND :ff
+                          AND local IS NOT NULL
+                        GROUP BY local
+                    """, {'fi': str(_rv_fi), 'ff': str(_rv_ff)})
                     st.session_state['rv_data'] = _rv_df_raw
+                    st.session_state['rv_data_aliva'] = _rv_df_aliva
                     st.session_state['rv_periodo_fi'] = str(_rv_fi)
                     st.session_state['rv_periodo_ff'] = str(_rv_ff)
 
@@ -6917,6 +6925,32 @@ if modulo.startswith("📦"):
                 st.markdown("<div class='section-label'>🍺 Categorías Bar</div>", unsafe_allow_html=True)
                 st.markdown(_render_html_table(_rv_pivot2, 'Categoría'), unsafe_allow_html=True)
 
+                st.markdown("<div style='margin-top:1.5rem'></div>", unsafe_allow_html=True)
+
+                # ── Tabla 3: Venta Aliva acumulada ──────────────────────────
+                _rv_df_aliva = st.session_state.get('rv_data_aliva', pd.DataFrame())
+                if _rv_df_aliva is not None and not _rv_df_aliva.empty:
+                    _rv_df_aliva['monto'] = pd.to_numeric(_rv_df_aliva['monto'], errors='coerce').fillna(0)
+                    # Construir tabla con locales en orden canónico como columnas
+                    _aliva_row = {loc: 0.0 for loc in _rv_locales_ord}
+                    for _, _ar in _rv_df_aliva.iterrows():
+                        _loc = str(_ar['local']).strip()
+                        if _loc in _aliva_row:
+                            _aliva_row[_loc] = float(_ar['monto'])
+                    _rv_pivot3 = pd.DataFrame(
+                        [_aliva_row],
+                        index=['Venta Aliva']
+                    )
+                    # Solo columnas con datos
+                    _rv_pivot3 = _rv_pivot3[[c for c in _rv_locales_ord if c in _rv_pivot3.columns]]
+                    _rv_pivot3['Total'] = _rv_pivot3.sum(axis=1)
+                    _rv_pivot3 = pd.concat([_rv_pivot3, _rv_pivot3.sum().rename('Total general').to_frame().T])
+
+                    st.markdown("<div class='section-label'>🏪 Venta Aliva (acumulada)</div>", unsafe_allow_html=True)
+                    st.markdown(_render_html_table(_rv_pivot3, 'Canal'), unsafe_allow_html=True)
+                else:
+                    _rv_pivot3 = pd.DataFrame()
+
                 # ── Descarga Excel ───────────────────────────────────────────
                 st.markdown("<div style='margin-top:1rem'></div>", unsafe_allow_html=True)
                 import io as _io_rv
@@ -6973,6 +7007,10 @@ if modulo.startswith("📦"):
                 ws_b = _wbrv.create_sheet('Categorías Bar')
                 ws_b.sheet_properties.tabColor = '2E7D32'
                 _rv_write_pivot(ws_b, _rv_pivot2, f'Categorías Bar — {_rv_fi} al {_rv_ff}')
+                if not _rv_pivot3.empty:
+                    ws_a = _wbrv.create_sheet('Venta Aliva')
+                    ws_a.sheet_properties.tabColor = 'D4A853'
+                    _rv_write_pivot(ws_a, _rv_pivot3, f'Venta Aliva — {_rv_fi} al {_rv_ff}')
                 _wbrv.save(_rv_buf); _rv_buf.seek(0)
 
                 st.download_button(
