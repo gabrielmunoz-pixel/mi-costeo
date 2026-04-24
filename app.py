@@ -6789,10 +6789,11 @@ if modulo.startswith("📦"):
         # Forma de pago → Salón
         _SALON_PAGOS = {
             'amipass','cuenta casa','getnet pdv','efectivo',
-            'tarjeta credito','tarjeta crédito','tarjeta debito','tarjeta débito'
+            'tarjeta credito','tarjeta crédito',
+            'tarjeta debito','tarjeta débito'
         }
-
-        # SKU → categoría bar
+        # Todo lo que NO esté en _SALON_PAGOS es Delivery
+        # UberEats, Rappi, PedidosYa, PedidosYa Vouchers, PedidosYa Cash Collection → Delivery
         _CAT_BAR_MAP = {}
         for _sku_prefix, _cat in [
             ('BAJ','Bajativo'),('BEB','Bebidas'),('BET','Bebidas'),
@@ -6848,9 +6849,9 @@ if modulo.startswith("📦"):
             if not _rv_df_raw.empty:
                 _rv_df_raw['monto'] = pd.to_numeric(_rv_df_raw['monto'], errors='coerce').fillna(0)
 
-                # Clasificar tipo_venta
+                # Clasificar tipo_venta — null/vacío → Delivery
                 _rv_df_raw['tipo_venta'] = _rv_df_raw['forma_pago'].apply(
-                    lambda x: 'Venta Salón' if str(x).strip().lower() in _SALON_PAGOS else 'Venta Delivery'
+                    lambda x: 'Venta Salón' if pd.notna(x) and str(x).strip().lower() in _SALON_PAGOS else 'Venta Delivery'
                 )
 
                 # Clasificar categoría bar
