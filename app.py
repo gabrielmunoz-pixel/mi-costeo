@@ -6786,14 +6786,7 @@ if modulo.startswith("📦"):
         _LOCALES_ORDER = ['Vitacura','Las Condes','Chicureo','La Dehesa','Macul',
                           'La Reina','Quilin','Nueva Providencia','Pedro de Valdivia','Los Trapenses']
 
-        # Forma de pago → Salón
-        _SALON_PAGOS = {
-            'amipass','cuenta casa','getnet pdv','efectivo',
-            'tarjeta credito','tarjeta crédito',
-            'tarjeta debito','tarjeta débito'
-        }
-        # Todo lo que NO esté en _SALON_PAGOS es Delivery
-        # UberEats, Rappi, PedidosYa, PedidosYa Vouchers, PedidosYa Cash Collection → Delivery
+        # origen vacío/null = Venta Salón, con valor (UberEats, Rappi, etc.) = Venta Delivery
         _CAT_BAR_MAP = {}
         for _sku_prefix, _cat in [
             ('BAJ','Bajativo'),('BEB','Bebidas'),('BET','Bebidas'),
