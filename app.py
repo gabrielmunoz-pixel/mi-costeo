@@ -3203,7 +3203,7 @@ if modulo.startswith("📦"):
     </div>
     """, unsafe_allow_html=True)
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs(["📖 Recetario", "🛒 Compras", "📈 Ventas", "🔀 Equivalencias SKU", "🔍 Auditoría Compras", "📦 Inventario / Uso", "🗂️ Clasificación", "🏷️ Auditoría Categorías", "🔗 Conciliador", "🏢 Proveedores"])
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11 = st.tabs(["📖 Recetario", "🛒 Compras", "📈 Ventas", "🔀 Equivalencias SKU", "🔍 Auditoría Compras", "📦 Inventario / Uso", "🗂️ Clasificación", "🏷️ Auditoría Categorías", "🔗 Conciliador", "🏢 Proveedores", "📊 Resumen Ventas"])
 
     with tab1:
         _rt1, _rt2 = st.tabs(["📥 Carga Masiva", "✏️ Editor de Recetas"])
@@ -6779,9 +6779,232 @@ if modulo.startswith("📦"):
                     )
                     st.markdown("---")
 
-# ============================================================
-# MÓDULO: EXPLOSIÓN MRP (eliminado — ahora en pestaña de Gestión de Datos)
-# ============================================================
+# ── Tab 11: Resumen de Ventas ─────────────────────────────────────────────
+    with tab11:
+        st.markdown("#### 📊 Resumen de Ventas por Local")
+
+        _LOCALES_ORDER = ['Vitacura','Las Condes','Chicureo','La Dehesa','Macul',
+                          'La Reina','Quilin','Nueva Providencia','Pedro de Valdivia','Los Trapenses']
+
+        # Forma de pago → Salón
+        _SALON_PAGOS = {
+            'amipass','cuenta casa','getnet pdv','efectivo',
+            'tarjeta credito','tarjeta crédito','tarjeta debito','tarjeta débito'
+        }
+
+        # SKU → categoría bar
+        _CAT_BAR_MAP = {}
+        for _sku_prefix, _cat in [
+            ('BAJ','Bajativo'),('BEB','Bebidas'),('BET','Bebidas'),
+            ('CAF','Cafetería'),('CER','Cervezas'),('COC','Cocteles'),
+            ('ESP','Espumantes'),('JUG','Jugos/Limonadas'),('LIM','Jugos/Limonadas'),
+            ('PIS','Pisco'),('POS','Dulce'),('RON','Ron'),
+            ('TEQ','Tequila'),('VIN','Vinos'),('VOD','Vodka'),('WHI','Whisky'),
+        ]:
+            _CAT_BAR_MAP[_sku_prefix] = _cat
+
+        # SKUs individuales que sobreescriben el prefijo (de la fórmula original)
+        _CAT_BAR_SKU = {}
+        for _s in ['BEB-001','BEB-002','BEB-003','BEB-004','BEB-005','BEB-006','BEB-007','BEB-008',
+                   'BEB-009','BEB-010','BEB-011','BEB-012','BEB-013','BEB-014','BEB-015','BEB-016',
+                   'BEB-017','BEB-018','BEB-019','BEB-020','BEB-021']:
+            _CAT_BAR_SKU[_s] = 'Bebidas'
+        for _s in ['BET-001','BET-002','BET-003','BET-004','BET-005','BET-006',
+                   'BET-007','BET-008','BET-009','BET-010','BET-011','BET-012']:
+            _CAT_BAR_SKU[_s] = 'Bebidas'
+        for _s in ['PIS-001','PIS-002']: _CAT_BAR_SKU[_s] = 'Pisco'
+
+        _rv_col1, _rv_col2, _rv_col3 = st.columns([2,2,1])
+        with _rv_col1:
+            _rv_fi = st.date_input("Desde", value=date(datetime.now().year, datetime.now().month, 1), key='rv_fi')
+        with _rv_col2:
+            _rv_ff = st.date_input("Hasta", value=date.today(), key='rv_ff')
+        with _rv_col3:
+            st.markdown("<div style='margin-top:1.6rem'></div>", unsafe_allow_html=True)
+            _rv_btn = st.button("Generar", key='rv_gen', use_container_width=True)
+
+        if _rv_btn or st.session_state.get('rv_data'):
+            if _rv_btn:
+                with st.spinner("Consultando ventas..."):
+                    _rv_q = f"""
+                        SELECT
+                            local,
+                            forma_pago,
+                            sku_producto,
+                            SUM(venta_real) AS venta_real
+                        FROM ventas
+                        WHERE fecha_venta BETWEEN '{_rv_fi}' AND '{_rv_ff}'
+                          AND es_opcion = false
+                          AND venta_real > 0
+                        GROUP BY local, forma_pago, sku_producto
+                    """
+                    _rv_df_raw = run_query(_rv_q)
+                    st.session_state['rv_data'] = _rv_df_raw
+                    st.session_state['rv_fi'] = str(_rv_fi)
+                    st.session_state['rv_ff'] = str(_rv_ff)
+
+            _rv_df_raw = st.session_state.get('rv_data', pd.DataFrame())
+
+            if not _rv_df_raw.empty:
+                _rv_df_raw['venta_real'] = pd.to_numeric(_rv_df_raw['venta_real'], errors='coerce').fillna(0)
+
+                # Clasificar tipo_venta
+                _rv_df_raw['tipo_venta'] = _rv_df_raw['forma_pago'].apply(
+                    lambda x: 'Venta Salón' if str(x).strip().lower() in _SALON_PAGOS else 'Venta Delivery'
+                )
+
+                # Clasificar categoría bar
+                def _cat_bar(sku):
+                    sku = str(sku).strip()
+                    if sku in _CAT_BAR_SKU: return _CAT_BAR_SKU[sku]
+                    pref = sku.split('-')[0] if '-' in sku else ''
+                    return _CAT_BAR_MAP.get(pref, None)
+
+                _rv_df_raw['cat_bar'] = _rv_df_raw['sku_producto'].apply(_cat_bar)
+
+                # Ordenar locales
+                _rv_locales_presentes = [l for l in _LOCALES_ORDER if l in _rv_df_raw['local'].unique()]
+                _rv_otros = [l for l in _rv_df_raw['local'].unique() if l not in _LOCALES_ORDER]
+                _rv_locales_ord = _rv_locales_presentes + _rv_otros
+
+                st.markdown("---")
+                _rv_t1, _rv_t2 = st.tabs(["🏠 Salón vs Delivery", "🍺 Categorías Bar"])
+
+                # ── Vista 1: Salón vs Delivery ──────────────────────────────
+                with _rv_t1:
+                    _rv_pivot1 = _rv_df_raw.groupby(['tipo_venta','local'])['venta_real'].sum().reset_index()
+                    _rv_pivot1 = _rv_pivot1.pivot(index='tipo_venta', columns='local', values='venta_real').fillna(0)
+                    # Ordenar columnas
+                    _rv_pivot1 = _rv_pivot1.reindex(columns=[c for c in _rv_locales_ord if c in _rv_pivot1.columns])
+                    # Ordenar filas
+                    _rv_pivot1 = _rv_pivot1.reindex([r for r in ['Venta Salón','Venta Delivery'] if r in _rv_pivot1.index])
+                    _rv_pivot1['Total'] = _rv_pivot1.sum(axis=1)
+                    _rv_total1 = _rv_pivot1.sum().rename('Total general')
+                    _rv_pivot1 = pd.concat([_rv_pivot1, _rv_total1.to_frame().T])
+
+                    # Render tabla HTML
+                    def _fmt_clp(v):
+                        try: return f"${int(round(v)):,}".replace(',','.')
+                        except: return '-'
+
+                    _cols1 = _rv_pivot1.columns.tolist()
+                    _html1 = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:0.8rem">'
+                    _html1 += '<thead><tr><th style="text-align:left;padding:8px 10px;background:#1F3864;color:#fff;border-radius:4px 0 0 0">Tipo Venta</th>'
+                    for _c in _cols1:
+                        _html1 += f'<th style="text-align:right;padding:8px 10px;background:#1F3864;color:#fff">{_c}</th>'
+                    _html1 += '</tr></thead><tbody>'
+                    for _ri, (_idx, _row) in enumerate(_rv_pivot1.iterrows()):
+                        _is_total = _idx == 'Total general'
+                        _bg = '#1F3864' if _is_total else ('#F5F5F5' if _ri%2==0 else '#FFFFFF')
+                        _fc = '#FFFFFF' if _is_total else '#222222'
+                        _fw = 'bold' if _is_total else 'normal'
+                        _html1 += f'<tr><td style="padding:7px 10px;background:{_bg};color:{_fc};font-weight:{_fw}">{_idx}</td>'
+                        for _c in _cols1:
+                            _v = _row[_c]
+                            _html1 += f'<td style="text-align:right;padding:7px 10px;background:{_bg};color:{_fc};font-weight:{_fw}">{_fmt_clp(_v)}</td>'
+                        _html1 += '</tr>'
+                    _html1 += '</tbody></table></div>'
+                    st.markdown(_html1, unsafe_allow_html=True)
+
+                # ── Vista 2: Categorías Bar ──────────────────────────────────
+                with _rv_t2:
+                    _rv_bar = _rv_df_raw[_rv_df_raw['cat_bar'].notna()].copy()
+                    _rv_pivot2 = _rv_bar.groupby(['cat_bar','local'])['venta_real'].sum().reset_index()
+                    _rv_pivot2 = _rv_pivot2.pivot(index='cat_bar', columns='local', values='venta_real').fillna(0)
+                    _rv_pivot2 = _rv_pivot2.reindex(columns=[c for c in _rv_locales_ord if c in _rv_pivot2.columns])
+                    _rv_pivot2 = _rv_pivot2.sort_values(_rv_pivot2.columns[0] if len(_rv_pivot2.columns) else 'Total', ascending=False)
+                    _rv_pivot2['Total'] = _rv_pivot2.sum(axis=1)
+                    _rv_total2 = _rv_pivot2.sum().rename('Total general')
+                    _rv_pivot2 = pd.concat([_rv_pivot2, _rv_total2.to_frame().T])
+
+                    _cols2 = _rv_pivot2.columns.tolist()
+                    _html2 = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:0.8rem">'
+                    _html2 += '<thead><tr><th style="text-align:left;padding:8px 10px;background:#1F3864;color:#fff">Categoría</th>'
+                    for _c in _cols2:
+                        _html2 += f'<th style="text-align:right;padding:8px 10px;background:#1F3864;color:#fff">{_c}</th>'
+                    _html2 += '</tr></thead><tbody>'
+                    for _ri, (_idx, _row) in enumerate(_rv_pivot2.iterrows()):
+                        _is_total = _idx == 'Total general'
+                        _bg = '#1F3864' if _is_total else ('#F5F5F5' if _ri%2==0 else '#FFFFFF')
+                        _fc = '#FFFFFF' if _is_total else '#222222'
+                        _fw = 'bold' if _is_total else 'normal'
+                        _html2 += f'<tr><td style="padding:7px 10px;background:{_bg};color:{_fc};font-weight:{_fw}">{_idx}</td>'
+                        for _c in _cols2:
+                            _v = _row[_c]
+                            _html2 += f'<td style="text-align:right;padding:7px 10px;background:{_bg};color:{_fc};font-weight:{_fw}">{_fmt_clp(_v)}</td>'
+                        _html2 += '</tr>'
+                    _html2 += '</tbody></table></div>'
+                    st.markdown(_html2, unsafe_allow_html=True)
+
+                # ── Descarga Excel ───────────────────────────────────────────
+                st.markdown("<div style='margin-top:1rem'></div>", unsafe_allow_html=True)
+                import io as _io_rv
+                from openpyxl import Workbook as _WBrv
+                from openpyxl.styles import Font as _Frv, PatternFill as _PFrv, Alignment as _Arv
+                from openpyxl.utils import get_column_letter as _gclrv
+
+                _rv_buf = _io_rv.BytesIO()
+                _wbrv = _WBrv()
+
+                def _rv_write_pivot(ws, pivot_df, title):
+                    ws.sheet_view.showGridLines = False
+                    cols = pivot_df.columns.tolist()
+                    # Title
+                    ws.merge_cells(f'A1:{_gclrv(len(cols)+1)}1')
+                    tc = ws.cell(row=1, column=1, value=title)
+                    tc.font = _Frv(name='Calibri', bold=True, size=12, color='FFFFFF')
+                    tc.fill = _PFrv('solid', start_color='1F3864', end_color='1F3864')
+                    tc.alignment = _Arv(horizontal='left', vertical='center')
+                    ws.row_dimensions[1].height = 26
+                    # Header
+                    ws.cell(row=2, column=1, value='').fill = _PFrv('solid', start_color='2E5090', end_color='2E5090')
+                    for ci, c in enumerate(cols, 2):
+                        cell = ws.cell(row=2, column=ci, value=c)
+                        cell.font = _Frv(name='Calibri', bold=True, size=9, color='FFFFFF')
+                        cell.fill = _PFrv('solid', start_color='2E5090', end_color='2E5090')
+                        cell.alignment = _Arv(horizontal='right', vertical='center')
+                    ws.row_dimensions[2].height = 24
+                    # Data
+                    for ri, (idx, row) in enumerate(pivot_df.iterrows()):
+                        er = ri + 3
+                        is_total = idx == 'Total general'
+                        bg = '1F3864' if is_total else ('F5F5F5' if ri%2==0 else 'FFFFFF')
+                        fc = 'FFFFFF' if is_total else '222222'
+                        cell = ws.cell(row=er, column=1, value=idx)
+                        cell.font = _Frv(name='Calibri', bold=is_total, size=9, color=fc)
+                        cell.fill = _PFrv('solid', start_color=bg, end_color=bg)
+                        cell.alignment = _Arv(horizontal='left', vertical='center')
+                        for ci, c in enumerate(cols, 2):
+                            cell = ws.cell(row=er, column=ci, value=row[c])
+                            cell.font = _Frv(name='Calibri', bold=is_total, size=9, color=fc)
+                            cell.fill = _PFrv('solid', start_color=bg, end_color=bg)
+                            cell.number_format = '$#,##0'
+                            cell.alignment = _Arv(horizontal='right', vertical='center')
+                        ws.row_dimensions[er].height = 16
+                    ws.column_dimensions['A'].width = 22
+                    for ci in range(2, len(cols)+2):
+                        ws.column_dimensions[_gclrv(ci)].width = 16
+                    ws.freeze_panes = 'A3'
+
+                ws_s = _wbrv.active; ws_s.title = 'Salón vs Delivery'
+                ws_s.sheet_properties.tabColor = '1F3864'
+                _rv_write_pivot(ws_s, _rv_pivot1, f'Venta Salón vs Delivery — {_rv_fi} al {_rv_ff}')
+                ws_b = _wbrv.create_sheet('Categorías Bar')
+                ws_b.sheet_properties.tabColor = '2E7D32'
+                _rv_write_pivot(ws_b, _rv_pivot2, f'Categorías Bar — {_rv_fi} al {_rv_ff}')
+                _wbrv.save(_rv_buf); _rv_buf.seek(0)
+
+                st.download_button(
+                    "📥 Exportar Excel",
+                    _rv_buf.getvalue(),
+                    f"Resumen_Ventas_{_rv_fi}_{_rv_ff}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key='rv_dl'
+                )
+            else:
+                st.info("No se encontraron ventas para el período seleccionado.")
+
+
 elif modulo.startswith("🧮"):
     st.markdown(f"""
     <div style="margin-bottom:1.5rem">
