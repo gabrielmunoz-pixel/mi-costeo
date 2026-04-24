@@ -6831,22 +6831,22 @@ if modulo.startswith("📦"):
                             local,
                             forma_pago,
                             sku_producto,
-                            SUM(venta_real) AS venta_real
+                            SUM(monto_venta_real) AS monto
                         FROM ventas
                         WHERE fecha_venta BETWEEN '{_rv_fi}' AND '{_rv_ff}'
                           AND es_opcion = false
-                          AND venta_real > 0
+                          AND monto_venta_real > 0
                         GROUP BY local, forma_pago, sku_producto
                     """
                     _rv_df_raw = run_query(_rv_q)
                     st.session_state['rv_data'] = _rv_df_raw
-                    st.session_state['rv_fi'] = str(_rv_fi)
-                    st.session_state['rv_ff'] = str(_rv_ff)
+                    st.session_state['rv_periodo_fi'] = str(_rv_fi)
+                    st.session_state['rv_periodo_ff'] = str(_rv_ff)
 
             _rv_df_raw = st.session_state.get('rv_data', pd.DataFrame())
 
             if not _rv_df_raw.empty:
-                _rv_df_raw['venta_real'] = pd.to_numeric(_rv_df_raw['venta_real'], errors='coerce').fillna(0)
+                _rv_df_raw['monto'] = pd.to_numeric(_rv_df_raw['monto'], errors='coerce').fillna(0)
 
                 # Clasificar tipo_venta
                 _rv_df_raw['tipo_venta'] = _rv_df_raw['forma_pago'].apply(
@@ -6872,8 +6872,8 @@ if modulo.startswith("📦"):
 
                 # ── Vista 1: Salón vs Delivery ──────────────────────────────
                 with _rv_t1:
-                    _rv_pivot1 = _rv_df_raw.groupby(['tipo_venta','local'])['venta_real'].sum().reset_index()
-                    _rv_pivot1 = _rv_pivot1.pivot(index='tipo_venta', columns='local', values='venta_real').fillna(0)
+                    _rv_pivot1 = _rv_df_raw.groupby(['tipo_venta','local'])['monto'].sum().reset_index()
+                    _rv_pivot1 = _rv_pivot1.pivot(index='tipo_venta', columns='local', values='monto').fillna(0)
                     # Ordenar columnas
                     _rv_pivot1 = _rv_pivot1.reindex(columns=[c for c in _rv_locales_ord if c in _rv_pivot1.columns])
                     # Ordenar filas
@@ -6909,8 +6909,8 @@ if modulo.startswith("📦"):
                 # ── Vista 2: Categorías Bar ──────────────────────────────────
                 with _rv_t2:
                     _rv_bar = _rv_df_raw[_rv_df_raw['cat_bar'].notna()].copy()
-                    _rv_pivot2 = _rv_bar.groupby(['cat_bar','local'])['venta_real'].sum().reset_index()
-                    _rv_pivot2 = _rv_pivot2.pivot(index='cat_bar', columns='local', values='venta_real').fillna(0)
+                    _rv_pivot2 = _rv_bar.groupby(['cat_bar','local'])['monto'].sum().reset_index()
+                    _rv_pivot2 = _rv_pivot2.pivot(index='cat_bar', columns='local', values='monto').fillna(0)
                     _rv_pivot2 = _rv_pivot2.reindex(columns=[c for c in _rv_locales_ord if c in _rv_pivot2.columns])
                     _rv_pivot2 = _rv_pivot2.sort_values(_rv_pivot2.columns[0] if len(_rv_pivot2.columns) else 'Total', ascending=False)
                     _rv_pivot2['Total'] = _rv_pivot2.sum(axis=1)
