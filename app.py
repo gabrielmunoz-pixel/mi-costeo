@@ -6820,19 +6820,19 @@ if modulo.startswith("📦"):
         if _rv_btn or st.session_state.get('rv_data'):
             if _rv_btn:
                 with st.spinner("Consultando ventas..."):
-                    _rv_q = f"""
+                    # Misma query que Informe Venta Diaria: sin filtro es_opcion ni monto>0,
+                    # solo local IS NOT NULL. Parametrizada para evitar SQL injection.
+                    _rv_df_raw = run_query("""
                         SELECT
                             local,
                             origen,
                             sku_producto,
                             SUM(monto_venta_real) AS monto
                         FROM ventas
-                        WHERE fecha_venta BETWEEN '{_rv_fi}' AND '{_rv_ff}'
-                          AND es_opcion = false
-                          AND monto_venta_real > 0
+                        WHERE fecha_venta BETWEEN :fi AND :ff
+                          AND local IS NOT NULL
                         GROUP BY local, origen, sku_producto
-                    """
-                    _rv_df_raw = run_query(_rv_q)
+                    """, {'fi': str(_rv_fi), 'ff': str(_rv_ff)})
                     st.session_state['rv_data'] = _rv_df_raw
                     st.session_state['rv_periodo_fi'] = str(_rv_fi)
                     st.session_state['rv_periodo_ff'] = str(_rv_ff)
