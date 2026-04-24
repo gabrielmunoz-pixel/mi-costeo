@@ -6830,14 +6830,14 @@ if modulo.startswith("📦"):
                     _rv_q = f"""
                         SELECT
                             local,
-                            forma_pago,
+                            origen,
                             sku_producto,
                             SUM(monto_venta_real) AS monto
                         FROM ventas
                         WHERE fecha_venta BETWEEN '{_rv_fi}' AND '{_rv_ff}'
                           AND es_opcion = false
                           AND monto_venta_real > 0
-                        GROUP BY local, forma_pago, sku_producto
+                        GROUP BY local, origen, sku_producto
                     """
                     _rv_df_raw = run_query(_rv_q)
                     st.session_state['rv_data'] = _rv_df_raw
@@ -6850,8 +6850,8 @@ if modulo.startswith("📦"):
                 _rv_df_raw['monto'] = pd.to_numeric(_rv_df_raw['monto'], errors='coerce').fillna(0)
 
                 # Clasificar tipo_venta — null/vacío → Delivery
-                _rv_df_raw['tipo_venta'] = _rv_df_raw['forma_pago'].apply(
-                    lambda x: 'Venta Salón' if pd.notna(x) and str(x).strip().lower() in _SALON_PAGOS else 'Venta Delivery'
+                _rv_df_raw['tipo_venta'] = _rv_df_raw['origen'].apply(
+                    lambda x: 'Venta Salón' if pd.isna(x) or str(x).strip() == '' else 'Venta Delivery'
                 )
 
                 # Clasificar categoría bar
