@@ -6784,7 +6784,10 @@ if modulo.startswith("📦"):
         st.markdown("#### 📊 Resumen de Ventas por Local")
 
         _LOCALES_ORDER = ['Vitacura','Las Condes','Chicureo','La Dehesa','Macul',
-                          'La Reina','Quilin','Nueva Providencia','Pedro de Valdivia','Los Trapenses']
+                          'La Reina','Quilin','Nueva Providencia','Providencia','Los Trapenses']
+
+        _CAT_BAR_ORDER = ['Cervezas','Bebidas','Jugos/Limonadas','Dulce','Cafetería',
+                          'Cocteles','Pisco','Vodka','Whisky','Ron','Bajativo','Espumantes','Vinos']
 
         # origen vacío/null = Venta Salón, con valor (UberEats, Rappi, etc.) = Venta Delivery
         _CAT_BAR_MAP = {}
@@ -6817,7 +6820,8 @@ if modulo.startswith("📦"):
             st.markdown("<div style='margin-top:1.6rem'></div>", unsafe_allow_html=True)
             _rv_btn = st.button("Generar", key='rv_gen', use_container_width=True)
 
-        if _rv_btn or st.session_state.get('rv_data'):
+        _rv_cached = st.session_state.get('rv_data')
+        if _rv_btn or (_rv_cached is not None and not _rv_cached.empty):
             if _rv_btn:
                 with st.spinner("Consultando ventas..."):
                     # Misma query que Informe Venta Diaria: sin filtro es_opcion ni monto>0,
@@ -6906,7 +6910,8 @@ if modulo.startswith("📦"):
                 _rv_pivot2 = _rv_pivot2.pivot(index='cat_bar', columns='local', values='monto').fillna(0)
                 _rv_pivot2 = _rv_pivot2.reindex(columns=[c for c in _rv_locales_ord if c in _rv_pivot2.columns])
                 _rv_pivot2['Total'] = _rv_pivot2.sum(axis=1)
-                _rv_pivot2 = _rv_pivot2.sort_values('Total', ascending=False)
+                # Ordenar filas según orden canónico de categorías Bar
+                _rv_pivot2 = _rv_pivot2.reindex([r for r in _CAT_BAR_ORDER if r in _rv_pivot2.index])
                 _rv_pivot2 = pd.concat([_rv_pivot2, _rv_pivot2.sum().rename('Total general').to_frame().T])
 
                 st.markdown("<div class='section-label'>🍺 Categorías Bar</div>", unsafe_allow_html=True)
