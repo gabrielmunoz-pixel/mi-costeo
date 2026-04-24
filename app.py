@@ -6861,74 +6861,56 @@ if modulo.startswith("📦"):
                 _rv_otros = [l for l in _rv_df_raw['local'].unique() if l not in _LOCALES_ORDER]
                 _rv_locales_ord = _rv_locales_presentes + _rv_otros
 
+                # ── Helper formato CLP ───────────────────────────────────────
+                def _fmt_clp(v):
+                    try: return f"${int(round(v)):,}".replace(',','.')
+                    except: return '-'
+
+                def _render_html_table(pivot_df, first_col_label):
+                    cols = pivot_df.columns.tolist()
+                    html = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:0.8rem">'
+                    html += f'<thead><tr><th style="text-align:left;padding:8px 10px;background:#1F3864;color:#fff;border-radius:4px 0 0 0">{first_col_label}</th>'
+                    for _c in cols:
+                        html += f'<th style="text-align:right;padding:8px 10px;background:#1F3864;color:#fff">{_c}</th>'
+                    html += '</tr></thead><tbody>'
+                    for _ri, (_idx, _row) in enumerate(pivot_df.iterrows()):
+                        _is_total = _idx == 'Total general'
+                        _bg = '#1F3864' if _is_total else ('#F5F5F5' if _ri%2==0 else '#FFFFFF')
+                        _fc = '#FFFFFF' if _is_total else '#222222'
+                        _fw = 'bold' if _is_total else 'normal'
+                        html += f'<tr><td style="padding:7px 10px;background:{_bg};color:{_fc};font-weight:{_fw}">{_idx}</td>'
+                        for _c in cols:
+                            html += f'<td style="text-align:right;padding:7px 10px;background:{_bg};color:{_fc};font-weight:{_fw}">{_fmt_clp(_row[_c])}</td>'
+                        html += '</tr>'
+                    html += '</tbody></table></div>'
+                    return html
+
                 st.markdown("---")
-                _rv_t1, _rv_t2 = st.tabs(["🏠 Salón vs Delivery", "🍺 Categorías Bar"])
 
-                # ── Vista 1: Salón vs Delivery ──────────────────────────────
-                with _rv_t1:
-                    _rv_pivot1 = _rv_df_raw.groupby(['tipo_venta','local'])['monto'].sum().reset_index()
-                    _rv_pivot1 = _rv_pivot1.pivot(index='tipo_venta', columns='local', values='monto').fillna(0)
-                    # Ordenar columnas
-                    _rv_pivot1 = _rv_pivot1.reindex(columns=[c for c in _rv_locales_ord if c in _rv_pivot1.columns])
-                    # Ordenar filas
-                    _rv_pivot1 = _rv_pivot1.reindex([r for r in ['Venta Salón','Venta Delivery'] if r in _rv_pivot1.index])
-                    _rv_pivot1['Total'] = _rv_pivot1.sum(axis=1)
-                    _rv_total1 = _rv_pivot1.sum().rename('Total general')
-                    _rv_pivot1 = pd.concat([_rv_pivot1, _rv_total1.to_frame().T])
+                # ── Pivot 1: Salón vs Delivery ───────────────────────────────
+                _rv_pivot1 = _rv_df_raw.groupby(['tipo_venta','local'])['monto'].sum().reset_index()
+                _rv_pivot1 = _rv_pivot1.pivot(index='tipo_venta', columns='local', values='monto').fillna(0)
+                _rv_pivot1 = _rv_pivot1.reindex(columns=[c for c in _rv_locales_ord if c in _rv_pivot1.columns])
+                _rv_pivot1 = _rv_pivot1.reindex([r for r in ['Venta Salón','Venta Delivery'] if r in _rv_pivot1.index])
+                _rv_pivot1['Total'] = _rv_pivot1.sum(axis=1)
+                _rv_pivot1 = pd.concat([_rv_pivot1, _rv_pivot1.sum().rename('Total general').to_frame().T])
 
-                    # Render tabla HTML
-                    def _fmt_clp(v):
-                        try: return f"${int(round(v)):,}".replace(',','.')
-                        except: return '-'
+                st.markdown("<div class='section-label'>🏠 Salón vs Delivery</div>", unsafe_allow_html=True)
+                st.markdown(_render_html_table(_rv_pivot1, 'Tipo Venta'), unsafe_allow_html=True)
 
-                    _cols1 = _rv_pivot1.columns.tolist()
-                    _html1 = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:0.8rem">'
-                    _html1 += '<thead><tr><th style="text-align:left;padding:8px 10px;background:#1F3864;color:#fff;border-radius:4px 0 0 0">Tipo Venta</th>'
-                    for _c in _cols1:
-                        _html1 += f'<th style="text-align:right;padding:8px 10px;background:#1F3864;color:#fff">{_c}</th>'
-                    _html1 += '</tr></thead><tbody>'
-                    for _ri, (_idx, _row) in enumerate(_rv_pivot1.iterrows()):
-                        _is_total = _idx == 'Total general'
-                        _bg = '#1F3864' if _is_total else ('#F5F5F5' if _ri%2==0 else '#FFFFFF')
-                        _fc = '#FFFFFF' if _is_total else '#222222'
-                        _fw = 'bold' if _is_total else 'normal'
-                        _html1 += f'<tr><td style="padding:7px 10px;background:{_bg};color:{_fc};font-weight:{_fw}">{_idx}</td>'
-                        for _c in _cols1:
-                            _v = _row[_c]
-                            _html1 += f'<td style="text-align:right;padding:7px 10px;background:{_bg};color:{_fc};font-weight:{_fw}">{_fmt_clp(_v)}</td>'
-                        _html1 += '</tr>'
-                    _html1 += '</tbody></table></div>'
-                    st.markdown(_html1, unsafe_allow_html=True)
+                st.markdown("<div style='margin-top:1.5rem'></div>", unsafe_allow_html=True)
 
-                # ── Vista 2: Categorías Bar ──────────────────────────────────
-                with _rv_t2:
-                    _rv_bar = _rv_df_raw[_rv_df_raw['cat_bar'].notna()].copy()
-                    _rv_pivot2 = _rv_bar.groupby(['cat_bar','local'])['monto'].sum().reset_index()
-                    _rv_pivot2 = _rv_pivot2.pivot(index='cat_bar', columns='local', values='monto').fillna(0)
-                    _rv_pivot2 = _rv_pivot2.reindex(columns=[c for c in _rv_locales_ord if c in _rv_pivot2.columns])
-                    _rv_pivot2 = _rv_pivot2.sort_values(_rv_pivot2.columns[0] if len(_rv_pivot2.columns) else 'Total', ascending=False)
-                    _rv_pivot2['Total'] = _rv_pivot2.sum(axis=1)
-                    _rv_total2 = _rv_pivot2.sum().rename('Total general')
-                    _rv_pivot2 = pd.concat([_rv_pivot2, _rv_total2.to_frame().T])
+                # ── Pivot 2: Categorías Bar ──────────────────────────────────
+                _rv_bar = _rv_df_raw[_rv_df_raw['cat_bar'].notna()].copy()
+                _rv_pivot2 = _rv_bar.groupby(['cat_bar','local'])['monto'].sum().reset_index()
+                _rv_pivot2 = _rv_pivot2.pivot(index='cat_bar', columns='local', values='monto').fillna(0)
+                _rv_pivot2 = _rv_pivot2.reindex(columns=[c for c in _rv_locales_ord if c in _rv_pivot2.columns])
+                _rv_pivot2['Total'] = _rv_pivot2.sum(axis=1)
+                _rv_pivot2 = _rv_pivot2.sort_values('Total', ascending=False)
+                _rv_pivot2 = pd.concat([_rv_pivot2, _rv_pivot2.sum().rename('Total general').to_frame().T])
 
-                    _cols2 = _rv_pivot2.columns.tolist()
-                    _html2 = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:0.8rem">'
-                    _html2 += '<thead><tr><th style="text-align:left;padding:8px 10px;background:#1F3864;color:#fff">Categoría</th>'
-                    for _c in _cols2:
-                        _html2 += f'<th style="text-align:right;padding:8px 10px;background:#1F3864;color:#fff">{_c}</th>'
-                    _html2 += '</tr></thead><tbody>'
-                    for _ri, (_idx, _row) in enumerate(_rv_pivot2.iterrows()):
-                        _is_total = _idx == 'Total general'
-                        _bg = '#1F3864' if _is_total else ('#F5F5F5' if _ri%2==0 else '#FFFFFF')
-                        _fc = '#FFFFFF' if _is_total else '#222222'
-                        _fw = 'bold' if _is_total else 'normal'
-                        _html2 += f'<tr><td style="padding:7px 10px;background:{_bg};color:{_fc};font-weight:{_fw}">{_idx}</td>'
-                        for _c in _cols2:
-                            _v = _row[_c]
-                            _html2 += f'<td style="text-align:right;padding:7px 10px;background:{_bg};color:{_fc};font-weight:{_fw}">{_fmt_clp(_v)}</td>'
-                        _html2 += '</tr>'
-                    _html2 += '</tbody></table></div>'
-                    st.markdown(_html2, unsafe_allow_html=True)
+                st.markdown("<div class='section-label'>🍺 Categorías Bar</div>", unsafe_allow_html=True)
+                st.markdown(_render_html_table(_rv_pivot2, 'Categoría'), unsafe_allow_html=True)
 
                 # ── Descarga Excel ───────────────────────────────────────────
                 st.markdown("<div style='margin-top:1rem'></div>", unsafe_allow_html=True)
