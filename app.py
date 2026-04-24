@@ -6849,9 +6849,9 @@ if modulo.startswith("📦"):
             if not _rv_df_raw.empty:
                 _rv_df_raw['monto'] = pd.to_numeric(_rv_df_raw['monto'], errors='coerce').fillna(0)
 
-                # Clasificar tipo_venta — null/vacío = Salón, con valor = Delivery
+                # Clasificar tipo_venta por origen (vacío = Salón, con valor = Delivery)
                 _rv_df_raw['tipo_venta'] = _rv_df_raw['origen'].apply(
-                    lambda x: 'Venta Salón' if pd.isna(x) or str(x).strip() == '' else 'Venta Delivery'
+                    lambda x: 'Venta Delivery' if (pd.notna(x) and str(x).strip() != '') else 'Venta Salón'
                 )
 
                 # Clasificar categoría bar
