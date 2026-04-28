@@ -2574,9 +2574,13 @@ def semaforo_margen(val):
 
 
 @st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def get_locales():
-    df = run_query("SELECT DISTINCT local FROM ventas WHERE local IS NOT NULL ORDER BY 1")
-    return ["Todos"] + df['local'].tolist() if not df.empty else ["Todos"]
+    try:
+        df = run_query("SELECT DISTINCT local FROM ventas WHERE local IS NOT NULL ORDER BY 1")
+        return ["Todos"] + df['local'].tolist() if not df.empty else ["Todos"]
+    except Exception:
+        return ["Todos"]
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_recetas():
@@ -2715,7 +2719,10 @@ with st.sidebar:
     submenu_actual = st.session_state.get('submenu','')
     # El Informe de Costos tiene sus propios filtros — los globales no aplican
     es_informe_costos = ('Informe de Costos' in submenu_actual or 'Informe de Costos' in modulo_actual) and 'Rentabilidad' not in modulo_actual
-    locales = get_locales()
+    try:
+        locales = get_locales()
+    except Exception:
+        locales = ["Todos"]
     if not es_informe_costos:
         st.markdown("<div style='font-size:0.75rem; color:#666; text-transform:uppercase; letter-spacing:0.08em;'>Filtros globales</div>", unsafe_allow_html=True)
         f_inicio = st.date_input("Desde", value=date(datetime.now().year, datetime.now().month, 1))
@@ -2725,6 +2732,9 @@ with st.sidebar:
         f_inicio = date(datetime.now().year, datetime.now().month, 1)
         f_fin    = date.today()
         f_local  = "Todos"
+
+# Variables de filtro accesibles globalmente fuera del sidebar
+modulo   = st.session_state.get('modulo', list(menu_items.keys())[0] if 'menu_items' in dir() and menu_items else '📦 Gestión de Datos')
 
 
 
