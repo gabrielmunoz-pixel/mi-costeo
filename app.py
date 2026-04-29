@@ -406,9 +406,8 @@ def _render_gestion_usuarios():
                     )
                     nuevos_permisos = ",".join(sel)
 
-                    # Local assignment
-                    _locales_adm = run_query("SELECT DISTINCT local FROM compras WHERE local IS NOT NULL ORDER BY local")
-                    _locales_adm_list = ["— Sin restricción —"] + (_locales_adm['local'].tolist() if not _locales_adm.empty else [])
+                    # Local assignment — lista fija, sin consulta a BD
+                    _locales_adm_list = ["— Sin restricción —", "Vitacura", "Las Condes", "Chicureo", "La Dehesa", "Macul", "La Reina", "Quilin", "Nueva Providencia", "Providencia", "Los Trapenses"]
                     _local_actual = str(row.get('local') or '')
                     _local_idx = _locales_adm_list.index(_local_actual) if _local_actual in _locales_adm_list else 0
                     nuevo_local = st.selectbox("Local asignado", _locales_adm_list,
@@ -455,8 +454,7 @@ def _render_gestion_usuarios():
         nu_pw   = st.text_input("Contraseña", type="password", key="nu_pw")
         opciones_mod2 = ["📦 Gestión de Datos", "📊 Informes", "📋 Notas de Crédito"]
         nu_perm = st.multiselect("Módulos habilitados", opciones_mod2, key="nu_perm")
-        _locales_nu = run_query("SELECT DISTINCT local FROM compras WHERE local IS NOT NULL ORDER BY local")
-        _locales_nu_list = ["— Sin restricción —"] + (_locales_nu['local'].tolist() if not _locales_nu.empty else [])
+        _locales_nu_list = ["— Sin restricción —", "Vitacura", "Las Condes", "Chicureo", "La Dehesa", "Macul", "La Reina", "Quilin", "Nueva Providencia", "Providencia", "Los Trapenses"]
         nu_local = st.selectbox("Local asignado", _locales_nu_list, key="nu_local")
         nu_local_val = None if nu_local == "— Sin restricción —" else nu_local
         if st.button("➕ Crear Usuario", key="btn_crear_user"):
@@ -865,6 +863,7 @@ def calcular_total_kg(producto, total, crudo=0, produccion=0, cocido=0, producto
 # BASE DE DATOS
 # ============================================================
 @st.cache_resource
+@st.cache_resource
 def get_engine():
     try:
         db = st.secrets["connections"]["supabase"]
@@ -877,8 +876,8 @@ def get_engine():
             pool_pre_ping=True,
             pool_recycle=180,
             pool_timeout=10,
-            pool_size=2,          # máximo 2 conexiones persistentes
-            max_overflow=3,       # hasta 5 conexiones totales en pico
+            pool_size=3,
+            max_overflow=5,
             connect_args={
                 "options":              "-c statement_timeout=30000",
                 "connect_timeout":      8,
@@ -2574,13 +2573,12 @@ def semaforo_margen(val):
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_resource
 def get_locales():
-    try:
-        df = run_query("SELECT DISTINCT local FROM ventas WHERE local IS NOT NULL ORDER BY 1")
-        return ["Todos"] + df['local'].tolist() if not df.empty else ["Todos"]
-    except Exception:
-        return ["Todos"]
+    # Lista fija — evita un DISTINCT pesado sobre la tabla ventas en cada carga
+    return ["Todos", "Vitacura", "Las Condes", "Chicureo", "La Dehesa",
+            "Macul", "La Reina", "Quilin", "Nueva Providencia",
+            "Providencia", "Los Trapenses"]
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_recetas():
@@ -3948,7 +3946,9 @@ if modulo.startswith("📦"):
     with tab4:
         st.markdown("<div class='info-box'>Mapea SKUs de compras sin código de venta hacia SKUs equivalentes que sí tienen receta.<br>Ejemplo: Erdinger Trigo (BA-CA-078) → Erdinger Weissbier (BA-CA-066)</div>", unsafe_allow_html=True)
 
-        df_eq = run_query("SELECT sku_compra, sku_receta, descripcion FROM sku_equivalencias ORDER BY sku_compra")
+        if 'eq_df_cache' not in st.session_state:
+            st.session_state['eq_df_cache'] = run_query("SELECT sku_compra, sku_receta, descripcion FROM sku_equivalencias ORDER BY sku_compra")
+        df_eq = st.session_state['eq_df_cache']
         if not df_eq.empty:
             st.caption(f"{len(df_eq)} equivalencias registradas")
             st.dataframe(df_eq, use_container_width=True, hide_index=True)
@@ -4019,7 +4019,9 @@ if modulo.startswith("📦"):
             umbral_audit = st.slider("Umbral de alerta (× esperado)", min_value=2.0, max_value=20.0, value=5.0, step=0.5,
                                      key='audit_umbral')
         with ac2:
-            cat_audit_q = run_query("SELECT DISTINCT categoria_producto FROM compras WHERE categoria_producto IS NOT NULL ORDER BY 1")
+            if 'cat_audit_cache' not in st.session_state:
+                st.session_state['cat_audit_cache'] = run_query("SELECT DISTINCT categoria_producto FROM compras WHERE categoria_producto IS NOT NULL ORDER BY 1")
+            cat_audit_q = st.session_state['cat_audit_cache']
             cats_raw = cat_audit_q['categoria_producto'].tolist() if not cat_audit_q.empty else []
             cats_colacion = [c for c in cats_raw if 'colacion' in c.lower().replace('ó','o').replace('ô','o') or c.upper() == 'COLACION']
             cats_normales = [c for c in cats_raw if c not in cats_colacion]
@@ -5810,11 +5812,14 @@ if modulo.startswith("📦"):
                         st.exception(e)
 
         # Vista resumen de clasificación existente
-        df_clas_res = run_query("""
-            SELECT plan_clasificacion, COUNT(*) as registros
-            FROM compras_clasificacion
-            GROUP BY plan_clasificacion ORDER BY registros DESC
-        """) if run_query("SELECT to_regclass('compras_clasificacion') as t")['t'].iloc[0] else pd.DataFrame()
+        if 'clas_res_cache' not in st.session_state:
+            _tbl_exists = run_query("SELECT to_regclass('compras_clasificacion') as t")['t'].iloc[0]
+            st.session_state['clas_res_cache'] = run_query("""
+                SELECT plan_clasificacion, COUNT(*) as registros
+                FROM compras_clasificacion
+                GROUP BY plan_clasificacion ORDER BY registros DESC
+            """) if _tbl_exists else pd.DataFrame()
+        df_clas_res = st.session_state['clas_res_cache']
         if not df_clas_res.empty:
             st.markdown("**Clasificación actual en BD:**")
             st.dataframe(df_clas_res, use_container_width=True, hide_index=True)
@@ -9199,7 +9204,7 @@ elif modulo.startswith("📊"):
                 _prot_ff = st.date_input("Fecha fin (precios)", key='prot_ff', value=f_fin)
             with _prot_c3:
                 _prot_local = st.selectbox("Local", ["Todos"] + (
-                    run_query("SELECT DISTINCT local FROM ventas WHERE local IS NOT NULL ORDER BY 1")['local'].tolist()
+                    ["Todos", "Vitacura", "Las Condes", "Chicureo", "La Dehesa", "Macul", "La Reina", "Quilin", "Nueva Providencia", "Providencia", "Los Trapenses"][1:]  # lista fija sin 'Todos' 
                 ), key='prot_local')
 
             if st.button("▶ Calcular Costo por Proteína", key='btn_prot'):
@@ -10394,16 +10399,17 @@ buildTree(data, 1, null);
             # ── Filtros ───────────────────────────────────────
             _pv_c1, _pv_c2, _pv_c3 = st.columns([2, 2, 1])
             with _pv_c1:
-                _pv_locales = run_query("SELECT DISTINCT local FROM compras WHERE local IS NOT NULL ORDER BY local")
-                _pv_loc_opts = ['Todos'] + (_pv_locales['local'].tolist() if not _pv_locales.empty else [])
+                _pv_loc_opts = ["Todos", "Vitacura", "Las Condes", "Chicureo", "La Dehesa", "Macul", "La Reina", "Quilin", "Nueva Providencia", "Providencia", "Los Trapenses"]
                 _pv_local = st.selectbox("Local", _pv_loc_opts, key='pv_local')
             with _pv_c2:
-                _pv_cats = run_query("""
+                if 'pv_cats_cache' not in st.session_state:
+                    st.session_state['pv_cats_cache'] = run_query("""
                     SELECT DISTINCT categoria_producto FROM compras
                     WHERE categoria_producto IS NOT NULL
                       AND UPPER(categoria_producto) NOT LIKE '%ADMINISTR%'
                     ORDER BY 1
                 """)
+                _pv_cats = st.session_state.get('pv_cats_cache', pd.DataFrame())
                 _pv_cat_opts = ['Todas'] + (_pv_cats['categoria_producto'].tolist() if not _pv_cats.empty else [])
                 _pv_cat = st.selectbox("Categoría", _pv_cat_opts, key='pv_cat')
             with _pv_c3:
@@ -10671,11 +10677,13 @@ buildTree(data, 1, null);
                 _ac_file = st.file_uploader("📄 Archivo de acuerdos (.xlsx)", type=['xlsx'], key='ac_file_up',
                                             help="Columnas esperadas: Nombre Local, Rut Proveedor, Nombre Proveedor, ItemCode, Descripción, Precio Negociado")
             with _ac_c2:
-                _ac_meses_opts = run_query("""
-                    SELECT DISTINCT TO_CHAR(DATE_TRUNC('month', fecha_dte::date), 'YYYY-MM') AS periodo
-                    FROM compras ORDER BY 1 DESC LIMIT 12
-                """)
-                _ac_per_opts = _ac_meses_opts['periodo'].tolist() if not _ac_meses_opts.empty else []
+                if 'ac_meses_cache' not in st.session_state:
+                    _ac_meses_opts = run_query("""
+                        SELECT DISTINCT TO_CHAR(DATE_TRUNC('month', fecha_dte::date), 'YYYY-MM') AS periodo
+                        FROM compras ORDER BY 1 DESC LIMIT 12
+                    """)
+                    st.session_state['ac_meses_cache'] = _ac_meses_opts['periodo'].tolist() if not _ac_meses_opts.empty else []
+                _ac_per_opts = st.session_state['ac_meses_cache']
                 _ac_periodo  = st.selectbox("Período a comparar", _ac_per_opts, key='ac_periodo_sel')
 
             if _ac_file and _ac_periodo:
