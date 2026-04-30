@@ -8324,6 +8324,7 @@ elif modulo.startswith("📊"):
                 _bench_html += "</div>"
                 st.markdown(_bench_html, unsafe_allow_html=True)
 
+
                 # ── Vista resumen por local (siempre visible) ─────
                 st.markdown("##### 📋 Resumen por Local")
 
@@ -8332,10 +8333,10 @@ elif modulo.startswith("📊"):
                     except: return "-"
 
                 _sr_html = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:0.78rem">'
-                _sr_html += '<thead><tr><th style="text-align:left;padding:8px 10px;background:#1F3864;color:#fff">Local</th>'
+                _sr_html += '<thead><tr><th style="text-align:left;padding:8px 10px;background:#1F3864;color:#fff;border-right:2px solid #4472C4">Local</th>'
                 for _c in _gz_cats_show:
-                    _sr_html += f'<th style="text-align:right;padding:8px 10px;background:#1F3864;color:#fff" colspan="2">{_c}<br><span style="font-size:0.66rem;font-weight:normal;opacity:0.75">Uds · Monto</span></th>'
-                _sr_html += '<th style="text-align:right;padding:8px 10px;background:#1F3864;color:#fff" colspan="2">Total<br><span style="font-size:0.66rem;font-weight:normal;opacity:0.75">Uds · Monto</span></th>'
+                    _sr_html += f'<th style="text-align:center;padding:8px 4px;background:#1F3864;color:#fff;border-right:2px solid #4472C4" colspan="3">{_c}<br><span style="font-size:0.63rem;font-weight:normal;opacity:0.75">Uds · Monto · %</span></th>'
+                _sr_html += '<th style="text-align:center;padding:8px 10px;background:#1F3864;color:#fff" colspan="2">Total<br><span style="font-size:0.63rem;font-weight:normal;opacity:0.75">Uds · Monto</span></th>'
                 _sr_html += '</tr></thead><tbody>'
 
                 _sr_tot_uds  = {c: 0 for c in _gz_cats_show + ["Total"]}
@@ -8345,34 +8346,43 @@ elif modulo.startswith("📊"):
                     _bg_s = "#F5F5F5" if _ri_s % 2 == 0 else "#FFFFFF"
                     _loc_uds  = _gz_pivot.xs(_loc_s, level="local") if "local" in _gz_pivot.index.names else _gz_pivot
                     _loc_mnto = _gz_pivot_m.xs(_loc_s, level="local") if "local" in _gz_pivot_m.index.names else _gz_pivot_m
-                    _sr_html += f'<tr><td style="padding:7px 10px;background:{_bg_s};font-weight:600">{_loc_s}</td>'
+                    _mv_tot_loc = float(_loc_mnto["Total"].sum()) if "Total" in _loc_mnto.columns else 0.0
+                    _sr_html += f'<tr><td style="padding:7px 10px;background:{_bg_s};font-weight:600;border-right:2px solid #4472C4">{_loc_s}</td>'
                     for _c in _gz_cats_show:
                         _u = int(_loc_uds[_c].sum()) if _c in _loc_uds.columns else 0
                         _mv = float(_loc_mnto[_c].sum()) if _c in _loc_mnto.columns else 0.0
+                        _pct_loc = (_mv / _mv_tot_loc * 100) if _mv_tot_loc > 0 else 0.0
+                        _bench_val = _gz_bench_pct.get(_c, 0)
+                        _diff = _pct_loc - _bench_val
+                        _col_pct = "#2E7D32" if _diff >= 5 else ("#B71C1C" if _diff <= -5 else "#222222")
                         _sr_tot_uds[_c]  += _u
                         _sr_tot_mnto[_c] += _mv
-                        _sr_html += f'<td style="text-align:right;padding:7px 10px;background:{_bg_s}">{_u:,}</td>'
-                        _sr_html += f'<td style="text-align:right;padding:7px 10px;background:{_bg_s};color:#1F3864">{_fmt_clp2(_mv)}</td>'
+                        _sr_html += f'<td style="text-align:center;padding:6px 4px;background:{_bg_s};border-left:1px solid #E0E0E0">{_u:,}</td>'
+                        _sr_html += f'<td style="text-align:center;padding:6px 4px;background:{_bg_s};color:#1F3864;font-size:0.72rem;border-left:1px solid #E0E0E0">{_fmt_clp2(_mv)}</td>'
+                        _sr_html += f'<td style="text-align:center;padding:6px 8px;background:{_bg_s};color:{_col_pct};font-weight:bold;border-left:1px solid #E0E0E0;border-right:2px solid #4472C4">{_pct_loc:.1f}%</td>'
                     _u_tot = int(_loc_uds["Total"].sum()) if "Total" in _loc_uds.columns else 0
-                    _mv_tot = float(_loc_mnto["Total"].sum()) if "Total" in _loc_mnto.columns else 0.0
                     _sr_tot_uds["Total"]  += _u_tot
-                    _sr_tot_mnto["Total"] += _mv_tot
-                    _sr_html += f'<td style="text-align:right;padding:7px 10px;background:{_bg_s};font-weight:bold">{_u_tot:,}</td>'
-                    _sr_html += f'<td style="text-align:right;padding:7px 10px;background:{_bg_s};font-weight:bold;color:#1F3864">{_fmt_clp2(_mv_tot)}</td>'
+                    _sr_tot_mnto["Total"] += _mv_tot_loc
+                    _sr_html += f'<td style="text-align:center;padding:6px 4px;background:{_bg_s};font-weight:bold;border-left:1px solid #E0E0E0">{_u_tot:,}</td>'
+                    _sr_html += f'<td style="text-align:center;padding:6px 10px;background:{_bg_s};font-weight:bold;color:#1F3864">{_fmt_clp2(_mv_tot_loc)}</td>'
                     _sr_html += '</tr>'
 
                 # Fila total red
-                _sr_html += '<tr><td style="padding:7px 10px;background:#1F3864;color:#D4A853;font-weight:bold">TOTAL RED</td>'
+                _mv_total_red = _sr_tot_mnto["Total"]
+                _sr_html += '<tr><td style="padding:7px 10px;background:#1F3864;color:#D4A853;font-weight:bold;border-right:2px solid #4472C4">TOTAL RED</td>'
                 for _c in _gz_cats_show:
-                    _sr_html += f'<td style="text-align:right;padding:7px 10px;background:#1F3864;color:#fff;font-weight:bold">{_sr_tot_uds[_c]:,}</td>'
-                    _sr_html += f'<td style="text-align:right;padding:7px 10px;background:#1F3864;color:#D4A853;font-weight:bold">{_fmt_clp2(_sr_tot_mnto[_c])}</td>'
-                _sr_html += f'<td style="text-align:right;padding:7px 10px;background:#1F3864;color:#fff;font-weight:bold">{_sr_tot_uds["Total"]:,}</td>'
-                _sr_html += f'<td style="text-align:right;padding:7px 10px;background:#1F3864;color:#D4A853;font-weight:bold">{_fmt_clp2(_sr_tot_mnto["Total"])}</td>'
+                    _pct_red = (_sr_tot_mnto[_c] / _mv_total_red * 100) if _mv_total_red > 0 else 0.0
+                    _sr_html += f'<td style="text-align:center;padding:6px 4px;background:#1F3864;color:#fff;font-weight:bold;border-left:1px solid #2E5090">{_sr_tot_uds[_c]:,}</td>'
+                    _sr_html += f'<td style="text-align:center;padding:6px 4px;background:#1F3864;color:#D4A853;font-weight:bold;border-left:1px solid #2E5090">{_fmt_clp2(_sr_tot_mnto[_c])}</td>'
+                    _sr_html += f'<td style="text-align:center;padding:6px 8px;background:#1F3864;color:#D4A853;font-weight:bold;border-left:1px solid #2E5090;border-right:2px solid #4472C4">{_pct_red:.1f}%</td>'
+                _sr_html += f'<td style="text-align:center;padding:6px 4px;background:#1F3864;color:#fff;font-weight:bold;border-left:1px solid #2E5090">{_sr_tot_uds["Total"]:,}</td>'
+                _sr_html += f'<td style="text-align:center;padding:6px 10px;background:#1F3864;color:#D4A853;font-weight:bold">{_fmt_clp2(_mv_total_red)}</td>'
                 _sr_html += '</tr></tbody></table></div>'
                 st.markdown(_sr_html, unsafe_allow_html=True)
 
                 st.markdown("<div style='margin-top:1.5rem'></div>", unsafe_allow_html=True)
                 st.markdown("##### 🔍 Detalle por Local y Garzón")
+
 
                 # ── Detalle aperturado por local ──────────────────
                 # ── Detalle aperturado por local ──────────────────
