@@ -10594,28 +10594,54 @@ buildTree(data, 1, null);
                     placeholder="Ej: AL-AF-276 o papas...",
                     key='inf3_buscar'
                 )
+
+                # ── Modo semanal ───────────────────────────────────
+                _modo_semanal = st.toggle(
+                    "📅 Comparar contra semana específica",
+                    value=False, key='inf3_semanal',
+                    help="Activa para comparar los precios del mes base contra las compras de una semana puntual."
+                )
+                if _modo_semanal:
+                    _sw1, _sw2 = st.columns(2)
+                    with _sw1:
+                        _sem_fi = st.date_input("Semana — desde", key='inf3_sem_fi',
+                                                value=date.today() - pd.Timedelta(days=date.today().weekday() + 7))
+                    with _sw2:
+                        _sem_ff = st.date_input("Semana — hasta", key='inf3_sem_ff',
+                                                value=date.today() - pd.Timedelta(days=date.today().weekday() + 1))
+                    st.caption(f"📌 Cantidades: compras del {_sem_fi} al {_sem_ff} · Precios referencia: {mes_base3_str}")
+
                 ord3_dir = '↓'
 
-
                 if st.button("▶ Generar Informe 3"):
-                    # Cantidades: siempre enero 2026
-                    cant_i = '2026-01-01'
-                    cant_f = '2026-01-31'
-                    # Precios referencia: mes inicio seleccionado
-                    base_i = mes_base3.strftime('%Y-%m-01')
-                    base_f = (mes_base3 + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
-                    # Precios comparación: mes término seleccionado
-                    comp_i = mes_comp3.strftime('%Y-%m-01')
-                    comp_f = (mes_comp3 + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
                     filtro_cat3 = f"AND categoria_producto = '{cat3_sel}'" if cat3_sel != 'Todos' else ""
 
-                    # Canasta fija: pasar fechas de cantidades separadas del mes de precios
-                    _cant_diferente = (base_i != cant_i)
+                    if _modo_semanal:
+                        # Cantidades: semana seleccionada
+                        cant_i = str(_sem_fi)
+                        cant_f = str(_sem_ff)
+                        # Precios referencia: mes base
+                        base_i = mes_base3.strftime('%Y-%m-01')
+                        base_f = (mes_base3 + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
+                        # Precios comparación: misma semana
+                        comp_i = cant_i
+                        comp_f = cant_f
+                        _label_comp = f"Semana {_sem_fi} → {_sem_ff}"
+                    else:
+                        # Modo mensual original
+                        cant_i = '2026-01-01'
+                        cant_f = '2026-01-31'
+                        base_i = mes_base3.strftime('%Y-%m-01')
+                        base_f = (mes_base3 + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
+                        comp_i = mes_comp3.strftime('%Y-%m-01')
+                        comp_f = (mes_comp3 + pd.offsets.MonthEnd(1)).strftime('%Y-%m-%d')
+                        _label_comp = mes_comp3_str
+
                     q_ing = _build_variacion_query(
                         base_i, base_f, comp_i, comp_f,
                         filtro_cat=filtro_cat3,
-                        fecha_cant_i=cant_i if _cant_diferente else None,
-                        fecha_cant_f=cant_f if _cant_diferente else None,
+                        fecha_cant_i=cant_i,
+                        fecha_cant_f=cant_f,
                     )
                     df3 = run_query(q_ing)
 
@@ -10624,7 +10650,7 @@ buildTree(data, 1, null);
                     else:
                         df3 = _procesar_variacion_df(df3)
                         st.session_state['inf3_df']     = df3
-                        st.session_state['inf3_labels'] = (mes_base3_str, mes_comp3_str)
+                        st.session_state['inf3_labels'] = (mes_base3_str, _label_comp)
                         st.session_state['inf3_fechas'] = (base_i, base_f, comp_i, comp_f)
                         st.session_state['inf3_local_label'] = f"Cadena — {cat3_sel}" if cat3_sel != 'Todos' else 'Cadena Completa'
                         st.session_state['inf3_ajuste_nota'] = ''
