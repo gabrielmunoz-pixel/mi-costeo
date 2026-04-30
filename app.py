@@ -8131,10 +8131,10 @@ elif modulo.startswith("📊"):
             # Cafetería
             "Cafeteria": "Cafetería", "Cafetería": "Cafetería",
             # Colaciones
-            "Colaciones": "Colaciones", "Colacion": "Colaciones",
-            "Menu Ejecutivo": "Colaciones", "Menú Ejecutivo": "Colaciones",
-            "MenÃº Ejecutivo": "Colaciones",
-            "Proteina Almuerzo": "Colaciones",
+            "Agregados": "Agregados", "Colacion": "Agregados",
+            "Menu Ejecutivo": "Agregados", "Menú Ejecutivo": "Agregados",
+            "MenÃº Ejecutivo": "Agregados",
+            "Proteina Almuerzo": "Agregados",
             # Líquidos C/A
             "Cervezas": "Líquidos C/A", "Cocteles": "Líquidos C/A",
             "Piscos": "Líquidos C/A", "Pisco Sour": "Líquidos C/A",
@@ -8175,7 +8175,7 @@ elif modulo.startswith("📊"):
             "Jonathan Araujo","Nasslo Beltran","Keiber Eduardo Munoz Urribarri","Jose Pacheco",
             "Nestor Rosas","dubuc_juan Dubuc Martinez","Jackson Moreno","Richard Gonzalez",
         }
-        _CATS_ORDEN = ["Alimentos", "Postres", "Cafetería", "Colaciones", "Líquidos C/A", "Líquidos S/A"]
+        _CATS_ORDEN = ["Alimentos", "Postres", "Cafetería", "Agregados", "Líquidos C/A", "Líquidos S/A"]
         _EXCLUIR_CATS = {"Otros", "otros", None}
 
         # Metas mensuales por local y categoría (Cafetería y Postres)
@@ -8284,7 +8284,7 @@ elif modulo.startswith("📊"):
                 _gz_df["cantidad_vendida"] = pd.to_numeric(_gz_df["cantidad_vendida"], errors="coerce").fillna(0)
                 _gz_df["monto_venta_real"] = pd.to_numeric(_gz_df["monto_venta_real"], errors="coerce").fillna(0)
 
-                # ── Pivot: garzon × categoría (unidades) ─────────
+                # ── Pivot unidades: garzon × categoría ───────────
                 _gz_pivot = (
                     _gz_df.groupby(["local", "garzon", "cat_gz"])["cantidad_vendida"]
                     .sum().reset_index()
@@ -8293,36 +8293,95 @@ elif modulo.startswith("📊"):
                 _gz_pivot = _gz_pivot.reindex(columns=[c for c in _CATS_ORDEN if c in _gz_pivot.columns], fill_value=0)
                 _gz_pivot["Total"] = _gz_pivot.sum(axis=1)
 
-                # ── Benchmark: promedio de todos los locales ──────
+                # ── Pivot monto: garzon × categoría ──────────────
+                _gz_pivot_m = (
+                    _gz_df.groupby(["local", "garzon", "cat_gz"])["monto_venta_real"]
+                    .sum().reset_index()
+                    .pivot_table(index=["local","garzon"], columns="cat_gz", values="monto_venta_real", aggfunc="sum", fill_value=0)
+                )
+                _gz_pivot_m = _gz_pivot_m.reindex(columns=[c for c in _CATS_ORDEN if c in _gz_pivot_m.columns], fill_value=0)
+                _gz_pivot_m["Total"] = _gz_pivot_m.sum(axis=1)
+
+                # ── Benchmark mix % ───────────────────────────────
                 _gz_bench = _gz_pivot[[c for c in _CATS_ORDEN if c in _gz_pivot.columns]].copy()
                 _gz_bench_total = _gz_bench.sum(axis=0)
                 _gz_bench_pct = (_gz_bench_total / _gz_bench_total.sum() * 100).round(1)
 
-                # ── Mix % por garzón ─────────────────────────────
+                # ── Mix % por garzón ──────────────────────────────
                 _gz_mix = _gz_pivot[[c for c in _CATS_ORDEN if c in _gz_pivot.columns]].div(_gz_pivot["Total"], axis=0) * 100
                 _gz_mix = _gz_mix.round(1)
 
-                # ── Render por local ─────────────────────────────
                 _gz_locales_datos = _gz_pivot.index.get_level_values("local").unique().tolist()
+                _gz_cats_show = [c for c in _CATS_ORDEN if c in _gz_pivot.columns]
 
                 st.markdown("---")
-                st.markdown(f"**Benchmark red completa (mix % de unidades vendidas):**")
 
-                # Benchmark pills
+                # ── Benchmark pills ───────────────────────────────
+                st.markdown("**Benchmark red completa (mix % de unidades vendidas):**")
                 _bench_html = "<div style='display:flex;flex-wrap:wrap;gap:8px;margin-bottom:1rem'>"
-                for _cat in [c for c in _CATS_ORDEN if c in _gz_bench_pct.index]:
-                    _bench_html += f"<span style='background:#1F3864;color:#fff;padding:4px 12px;border-radius:20px;font-size:0.78rem'>{_cat}: <b>{_gz_bench_pct[_cat]:.1f}%</b></span>"
+                for _cat in _gz_cats_show:
+                    _bench_html += f"<span style='background:#1F3864;color:#fff;padding:4px 12px;border-radius:20px;font-size:0.78rem'>{_cat}: <b>{_gz_bench_pct.get(_cat,0):.1f}%</b></span>"
                 _bench_html += "</div>"
                 st.markdown(_bench_html, unsafe_allow_html=True)
 
-                # ── Tabla por local ───────────────────────────────
-                _gz_cats_show = [c for c in _CATS_ORDEN if c in _gz_pivot.columns]
+                # ── Vista resumen por local (siempre visible) ─────
+                st.markdown("##### 📋 Resumen por Local")
 
+                def _fmt_clp2(v):
+                    try: return f"${int(round(v)):,}".replace(",",".")
+                    except: return "-"
+
+                _sr_html = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:0.78rem">'
+                _sr_html += '<thead><tr><th style="text-align:left;padding:8px 10px;background:#1F3864;color:#fff">Local</th>'
+                for _c in _gz_cats_show:
+                    _sr_html += f'<th style="text-align:right;padding:8px 10px;background:#1F3864;color:#fff" colspan="2">{_c}<br><span style="font-size:0.66rem;font-weight:normal;opacity:0.75">Uds · Monto</span></th>'
+                _sr_html += '<th style="text-align:right;padding:8px 10px;background:#1F3864;color:#fff" colspan="2">Total<br><span style="font-size:0.66rem;font-weight:normal;opacity:0.75">Uds · Monto</span></th>'
+                _sr_html += '</tr></thead><tbody>'
+
+                _sr_tot_uds  = {c: 0 for c in _gz_cats_show + ["Total"]}
+                _sr_tot_mnto = {c: 0.0 for c in _gz_cats_show + ["Total"]}
+
+                for _ri_s, _loc_s in enumerate(sorted(_gz_locales_datos)):
+                    _bg_s = "#F5F5F5" if _ri_s % 2 == 0 else "#FFFFFF"
+                    _loc_uds  = _gz_pivot.xs(_loc_s, level="local") if "local" in _gz_pivot.index.names else _gz_pivot
+                    _loc_mnto = _gz_pivot_m.xs(_loc_s, level="local") if "local" in _gz_pivot_m.index.names else _gz_pivot_m
+                    _sr_html += f'<tr><td style="padding:7px 10px;background:{_bg_s};font-weight:600">{_loc_s}</td>'
+                    for _c in _gz_cats_show:
+                        _u = int(_loc_uds[_c].sum()) if _c in _loc_uds.columns else 0
+                        _mv = float(_loc_mnto[_c].sum()) if _c in _loc_mnto.columns else 0.0
+                        _sr_tot_uds[_c]  += _u
+                        _sr_tot_mnto[_c] += _mv
+                        _sr_html += f'<td style="text-align:right;padding:7px 10px;background:{_bg_s}">{_u:,}</td>'
+                        _sr_html += f'<td style="text-align:right;padding:7px 10px;background:{_bg_s};color:#1F3864">{_fmt_clp2(_mv)}</td>'
+                    _u_tot = int(_loc_uds["Total"].sum()) if "Total" in _loc_uds.columns else 0
+                    _mv_tot = float(_loc_mnto["Total"].sum()) if "Total" in _loc_mnto.columns else 0.0
+                    _sr_tot_uds["Total"]  += _u_tot
+                    _sr_tot_mnto["Total"] += _mv_tot
+                    _sr_html += f'<td style="text-align:right;padding:7px 10px;background:{_bg_s};font-weight:bold">{_u_tot:,}</td>'
+                    _sr_html += f'<td style="text-align:right;padding:7px 10px;background:{_bg_s};font-weight:bold;color:#1F3864">{_fmt_clp2(_mv_tot)}</td>'
+                    _sr_html += '</tr>'
+
+                # Fila total red
+                _sr_html += '<tr><td style="padding:7px 10px;background:#1F3864;color:#D4A853;font-weight:bold">TOTAL RED</td>'
+                for _c in _gz_cats_show:
+                    _sr_html += f'<td style="text-align:right;padding:7px 10px;background:#1F3864;color:#fff;font-weight:bold">{_sr_tot_uds[_c]:,}</td>'
+                    _sr_html += f'<td style="text-align:right;padding:7px 10px;background:#1F3864;color:#D4A853;font-weight:bold">{_fmt_clp2(_sr_tot_mnto[_c])}</td>'
+                _sr_html += f'<td style="text-align:right;padding:7px 10px;background:#1F3864;color:#fff;font-weight:bold">{_sr_tot_uds["Total"]:,}</td>'
+                _sr_html += f'<td style="text-align:right;padding:7px 10px;background:#1F3864;color:#D4A853;font-weight:bold">{_fmt_clp2(_sr_tot_mnto["Total"])}</td>'
+                _sr_html += '</tr></tbody></table></div>'
+                st.markdown(_sr_html, unsafe_allow_html=True)
+
+                st.markdown("<div style='margin-top:1.5rem'></div>", unsafe_allow_html=True)
+                st.markdown("##### 🔍 Detalle por Local y Garzón")
+
+                # ── Detalle aperturado por local ──────────────────
+                # ── Detalle aperturado por local ──────────────────
                 for _loc in sorted(_gz_locales_datos):
                     _gz_loc_df = _gz_pivot.xs(_loc, level="local") if "local" in _gz_pivot.index.names else _gz_pivot
+                    _gz_loc_df_m = _gz_pivot_m.xs(_loc, level="local") if "local" in _gz_pivot_m.index.names else _gz_pivot_m
                     _gz_mix_loc = _gz_mix.xs(_loc, level="local") if "local" in _gz_mix.index.names else _gz_mix
 
-                    # Calcular avance vs meta mensual para Cafetería y Postres
+                    # Avance vs meta
                     _loc_metas = _METAS.get(_loc, {})
                     _meta_info = []
                     for _mcat in ["Cafetería", "Postres"]:
@@ -8334,47 +8393,57 @@ elif modulo.startswith("📊"):
                             _meta_info.append(f"<span style='color:{_color_m};font-weight:bold'>{_mcat}: {_vendido:,}/{_meta_m:,} ({_pct_m:.0f}%)</span>")
                     _meta_str = "  ·  ".join(_meta_info) if _meta_info else ""
 
+                    # Expanders cerrados por defecto en vista "Todos", abiertos si es un local específico
                     with st.expander(f"🏪 {_loc}", expanded=(_gz_local != "Todos")):
                         if _meta_str:
                             st.markdown(f"<div style='font-size:0.82rem;margin-bottom:0.6rem'>🎯 Avance vs Meta mensual: {_meta_str}</div>", unsafe_allow_html=True)
 
-                        # Tabla HTML
+                        # Tabla HTML con uds + monto por categoría
                         _gh = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:0.78rem">'
-                        # Header
                         _gh += '<thead><tr><th style="text-align:left;padding:8px 10px;background:#1F3864;color:#fff">Garzón</th>'
                         for _c in _gz_cats_show:
-                            _gh += f'<th style="text-align:right;padding:8px 10px;background:#1F3864;color:#fff">{_c}<br><span style="font-size:0.68rem;font-weight:normal;opacity:0.8">Uds · %</span></th>'
-                        _gh += '<th style="text-align:right;padding:8px 10px;background:#1F3864;color:#fff">Total</th>'
+                            _gh += f'<th style="text-align:right;padding:8px 10px;background:#1F3864;color:#fff" colspan="2">{_c}<br><span style="font-size:0.66rem;font-weight:normal;opacity:0.75">Uds · Monto</span></th>'
+                        _gh += '<th style="text-align:right;padding:8px 10px;background:#1F3864;color:#fff" colspan="2">Total<br><span style="font-size:0.66rem;font-weight:normal;opacity:0.75">Uds · Monto</span></th>'
+                        _gh += '<th style="text-align:right;padding:8px 10px;background:#1F3864;color:#fff">Mix %</th>'
                         _gh += '</tr></thead><tbody>'
 
                         for _ri, (_gz_name, _row) in enumerate(_gz_loc_df.iterrows()):
                             _bg = "#F5F5F5" if _ri % 2 == 0 else "#FFFFFF"
+                            _row_m = _gz_loc_df_m.loc[_gz_name] if _gz_name in _gz_loc_df_m.index else pd.Series(dtype=float)
                             _gh += f'<tr><td style="padding:7px 10px;background:{_bg};font-weight:500">{_gz_name}</td>'
                             for _c in _gz_cats_show:
                                 _uds = int(_row.get(_c, 0))
+                                _mnt = float(_row_m.get(_c, 0)) if not _row_m.empty else 0.0
                                 _pct = _gz_mix_loc.at[_gz_name, _c] if _gz_name in _gz_mix_loc.index and _c in _gz_mix_loc.columns else 0.0
                                 _bench_val = _gz_bench_pct.get(_c, 0)
-                                # Colorear si está >5pp por encima o debajo del benchmark
                                 _diff = _pct - _bench_val
                                 _color = "#2E7D32" if _diff >= 5 else ("#B71C1C" if _diff <= -5 else "#222222")
-                                _gh += f'<td style="text-align:right;padding:7px 10px;background:{_bg};color:{_color}">{_uds:,} · <b>{_pct:.1f}%</b></td>'
-                            _gh += f'<td style="text-align:right;padding:7px 10px;background:{_bg};font-weight:bold">{int(_row.get("Total",0)):,}</td>'
+                                _gh += f'<td style="text-align:right;padding:7px 5px;background:{_bg};color:{_color}">{_uds:,}</td>'
+                                _gh += f'<td style="text-align:right;padding:7px 10px;background:{_bg};color:#1F3864;font-size:0.72rem">{_fmt_clp2(_mnt)}</td>'
+                            _tot_uds = int(_row.get("Total", 0))
+                            _tot_mnt = float(_row_m.get("Total", 0)) if not _row_m.empty else 0.0
+                            _tot_pct_str = " · ".join([f"<b style='color:{('#2E7D32' if (_gz_mix_loc.at[_gz_name,c] if _gz_name in _gz_mix_loc.index and c in _gz_mix_loc.columns else 0)-_gz_bench_pct.get(c,0)>=5 else '#B71C1C' if (_gz_mix_loc.at[_gz_name,c] if _gz_name in _gz_mix_loc.index and c in _gz_mix_loc.columns else 0)-_gz_bench_pct.get(c,0)<=-5 else '#222')}'>{c[:3]} {(_gz_mix_loc.at[_gz_name,c] if _gz_name in _gz_mix_loc.index and c in _gz_mix_loc.columns else 0):.0f}%</b>" for c in _gz_cats_show])
+                            _gh += f'<td style="text-align:right;padding:7px 5px;background:{_bg};font-weight:bold">{_tot_uds:,}</td>'
+                            _gh += f'<td style="text-align:right;padding:7px 10px;background:{_bg};font-weight:bold;color:#1F3864">{_fmt_clp2(_tot_mnt)}</td>'
+                            _gh += f'<td style="text-align:right;padding:7px 10px;background:{_bg};font-size:0.7rem">{_tot_pct_str}</td>'
                             _gh += '</tr>'
 
                         # Fila benchmark
                         _gh += '<tr><td style="padding:7px 10px;background:#D4A853;font-weight:bold;color:#1F3864">Benchmark red</td>'
                         for _c in _gz_cats_show:
-                            _gh += f'<td style="text-align:right;padding:7px 10px;background:#D4A853;font-weight:bold;color:#1F3864">— · {_gz_bench_pct.get(_c,0):.1f}%</td>'
-                        _gh += '<td style="text-align:right;padding:7px 10px;background:#D4A853;font-weight:bold;color:#1F3864">100%</td></tr>'
+                            _gh += f'<td style="text-align:right;padding:7px 5px;background:#D4A853;color:#1F3864">—</td>'
+                            _gh += f'<td style="text-align:right;padding:7px 10px;background:#D4A853;font-weight:bold;color:#1F3864">{_gz_bench_pct.get(_c,0):.1f}%</td>'
+                        _gh += '<td colspan="3" style="text-align:right;padding:7px 10px;background:#D4A853;font-weight:bold;color:#1F3864">100%</td></tr>'
 
-                        # Fila meta mensual (solo Cafetería y Postres)
+                        # Fila meta mensual
                         if _loc_metas:
                             _gh += '<tr><td style="padding:7px 10px;background:#1F3864;font-weight:bold;color:#D4A853">🎯 Meta mensual</td>'
                             for _c in _gz_cats_show:
                                 _m = _loc_metas.get(_c, {}).get("mensual")
-                                _gh += f'<td style="text-align:right;padding:7px 10px;background:#1F3864;color:#D4A853;font-weight:bold">{_m:,}' if _m else '<td style="text-align:right;padding:7px 10px;background:#1F3864;color:#666">—'
-                                _gh += '</td>'
-                            _gh += '<td style="padding:7px 10px;background:#1F3864"></td></tr>'
+                                _val = f"{_m:,}" if _m else "—"
+                                _gh += f'<td style="text-align:right;padding:7px 5px;background:#1F3864;color:#D4A853;font-weight:bold">{_val}</td>'
+                                _gh += f'<td style="text-align:right;padding:7px 10px;background:#1F3864;color:#555">—</td>'
+                            _gh += '<td colspan="3" style="padding:7px 10px;background:#1F3864"></td></tr>'
 
                         _gh += '</tbody></table></div>'
                         st.markdown(_gh, unsafe_allow_html=True)
@@ -8391,15 +8460,11 @@ elif modulo.startswith("📊"):
                                 text=[f"{v:.0f}%" for v in _vals],
                                 textposition="inside", textfont=dict(size=9, color="white")
                             ))
-                        # Líneas benchmark
                         _acum = 0
                         for _ci, _c in enumerate(_gz_cats_show):
                             _acum += _gz_bench_pct.get(_c, 0)
-                            _fig_gz.add_hline(
-                                y=_acum, line_dash="dot",
-                                line_color=_COLORES[_ci % len(_COLORES)],
-                                line_width=1, opacity=0.6
-                            )
+                            _fig_gz.add_hline(y=_acum, line_dash="dot",
+                                line_color=_COLORES[_ci % len(_COLORES)], line_width=1, opacity=0.6)
                         _fig_gz.update_layout(
                             barmode="stack", height=380,
                             margin=dict(l=0, r=0, t=10, b=40),
@@ -8410,6 +8475,7 @@ elif modulo.startswith("📊"):
                             font=dict(size=10),
                         )
                         st.plotly_chart(_fig_gz, use_container_width=True, key=f"gz_chart_{_loc}")
+
 
                 # ── Exportar Excel ────────────────────────────────
                 st.markdown("---")
