@@ -8398,42 +8398,41 @@ elif modulo.startswith("📊"):
                         if _meta_str:
                             st.markdown(f"<div style='font-size:0.82rem;margin-bottom:0.6rem'>🎯 Avance vs Meta mensual: {_meta_str}</div>", unsafe_allow_html=True)
 
-                        # Tabla HTML con uds + monto por categoría
+                        # Tabla HTML: 3 cols por categoría (Uds · Monto · %)
                         _gh = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:0.78rem">'
                         _gh += '<thead><tr><th style="text-align:left;padding:8px 10px;background:#1F3864;color:#fff">Garzón</th>'
                         for _c in _gz_cats_show:
-                            _gh += f'<th style="text-align:right;padding:8px 10px;background:#1F3864;color:#fff" colspan="2">{_c}<br><span style="font-size:0.66rem;font-weight:normal;opacity:0.75">Uds · Monto</span></th>'
-                        _gh += '<th style="text-align:right;padding:8px 10px;background:#1F3864;color:#fff" colspan="2">Total<br><span style="font-size:0.66rem;font-weight:normal;opacity:0.75">Uds · Monto</span></th>'
-                        _gh += '<th style="text-align:right;padding:8px 10px;background:#1F3864;color:#fff">Mix %</th>'
+                            _gh += f'<th style="text-align:center;padding:8px 4px;background:#1F3864;color:#fff" colspan="3">{_c}<br><span style="font-size:0.63rem;font-weight:normal;opacity:0.75">Uds · Monto · %</span></th>'
+                        _gh += '<th style="text-align:right;padding:8px 10px;background:#1F3864;color:#fff" colspan="2">Total<br><span style="font-size:0.63rem;font-weight:normal;opacity:0.75">Uds · Monto</span></th>'
                         _gh += '</tr></thead><tbody>'
 
                         for _ri, (_gz_name, _row) in enumerate(_gz_loc_df.iterrows()):
                             _bg = "#F5F5F5" if _ri % 2 == 0 else "#FFFFFF"
                             _row_m = _gz_loc_df_m.loc[_gz_name] if _gz_name in _gz_loc_df_m.index else pd.Series(dtype=float)
+                            _tot_mnt_gz = float(_row_m.get("Total", 0)) if not _row_m.empty else 0.0
                             _gh += f'<tr><td style="padding:7px 10px;background:{_bg};font-weight:500">{_gz_name}</td>'
                             for _c in _gz_cats_show:
                                 _uds = int(_row.get(_c, 0))
                                 _mnt = float(_row_m.get(_c, 0)) if not _row_m.empty else 0.0
-                                _pct = _gz_mix_loc.at[_gz_name, _c] if _gz_name in _gz_mix_loc.index and _c in _gz_mix_loc.columns else 0.0
+                                _pct_venta = (_mnt / _tot_mnt_gz * 100) if _tot_mnt_gz > 0 else 0.0
                                 _bench_val = _gz_bench_pct.get(_c, 0)
-                                _diff = _pct - _bench_val
+                                _diff = _pct_venta - _bench_val
                                 _color = "#2E7D32" if _diff >= 5 else ("#B71C1C" if _diff <= -5 else "#222222")
-                                _gh += f'<td style="text-align:right;padding:7px 5px;background:{_bg};color:{_color}">{_uds:,}</td>'
-                                _gh += f'<td style="text-align:right;padding:7px 10px;background:{_bg};color:#1F3864;font-size:0.72rem">{_fmt_clp2(_mnt)}</td>'
+                                _gh += f'<td style="text-align:right;padding:6px 4px;background:{_bg}">{_uds:,}</td>'
+                                _gh += f'<td style="text-align:right;padding:6px 4px;background:{_bg};color:#1F3864;font-size:0.72rem">{_fmt_clp2(_mnt)}</td>'
+                                _gh += f'<td style="text-align:right;padding:6px 8px;background:{_bg};color:{_color};font-weight:bold">{_pct_venta:.1f}%</td>'
                             _tot_uds = int(_row.get("Total", 0))
-                            _tot_mnt = float(_row_m.get("Total", 0)) if not _row_m.empty else 0.0
-                            _tot_pct_str = " · ".join([f"<b style='color:{('#2E7D32' if (_gz_mix_loc.at[_gz_name,c] if _gz_name in _gz_mix_loc.index and c in _gz_mix_loc.columns else 0)-_gz_bench_pct.get(c,0)>=5 else '#B71C1C' if (_gz_mix_loc.at[_gz_name,c] if _gz_name in _gz_mix_loc.index and c in _gz_mix_loc.columns else 0)-_gz_bench_pct.get(c,0)<=-5 else '#222')}'>{c[:3]} {(_gz_mix_loc.at[_gz_name,c] if _gz_name in _gz_mix_loc.index and c in _gz_mix_loc.columns else 0):.0f}%</b>" for c in _gz_cats_show])
-                            _gh += f'<td style="text-align:right;padding:7px 5px;background:{_bg};font-weight:bold">{_tot_uds:,}</td>'
-                            _gh += f'<td style="text-align:right;padding:7px 10px;background:{_bg};font-weight:bold;color:#1F3864">{_fmt_clp2(_tot_mnt)}</td>'
-                            _gh += f'<td style="text-align:right;padding:7px 10px;background:{_bg};font-size:0.7rem">{_tot_pct_str}</td>'
+                            _gh += f'<td style="text-align:right;padding:6px 4px;background:{_bg};font-weight:bold">{_tot_uds:,}</td>'
+                            _gh += f'<td style="text-align:right;padding:6px 10px;background:{_bg};font-weight:bold;color:#1F3864">{_fmt_clp2(_tot_mnt_gz)}</td>'
                             _gh += '</tr>'
 
                         # Fila benchmark
                         _gh += '<tr><td style="padding:7px 10px;background:#D4A853;font-weight:bold;color:#1F3864">Benchmark red</td>'
                         for _c in _gz_cats_show:
-                            _gh += f'<td style="text-align:right;padding:7px 5px;background:#D4A853;color:#1F3864">—</td>'
-                            _gh += f'<td style="text-align:right;padding:7px 10px;background:#D4A853;font-weight:bold;color:#1F3864">{_gz_bench_pct.get(_c,0):.1f}%</td>'
-                        _gh += '<td colspan="3" style="text-align:right;padding:7px 10px;background:#D4A853;font-weight:bold;color:#1F3864">100%</td></tr>'
+                            _gh += f'<td style="text-align:right;padding:6px 4px;background:#D4A853;color:#1F3864">—</td>'
+                            _gh += f'<td style="text-align:right;padding:6px 4px;background:#D4A853;color:#1F3864">—</td>'
+                            _gh += f'<td style="text-align:right;padding:6px 8px;background:#D4A853;font-weight:bold;color:#1F3864">{_gz_bench_pct.get(_c,0):.1f}%</td>'
+                        _gh += '<td colspan="2" style="text-align:right;padding:7px 10px;background:#D4A853;font-weight:bold;color:#1F3864">100%</td></tr>'
 
                         # Fila meta mensual
                         if _loc_metas:
@@ -8441,9 +8440,10 @@ elif modulo.startswith("📊"):
                             for _c in _gz_cats_show:
                                 _m = _loc_metas.get(_c, {}).get("mensual")
                                 _val = f"{_m:,}" if _m else "—"
-                                _gh += f'<td style="text-align:right;padding:7px 5px;background:#1F3864;color:#D4A853;font-weight:bold">{_val}</td>'
-                                _gh += f'<td style="text-align:right;padding:7px 10px;background:#1F3864;color:#555">—</td>'
-                            _gh += '<td colspan="3" style="padding:7px 10px;background:#1F3864"></td></tr>'
+                                _gh += f'<td style="text-align:right;padding:6px 4px;background:#1F3864;color:#D4A853;font-weight:bold">{_val}</td>'
+                                _gh += f'<td style="text-align:right;padding:6px 4px;background:#1F3864;color:#555">—</td>'
+                                _gh += f'<td style="text-align:right;padding:6px 8px;background:#1F3864;color:#555">—</td>'
+                            _gh += '<td colspan="2" style="padding:7px 10px;background:#1F3864"></td></tr>'
 
                         _gh += '</tbody></table></div>'
                         st.markdown(_gh, unsafe_allow_html=True)
