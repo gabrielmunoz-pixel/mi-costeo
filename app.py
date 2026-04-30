@@ -8096,7 +8096,374 @@ elif modulo.startswith("📊"):
                 )
 
 
-    elif informe_sel in ("CuentasCasa", "Auditor", "Bar", "Garzones"):
+    elif informe_sel == "Garzones":
+        import plotly.graph_objects as go
+        import io as _gz_io
+        from openpyxl import Workbook as _GZWb
+        from openpyxl.styles import Font as _GZF, PatternFill as _GZPF, Alignment as _GZA
+        from datetime import date as _gz_date
+
+        # ── Mapa de categorías (lógica PowerPivot traducida) ─────
+        _CAT_MENU_MAP = {
+            # Alimentos
+            "Acompañamiento Almuerzo": "Alimentos", "AcompaÃ±amiento Almuerzo": "Alimentos",
+            "Acompañamientos": "Alimentos", "AcompaÃ±amientos": "Alimentos",
+            "Acompanamiento Almuerzo": "Alimentos", "Acompanamientos": "Alimentos",
+            "Ensaladas Y Otros": "Alimentos", "Ensaladas Almuerzo": "Alimentos",
+            "Para Compartir": "Alimentos",
+            "Platos Clásicos": "Alimentos", "Platos Clasicos": "Alimentos",
+            "PlÃ¡sicos": "Alimentos",
+            "Platos Alemanes": "Alimentos",
+            "Hamburguesa Clásica": "Alimentos", "Hamburguesa Clasica": "Alimentos",
+            "Hamburguesa De La Casa": "Alimentos", "Hamburguesa De Quinoa": "Alimentos",
+            "Lomito Clásico": "Alimentos", "Lomito Clasico": "Alimentos",
+            "Ave Clásica": "Alimentos", "Ave Clasica": "Alimentos",
+            "Churrasco Clásico": "Alimentos", "Churrasco Clasico": "Alimentos",
+            "Pernil Clásico": "Alimentos", "Pernil Clasico": "Alimentos",
+            "Filete Clásico": "Alimentos", "Filete Clasico": "Alimentos",
+            "Mechada Clásica": "Alimentos", "Mechada Clasica": "Alimentos",
+            "Sándwich Clásicos": "Alimentos", "Sandwich Clasicos": "Alimentos",
+            "SÃ¡ndwich ClÃ¡sicos": "Alimentos",
+            "Niños": "Alimentos", "NiÃ±os": "Alimentos", "Ninos": "Alimentos",
+            "Hot-Dog": "Alimentos", "Agregados": "Alimentos",
+            # Postres
+            "Postres": "Postres",
+            # Cafetería
+            "Cafeteria": "Cafetería", "Cafetería": "Cafetería",
+            # Colaciones
+            "Colaciones": "Colaciones", "Colacion": "Colaciones",
+            "Menu Ejecutivo": "Colaciones", "Menú Ejecutivo": "Colaciones",
+            "MenÃº Ejecutivo": "Colaciones",
+            "Proteina Almuerzo": "Colaciones",
+            # Líquidos C/A
+            "Cervezas": "Líquidos C/A", "Cocteles": "Líquidos C/A",
+            "Piscos": "Líquidos C/A", "Pisco Sour": "Líquidos C/A",
+            "Vinos": "Líquidos C/A", "Espumantes": "Líquidos C/A",
+            "Bajativos": "Líquidos C/A", "Ron": "Líquidos C/A",
+            "Whisky": "Líquidos C/A", "Vodka": "Líquidos C/A",
+            "Tequila": "Líquidos C/A", "Tragos": "Líquidos C/A",
+            "Royal Guard": "Líquidos C/A", "Heineken": "Líquidos C/A",
+            "Cerveza": "Líquidos C/A", "Vinos y Espumantes": "Líquidos C/A",
+            # Líquidos S/A
+            "Bebidas": "Líquidos S/A", "Jugos Naturales": "Líquidos S/A",
+            "Limonadas": "Líquidos S/A", "Aguas": "Líquidos S/A",
+            "Bebestibles": "Líquidos S/A", "Tragos S/A": "Líquidos S/A",
+            "Jugos/Limonadas": "Líquidos S/A",
+        }
+        _CATS_ORDEN = ["Alimentos", "Postres", "Cafetería", "Colaciones", "Líquidos C/A", "Líquidos S/A"]
+        _EXCLUIR_CATS = {"Otros", "otros", None}
+
+        # Metas mensuales por local y categoría (Cafetería y Postres)
+        _METAS = {
+            "La Reina":           {"Cafetería": {"mensual": 1499, "diaria": 50},  "Postres": {"mensual": 1543, "diaria": 51}},
+            "Quilin":             {"Cafetería": {"mensual": 1112, "diaria": 37},  "Postres": {"mensual": 1412, "diaria": 47}},
+            "Macul":              {"Cafetería": {"mensual": 1840, "diaria": 61},  "Postres": {"mensual": 2226, "diaria": 74}},
+            "Chicureo":           {"Cafetería": {"mensual": 1653, "diaria": 55},  "Postres": {"mensual": 1926, "diaria": 64}},
+            "La Dehesa":          {"Cafetería": {"mensual": 1736, "diaria": 58},  "Postres": {"mensual": 1658, "diaria": 55}},
+            "Las Condes":         {"Cafetería": {"mensual": 2024, "diaria": 67},  "Postres": {"mensual": 1984, "diaria": 66}},
+            "Los Trapenses":      {"Cafetería": {"mensual": 1857, "diaria": 62},  "Postres": {"mensual": 1962, "diaria": 65}},
+            "Nueva Providencia":  {"Cafetería": {"mensual": 1119, "diaria": 37},  "Postres": {"mensual": 1244, "diaria": 41}},
+            "Providencia":        {"Cafetería": {"mensual":  728, "diaria": 24},  "Postres": {"mensual":  942, "diaria": 31}},
+            "Vitacura":           {"Cafetería": {"mensual": 2764, "diaria": 92},  "Postres": {"mensual": 2431, "diaria": 81}},
+        }
+
+        def _gz_categorizar(cat_menu, nombre_producto):
+            """Traduce categoria_menu → categoría agrupada, igual que el PowerPivot."""
+            cat_norm = str(cat_menu).strip() if cat_menu else ""
+            result = _CAT_MENU_MAP.get(cat_norm)
+            if result:
+                return result
+            # Fallback por nombre de producto (casos especiales del PowerPivot)
+            nom = str(nombre_producto).strip() if nombre_producto else ""
+            _NOMBRE_MAP = {
+                "Hot dog Italiano": "Alimentos", "Hot dog Dinamico": "Alimentos",
+                "Hot dog Completa": "Alimentos", "Hot dog Tomate Mayo": "Alimentos",
+                "Pisco Sour De La Casa": "Líquidos C/A", "Pisco Sour Peruano": "Líquidos C/A",
+                "Sangria  AE": "Líquidos C/A", "Royal Guard": "Líquidos C/A",
+                "Heineken": "Líquidos C/A",
+                "Coca Cola": "Líquidos S/A", "Coca Cola Zero": "Líquidos S/A",
+                "Coca Cola Light": "Líquidos S/A", "Sprite": "Líquidos S/A",
+                "Sprite Zero": "Líquidos S/A", "Fanta Zero": "Líquidos S/A",
+                "Agua con gas": "Líquidos S/A", "Agua sin gas": "Líquidos S/A",
+                "Mineral con Gas": "Líquidos S/A", "Mineral sin gas": "Líquidos S/A",
+                "Ginger Ale Ligh": "Líquidos S/A",
+                "Mojito Clasico Sin Alcohol": "Líquidos S/A",
+                "Mojito Berries Sin Alcohol": "Líquidos S/A",
+                "Mojito Maracuya Sin Alcohol": "Líquidos S/A",
+                "London Mule Sin Alcohol": "Líquidos S/A",
+                "Gin Tonic Sin Alcohol": "Líquidos S/A",
+            }
+            for k, v in _NOMBRE_MAP.items():
+                if k.lower() in nom.lower():
+                    return v
+            return None  # excluir
+
+        # ── Controles ────────────────────────────────────────────
+        _gz_c1, _gz_c2, _gz_c3, _gz_c4 = st.columns([2, 2, 2, 1])
+        with _gz_c1:
+            _gz_fi = st.date_input("Desde", value=_gz_date.today().replace(day=1), key="gz_fi")
+        with _gz_c2:
+            _gz_ff = st.date_input("Hasta", value=_gz_date.today(), key="gz_ff")
+        with _gz_c3:
+            _gz_locales = ["Todos"] + ["Vitacura","Las Condes","Chicureo","La Dehesa",
+                                        "Macul","La Reina","Quilin","Nueva Providencia",
+                                        "Providencia","Los Trapenses"]
+            _gz_local = st.selectbox("Local", _gz_locales, key="gz_local")
+        with _gz_c4:
+            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+            _gz_btn = st.button("Generar", key="gz_btn", type="primary", use_container_width=True)
+
+        _gz_cached = st.session_state.get("gz_data")
+        if _gz_btn or (_gz_cached is not None and not _gz_cached.empty):
+            if _gz_btn:
+                with st.spinner("Cargando ventas..."):
+                    _gz_loc_filter = "" if _gz_local == "Todos" else "AND local = :local"
+                    _gz_params = {"fi": str(_gz_fi), "ff": str(_gz_ff)}
+                    if _gz_local != "Todos":
+                        _gz_params["local"] = _gz_local
+
+                    _gz_df_raw = run_query(f"""
+                        SELECT
+                            local,
+                            garzon,
+                            categoria_menu,
+                            nombre_producto,
+                            es_opcion,
+                            cantidad_vendida,
+                            monto_venta_real
+                        FROM ventas
+                        WHERE fecha_venta BETWEEN :fi AND :ff
+                          AND garzon IS NOT NULL
+                          AND garzon != ''
+                          AND local IS NOT NULL
+                          AND es_opcion = false
+                          {_gz_loc_filter}
+                    """, _gz_params)
+
+                    st.session_state["gz_data"] = _gz_df_raw
+                    st.session_state["gz_fi"] = str(_gz_fi)
+                    st.session_state["gz_ff"] = str(_gz_ff)
+                    st.session_state["gz_local"] = _gz_local
+
+            _gz_df_raw = st.session_state.get("gz_data", pd.DataFrame())
+
+            if _gz_df_raw is not None and not _gz_df_raw.empty:
+                # ── Categorizar ──────────────────────────────────
+                _gz_df_raw["cat_gz"] = _gz_df_raw.apply(
+                    lambda r: _gz_categorizar(r["categoria_menu"], r["nombre_producto"]), axis=1
+                )
+                _gz_df = _gz_df_raw[_gz_df_raw["cat_gz"].notna()].copy()
+                _gz_df["cantidad_vendida"] = pd.to_numeric(_gz_df["cantidad_vendida"], errors="coerce").fillna(0)
+                _gz_df["monto_venta_real"] = pd.to_numeric(_gz_df["monto_venta_real"], errors="coerce").fillna(0)
+
+                # ── Pivot: garzon × categoría (unidades) ─────────
+                _gz_pivot = (
+                    _gz_df.groupby(["local", "garzon", "cat_gz"])["cantidad_vendida"]
+                    .sum().reset_index()
+                    .pivot_table(index=["local","garzon"], columns="cat_gz", values="cantidad_vendida", aggfunc="sum", fill_value=0)
+                )
+                _gz_pivot = _gz_pivot.reindex(columns=[c for c in _CATS_ORDEN if c in _gz_pivot.columns], fill_value=0)
+                _gz_pivot["Total"] = _gz_pivot.sum(axis=1)
+
+                # ── Benchmark: promedio de todos los locales ──────
+                _gz_bench = _gz_pivot[[c for c in _CATS_ORDEN if c in _gz_pivot.columns]].copy()
+                _gz_bench_total = _gz_bench.sum(axis=0)
+                _gz_bench_pct = (_gz_bench_total / _gz_bench_total.sum() * 100).round(1)
+
+                # ── Mix % por garzón ─────────────────────────────
+                _gz_mix = _gz_pivot[[c for c in _CATS_ORDEN if c in _gz_pivot.columns]].div(_gz_pivot["Total"], axis=0) * 100
+                _gz_mix = _gz_mix.round(1)
+
+                # ── Render por local ─────────────────────────────
+                _gz_locales_datos = _gz_pivot.index.get_level_values("local").unique().tolist()
+
+                st.markdown("---")
+                st.markdown(f"**Benchmark red completa (mix % de unidades vendidas):**")
+
+                # Benchmark pills
+                _bench_html = "<div style='display:flex;flex-wrap:wrap;gap:8px;margin-bottom:1rem'>"
+                for _cat in [c for c in _CATS_ORDEN if c in _gz_bench_pct.index]:
+                    _bench_html += f"<span style='background:#1F3864;color:#fff;padding:4px 12px;border-radius:20px;font-size:0.78rem'>{_cat}: <b>{_gz_bench_pct[_cat]:.1f}%</b></span>"
+                _bench_html += "</div>"
+                st.markdown(_bench_html, unsafe_allow_html=True)
+
+                # ── Tabla por local ───────────────────────────────
+                _gz_cats_show = [c for c in _CATS_ORDEN if c in _gz_pivot.columns]
+
+                for _loc in sorted(_gz_locales_datos):
+                    _gz_loc_df = _gz_pivot.xs(_loc, level="local") if "local" in _gz_pivot.index.names else _gz_pivot
+                    _gz_mix_loc = _gz_mix.xs(_loc, level="local") if "local" in _gz_mix.index.names else _gz_mix
+
+                    # Calcular avance vs meta mensual para Cafetería y Postres
+                    _loc_metas = _METAS.get(_loc, {})
+                    _meta_info = []
+                    for _mcat in ["Cafetería", "Postres"]:
+                        if _mcat in _loc_metas and _mcat in _gz_pivot.columns:
+                            _vendido = int(_gz_pivot.xs(_loc, level="local")[_mcat].sum()) if "local" in _gz_pivot.index.names else 0
+                            _meta_m = _loc_metas[_mcat]["mensual"]
+                            _pct_m = _vendido / _meta_m * 100 if _meta_m else 0
+                            _color_m = "#2E7D32" if _pct_m >= 100 else ("#D4A853" if _pct_m >= 70 else "#B71C1C")
+                            _meta_info.append(f"<span style='color:{_color_m};font-weight:bold'>{_mcat}: {_vendido:,}/{_meta_m:,} ({_pct_m:.0f}%)</span>")
+                    _meta_str = "  ·  ".join(_meta_info) if _meta_info else ""
+
+                    with st.expander(f"🏪 {_loc}", expanded=(_gz_local != "Todos")):
+                        if _meta_str:
+                            st.markdown(f"<div style='font-size:0.82rem;margin-bottom:0.6rem'>🎯 Avance vs Meta mensual: {_meta_str}</div>", unsafe_allow_html=True)
+
+                        # Tabla HTML
+                        _gh = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:0.78rem">'
+                        # Header
+                        _gh += '<thead><tr><th style="text-align:left;padding:8px 10px;background:#1F3864;color:#fff">Garzón</th>'
+                        for _c in _gz_cats_show:
+                            _gh += f'<th style="text-align:right;padding:8px 10px;background:#1F3864;color:#fff">{_c}<br><span style="font-size:0.68rem;font-weight:normal;opacity:0.8">Uds · %</span></th>'
+                        _gh += '<th style="text-align:right;padding:8px 10px;background:#1F3864;color:#fff">Total</th>'
+                        _gh += '</tr></thead><tbody>'
+
+                        for _ri, (_gz_name, _row) in enumerate(_gz_loc_df.iterrows()):
+                            _bg = "#F5F5F5" if _ri % 2 == 0 else "#FFFFFF"
+                            _gh += f'<tr><td style="padding:7px 10px;background:{_bg};font-weight:500">{_gz_name}</td>'
+                            for _c in _gz_cats_show:
+                                _uds = int(_row.get(_c, 0))
+                                _pct = _gz_mix_loc.at[_gz_name, _c] if _gz_name in _gz_mix_loc.index and _c in _gz_mix_loc.columns else 0.0
+                                _bench_val = _gz_bench_pct.get(_c, 0)
+                                # Colorear si está >5pp por encima o debajo del benchmark
+                                _diff = _pct - _bench_val
+                                _color = "#2E7D32" if _diff >= 5 else ("#B71C1C" if _diff <= -5 else "#222222")
+                                _gh += f'<td style="text-align:right;padding:7px 10px;background:{_bg};color:{_color}">{_uds:,} · <b>{_pct:.1f}%</b></td>'
+                            _gh += f'<td style="text-align:right;padding:7px 10px;background:{_bg};font-weight:bold">{int(_row.get("Total",0)):,}</td>'
+                            _gh += '</tr>'
+
+                        # Fila benchmark
+                        _gh += '<tr><td style="padding:7px 10px;background:#D4A853;font-weight:bold;color:#1F3864">Benchmark red</td>'
+                        for _c in _gz_cats_show:
+                            _gh += f'<td style="text-align:right;padding:7px 10px;background:#D4A853;font-weight:bold;color:#1F3864">— · {_gz_bench_pct.get(_c,0):.1f}%</td>'
+                        _gh += '<td style="text-align:right;padding:7px 10px;background:#D4A853;font-weight:bold;color:#1F3864">100%</td></tr>'
+
+                        # Fila meta mensual (solo Cafetería y Postres)
+                        if _loc_metas:
+                            _gh += '<tr><td style="padding:7px 10px;background:#1F3864;font-weight:bold;color:#D4A853">🎯 Meta mensual</td>'
+                            for _c in _gz_cats_show:
+                                _m = _loc_metas.get(_c, {}).get("mensual")
+                                _gh += f'<td style="text-align:right;padding:7px 10px;background:#1F3864;color:#D4A853;font-weight:bold">{_m:,}' if _m else '<td style="text-align:right;padding:7px 10px;background:#1F3864;color:#666">—'
+                                _gh += '</td>'
+                            _gh += '<td style="padding:7px 10px;background:#1F3864"></td></tr>'
+
+                        _gh += '</tbody></table></div>'
+                        st.markdown(_gh, unsafe_allow_html=True)
+
+                        # ── Gráfico barras apiladas % ─────────────
+                        _fig_gz = go.Figure()
+                        _gz_garzones = _gz_loc_df.index.tolist()
+                        _COLORES = ["#1F3864","#2E5090","#4472C4","#D4A853","#8FAF3E","#B55A1C"]
+                        for _ci, _c in enumerate(_gz_cats_show):
+                            _vals = [_gz_mix_loc.at[g, _c] if g in _gz_mix_loc.index and _c in _gz_mix_loc.columns else 0 for g in _gz_garzones]
+                            _fig_gz.add_trace(go.Bar(
+                                name=_c, x=_gz_garzones, y=_vals,
+                                marker_color=_COLORES[_ci % len(_COLORES)],
+                                text=[f"{v:.0f}%" for v in _vals],
+                                textposition="inside", textfont=dict(size=9, color="white")
+                            ))
+                        # Líneas benchmark
+                        _acum = 0
+                        for _ci, _c in enumerate(_gz_cats_show):
+                            _acum += _gz_bench_pct.get(_c, 0)
+                            _fig_gz.add_hline(
+                                y=_acum, line_dash="dot",
+                                line_color=_COLORES[_ci % len(_COLORES)],
+                                line_width=1, opacity=0.6
+                            )
+                        _fig_gz.update_layout(
+                            barmode="stack", height=380,
+                            margin=dict(l=0, r=0, t=10, b=40),
+                            xaxis_title="", yaxis_title="Mix %",
+                            legend=dict(orientation="h", y=1.12, x=0, font=dict(size=9)),
+                            plot_bgcolor="white", paper_bgcolor="white",
+                            yaxis=dict(range=[0, 105], ticksuffix="%"),
+                            font=dict(size=10),
+                        )
+                        st.plotly_chart(_fig_gz, use_container_width=True, key=f"gz_chart_{_loc}")
+
+                # ── Exportar Excel ────────────────────────────────
+                st.markdown("---")
+                _gz_buf = _gz_io.BytesIO()
+                _gz_wb = _GZWb()
+                _gz_ws = _gz_wb.active
+                _gz_ws.title = "Rendimiento Garzones"
+                _gz_ws.sheet_properties.tabColor = "1F3864"
+                _gz_ws.sheet_view.showGridLines = False
+
+                # Título
+                _gz_ws.merge_cells(f"A1:{chr(65 + len(_gz_cats_show) + 2)}1")
+                _tc = _gz_ws.cell(row=1, column=1, value=f"Rendimiento Garzones — {st.session_state.get('gz_fi','')} al {st.session_state.get('gz_ff','')} — {st.session_state.get('gz_local','')}")
+                _tc.font = _GZF(name="Calibri", bold=True, size=12, color="FFFFFF")
+                _tc.fill = _GZPF("solid", start_color="1F3864", end_color="1F3864")
+                _tc.alignment = _GZA(horizontal="left", vertical="center")
+                _gz_ws.row_dimensions[1].height = 26
+
+                # Headers
+                _gz_hdrs = ["Local", "Garzón"] + _gz_cats_show + ["Total"]
+                for _ci, _h in enumerate(_gz_hdrs, 1):
+                    _c = _gz_ws.cell(row=2, column=_ci, value=_h)
+                    _c.font = _GZF(name="Calibri", bold=True, size=9, color="FFFFFF")
+                    _c.fill = _GZPF("solid", start_color="2E5090", end_color="2E5090")
+                    _c.alignment = _GZA(horizontal="right" if _ci > 2 else "left", vertical="center")
+                _gz_ws.row_dimensions[2].height = 18
+
+                # Headers % fila 3
+                _gz_hpct = ["", ""] + [f"% {c}" for c in _gz_cats_show] + [""]
+                for _ci, _h in enumerate(_gz_hpct, 1):
+                    _c = _gz_ws.cell(row=3, column=_ci, value=_h)
+                    _c.font = _GZF(name="Calibri", italic=True, size=8, color="FFFFFF")
+                    _c.fill = _GZPF("solid", start_color="2E5090", end_color="2E5090")
+                    _c.alignment = _GZA(horizontal="right" if _ci > 2 else "left")
+                _gz_ws.row_dimensions[3].height = 14
+
+                _gz_row = 4
+                for _loc in sorted(_gz_locales_datos):
+                    _gz_loc_df2 = _gz_pivot.xs(_loc, level="local") if "local" in _gz_pivot.index.names else _gz_pivot
+                    _gz_mix_loc2 = _gz_mix.xs(_loc, level="local") if "local" in _gz_mix.index.names else _gz_mix
+                    for _ri2, (_gz_name, _row2) in enumerate(_gz_loc_df2.iterrows()):
+                        _bg2 = "F5F5F5" if _ri2 % 2 == 0 else "FFFFFF"
+                        _gz_ws.cell(row=_gz_row, column=1, value=_loc).font = _GZF(name="Calibri", size=9)
+                        _gz_ws.cell(row=_gz_row, column=2, value=_gz_name).font = _GZF(name="Calibri", size=9, bold=True)
+                        for _ci2, _c2 in enumerate(_gz_cats_show, 3):
+                            _uds2 = int(_row2.get(_c2, 0))
+                            _cell = _gz_ws.cell(row=_gz_row, column=_ci2, value=_uds2)
+                            _cell.font = _GZF(name="Calibri", size=9)
+                            _cell.fill = _GZPF("solid", start_color=_bg2, end_color=_bg2)
+                            _cell.alignment = _GZA(horizontal="right")
+                        _gz_ws.cell(row=_gz_row, column=len(_gz_cats_show)+3, value=int(_row2.get("Total",0))).font = _GZF(name="Calibri", size=9, bold=True)
+                        _gz_row += 1
+
+                    # Benchmark fila por local
+                    _gz_ws.cell(row=_gz_row, column=1, value=_loc)
+                    _gz_ws.cell(row=_gz_row, column=2, value="Benchmark red")
+                    for _ci3, _c3 in enumerate(_gz_cats_show, 3):
+                        _cell_b = _gz_ws.cell(row=_gz_row, column=_ci3, value=round(_gz_bench_pct.get(_c3, 0), 1))
+                        _cell_b.font = _GZF(name="Calibri", size=9, bold=True, color="1F3864")
+                        _cell_b.fill = _GZPF("solid", start_color="D4A853", end_color="D4A853")
+                        _cell_b.number_format = "0.0%"
+                    _gz_row += 2
+
+                for _ci4 in range(1, len(_gz_hdrs)+1):
+                    _gz_ws.column_dimensions[chr(64+_ci4)].width = 16 if _ci4 > 2 else 22
+                _gz_ws.freeze_panes = "C4"
+                _gz_wb.save(_gz_buf); _gz_buf.seek(0)
+
+                _gz_fname = f"rendimiento_garzones_{st.session_state.get('gz_fi','')}_{st.session_state.get('gz_local','').replace(' ','_')}.xlsx"
+                st.download_button(
+                    "📥 Exportar Excel",
+                    _gz_buf.getvalue(),
+                    file_name=_gz_fname,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=False,
+                )
+
+    # ============================================================
+    # MÓDULO: AUDITOR DE CATEGORÍAS
+    # ============================================================
+
+    elif informe_sel in ("CuentasCasa", "Auditor", "Bar"):
         pass  # estos módulos se renderizan en sus propios elif globales
     elif "Informe 1" in informe_sel:
         st.markdown("### 💰 Rentabilidad por Producto / Categoría")
@@ -13501,375 +13868,6 @@ buildTree(data, 1, null);
                 periodo_safe = d['periodo'].replace(' ','_').replace('/','_')
                 nombre_file  = f"Informe_{local_rpt}_{periodo_safe}.xlsx"
 
-# ============================================================
-# MÓDULO: RENDIMIENTO GARZONES
-# ============================================================
-elif modulo.startswith("📊") and informe_sel == "Garzones":
-    import plotly.graph_objects as go
-    import io as _gz_io
-    from openpyxl import Workbook as _GZWb
-    from openpyxl.styles import Font as _GZF, PatternFill as _GZPF, Alignment as _GZA
-    from datetime import date as _gz_date
-
-    # ── Mapa de categorías (lógica PowerPivot traducida) ─────
-    _CAT_MENU_MAP = {
-        # Alimentos
-        "Acompañamiento Almuerzo": "Alimentos", "AcompaÃ±amiento Almuerzo": "Alimentos",
-        "Acompañamientos": "Alimentos", "AcompaÃ±amientos": "Alimentos",
-        "Acompanamiento Almuerzo": "Alimentos", "Acompanamientos": "Alimentos",
-        "Ensaladas Y Otros": "Alimentos", "Ensaladas Almuerzo": "Alimentos",
-        "Para Compartir": "Alimentos",
-        "Platos Clásicos": "Alimentos", "Platos Clasicos": "Alimentos",
-        "PlÃ¡sicos": "Alimentos",
-        "Platos Alemanes": "Alimentos",
-        "Hamburguesa Clásica": "Alimentos", "Hamburguesa Clasica": "Alimentos",
-        "Hamburguesa De La Casa": "Alimentos", "Hamburguesa De Quinoa": "Alimentos",
-        "Lomito Clásico": "Alimentos", "Lomito Clasico": "Alimentos",
-        "Ave Clásica": "Alimentos", "Ave Clasica": "Alimentos",
-        "Churrasco Clásico": "Alimentos", "Churrasco Clasico": "Alimentos",
-        "Pernil Clásico": "Alimentos", "Pernil Clasico": "Alimentos",
-        "Filete Clásico": "Alimentos", "Filete Clasico": "Alimentos",
-        "Mechada Clásica": "Alimentos", "Mechada Clasica": "Alimentos",
-        "Sándwich Clásicos": "Alimentos", "Sandwich Clasicos": "Alimentos",
-        "SÃ¡ndwich ClÃ¡sicos": "Alimentos",
-        "Niños": "Alimentos", "NiÃ±os": "Alimentos", "Ninos": "Alimentos",
-        "Hot-Dog": "Alimentos", "Agregados": "Alimentos",
-        # Postres
-        "Postres": "Postres",
-        # Cafetería
-        "Cafeteria": "Cafetería", "Cafetería": "Cafetería",
-        # Colaciones
-        "Colaciones": "Colaciones", "Colacion": "Colaciones",
-        "Menu Ejecutivo": "Colaciones", "Menú Ejecutivo": "Colaciones",
-        "MenÃº Ejecutivo": "Colaciones",
-        "Proteina Almuerzo": "Colaciones",
-        # Líquidos C/A
-        "Cervezas": "Líquidos C/A", "Cocteles": "Líquidos C/A",
-        "Piscos": "Líquidos C/A", "Pisco Sour": "Líquidos C/A",
-        "Vinos": "Líquidos C/A", "Espumantes": "Líquidos C/A",
-        "Bajativos": "Líquidos C/A", "Ron": "Líquidos C/A",
-        "Whisky": "Líquidos C/A", "Vodka": "Líquidos C/A",
-        "Tequila": "Líquidos C/A", "Tragos": "Líquidos C/A",
-        "Royal Guard": "Líquidos C/A", "Heineken": "Líquidos C/A",
-        "Cerveza": "Líquidos C/A", "Vinos y Espumantes": "Líquidos C/A",
-        # Líquidos S/A
-        "Bebidas": "Líquidos S/A", "Jugos Naturales": "Líquidos S/A",
-        "Limonadas": "Líquidos S/A", "Aguas": "Líquidos S/A",
-        "Bebestibles": "Líquidos S/A", "Tragos S/A": "Líquidos S/A",
-        "Jugos/Limonadas": "Líquidos S/A",
-    }
-    _CATS_ORDEN = ["Alimentos", "Postres", "Cafetería", "Colaciones", "Líquidos C/A", "Líquidos S/A"]
-    _EXCLUIR_CATS = {"Otros", "otros", None}
-
-    # Metas mensuales por local y categoría (Cafetería y Postres)
-    _METAS = {
-        "La Reina":           {"Cafetería": {"mensual": 1499, "diaria": 50},  "Postres": {"mensual": 1543, "diaria": 51}},
-        "Quilin":             {"Cafetería": {"mensual": 1112, "diaria": 37},  "Postres": {"mensual": 1412, "diaria": 47}},
-        "Macul":              {"Cafetería": {"mensual": 1840, "diaria": 61},  "Postres": {"mensual": 2226, "diaria": 74}},
-        "Chicureo":           {"Cafetería": {"mensual": 1653, "diaria": 55},  "Postres": {"mensual": 1926, "diaria": 64}},
-        "La Dehesa":          {"Cafetería": {"mensual": 1736, "diaria": 58},  "Postres": {"mensual": 1658, "diaria": 55}},
-        "Las Condes":         {"Cafetería": {"mensual": 2024, "diaria": 67},  "Postres": {"mensual": 1984, "diaria": 66}},
-        "Los Trapenses":      {"Cafetería": {"mensual": 1857, "diaria": 62},  "Postres": {"mensual": 1962, "diaria": 65}},
-        "Nueva Providencia":  {"Cafetería": {"mensual": 1119, "diaria": 37},  "Postres": {"mensual": 1244, "diaria": 41}},
-        "Providencia":        {"Cafetería": {"mensual":  728, "diaria": 24},  "Postres": {"mensual":  942, "diaria": 31}},
-        "Vitacura":           {"Cafetería": {"mensual": 2764, "diaria": 92},  "Postres": {"mensual": 2431, "diaria": 81}},
-    }
-
-    def _gz_categorizar(cat_menu, nombre_producto):
-        """Traduce categoria_menu → categoría agrupada, igual que el PowerPivot."""
-        cat_norm = str(cat_menu).strip() if cat_menu else ""
-        result = _CAT_MENU_MAP.get(cat_norm)
-        if result:
-            return result
-        # Fallback por nombre de producto (casos especiales del PowerPivot)
-        nom = str(nombre_producto).strip() if nombre_producto else ""
-        _NOMBRE_MAP = {
-            "Hot dog Italiano": "Alimentos", "Hot dog Dinamico": "Alimentos",
-            "Hot dog Completa": "Alimentos", "Hot dog Tomate Mayo": "Alimentos",
-            "Pisco Sour De La Casa": "Líquidos C/A", "Pisco Sour Peruano": "Líquidos C/A",
-            "Sangria  AE": "Líquidos C/A", "Royal Guard": "Líquidos C/A",
-            "Heineken": "Líquidos C/A",
-            "Coca Cola": "Líquidos S/A", "Coca Cola Zero": "Líquidos S/A",
-            "Coca Cola Light": "Líquidos S/A", "Sprite": "Líquidos S/A",
-            "Sprite Zero": "Líquidos S/A", "Fanta Zero": "Líquidos S/A",
-            "Agua con gas": "Líquidos S/A", "Agua sin gas": "Líquidos S/A",
-            "Mineral con Gas": "Líquidos S/A", "Mineral sin gas": "Líquidos S/A",
-            "Ginger Ale Ligh": "Líquidos S/A",
-            "Mojito Clasico Sin Alcohol": "Líquidos S/A",
-            "Mojito Berries Sin Alcohol": "Líquidos S/A",
-            "Mojito Maracuya Sin Alcohol": "Líquidos S/A",
-            "London Mule Sin Alcohol": "Líquidos S/A",
-            "Gin Tonic Sin Alcohol": "Líquidos S/A",
-        }
-        for k, v in _NOMBRE_MAP.items():
-            if k.lower() in nom.lower():
-                return v
-        return None  # excluir
-
-    # ── Controles ────────────────────────────────────────────
-    _gz_c1, _gz_c2, _gz_c3, _gz_c4 = st.columns([2, 2, 2, 1])
-    with _gz_c1:
-        _gz_fi = st.date_input("Desde", value=_gz_date.today().replace(day=1), key="gz_fi")
-    with _gz_c2:
-        _gz_ff = st.date_input("Hasta", value=_gz_date.today(), key="gz_ff")
-    with _gz_c3:
-        _gz_locales = ["Todos"] + ["Vitacura","Las Condes","Chicureo","La Dehesa",
-                                    "Macul","La Reina","Quilin","Nueva Providencia",
-                                    "Providencia","Los Trapenses"]
-        _gz_local = st.selectbox("Local", _gz_locales, key="gz_local")
-    with _gz_c4:
-        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-        _gz_btn = st.button("Generar", key="gz_btn", type="primary", use_container_width=True)
-
-    _gz_cached = st.session_state.get("gz_data")
-    if _gz_btn or (_gz_cached is not None and not _gz_cached.empty):
-        if _gz_btn:
-            with st.spinner("Cargando ventas..."):
-                _gz_loc_filter = "" if _gz_local == "Todos" else "AND local = :local"
-                _gz_params = {"fi": str(_gz_fi), "ff": str(_gz_ff)}
-                if _gz_local != "Todos":
-                    _gz_params["local"] = _gz_local
-
-                _gz_df_raw = run_query(f"""
-                    SELECT
-                        local,
-                        garzon,
-                        categoria_menu,
-                        nombre_producto,
-                        es_opcion,
-                        cantidad_vendida,
-                        monto_venta_real
-                    FROM ventas
-                    WHERE fecha_venta BETWEEN :fi AND :ff
-                      AND garzon IS NOT NULL
-                      AND garzon != ''
-                      AND local IS NOT NULL
-                      AND es_opcion = false
-                      {_gz_loc_filter}
-                """, _gz_params)
-
-                st.session_state["gz_data"] = _gz_df_raw
-                st.session_state["gz_fi"] = str(_gz_fi)
-                st.session_state["gz_ff"] = str(_gz_ff)
-                st.session_state["gz_local"] = _gz_local
-
-        _gz_df_raw = st.session_state.get("gz_data", pd.DataFrame())
-
-        if _gz_df_raw is not None and not _gz_df_raw.empty:
-            # ── Categorizar ──────────────────────────────────
-            _gz_df_raw["cat_gz"] = _gz_df_raw.apply(
-                lambda r: _gz_categorizar(r["categoria_menu"], r["nombre_producto"]), axis=1
-            )
-            _gz_df = _gz_df_raw[_gz_df_raw["cat_gz"].notna()].copy()
-            _gz_df["cantidad_vendida"] = pd.to_numeric(_gz_df["cantidad_vendida"], errors="coerce").fillna(0)
-            _gz_df["monto_venta_real"] = pd.to_numeric(_gz_df["monto_venta_real"], errors="coerce").fillna(0)
-
-            # ── Pivot: garzon × categoría (unidades) ─────────
-            _gz_pivot = (
-                _gz_df.groupby(["local", "garzon", "cat_gz"])["cantidad_vendida"]
-                .sum().reset_index()
-                .pivot_table(index=["local","garzon"], columns="cat_gz", values="cantidad_vendida", aggfunc="sum", fill_value=0)
-            )
-            _gz_pivot = _gz_pivot.reindex(columns=[c for c in _CATS_ORDEN if c in _gz_pivot.columns], fill_value=0)
-            _gz_pivot["Total"] = _gz_pivot.sum(axis=1)
-
-            # ── Benchmark: promedio de todos los locales ──────
-            _gz_bench = _gz_pivot[[c for c in _CATS_ORDEN if c in _gz_pivot.columns]].copy()
-            _gz_bench_total = _gz_bench.sum(axis=0)
-            _gz_bench_pct = (_gz_bench_total / _gz_bench_total.sum() * 100).round(1)
-
-            # ── Mix % por garzón ─────────────────────────────
-            _gz_mix = _gz_pivot[[c for c in _CATS_ORDEN if c in _gz_pivot.columns]].div(_gz_pivot["Total"], axis=0) * 100
-            _gz_mix = _gz_mix.round(1)
-
-            # ── Render por local ─────────────────────────────
-            _gz_locales_datos = _gz_pivot.index.get_level_values("local").unique().tolist()
-
-            st.markdown("---")
-            st.markdown(f"**Benchmark red completa (mix % de unidades vendidas):**")
-
-            # Benchmark pills
-            _bench_html = "<div style='display:flex;flex-wrap:wrap;gap:8px;margin-bottom:1rem'>"
-            for _cat in [c for c in _CATS_ORDEN if c in _gz_bench_pct.index]:
-                _bench_html += f"<span style='background:#1F3864;color:#fff;padding:4px 12px;border-radius:20px;font-size:0.78rem'>{_cat}: <b>{_gz_bench_pct[_cat]:.1f}%</b></span>"
-            _bench_html += "</div>"
-            st.markdown(_bench_html, unsafe_allow_html=True)
-
-            # ── Tabla por local ───────────────────────────────
-            _gz_cats_show = [c for c in _CATS_ORDEN if c in _gz_pivot.columns]
-
-            for _loc in sorted(_gz_locales_datos):
-                _gz_loc_df = _gz_pivot.xs(_loc, level="local") if "local" in _gz_pivot.index.names else _gz_pivot
-                _gz_mix_loc = _gz_mix.xs(_loc, level="local") if "local" in _gz_mix.index.names else _gz_mix
-
-                # Calcular avance vs meta mensual para Cafetería y Postres
-                _loc_metas = _METAS.get(_loc, {})
-                _meta_info = []
-                for _mcat in ["Cafetería", "Postres"]:
-                    if _mcat in _loc_metas and _mcat in _gz_pivot.columns:
-                        _vendido = int(_gz_pivot.xs(_loc, level="local")[_mcat].sum()) if "local" in _gz_pivot.index.names else 0
-                        _meta_m = _loc_metas[_mcat]["mensual"]
-                        _pct_m = _vendido / _meta_m * 100 if _meta_m else 0
-                        _color_m = "#2E7D32" if _pct_m >= 100 else ("#D4A853" if _pct_m >= 70 else "#B71C1C")
-                        _meta_info.append(f"<span style='color:{_color_m};font-weight:bold'>{_mcat}: {_vendido:,}/{_meta_m:,} ({_pct_m:.0f}%)</span>")
-                _meta_str = "  ·  ".join(_meta_info) if _meta_info else ""
-
-                with st.expander(f"🏪 {_loc}", expanded=(_gz_local != "Todos")):
-                    if _meta_str:
-                        st.markdown(f"<div style='font-size:0.82rem;margin-bottom:0.6rem'>🎯 Avance vs Meta mensual: {_meta_str}</div>", unsafe_allow_html=True)
-
-                    # Tabla HTML
-                    _gh = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:0.78rem">'
-                    # Header
-                    _gh += '<thead><tr><th style="text-align:left;padding:8px 10px;background:#1F3864;color:#fff">Garzón</th>'
-                    for _c in _gz_cats_show:
-                        _gh += f'<th style="text-align:right;padding:8px 10px;background:#1F3864;color:#fff">{_c}<br><span style="font-size:0.68rem;font-weight:normal;opacity:0.8">Uds · %</span></th>'
-                    _gh += '<th style="text-align:right;padding:8px 10px;background:#1F3864;color:#fff">Total</th>'
-                    _gh += '</tr></thead><tbody>'
-
-                    for _ri, (_gz_name, _row) in enumerate(_gz_loc_df.iterrows()):
-                        _bg = "#F5F5F5" if _ri % 2 == 0 else "#FFFFFF"
-                        _gh += f'<tr><td style="padding:7px 10px;background:{_bg};font-weight:500">{_gz_name}</td>'
-                        for _c in _gz_cats_show:
-                            _uds = int(_row.get(_c, 0))
-                            _pct = _gz_mix_loc.at[_gz_name, _c] if _gz_name in _gz_mix_loc.index and _c in _gz_mix_loc.columns else 0.0
-                            _bench_val = _gz_bench_pct.get(_c, 0)
-                            # Colorear si está >5pp por encima o debajo del benchmark
-                            _diff = _pct - _bench_val
-                            _color = "#2E7D32" if _diff >= 5 else ("#B71C1C" if _diff <= -5 else "#222222")
-                            _gh += f'<td style="text-align:right;padding:7px 10px;background:{_bg};color:{_color}">{_uds:,} · <b>{_pct:.1f}%</b></td>'
-                        _gh += f'<td style="text-align:right;padding:7px 10px;background:{_bg};font-weight:bold">{int(_row.get("Total",0)):,}</td>'
-                        _gh += '</tr>'
-
-                    # Fila benchmark
-                    _gh += '<tr><td style="padding:7px 10px;background:#D4A853;font-weight:bold;color:#1F3864">Benchmark red</td>'
-                    for _c in _gz_cats_show:
-                        _gh += f'<td style="text-align:right;padding:7px 10px;background:#D4A853;font-weight:bold;color:#1F3864">— · {_gz_bench_pct.get(_c,0):.1f}%</td>'
-                    _gh += '<td style="text-align:right;padding:7px 10px;background:#D4A853;font-weight:bold;color:#1F3864">100%</td></tr>'
-
-                    # Fila meta mensual (solo Cafetería y Postres)
-                    if _loc_metas:
-                        _gh += '<tr><td style="padding:7px 10px;background:#1F3864;font-weight:bold;color:#D4A853">🎯 Meta mensual</td>'
-                        for _c in _gz_cats_show:
-                            _m = _loc_metas.get(_c, {}).get("mensual")
-                            _gh += f'<td style="text-align:right;padding:7px 10px;background:#1F3864;color:#D4A853;font-weight:bold">{_m:,}' if _m else '<td style="text-align:right;padding:7px 10px;background:#1F3864;color:#666">—'
-                            _gh += '</td>'
-                        _gh += '<td style="padding:7px 10px;background:#1F3864"></td></tr>'
-
-                    _gh += '</tbody></table></div>'
-                    st.markdown(_gh, unsafe_allow_html=True)
-
-                    # ── Gráfico barras apiladas % ─────────────
-                    _fig_gz = go.Figure()
-                    _gz_garzones = _gz_loc_df.index.tolist()
-                    _COLORES = ["#1F3864","#2E5090","#4472C4","#D4A853","#8FAF3E","#B55A1C"]
-                    for _ci, _c in enumerate(_gz_cats_show):
-                        _vals = [_gz_mix_loc.at[g, _c] if g in _gz_mix_loc.index and _c in _gz_mix_loc.columns else 0 for g in _gz_garzones]
-                        _fig_gz.add_trace(go.Bar(
-                            name=_c, x=_gz_garzones, y=_vals,
-                            marker_color=_COLORES[_ci % len(_COLORES)],
-                            text=[f"{v:.0f}%" for v in _vals],
-                            textposition="inside", textfont=dict(size=9, color="white")
-                        ))
-                    # Líneas benchmark
-                    _acum = 0
-                    for _ci, _c in enumerate(_gz_cats_show):
-                        _acum += _gz_bench_pct.get(_c, 0)
-                        _fig_gz.add_hline(
-                            y=_acum, line_dash="dot",
-                            line_color=_COLORES[_ci % len(_COLORES)],
-                            line_width=1, opacity=0.6
-                        )
-                    _fig_gz.update_layout(
-                        barmode="stack", height=380,
-                        margin=dict(l=0, r=0, t=10, b=40),
-                        xaxis_title="", yaxis_title="Mix %",
-                        legend=dict(orientation="h", y=1.12, x=0, font=dict(size=9)),
-                        plot_bgcolor="white", paper_bgcolor="white",
-                        yaxis=dict(range=[0, 105], ticksuffix="%"),
-                        font=dict(size=10),
-                    )
-                    st.plotly_chart(_fig_gz, use_container_width=True, key=f"gz_chart_{_loc}")
-
-            # ── Exportar Excel ────────────────────────────────
-            st.markdown("---")
-            _gz_buf = _gz_io.BytesIO()
-            _gz_wb = _GZWb()
-            _gz_ws = _gz_wb.active
-            _gz_ws.title = "Rendimiento Garzones"
-            _gz_ws.sheet_properties.tabColor = "1F3864"
-            _gz_ws.sheet_view.showGridLines = False
-
-            # Título
-            _gz_ws.merge_cells(f"A1:{chr(65 + len(_gz_cats_show) + 2)}1")
-            _tc = _gz_ws.cell(row=1, column=1, value=f"Rendimiento Garzones — {st.session_state.get('gz_fi','')} al {st.session_state.get('gz_ff','')} — {st.session_state.get('gz_local','')}")
-            _tc.font = _GZF(name="Calibri", bold=True, size=12, color="FFFFFF")
-            _tc.fill = _GZPF("solid", start_color="1F3864", end_color="1F3864")
-            _tc.alignment = _GZA(horizontal="left", vertical="center")
-            _gz_ws.row_dimensions[1].height = 26
-
-            # Headers
-            _gz_hdrs = ["Local", "Garzón"] + _gz_cats_show + ["Total"]
-            for _ci, _h in enumerate(_gz_hdrs, 1):
-                _c = _gz_ws.cell(row=2, column=_ci, value=_h)
-                _c.font = _GZF(name="Calibri", bold=True, size=9, color="FFFFFF")
-                _c.fill = _GZPF("solid", start_color="2E5090", end_color="2E5090")
-                _c.alignment = _GZA(horizontal="right" if _ci > 2 else "left", vertical="center")
-            _gz_ws.row_dimensions[2].height = 18
-
-            # Headers % fila 3
-            _gz_hpct = ["", ""] + [f"% {c}" for c in _gz_cats_show] + [""]
-            for _ci, _h in enumerate(_gz_hpct, 1):
-                _c = _gz_ws.cell(row=3, column=_ci, value=_h)
-                _c.font = _GZF(name="Calibri", italic=True, size=8, color="FFFFFF")
-                _c.fill = _GZPF("solid", start_color="2E5090", end_color="2E5090")
-                _c.alignment = _GZA(horizontal="right" if _ci > 2 else "left")
-            _gz_ws.row_dimensions[3].height = 14
-
-            _gz_row = 4
-            for _loc in sorted(_gz_locales_datos):
-                _gz_loc_df2 = _gz_pivot.xs(_loc, level="local") if "local" in _gz_pivot.index.names else _gz_pivot
-                _gz_mix_loc2 = _gz_mix.xs(_loc, level="local") if "local" in _gz_mix.index.names else _gz_mix
-                for _ri2, (_gz_name, _row2) in enumerate(_gz_loc_df2.iterrows()):
-                    _bg2 = "F5F5F5" if _ri2 % 2 == 0 else "FFFFFF"
-                    _gz_ws.cell(row=_gz_row, column=1, value=_loc).font = _GZF(name="Calibri", size=9)
-                    _gz_ws.cell(row=_gz_row, column=2, value=_gz_name).font = _GZF(name="Calibri", size=9, bold=True)
-                    for _ci2, _c2 in enumerate(_gz_cats_show, 3):
-                        _uds2 = int(_row2.get(_c2, 0))
-                        _cell = _gz_ws.cell(row=_gz_row, column=_ci2, value=_uds2)
-                        _cell.font = _GZF(name="Calibri", size=9)
-                        _cell.fill = _GZPF("solid", start_color=_bg2, end_color=_bg2)
-                        _cell.alignment = _GZA(horizontal="right")
-                    _gz_ws.cell(row=_gz_row, column=len(_gz_cats_show)+3, value=int(_row2.get("Total",0))).font = _GZF(name="Calibri", size=9, bold=True)
-                    _gz_row += 1
-
-                # Benchmark fila por local
-                _gz_ws.cell(row=_gz_row, column=1, value=_loc)
-                _gz_ws.cell(row=_gz_row, column=2, value="Benchmark red")
-                for _ci3, _c3 in enumerate(_gz_cats_show, 3):
-                    _cell_b = _gz_ws.cell(row=_gz_row, column=_ci3, value=round(_gz_bench_pct.get(_c3, 0), 1))
-                    _cell_b.font = _GZF(name="Calibri", size=9, bold=True, color="1F3864")
-                    _cell_b.fill = _GZPF("solid", start_color="D4A853", end_color="D4A853")
-                    _cell_b.number_format = "0.0%"
-                _gz_row += 2
-
-            for _ci4 in range(1, len(_gz_hdrs)+1):
-                _gz_ws.column_dimensions[chr(64+_ci4)].width = 16 if _ci4 > 2 else 22
-            _gz_ws.freeze_panes = "C4"
-            _gz_wb.save(_gz_buf); _gz_buf.seek(0)
-
-            _gz_fname = f"rendimiento_garzones_{st.session_state.get('gz_fi','')}_{st.session_state.get('gz_local','').replace(' ','_')}.xlsx"
-            st.download_button(
-                "📥 Exportar Excel",
-                _gz_buf.getvalue(),
-                file_name=_gz_fname,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=False,
-            )
-
-# ============================================================
-# MÓDULO: AUDITOR DE CATEGORÍAS
-# ============================================================
 elif informe_sel == "Auditor":
     from datetime import date as _date2
 
