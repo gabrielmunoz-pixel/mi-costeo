@@ -8150,6 +8150,31 @@ elif modulo.startswith("📊"):
             "Bebestibles": "Líquidos S/A", "Tragos S/A": "Líquidos S/A",
             "Jugos/Limonadas": "Líquidos S/A",
         }
+        _GARZONES_VALIDOS = {
+            "Johann Bermudez","Francisco Navarro","Yirfrey Alexander Valero Ramirez","Yurubi",
+            "Genesis Penafiel","Raul Figueroa","David Ramirez","Miguel Menacho Oliveira",
+            "Maria Campos","Alejandro Vergara","Sofia Andarcia","Jesus Rodriguez Molina",
+            "Jose Ricardo Valdes Contreras","Jose Tomas Mora Castillo","Eduard Cabrera",
+            "Enrique Jose Saavedra Briceno","Jose Daniel Vera","Manuel Chacon","Robert Duran",
+            "Felipe Hueiquil","Joaquin Arandia","Alexander Quintero","Eloy Sandoval",
+            "Carlos Alberto Abarca Suarez","Yuliana Valdebenito","Victor Escalona",
+            "Eliscar Torres","Mariely Karina Rivera Linares","Yovanny Duarte","Manuel Rodriguez",
+            "Jose Chacin","Jesus Alberto Segovia Aranguren","Pedro Ruiz","Pedro Maldonado",
+            "Jonnatha Araujo","Wilmer Causil","Pablo Oviedo","Carolina Rodriguez",
+            "Maria Paula Gonzalez Franco","Carlos David Colina","Yusney Jaimes","Marco Valdez",
+            "Rocio Gutierrez Opazo","David Alcivar Rosero","Magdalena Castro","Manuel Aguila",
+            "Nayiber Campos","Daniel Espinoza","Julio Gil","Lascano Gaming","Jhoiner Garcia",
+            "Ivan Mazaby","Kevin Gaitan","Ana Araque","Eduard Quinones Quinones Yepez",
+            "Jhonny Gomez","Prospero Alexis Gutierrez Ramirez","Charlotte Gonzalez","Juan Agudelo",
+            "BERNARDO CASTRO Castro","Wilmer Alfonso","Evelyn jaque","Frettzy Lucena Querales",
+            "Ivan Eduardo Salazar Alvarez","Jeremit Orlando Asicle Suarez","Gustavo Alvarado",
+            "Lisette Morell Coloma","Junior Mora","Yenifer Pabon","Jose Aquiles Mora Ramirez",
+            "Gustavo Saldias","Jorge Grandon","Rodrigo Alejandro Romero Castillo",
+            "NICOLAS TERRAZA","Jose Castillo","Juan Rodriguez","Cindy Santander","Abelmary Romero",
+            "Edwar Pernalete","Jimmy Gallo","Jesus Antonio Ramirez","Yosman Rangel",
+            "Jonathan Araujo","Nasslo Beltran","Keiber Eduardo Munoz Urribarri","Jose Pacheco",
+            "Nestor Rosas","dubuc_juan Dubuc Martinez","Jackson Moreno","Richard Gonzalez",
+        }
         _CATS_ORDEN = ["Alimentos", "Postres", "Cafetería", "Colaciones", "Líquidos C/A", "Líquidos S/A"]
         _EXCLUIR_CATS = {"Otros", "otros", None}
 
@@ -8240,10 +8265,13 @@ elif modulo.startswith("📊"):
                           {_gz_loc_filter}
                     """, _gz_params)
 
+                    # Filtrar solo garzones válidos (whitelist)
+                    if not _gz_df_raw.empty and 'garzon' in _gz_df_raw.columns:
+                        _gz_df_raw = _gz_df_raw[_gz_df_raw['garzon'].isin(_GARZONES_VALIDOS)]
                     st.session_state["gz_data"] = _gz_df_raw
-                    st.session_state["gz_fi"] = str(_gz_fi)
-                    st.session_state["gz_ff"] = str(_gz_ff)
-                    st.session_state["gz_local"] = _gz_local
+                    st.session_state["gz_fi_val"] = str(_gz_fi)
+                    st.session_state["gz_ff_val"] = str(_gz_ff)
+                    st.session_state["gz_local_val"] = _gz_local
 
             _gz_df_raw = st.session_state.get("gz_data", pd.DataFrame())
 
@@ -8394,7 +8422,7 @@ elif modulo.startswith("📊"):
 
                 # Título
                 _gz_ws.merge_cells(f"A1:{chr(65 + len(_gz_cats_show) + 2)}1")
-                _tc = _gz_ws.cell(row=1, column=1, value=f"Rendimiento Garzones — {st.session_state.get('gz_fi','')} al {st.session_state.get('gz_ff','')} — {st.session_state.get('gz_local','')}")
+                _tc = _gz_ws.cell(row=1, column=1, value=f"Rendimiento Garzones — {st.session_state.get('gz_fi_val','')} al {st.session_state.get('gz_ff_val','')} — {st.session_state.get('gz_local_val','')}")
                 _tc.font = _GZF(name="Calibri", bold=True, size=12, color="FFFFFF")
                 _tc.fill = _GZPF("solid", start_color="1F3864", end_color="1F3864")
                 _tc.alignment = _GZA(horizontal="left", vertical="center")
@@ -8450,7 +8478,7 @@ elif modulo.startswith("📊"):
                 _gz_ws.freeze_panes = "C4"
                 _gz_wb.save(_gz_buf); _gz_buf.seek(0)
 
-                _gz_fname = f"rendimiento_garzones_{st.session_state.get('gz_fi','')}_{st.session_state.get('gz_local','').replace(' ','_')}.xlsx"
+                _gz_fname = f"rendimiento_garzones_{st.session_state.get('gz_fi_val','')}_{st.session_state.get('gz_local_val','').replace(' ','_')}.xlsx"
                 st.download_button(
                     "📥 Exportar Excel",
                     _gz_buf.getvalue(),
