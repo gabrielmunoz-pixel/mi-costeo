@@ -13504,7 +13504,7 @@ buildTree(data, 1, null);
 # ============================================================
 # MÓDULO: RENDIMIENTO GARZONES
 # ============================================================
-elif informe_sel == "Garzones":
+elif modulo.startswith("📊") and informe_sel == "Garzones":
     import plotly.graph_objects as go
     import io as _gz_io
     from openpyxl import Workbook as _GZWb
@@ -13560,6 +13560,20 @@ elif informe_sel == "Garzones":
     }
     _CATS_ORDEN = ["Alimentos", "Postres", "Cafetería", "Colaciones", "Líquidos C/A", "Líquidos S/A"]
     _EXCLUIR_CATS = {"Otros", "otros", None}
+
+    # Metas mensuales por local y categoría (Cafetería y Postres)
+    _METAS = {
+        "La Reina":           {"Cafetería": {"mensual": 1499, "diaria": 50},  "Postres": {"mensual": 1543, "diaria": 51}},
+        "Quilin":             {"Cafetería": {"mensual": 1112, "diaria": 37},  "Postres": {"mensual": 1412, "diaria": 47}},
+        "Macul":              {"Cafetería": {"mensual": 1840, "diaria": 61},  "Postres": {"mensual": 2226, "diaria": 74}},
+        "Chicureo":           {"Cafetería": {"mensual": 1653, "diaria": 55},  "Postres": {"mensual": 1926, "diaria": 64}},
+        "La Dehesa":          {"Cafetería": {"mensual": 1736, "diaria": 58},  "Postres": {"mensual": 1658, "diaria": 55}},
+        "Las Condes":         {"Cafetería": {"mensual": 2024, "diaria": 67},  "Postres": {"mensual": 1984, "diaria": 66}},
+        "Los Trapenses":      {"Cafetería": {"mensual": 1857, "diaria": 62},  "Postres": {"mensual": 1962, "diaria": 65}},
+        "Nueva Providencia":  {"Cafetería": {"mensual": 1119, "diaria": 37},  "Postres": {"mensual": 1244, "diaria": 41}},
+        "Providencia":        {"Cafetería": {"mensual":  728, "diaria": 24},  "Postres": {"mensual":  942, "diaria": 31}},
+        "Vitacura":           {"Cafetería": {"mensual": 2764, "diaria": 92},  "Postres": {"mensual": 2431, "diaria": 81}},
+    }
 
     def _gz_categorizar(cat_menu, nombre_producto):
         """Traduce categoria_menu → categoría agrupada, igual que el PowerPivot."""
@@ -13688,7 +13702,22 @@ elif informe_sel == "Garzones":
                 _gz_loc_df = _gz_pivot.xs(_loc, level="local") if "local" in _gz_pivot.index.names else _gz_pivot
                 _gz_mix_loc = _gz_mix.xs(_loc, level="local") if "local" in _gz_mix.index.names else _gz_mix
 
+                # Calcular avance vs meta mensual para Cafetería y Postres
+                _loc_metas = _METAS.get(_loc, {})
+                _meta_info = []
+                for _mcat in ["Cafetería", "Postres"]:
+                    if _mcat in _loc_metas and _mcat in _gz_pivot.columns:
+                        _vendido = int(_gz_pivot.xs(_loc, level="local")[_mcat].sum()) if "local" in _gz_pivot.index.names else 0
+                        _meta_m = _loc_metas[_mcat]["mensual"]
+                        _pct_m = _vendido / _meta_m * 100 if _meta_m else 0
+                        _color_m = "#2E7D32" if _pct_m >= 100 else ("#D4A853" if _pct_m >= 70 else "#B71C1C")
+                        _meta_info.append(f"<span style='color:{_color_m};font-weight:bold'>{_mcat}: {_vendido:,}/{_meta_m:,} ({_pct_m:.0f}%)</span>")
+                _meta_str = "  ·  ".join(_meta_info) if _meta_info else ""
+
                 with st.expander(f"🏪 {_loc}", expanded=(_gz_local != "Todos")):
+                    if _meta_str:
+                        st.markdown(f"<div style='font-size:0.82rem;margin-bottom:0.6rem'>🎯 Avance vs Meta mensual: {_meta_str}</div>", unsafe_allow_html=True)
+
                     # Tabla HTML
                     _gh = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:0.78rem">'
                     # Header
@@ -13717,6 +13746,16 @@ elif informe_sel == "Garzones":
                     for _c in _gz_cats_show:
                         _gh += f'<td style="text-align:right;padding:7px 10px;background:#D4A853;font-weight:bold;color:#1F3864">— · {_gz_bench_pct.get(_c,0):.1f}%</td>'
                     _gh += '<td style="text-align:right;padding:7px 10px;background:#D4A853;font-weight:bold;color:#1F3864">100%</td></tr>'
+
+                    # Fila meta mensual (solo Cafetería y Postres)
+                    if _loc_metas:
+                        _gh += '<tr><td style="padding:7px 10px;background:#1F3864;font-weight:bold;color:#D4A853">🎯 Meta mensual</td>'
+                        for _c in _gz_cats_show:
+                            _m = _loc_metas.get(_c, {}).get("mensual")
+                            _gh += f'<td style="text-align:right;padding:7px 10px;background:#1F3864;color:#D4A853;font-weight:bold">{_m:,}' if _m else '<td style="text-align:right;padding:7px 10px;background:#1F3864;color:#666">—'
+                            _gh += '</td>'
+                        _gh += '<td style="padding:7px 10px;background:#1F3864"></td></tr>'
+
                     _gh += '</tbody></table></div>'
                     st.markdown(_gh, unsafe_allow_html=True)
 
