@@ -8053,10 +8053,11 @@ elif modulo.startswith("📊"):
                         _insert_img(_ws_out, _img_bytes(fig3), 'N59')  # sin dimensiones → tamaño natural
 
                                                 # ── GRÁFICO 4: Total Aliva histórico (línea) ──────────
-                        # Aliva usa cols I,K...AE fila 44 como categorías, fila 56 como valores
+                        # Aliva usa cols I,K...AE fila 44 como categorías
+                        # Total = suma filas 45-54 (openpyxl no evalúa fórmulas de fila 56)
                         _ALIVA_HIST_COLS = list(range(9, 30, 2)) + [31]
                         _aliva_lbl_raw  = [str(_ws_out.cell(44, _c).value or '').strip() for _c in _ALIVA_HIST_COLS]
-                        _aliva_vals_raw = [_cell_float(_ws_out, 56, _c) for _c in _ALIVA_HIST_COLS]
+                        _aliva_vals_raw = [sum(_cell_float(_ws_out, _ar, _c) for _ar in range(45, 55)) for _c in _ALIVA_HIST_COLS]
                         # Filtrar puntos con valor 0 (celdas con fórmula sin calcular o vacías)
                         _aliva_pairs = [(l, v) for l, v in zip(_aliva_lbl_raw, _aliva_vals_raw) if v > 0]
                         if _aliva_pairs:
