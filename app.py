@@ -7888,8 +7888,6 @@ elif modulo.startswith("📊"):
                             _ws_out.cell(_ar, 31).value = round(_aliva_p, 2) if _aliva_p else 0
                             # Histórico Aliva desde ventas_aliva por mes
                             for _col_h, (_aa_h, _mm_h) in _EXP_COL_MES.items():
-                                if _col_h <= 30:
-                                    continue  # I:AD — respetar valores del template
                                 _df_aliva_mes = run_query("""
                                     SELECT SUM(monto_total) AS venta FROM ventas_aliva
                                     WHERE EXTRACT(YEAR FROM fecha)=:a AND EXTRACT(MONTH FROM fecha)=:m
