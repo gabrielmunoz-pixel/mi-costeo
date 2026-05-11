@@ -863,7 +863,6 @@ def calcular_total_kg(producto, total, crudo=0, produccion=0, cocido=0, producto
 # BASE DE DATOS
 # ============================================================
 @st.cache_resource
-@st.cache_resource
 def get_engine():
     try:
         db = st.secrets["connections"]["supabase"]
@@ -890,6 +889,34 @@ def get_engine():
     except Exception as e:
         st.error(f"❌ Error de conexión: {e}")
         return None
+
+
+@st.cache_resource
+def _init_db():
+    """Crea índices críticos una sola vez al arrancar la app."""
+    engine = get_engine()
+    if engine is None:
+        return
+    indices = [
+        "CREATE INDEX IF NOT EXISTS idx_ventas_fecha       ON ventas(fecha_venta)",
+        "CREATE INDEX IF NOT EXISTS idx_ventas_local       ON ventas(local)",
+        "CREATE INDEX IF NOT EXISTS idx_ventas_fecha_local ON ventas(fecha_venta, local)",
+        "CREATE INDEX IF NOT EXISTS idx_ventas_sku         ON ventas(sku_producto)",
+        "CREATE INDEX IF NOT EXISTS idx_compras_fecha      ON compras(fecha_dte)",
+        "CREATE INDEX IF NOT EXISTS idx_compras_local      ON compras(local)",
+        "CREATE INDEX IF NOT EXISTS idx_compras_sku        ON compras(sku)",
+        "CREATE INDEX IF NOT EXISTS idx_compras_rut        ON compras(rut_proveedor)",
+        "CREATE INDEX IF NOT EXISTS idx_ventas_aliva_fecha ON ventas_aliva(fecha)",
+        "CREATE INDEX IF NOT EXISTS idx_ventas_aliva_local ON ventas_aliva(local)",
+    ]
+    try:
+        with engine.begin() as conn:
+            for idx in indices:
+                conn.execute(text(idx))
+    except Exception:
+        pass  # Si ya existen o no hay permisos, continuar sin error
+
+_init_db()
 
 
 def run_query(sql, params=None):
@@ -7707,11 +7734,13 @@ elif modulo.startswith("📊"):
                             WHERE fecha BETWEEN :fi AND :ff AND local IS NOT NULL GROUP BY local
                         """, {'fi': str(_exp_fi), 'ff': str(_exp_ff)})
 
-                        # Histórico mensual desde ventas_mensual
-                        _df_mens = run_query("""
-                            SELECT año, mes, local, tipo, monto FROM ventas_mensual
-                            ORDER BY año, mes, local, tipo
-                        """)
+                        # Histórico mensual desde ventas_mensual — cache por sesión
+                        if 'vd_mens_cache' not in st.session_state:
+                            st.session_state['vd_mens_cache'] = run_query("""
+                                SELECT año, mes, local, tipo, monto FROM ventas_mensual
+                                ORDER BY año, mes, local, tipo
+                            """)
+                        _df_mens = st.session_state['vd_mens_cache']
 
                         def _vget_exp(df, loc, tipo=None):
                             if df.empty: return 0.0
@@ -10538,10 +10567,12 @@ buildTree(data, 1, null);
 
         with _tab_var3:
             # ── Selectores de mes ──────────────────────────────────
-            meses_disp3 = run_query("""
-                SELECT DISTINCT DATE_TRUNC('month', fecha_dte::timestamp)::date as mes
-                FROM compras WHERE subcat IN ('Directo','Indirecto') ORDER BY 1
-            """)
+            if 'meses_disp3_cache' not in st.session_state:
+                st.session_state['meses_disp3_cache'] = run_query("""
+                    SELECT DISTINCT DATE_TRUNC('month', fecha_dte::timestamp)::date as mes
+                    FROM compras WHERE subcat IN ('Directo','Indirecto') ORDER BY 1
+                """)
+            meses_disp3 = st.session_state['meses_disp3_cache']
 
             if meses_disp3.empty:
                 st.warning("No hay datos de compras disponibles.")
@@ -12297,10 +12328,12 @@ buildTree(data, 1, null);
 
             _vp_c1, _vp_c2, _vp_c3 = st.columns([2, 2, 2])
             with _vp_c1:
-                _vp_meses = run_query("""
+                if 'vp_meses_cache' not in st.session_state:
+                    st.session_state['vp_meses_cache'] = run_query("""
                     SELECT DISTINCT TO_CHAR(DATE_TRUNC('month', fecha_dte::date), 'YYYY-MM') AS mes
                     FROM compras WHERE subcat IN ('Directo','Indirecto') ORDER BY 1
                 """)
+                _vp_meses = st.session_state['vp_meses_cache']
                 _vp_opts = _vp_meses['mes'].tolist() if not _vp_meses.empty else []
                 _vp_base = st.selectbox("Mes base", _vp_opts, index=max(0, len(_vp_opts)-2), key='vp_base')
             with _vp_c2:
@@ -15842,7 +15875,7 @@ elif modulo.startswith("📋 Notas de Crédito"):
     with _nc_tab1:
         st.markdown("<div class='info-box'>Registra una nota de crédito pendiente de emisión. Se considerará automáticamente en el Informe de Costos del período correspondiente mientras el estado sea <b>Pendiente</b>.</div>", unsafe_allow_html=True)
 
-        _locales_nc = run_query("SELECT DISTINCT local FROM compras WHERE local IS NOT NULL ORDER BY local")
+        _locales_nc_vals = ["Todos","Vitacura","Las Condes","Chicureo","La Dehesa","Macul","La Reina","Quilin","Nueva Providencia","Providencia","Los Trapenses"]
         _locales_nc_list = _locales_nc['local'].tolist() if not _locales_nc.empty else []
         _user_local_nc = st.session_state.get("user_local")
 
@@ -16046,11 +16079,13 @@ elif modulo.startswith("📋 Notas de Crédito"):
         # ── Controles ────────────────────────────────────────────────────
         _ec1, _ec2, _ec3, _ec4 = st.columns([2, 2, 1.5, 1])
         with _ec1:
-            _meses_disp = run_query("""
-                SELECT DISTINCT DATE_TRUNC('month', fecha_venta)::date AS mes
-                FROM ventas WHERE fecha_venta IS NOT NULL
-                ORDER BY mes DESC LIMIT 24
-            """)
+            if 'ec_meses_cache' not in st.session_state:
+                st.session_state['ec_meses_cache'] = run_query("""
+                    SELECT DISTINCT DATE_TRUNC('month', fecha_venta)::date AS mes
+                    FROM ventas WHERE fecha_venta IS NOT NULL
+                    ORDER BY mes DESC LIMIT 24
+                """)
+            _meses_disp = st.session_state['ec_meses_cache']
             if not _meses_disp.empty:
                 _meses_opts = _meses_disp['mes'].tolist()
                 _mes_labels = {m: m.strftime('%B %Y').capitalize() for m in _meses_opts}
