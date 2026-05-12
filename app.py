@@ -873,12 +873,12 @@ def get_engine():
         return create_engine(
             conn_str,
             pool_pre_ping=True,
-            pool_recycle=180,
+            pool_recycle=60,
             pool_timeout=10,
-            pool_size=3,
-            max_overflow=5,
+            pool_size=2,
+            max_overflow=3,
             connect_args={
-                "options":              "-c statement_timeout=30000",
+                "options":              "-c statement_timeout=15000 -c idle_in_transaction_session_timeout=10000",
                 "connect_timeout":      8,
                 "keepalives":           1,
                 "keepalives_idle":      30,
@@ -893,28 +893,35 @@ def get_engine():
 
 @st.cache_resource
 def _init_db():
-    """Crea índices críticos una sola vez al arrancar la app."""
-    engine = get_engine()
-    if engine is None:
-        return
-    indices = [
-        "CREATE INDEX IF NOT EXISTS idx_ventas_fecha       ON ventas(fecha_venta)",
-        "CREATE INDEX IF NOT EXISTS idx_ventas_local       ON ventas(local)",
-        "CREATE INDEX IF NOT EXISTS idx_ventas_fecha_local ON ventas(fecha_venta, local)",
-        "CREATE INDEX IF NOT EXISTS idx_ventas_sku         ON ventas(sku_producto)",
-        "CREATE INDEX IF NOT EXISTS idx_compras_fecha      ON compras(fecha_dte)",
-        "CREATE INDEX IF NOT EXISTS idx_compras_local      ON compras(local)",
-        "CREATE INDEX IF NOT EXISTS idx_compras_sku        ON compras(sku)",
-        "CREATE INDEX IF NOT EXISTS idx_compras_rut        ON compras(rut_proveedor)",
-        "CREATE INDEX IF NOT EXISTS idx_ventas_aliva_fecha ON ventas_aliva(fecha)",
-        "CREATE INDEX IF NOT EXISTS idx_ventas_aliva_local ON ventas_aliva(local)",
-    ]
-    try:
-        with engine.begin() as conn:
-            for idx in indices:
-                conn.execute(text(idx))
-    except Exception:
-        pass  # Si ya existen o no hay permisos, continuar sin error
+    """Crea índices críticos una sola vez al arrancar la app — en background."""
+    import threading
+    def _crear_indices():
+        try:
+            engine = get_engine()
+            if engine is None:
+                return
+            indices = [
+                "CREATE INDEX IF NOT EXISTS idx_ventas_fecha       ON ventas(fecha_venta)",
+                "CREATE INDEX IF NOT EXISTS idx_ventas_local       ON ventas(local)",
+                "CREATE INDEX IF NOT EXISTS idx_ventas_fecha_local ON ventas(fecha_venta, local)",
+                "CREATE INDEX IF NOT EXISTS idx_ventas_sku         ON ventas(sku_producto)",
+                "CREATE INDEX IF NOT EXISTS idx_compras_fecha      ON compras(fecha_dte)",
+                "CREATE INDEX IF NOT EXISTS idx_compras_local      ON compras(local)",
+                "CREATE INDEX IF NOT EXISTS idx_compras_sku        ON compras(sku)",
+                "CREATE INDEX IF NOT EXISTS idx_compras_rut        ON compras(rut_proveedor)",
+                "CREATE INDEX IF NOT EXISTS idx_ventas_aliva_fecha ON ventas_aliva(fecha)",
+                "CREATE INDEX IF NOT EXISTS idx_ventas_aliva_local ON ventas_aliva(local)",
+                "CREATE INDEX IF NOT EXISTS idx_vmensual_año_mes   ON ventas_mensual(año, mes)",
+                "CREATE INDEX IF NOT EXISTS idx_vmensual_local     ON ventas_mensual(local)",
+                "CREATE INDEX IF NOT EXISTS idx_recetas_codigo     ON recetas(codigo_venta)",
+                "CREATE INDEX IF NOT EXISTS idx_recetas_sku_ing    ON recetas(sku_ingrediente)",
+            ]
+            with engine.begin() as conn:
+                for idx in indices:
+                    conn.execute(text(idx))
+        except Exception:
+            pass
+    threading.Thread(target=_crear_indices, daemon=True).start()
 
 _init_db()
 
