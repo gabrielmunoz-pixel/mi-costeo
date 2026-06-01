@@ -8772,7 +8772,7 @@ elif modulo.startswith("📊"):
 
             # ── helper delta ─────────────────────────────────────
             def _tv_delta(a, b):
-                if b > 0: return (a/b - 1)*100
+                if a > 0: return (b/a - 1)*100
                 return None
 
             def _tv_fmt_delta(v):
