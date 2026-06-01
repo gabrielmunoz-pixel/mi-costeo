@@ -8881,6 +8881,10 @@ elif modulo.startswith("📊"):
             _tv_piv2  = _tv_piv2.reindex(_TV_LOCALES, fill_value=0)
             _tv_piv1m = _tv_piv1m.reindex(_TV_LOCALES, fill_value=0)
 
+            # Días de cada mes para métrica diaria
+            _tv_dias1 = _tv_cal.monthrange(_tv_m1.year, _tv_m1.month)[1]
+            _tv_dias2 = _tv_cal.monthrange(_tv_m2.year, _tv_m2.month)[1]
+
             # Build display table HTML
             _tv_th_style = "padding:8px 10px;text-align:center;background:#1F3864;color:#fff;font-size:0.78rem;white-space:nowrap"
             _tv_td_style = "padding:6px 10px;text-align:right;font-size:0.8rem;border-bottom:1px solid #333"
@@ -8892,17 +8896,21 @@ elif modulo.startswith("📊"):
             <th style="{_tv_th_style};text-align:left">Local</th>"""
             for _c in _cats:
                 _clr = _TV_CAT_COLOR.get(_c,"#333")
-                _tv_tbl += f'<th style="{_tv_th_style};background:{_clr}" colspan="2">{_c}</th>'
-            _tv_tbl += f'<th style="{_tv_th_style}" colspan="2">TOTAL</th></tr>'
+                _tv_tbl += f'<th style="{_tv_th_style};background:{_clr}" colspan="4">{_c}</th>'
+            _tv_tbl += f'<th style="{_tv_th_style}" colspan="4">TOTAL</th></tr>'
 
             # Sub-header
             _tv_tbl += '<tr><th style="background:#111"></th>'
             for _c in _cats:
                 _clr = _TV_CAT_COLOR.get(_c,"#333")
                 _tv_tbl += f'<th style="padding:4px 8px;font-size:0.7rem;background:{_clr};color:rgba(255,255,255,0.7);text-align:center">{_lbl1}</th>'
-                _tv_tbl += f'<th style="padding:4px 8px;font-size:0.7rem;background:{_clr};color:rgba(255,255,255,0.7);text-align:center">{_lbl2} / Δ%</th>'
+                _tv_tbl += f'<th style="padding:4px 8px;font-size:0.65rem;background:{_clr};color:rgba(255,255,255,0.6);text-align:center">día {_lbl1}</th>'
+                _tv_tbl += f'<th style="padding:4px 8px;font-size:0.7rem;background:{_clr};color:rgba(255,255,255,0.7);text-align:center">{_lbl2}</th>'
+                _tv_tbl += f'<th style="padding:4px 8px;font-size:0.65rem;background:{_clr};color:rgba(255,255,255,0.6);text-align:center">día {_lbl2} / Δ%</th>'
             _tv_tbl += f'<th style="padding:4px 8px;font-size:0.7rem;background:#1F3864;color:rgba(255,255,255,0.7);text-align:center">{_lbl1}</th>'
-            _tv_tbl += f'<th style="padding:4px 8px;font-size:0.7rem;background:#1F3864;color:rgba(255,255,255,0.7);text-align:center">{_lbl2} / Δ%</th></tr></thead><tbody>'
+            _tv_tbl += f'<th style="padding:4px 8px;font-size:0.65rem;background:#1F3864;color:rgba(255,255,255,0.6);text-align:center">día {_lbl1}</th>'
+            _tv_tbl += f'<th style="padding:4px 8px;font-size:0.7rem;background:#1F3864;color:rgba(255,255,255,0.7);text-align:center">{_lbl2}</th>'
+            _tv_tbl += f'<th style="padding:4px 8px;font-size:0.65rem;background:#1F3864;color:rgba(255,255,255,0.6);text-align:center">día {_lbl2} / Δ%</th></tr></thead><tbody>'
 
             for _loc in _TV_LOCALES:
                 _tv_tbl += f'<tr><td style="{_tv_td_loc};background:#1a1a1a">{_loc}</td>'
@@ -8910,15 +8918,21 @@ elif modulo.startswith("📊"):
                 for _c in _cats:
                     _u1 = int(_tv_piv1.loc[_loc, _c]) if _loc in _tv_piv1.index else 0
                     _u2 = int(_tv_piv2.loc[_loc, _c]) if _loc in _tv_piv2.index else 0
+                    _d1 = round(_u1/_tv_dias1, 1); _d2 = round(_u2/_tv_dias2, 1)
                     _d  = _tv_delta(_u1, _u2)
                     _loc_tot1 += _u1; _loc_tot2 += _u2
                     _dc = "#7fffb0" if (_d or 0) >= 0 else "#ff8080"
                     _tv_tbl += f'<td style="{_tv_td_style}">{_u1:,}</td>'
-                    _tv_tbl += f'<td style="{_tv_td_style}">{_u2:,} <span style="color:{_dc};font-size:0.75rem">{_tv_fmt_delta(_d)}</span></td>'
+                    _tv_tbl += f'<td style="{_tv_td_style};color:#aaa">{_d1:.1f}</td>'
+                    _tv_tbl += f'<td style="{_tv_td_style}">{_u2:,}</td>'
+                    _tv_tbl += f'<td style="{_tv_td_style}">{_d2:.1f} <span style="color:{_dc};font-size:0.75rem">{_tv_fmt_delta(_d)}</span></td>'
                 _dtot = _tv_delta(_loc_tot1, _loc_tot2)
                 _dc   = "#7fffb0" if (_dtot or 0) >= 0 else "#ff8080"
+                _dt1 = round(_loc_tot1/_tv_dias1, 1); _dt2 = round(_loc_tot2/_tv_dias2, 1)
                 _tv_tbl += f'<td style="{_tv_td_style};font-weight:700">{_loc_tot1:,}</td>'
-                _tv_tbl += f'<td style="{_tv_td_style};font-weight:700">{_loc_tot2:,} <span style="color:{_dc};font-size:0.75rem">{_tv_fmt_delta(_dtot)}</span></td></tr>'
+                _tv_tbl += f'<td style="{_tv_td_style};color:#aaa;font-weight:600">{_dt1:.1f}</td>'
+                _tv_tbl += f'<td style="{_tv_td_style};font-weight:700">{_loc_tot2:,}</td>'
+                _tv_tbl += f'<td style="{_tv_td_style};font-weight:700">{_dt2:.1f} <span style="color:{_dc};font-size:0.75rem">{_tv_fmt_delta(_dtot)}</span></td></tr>'
 
             # Fila total red
             _tv_tbl += '<tr style="border-top:2px solid #4472C4"><td style="padding:8px 10px;font-weight:800;font-size:0.85rem;background:#1F3864;color:#fff">TOTAL RED</td>'
@@ -8929,12 +8943,18 @@ elif modulo.startswith("📊"):
                 _grand1 += _ct1; _grand2 += _ct2
                 _d = _tv_delta(_ct1, _ct2)
                 _dc = "#7fffb0" if (_d or 0) >= 0 else "#ff8080"
+                _cd1 = round(_ct1/_tv_dias1,1); _cd2 = round(_ct2/_tv_dias2,1)
                 _tv_tbl += f'<td style="padding:8px;text-align:right;font-weight:700;background:#1F3864;color:#fff">{_ct1:,}</td>'
-                _tv_tbl += f'<td style="padding:8px;text-align:right;font-weight:700;background:#1F3864;color:#fff">{_ct2:,} <span style="color:{_dc}">{_tv_fmt_delta(_d)}</span></td>'
+                _tv_tbl += f'<td style="padding:8px;text-align:right;background:#1F3864;color:rgba(255,255,255,0.7)">{_cd1:.1f}</td>'
+                _tv_tbl += f'<td style="padding:8px;text-align:right;font-weight:700;background:#1F3864;color:#fff">{_ct2:,}</td>'
+                _tv_tbl += f'<td style="padding:8px;text-align:right;font-weight:700;background:#1F3864;color:#fff">{_cd2:.1f} <span style="color:{_dc}">{_tv_fmt_delta(_d)}</span></td>'
             _dg = _tv_delta(_grand1, _grand2)
             _dc = "#7fffb0" if (_dg or 0) >= 0 else "#ff8080"
+            _gd1 = round(_grand1/_tv_dias1,1); _gd2 = round(_grand2/_tv_dias2,1)
             _tv_tbl += f'<td style="padding:8px;text-align:right;font-weight:800;background:#1F3864;color:#fff">{_grand1:,}</td>'
-            _tv_tbl += f'<td style="padding:8px;text-align:right;font-weight:800;background:#1F3864;color:#fff">{_grand2:,} <span style="color:{_dc}">{_tv_fmt_delta(_dg)}</span></td></tr>'
+            _tv_tbl += f'<td style="padding:8px;text-align:right;background:#1F3864;color:rgba(255,255,255,0.7)">{_gd1:.1f}</td>'
+            _tv_tbl += f'<td style="padding:8px;text-align:right;font-weight:800;background:#1F3864;color:#fff">{_grand2:,}</td>'
+            _tv_tbl += f'<td style="padding:8px;text-align:right;font-weight:800;background:#1F3864;color:#fff">{_gd2:.1f} <span style="color:{_dc}">{_tv_fmt_delta(_dg)}</span></td></tr>'
             _tv_tbl += '</tbody></table></div>'
             st.markdown(_tv_tbl, unsafe_allow_html=True)
 
