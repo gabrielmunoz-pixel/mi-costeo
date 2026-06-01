@@ -8166,16 +8166,24 @@ elif modulo.startswith("📊"):
             "Sándwich Clásicos": "Alimentos", "Sandwich Clasicos": "Alimentos",
             "SÃ¡ndwich ClÃ¡sicos": "Alimentos",
             "Niños": "Alimentos", "NiÃ±os": "Alimentos", "Ninos": "Alimentos",
-            "Hot-Dog": "Alimentos", "Agregados": "Alimentos",
+            "Hot-Dog": "Alimentos", "Hot Dog": "Alimentos",
+            "Hamburguesa De La Casa": "Alimentos", "Hamburguesa De Quinoa": "Alimentos",
+            "Hamburguesa Clasica": "Alimentos", "Hamburguesa Clásica": "Alimentos",
+            "Platos Clasicos": "Alimentos", "Platos Clásicos": "Alimentos",
+            "Platos Alemanes": "Alimentos",
+            "ACOMPANAMIENTO ALMUERZO": "Colación",
+            "ENSALADAS ALMUERZO": "Colación",
+            "Seleccionados Para Ti": "Alimentos",
+            "PROTEINA ALMUERZO": "Colación",
             # Postres
             "Postres": "Postres",
             # Cafetería
             "Cafeteria": "Cafetería", "Cafetería": "Cafetería",
             # Colaciones
-            "Agregados": "Agregados", "Colacion": "Agregados",
-            "Menu Ejecutivo": "Agregados", "Menú Ejecutivo": "Agregados",
-            "MenÃº Ejecutivo": "Agregados",
-            "Proteina Almuerzo": "Agregados",
+            "Agregados": "Agregados", "Colacion": "Colación",
+            "Menu Ejecutivo": "Colación", "Menú Ejecutivo": "Colación",
+            "MenÃº Ejecutivo": "Colación",
+            "Proteina Almuerzo": "Colación",
             # Líquidos C/A
             "Cervezas": "Líquidos C/A", "Cocteles": "Líquidos C/A",
             "Piscos": "Líquidos C/A", "Pisco Sour": "Líquidos C/A",
@@ -8189,6 +8197,7 @@ elif modulo.startswith("📊"):
             "Bebidas": "Líquidos S/A", "Jugos Naturales": "Líquidos S/A",
             "Limonadas": "Líquidos S/A", "Aguas": "Líquidos S/A",
             "Bebestibles": "Líquidos S/A", "Tragos S/A": "Líquidos S/A",
+            "Tragos Sin Alcohol": "Líquidos S/A",
             "Jugos/Limonadas": "Líquidos S/A",
         }
         _GARZONES_VALIDOS = {
@@ -8216,7 +8225,7 @@ elif modulo.startswith("📊"):
             "Jonathan Araujo","Nasslo Beltran","Keiber Eduardo Munoz Urribarri","Jose Pacheco",
             "Nestor Rosas","dubuc_juan Dubuc Martinez","Jackson Moreno","Richard Gonzalez",
         }
-        _CATS_ORDEN = ["Alimentos", "Postres", "Cafetería", "Agregados", "Líquidos C/A", "Líquidos S/A"]
+        _CATS_ORDEN = ["Alimentos", "Postres", "Cafetería", "Colación", "Agregados", "Líquidos C/A", "Líquidos S/A"]
         _EXCLUIR_CATS = {"Otros", "otros", None}
 
         # Metas mensuales por local y categoría (Cafetería y Postres)
@@ -8620,6 +8629,7 @@ elif modulo.startswith("📊"):
 
         # ── Mapa categorías (mismo que Garzones) ─────────────────
         _TV_CAT_MAP = {
+            # Alimentos
             "Lomito Clásico":"Alimentos","Lomito Clasico":"Alimentos",
             "Ave Clásica":"Alimentos","Ave Clasica":"Alimentos",
             "Churrasco Clásico":"Alimentos","Churrasco Clasico":"Alimentos",
@@ -8629,12 +8639,30 @@ elif modulo.startswith("📊"):
             "Sándwich Clásicos":"Alimentos","Sandwich Clasicos":"Alimentos",
             "SÃ¡ndwich ClÃ¡sicos":"Alimentos",
             "Niños":"Alimentos","NiÃ±os":"Alimentos","Ninos":"Alimentos",
-            "Hot-Dog":"Alimentos","Agregados":"Alimentos",
+            "Hot-Dog":"Alimentos","Hot Dog":"Alimentos",
+            "Hamburguesa Clasica":"Alimentos","Hamburguesa Clásica":"Alimentos",
+            "Hamburguesa De La Casa":"Alimentos","Hamburguesa De Quinoa":"Alimentos",
+            "Platos Clasicos":"Alimentos","Platos Clásicos":"Alimentos",
+            "Platos Alemanes":"Alimentos",
+            "Ensaladas Y Otros":"Alimentos","Ensaladas Almuerzo":"Alimentos",
+            "ENSALADAS ALMUERZO":"Colación",
+            "Para Compartir":"Alimentos",
+            "Seleccionados Para Ti":"Alimentos",
+            "Acompanamientos":"Alimentos","Acompañamientos":"Alimentos",
+            "AcompaÃ±amientos":"Alimentos",
+            "Acompanamiento Almuerzo":"Alimentos","Acompañamiento Almuerzo":"Alimentos",
+            "AcompaÃ±amiento Almuerzo":"Alimentos",
+            "ACOMPANAMIENTO ALMUERZO":"Colación",
+            "PROTEINA ALMUERZO":"Colación",
+            # Postres
             "Postres":"Postres",
+            # Cafetería
             "Cafeteria":"Cafetería","Cafetería":"Cafetería",
-            "Colacion":"Agregados","Menu Ejecutivo":"Agregados",
-            "Menú Ejecutivo":"Agregados","MenÃº Ejecutivo":"Agregados",
-            "Proteina Almuerzo":"Agregados",
+            # Agregados
+            "Agregados":"Agregados","Colacion":"Colación","COLACIONES":"Colación",
+            "Menu Ejecutivo":"Colación","Menú Ejecutivo":"Colación",
+            "MenÃº Ejecutivo":"Colación","Proteina Almuerzo":"Colación",
+            # Líquidos C/A
             "Cervezas":"Líquidos C/A","Cocteles":"Líquidos C/A",
             "Piscos":"Líquidos C/A","Pisco Sour":"Líquidos C/A",
             "Vinos":"Líquidos C/A","Espumantes":"Líquidos C/A",
@@ -8643,18 +8671,21 @@ elif modulo.startswith("📊"):
             "Tequila":"Líquidos C/A","Tragos":"Líquidos C/A",
             "Royal Guard":"Líquidos C/A","Heineken":"Líquidos C/A",
             "Cerveza":"Líquidos C/A","Vinos y Espumantes":"Líquidos C/A",
+            # Líquidos S/A
             "Bebidas":"Líquidos S/A","Jugos Naturales":"Líquidos S/A",
             "Limonadas":"Líquidos S/A","Aguas":"Líquidos S/A",
             "Bebestibles":"Líquidos S/A","Tragos S/A":"Líquidos S/A",
+            "Tragos Sin Alcohol":"Líquidos S/A",
             "Jugos/Limonadas":"Líquidos S/A",
         }
-        _TV_CATS_ALL  = ["Alimentos","Postres","Cafetería","Agregados","Líquidos C/A","Líquidos S/A"]
+        _TV_CATS_ALL  = ["Alimentos","Postres","Cafetería","Colación","Agregados","Líquidos C/A","Líquidos S/A"]
         _TV_LOCALES   = ["Vitacura","Las Condes","Chicureo","La Dehesa","Macul",
                          "La Reina","Quilin","Nueva Providencia","Providencia","Los Trapenses"]
         _TV_CAT_COLOR = {
             "Alimentos":     "#1F3864",
             "Postres":       "#C00000",
             "Cafetería":     "#7B3F00",
+            "Colación":      "#833C00",
             "Agregados":     "#375623",
             "Líquidos C/A":  "#4472C4",
             "Líquidos S/A":  "#70AD47",
