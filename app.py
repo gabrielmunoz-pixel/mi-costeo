@@ -873,12 +873,12 @@ def get_engine():
         return create_engine(
             conn_str,
             pool_pre_ping=True,
-            pool_recycle=60,
+            pool_recycle=180,
             pool_timeout=10,
-            pool_size=2,
-            max_overflow=3,
+            pool_size=3,
+            max_overflow=5,
             connect_args={
-                "options":              "-c statement_timeout=15000 -c idle_in_transaction_session_timeout=10000",
+                "options":              "-c statement_timeout=30000",
                 "connect_timeout":      8,
                 "keepalives":           1,
                 "keepalives_idle":      30,
@@ -893,35 +893,28 @@ def get_engine():
 
 @st.cache_resource
 def _init_db():
-    """Crea índices críticos una sola vez al arrancar la app — en background."""
-    import threading
-    def _crear_indices():
-        try:
-            engine = get_engine()
-            if engine is None:
-                return
-            indices = [
-                "CREATE INDEX IF NOT EXISTS idx_ventas_fecha       ON ventas(fecha_venta)",
-                "CREATE INDEX IF NOT EXISTS idx_ventas_local       ON ventas(local)",
-                "CREATE INDEX IF NOT EXISTS idx_ventas_fecha_local ON ventas(fecha_venta, local)",
-                "CREATE INDEX IF NOT EXISTS idx_ventas_sku         ON ventas(sku_producto)",
-                "CREATE INDEX IF NOT EXISTS idx_compras_fecha      ON compras(fecha_dte)",
-                "CREATE INDEX IF NOT EXISTS idx_compras_local      ON compras(local)",
-                "CREATE INDEX IF NOT EXISTS idx_compras_sku        ON compras(sku)",
-                "CREATE INDEX IF NOT EXISTS idx_compras_rut        ON compras(rut_proveedor)",
-                "CREATE INDEX IF NOT EXISTS idx_ventas_aliva_fecha ON ventas_aliva(fecha)",
-                "CREATE INDEX IF NOT EXISTS idx_ventas_aliva_local ON ventas_aliva(local)",
-                "CREATE INDEX IF NOT EXISTS idx_vmensual_año_mes   ON ventas_mensual(año, mes)",
-                "CREATE INDEX IF NOT EXISTS idx_vmensual_local     ON ventas_mensual(local)",
-                "CREATE INDEX IF NOT EXISTS idx_recetas_codigo     ON recetas(codigo_venta)",
-                "CREATE INDEX IF NOT EXISTS idx_recetas_sku_ing    ON recetas(sku_ingrediente)",
-            ]
-            with engine.begin() as conn:
-                for idx in indices:
-                    conn.execute(text(idx))
-        except Exception:
-            pass
-    threading.Thread(target=_crear_indices, daemon=True).start()
+    """Crea índices críticos una sola vez al arrancar la app."""
+    engine = get_engine()
+    if engine is None:
+        return
+    indices = [
+        "CREATE INDEX IF NOT EXISTS idx_ventas_fecha       ON ventas(fecha_venta)",
+        "CREATE INDEX IF NOT EXISTS idx_ventas_local       ON ventas(local)",
+        "CREATE INDEX IF NOT EXISTS idx_ventas_fecha_local ON ventas(fecha_venta, local)",
+        "CREATE INDEX IF NOT EXISTS idx_ventas_sku         ON ventas(sku_producto)",
+        "CREATE INDEX IF NOT EXISTS idx_compras_fecha      ON compras(fecha_dte)",
+        "CREATE INDEX IF NOT EXISTS idx_compras_local      ON compras(local)",
+        "CREATE INDEX IF NOT EXISTS idx_compras_sku        ON compras(sku)",
+        "CREATE INDEX IF NOT EXISTS idx_compras_rut        ON compras(rut_proveedor)",
+        "CREATE INDEX IF NOT EXISTS idx_ventas_aliva_fecha ON ventas_aliva(fecha)",
+        "CREATE INDEX IF NOT EXISTS idx_ventas_aliva_local ON ventas_aliva(local)",
+    ]
+    try:
+        with engine.begin() as conn:
+            for idx in indices:
+                conn.execute(text(idx))
+    except Exception:
+        pass  # Si ya existen o no hay permisos, continuar sin error
 
 _init_db()
 
@@ -2691,7 +2684,7 @@ with st.sidebar:
     if _is_admin:
         menu_items["📦 Gestión de Datos"] = []
     if _user_puede("📊 Informes"):
-        menu_items["📊 Informes"] = ["Rentabilidad", "Desviación", "Variación Precio Compras", "Informe de Costos", "Auditor Categorías", "Tendencias Bar", "Cuentas Casa", "Venta Diaria", "Rendimiento Garzones"]
+        menu_items["📊 Informes"] = ["Rentabilidad", "Desviación", "Variación Precio Compras", "Informe de Costos", "Auditor Categorías", "Tendencias Bar", "Cuentas Casa", "Venta Diaria", "Rendimiento Garzones", "Tendencia de Ventas"]
     if _is_admin or _user_puede("📋 Notas de Crédito"):
         menu_items["📋 Notas de Crédito"] = []
     if _is_admin:
@@ -3958,27 +3951,16 @@ if modulo.startswith("📦"):
                         conn.commit()
 
                     total_filas = len(df_save2)
-                    CHUNK_SQL   = 2_000
+                    CHUNK_SQL   = 5_000
                     n_chunks    = (total_filas // CHUNK_SQL) + 1
                     prog        = st.progress(0, text="Insertando registros...")
 
                     for i in range(n_chunks):
-                        chunk_df = df_save2.iloc[i*CHUNK_SQL:(i+1)*CHUNK_SQL].copy()
+                        chunk_df = df_save2.iloc[i*CHUNK_SQL:(i+1)*CHUNK_SQL]
                         if chunk_df.empty:
                             break
-                        # Usar COPY via psycopg2 — más rápido y estable que to_sql multi
-                        import io as _io_copy
-                        _buf = _io_copy.StringIO()
-                        chunk_df.to_csv(_buf, index=False, header=False, na_rep='')
-                        _buf.seek(0)
-                        with engine.raw_connection() as raw_conn:
-                            with raw_conn.cursor() as cur:
-                                cols_str = ', '.join(chunk_df.columns)
-                                cur.copy_expert(
-                                    f"COPY ventas ({cols_str}) FROM STDIN WITH (FORMAT CSV, NULL '')",
-                                    _buf
-                                )
-                            raw_conn.commit()
+                        chunk_df.to_sql('ventas', engine, if_exists='append',
+                                        index=False, method='multi', chunksize=500)
                         pct = min(int((i+1)/n_chunks*100), 100)
                         prog.progress(pct, text=f"Insertando... {min((i+1)*CHUNK_SQL, total_filas):,} / {total_filas:,} filas")
 
@@ -7171,6 +7153,8 @@ elif modulo.startswith("📊"):
         informe_sel = "VentaDiaria"
     elif "Garzones" in modulo or "Rendimiento" in modulo:
         informe_sel = "Garzones"
+    elif "Tendencia de Ventas" in modulo or "Tendencia" in modulo and "Bar" not in modulo:
+        informe_sel = "TendenciaVentas"
     else:
         informe_sel = "Informe 1"  # default
 
@@ -8625,6 +8609,319 @@ elif modulo.startswith("📊"):
     # ============================================================
     # MÓDULO: AUDITOR DE CATEGORÍAS
     # ============================================================
+
+    elif informe_sel == "TendenciaVentas":
+        import plotly.graph_objects as go
+        import io as _tv_io
+        from openpyxl import Workbook as _TVWb
+        from openpyxl.styles import Font as _TVF, PatternFill as _TVPF, Alignment as _TVA
+        from datetime import date as _tv_date
+
+        st.markdown("### 📈 Tendencia de Ventas")
+
+        # ── Selectores ───────────────────────────────────────────
+        _tv_col1, _tv_col2, _tv_col3 = st.columns([2, 2, 2])
+
+        # Meses disponibles
+        if 'tv_meses_cache' not in st.session_state:
+            st.session_state['tv_meses_cache'] = run_query("""
+                SELECT DISTINCT DATE_TRUNC('month', fecha_venta)::date AS mes
+                FROM ventas WHERE fecha_venta IS NOT NULL
+                ORDER BY mes DESC LIMIT 24
+            """)
+        _tv_meses_df = st.session_state['tv_meses_cache']
+        _tv_meses = [m for m in _tv_meses_df['mes'].tolist() if m is not None]
+        _tv_mes_labels = [m.strftime('%b %Y').upper() for m in _tv_meses]
+
+        with _tv_col1:
+            _tv_mes1_idx = st.selectbox("Mes base", range(len(_tv_meses)),
+                format_func=lambda i: _tv_mes_labels[i], key="tv_mes1")
+        with _tv_col2:
+            _tv_mes2_idx = st.selectbox("Mes comparación", range(len(_tv_meses)),
+                format_func=lambda i: _tv_mes_labels[i],
+                index=min(1, len(_tv_meses)-1), key="tv_mes2")
+        with _tv_col3:
+            _tv_local = st.selectbox("Local", ["Todos"] + [
+                "Vitacura","Las Condes","Chicureo","La Dehesa","Macul",
+                "La Reina","Quilin","Nueva Providencia","Providencia","Los Trapenses"
+            ], key="tv_local")
+
+        _tv_m1 = _tv_meses[_tv_mes1_idx]
+        _tv_m2 = _tv_meses[_tv_mes2_idx]
+        _tv_fi1 = _tv_m1.replace(day=1)
+        import calendar as _tv_cal
+        _tv_ff1 = _tv_m1.replace(day=_tv_cal.monthrange(_tv_m1.year, _tv_m1.month)[1])
+        _tv_fi2 = _tv_m2.replace(day=1)
+        _tv_ff2 = _tv_m2.replace(day=_tv_cal.monthrange(_tv_m2.year, _tv_m2.month)[1])
+        _tv_loc_filter = "AND UPPER(local) = UPPER(:loc)" if _tv_local != "Todos" else ""
+
+        _tv_btn = st.button("📊 Generar Informe", key="tv_btn", type="primary")
+
+        if _tv_btn or st.session_state.get('tv_data') is not None:
+
+            if _tv_btn:
+                # ── Query ventas padre ──────────────────────────
+                _tv_params1 = {'fi': str(_tv_fi1), 'ff': str(_tv_ff1)}
+                _tv_params2 = {'fi': str(_tv_fi2), 'ff': str(_tv_ff2)}
+                if _tv_local != "Todos":
+                    _tv_params1['loc'] = _tv_local
+                    _tv_params2['loc'] = _tv_local
+
+                _tv_q_padre = f"""
+                    SELECT sku_producto, nombre_producto,
+                           SUM(cantidad_vendida) AS uds,
+                           SUM(monto_venta_real) AS monto
+                    FROM ventas
+                    WHERE fecha_venta BETWEEN :fi AND :ff
+                      AND es_opcion = false
+                      AND local IS NOT NULL
+                      {_tv_loc_filter}
+                    GROUP BY sku_producto, nombre_producto
+                """
+
+                # ── Query opciones (misma lógica rentabilidad) ──
+                _tv_ba_sql = "', '".join(BA_COSTEABLES)
+                _tv_q_op = f"""
+                    WITH padres AS (
+                        SELECT id_orden, ab_categoria, sku_producto AS sku_padre,
+                               SUM(cantidad_vendida) AS cant_padre
+                        FROM ventas
+                        WHERE fecha_venta BETWEEN :fi AND :ff
+                          AND es_opcion = false
+                          AND ab_categoria IS NOT NULL
+                          {_tv_loc_filter}
+                        GROUP BY id_orden, ab_categoria, sku_producto
+                    ),
+                    total_por_ab_orden AS (
+                        SELECT id_orden, ab_categoria, SUM(cant_padre) AS total_padres
+                        FROM padres GROUP BY id_orden, ab_categoria
+                    ),
+                    opciones_raw AS (
+                        SELECT id_orden, ab_categoria, sku_producto AS sku_opcion,
+                               nombre_producto AS nombre_opcion,
+                               SUM(cantidad_vendida) AS cant_opcion,
+                               SUM(monto_venta_real) AS monto_opcion
+                        FROM ventas
+                        WHERE fecha_venta BETWEEN :fi AND :ff
+                          AND es_opcion = true
+                          {_tv_loc_filter}
+                        GROUP BY id_orden, ab_categoria, sku_producto, nombre_producto
+                    )
+                    SELECT p.sku_padre,
+                           o.sku_opcion, o.nombre_opcion,
+                           SUM(o.cant_opcion::float * p.cant_padre::float /
+                               NULLIF(t.total_padres, 0)) AS uds_opcion,
+                           SUM(o.monto_opcion::float * p.cant_padre::float /
+                               NULLIF(t.total_padres, 0)) AS monto_opcion
+                    FROM padres p
+                    JOIN total_por_ab_orden t
+                        ON t.id_orden = p.id_orden AND t.ab_categoria = p.ab_categoria
+                    JOIN opciones_raw o
+                        ON o.id_orden = p.id_orden AND o.ab_categoria = p.ab_categoria
+                    GROUP BY p.sku_padre, o.sku_opcion, o.nombre_opcion
+                """
+
+                with st.spinner("Consultando datos..."):
+                    _tv_df_p1 = run_query(_tv_q_padre, _tv_params1)
+                    _tv_df_p2 = run_query(_tv_q_padre, _tv_params2)
+                    _tv_df_o1 = run_query(_tv_q_op, _tv_params1)
+                    _tv_df_o2 = run_query(_tv_q_op, _tv_params2)
+
+                st.session_state['tv_data'] = {
+                    'df_p1': _tv_df_p1, 'df_p2': _tv_df_p2,
+                    'df_o1': _tv_df_o1, 'df_o2': _tv_df_o2,
+                    'lbl1': _tv_mes_labels[_tv_mes1_idx],
+                    'lbl2': _tv_mes_labels[_tv_mes2_idx],
+                    'local': _tv_local,
+                }
+
+            # ── Recuperar datos ──────────────────────────────────
+            _tv_d = st.session_state['tv_data']
+            _tv_df_p1 = _tv_d['df_p1'].copy()
+            _tv_df_p2 = _tv_d['df_p2'].copy()
+            _tv_df_o1 = _tv_d['df_o1'].copy()
+            _tv_df_o2 = _tv_d['df_o2'].copy()
+            _tv_lbl1  = _tv_d['lbl1']
+            _tv_lbl2  = _tv_d['lbl2']
+
+            for _df in [_tv_df_p1, _tv_df_p2]:
+                _df['uds']   = pd.to_numeric(_df['uds'],   errors='coerce').fillna(0)
+                _df['monto'] = pd.to_numeric(_df['monto'], errors='coerce').fillna(0)
+            for _df in [_tv_df_o1, _tv_df_o2]:
+                _df['uds_opcion']   = pd.to_numeric(_df['uds_opcion'],   errors='coerce').fillna(0)
+                _df['monto_opcion'] = pd.to_numeric(_df['monto_opcion'], errors='coerce').fillna(0)
+
+            # ── Merge padres ─────────────────────────────────────
+            _tv_merge = pd.merge(
+                _tv_df_p1.rename(columns={'uds': 'uds_m1', 'monto': 'monto_m1'}),
+                _tv_df_p2.rename(columns={'uds': 'uds_m2', 'monto': 'monto_m2'})[['sku_producto','uds_m2','monto_m2']],
+                on='sku_producto', how='outer'
+            ).fillna(0)
+            _tv_merge['nombre_producto'] = _tv_merge['nombre_producto'].replace('', None).fillna(
+                _tv_df_p2.set_index('sku_producto')['nombre_producto'].to_dict()
+            )
+            _tv_merge['delta_uds']   = _tv_merge['uds_m1'] - _tv_merge['uds_m2']
+            _tv_merge['delta_pct']   = _tv_merge.apply(
+                lambda r: (r['uds_m1']/r['uds_m2'] - 1)*100 if r['uds_m2'] > 0 else None, axis=1
+            )
+            _tv_merge = _tv_merge.sort_values('monto_m1', ascending=False)
+
+            # ── KPIs ─────────────────────────────────────────────
+            _kc1, _kc2, _kc3, _kc4 = st.columns(4)
+            _kc1.metric(f"Platos {_tv_lbl1}", f"{int(_tv_merge['uds_m1'].sum()):,}")
+            _kc2.metric(f"Monto {_tv_lbl1}", f"${_tv_merge['monto_m1'].sum():,.0f}")
+            _kc3.metric(f"Platos {_tv_lbl2}", f"{int(_tv_merge['uds_m2'].sum()):,}")
+            _kc4.metric(f"Monto {_tv_lbl2}", f"${_tv_merge['monto_m2'].sum():,.0f}")
+
+            st.markdown("---")
+
+            # ── Tabla con expanders por plato ────────────────────
+            _tv_o1_idx = _tv_df_o1.groupby('sku_padre')
+            _tv_o2_idx = _tv_df_o2.groupby('sku_padre')
+
+            for _, _row in _tv_merge.iterrows():
+                _sku = _row['sku_producto']
+                _nom = _row['nombre_producto']
+                _dpct = f"{_row['delta_pct']:+.1f}%" if _row['delta_pct'] is not None else "N/A"
+                _color = "#2ecc71" if (_row['delta_pct'] or 0) >= 0 else "#e74c3c"
+
+                with st.expander(
+                    f"**{_nom}** — "
+                    f"{_tv_lbl1}: {int(_row['uds_m1']):,} uds · ${_row['monto_m1']:,.0f} | "
+                    f"{_tv_lbl2}: {int(_row['uds_m2']):,} uds · ${_row['monto_m2']:,.0f} | "
+                    f"Δ {_dpct}"
+                ):
+                    # Opciones del plato
+                    _o1 = _tv_o1_idx.get_group(_sku).copy() if _sku in _tv_o1_idx.groups else pd.DataFrame()
+                    _o2 = _tv_o2_idx.get_group(_sku).copy() if _sku in _tv_o2_idx.groups else pd.DataFrame()
+
+                    if _o1.empty and _o2.empty:
+                        st.caption("Sin opciones registradas.")
+                    else:
+                        _op_merge = pd.merge(
+                            _o1[['sku_opcion','nombre_opcion','uds_opcion','monto_opcion']].rename(
+                                columns={'uds_opcion':'uds_m1','monto_opcion':'monto_m1'}),
+                            _o2[['sku_opcion','uds_opcion','monto_opcion']].rename(
+                                columns={'uds_opcion':'uds_m2','monto_opcion':'monto_m2'}),
+                            on='sku_opcion', how='outer'
+                        ).fillna(0)
+
+                        # Fill nombre from o2 where missing
+                        if not _o2.empty:
+                            _n2 = _o2.set_index('sku_opcion')['nombre_opcion'].to_dict()
+                            _op_merge['nombre_opcion'] = _op_merge.apply(
+                                lambda r: r['nombre_opcion'] if r['nombre_opcion'] else _n2.get(r['sku_opcion'],''), axis=1
+                            )
+
+                        # Filter out zero rows
+                        _op_merge = _op_merge[(_op_merge['uds_m1'] > 0) | (_op_merge['uds_m2'] > 0)]
+                        _op_merge = _op_merge.sort_values('uds_m1', ascending=False)
+
+                        # % del padre
+                        _op_merge['pct_m1'] = _op_merge['uds_m1'] / _row['uds_m1'] * 100 if _row['uds_m1'] > 0 else 0
+                        _op_merge['pct_m2'] = _op_merge['uds_m2'] / _row['uds_m2'] * 100 if _row['uds_m2'] > 0 else 0
+                        _op_merge['delta_op'] = _op_merge.apply(
+                            lambda r: (r['uds_m1']/r['uds_m2'] - 1)*100 if r['uds_m2'] > 0 else None, axis=1
+                        )
+
+                        _op_display = pd.DataFrame({
+                            'Opción': _op_merge['nombre_opcion'],
+                            f'Uds {_tv_lbl1}': _op_merge['uds_m1'].apply(lambda x: f"{x:,.0f}"),
+                            f'% padre {_tv_lbl1}': _op_merge['pct_m1'].apply(lambda x: f"{x:.1f}%"),
+                            f'Monto {_tv_lbl1}': _op_merge['monto_m1'].apply(lambda x: f"${x:,.0f}"),
+                            f'Uds {_tv_lbl2}': _op_merge['uds_m2'].apply(lambda x: f"{x:,.0f}"),
+                            f'% padre {_tv_lbl2}': _op_merge['pct_m2'].apply(lambda x: f"{x:.1f}%"),
+                            f'Monto {_tv_lbl2}': _op_merge['monto_m2'].apply(lambda x: f"${x:,.0f}"),
+                            'Δ%': _op_merge['delta_op'].apply(lambda x: f"{x:+.1f}%" if x is not None else "N/A"),
+                        })
+                        st.dataframe(_op_display, use_container_width=True, hide_index=True)
+
+            # ── Export Excel ─────────────────────────────────────
+            st.markdown("---")
+            if st.button("⬇️ Exportar Excel", key="tv_export"):
+                _tv_wb = _TVWb()
+                _tv_ws = _tv_wb.active
+                _tv_ws.title = "Tendencia de Ventas"
+                _tv_ws.sheet_properties.tabColor = "1F3864"
+                _tv_ws.sheet_view.showGridLines = False
+
+                _tv_hdr_fill = _TVPF("solid", start_color="1F3864", end_color="1F3864")
+                _tv_hdr_font = _TVF(name="Calibri", bold=True, size=11, color="FFFFFF")
+                _tv_sub_fill = _TVPF("solid", start_color="2E4A7A", end_color="2E4A7A")
+
+                # Headers
+                _tv_cols = [
+                    "SKU", "Producto",
+                    f"Uds {_tv_lbl1}", f"Monto {_tv_lbl1}",
+                    f"Uds {_tv_lbl2}", f"Monto {_tv_lbl2}",
+                    "Δ Uds", "Δ%",
+                    "SKU Opción", "Opción",
+                    f"Uds Op {_tv_lbl1}", f"% Padre {_tv_lbl1}",
+                    f"Uds Op {_tv_lbl2}", f"% Padre {_tv_lbl2}",
+                    "Δ% Opción"
+                ]
+                for ci, h in enumerate(_tv_cols, 1):
+                    c = _tv_ws.cell(1, ci, h)
+                    c.font = _tv_hdr_font; c.fill = _tv_hdr_fill
+                    c.alignment = _TVA(horizontal="center", vertical="center")
+
+                _tv_row = 2
+                for _, _row in _tv_merge.iterrows():
+                    _sku = _row['sku_producto']
+                    _dpct_val = _row['delta_pct']
+                    _o1 = _tv_o1_idx.get_group(_sku).copy() if _sku in _tv_o1_idx.groups else pd.DataFrame()
+                    _o2 = _tv_o2_idx.get_group(_sku).copy() if _sku in _tv_o2_idx.groups else pd.DataFrame()
+
+                    _op_merge2 = pd.merge(
+                        _o1[['sku_opcion','nombre_opcion','uds_opcion','monto_opcion']].rename(
+                            columns={'uds_opcion':'uds_m1','monto_opcion':'monto_m1'}) if not _o1.empty else pd.DataFrame(columns=['sku_opcion','nombre_opcion','uds_m1','monto_m1']),
+                        _o2[['sku_opcion','uds_opcion']].rename(columns={'uds_opcion':'uds_m2'}) if not _o2.empty else pd.DataFrame(columns=['sku_opcion','uds_m2']),
+                        on='sku_opcion', how='outer'
+                    ).fillna(0)
+                    _op_merge2 = _op_merge2[(_op_merge2['uds_m1'] > 0) | (_op_merge2['uds_m2'] > 0)]
+
+                    _padre_fill = _TVPF("solid", start_color="E8F0FE", end_color="E8F0FE")
+                    if _op_merge2.empty:
+                        vals = [_sku, _row['nombre_producto'],
+                                round(_row['uds_m1']), round(_row['monto_m1']),
+                                round(_row['uds_m2']), round(_row['monto_m2']),
+                                round(_row['delta_uds']),
+                                f"{_dpct_val:+.1f}%" if _dpct_val is not None else "N/A",
+                                "", "", "", "", "", "", ""]
+                        for ci, v in enumerate(vals, 1):
+                            c = _tv_ws.cell(_tv_row, ci, v)
+                            c.fill = _padre_fill
+                        _tv_row += 1
+                    else:
+                        for oi, _op in _op_merge2.iterrows():
+                            _pct1 = _op['uds_m1'] / _row['uds_m1'] * 100 if _row['uds_m1'] > 0 else 0
+                            _pct2 = _op['uds_m2'] / _row['uds_m2'] * 100 if _row['uds_m2'] > 0 else 0
+                            _dop = (_op['uds_m1']/_op['uds_m2'] - 1)*100 if _op['uds_m2'] > 0 else None
+                            vals = [_sku, _row['nombre_producto'],
+                                    round(_row['uds_m1']), round(_row['monto_m1']),
+                                    round(_row['uds_m2']), round(_row['monto_m2']),
+                                    round(_row['delta_uds']),
+                                    f"{_dpct_val:+.1f}%" if _dpct_val is not None else "N/A",
+                                    _op['sku_opcion'], _op.get('nombre_opcion',''),
+                                    round(_op['uds_m1']), f"{_pct1:.1f}%",
+                                    round(_op['uds_m2']), f"{_pct2:.1f}%",
+                                    f"{_dop:+.1f}%" if _dop is not None else "N/A"]
+                            for ci, v in enumerate(vals, 1):
+                                c = _tv_ws.cell(_tv_row, ci, v)
+                                if ci <= 8:
+                                    c.fill = _padre_fill
+                            _tv_row += 1
+
+                _tv_buf = _tv_io.BytesIO()
+                _tv_wb.save(_tv_buf)
+                _tv_buf.seek(0)
+                st.download_button(
+                    "📥 Descargar Excel",
+                    _tv_buf,
+                    file_name=f"Tendencia_Ventas_{_tv_lbl1}_vs_{_tv_lbl2}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="tv_dl"
+                )
 
     elif informe_sel in ("CuentasCasa", "Auditor", "Bar"):
         pass  # estos módulos se renderizan en sus propios elif globales
