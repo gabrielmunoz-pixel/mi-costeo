@@ -8613,315 +8613,528 @@ elif modulo.startswith("📊"):
     elif informe_sel == "TendenciaVentas":
         import plotly.graph_objects as go
         import io as _tv_io
+        import calendar as _tv_cal
         from openpyxl import Workbook as _TVWb
-        from openpyxl.styles import Font as _TVF, PatternFill as _TVPF, Alignment as _TVA
-        from datetime import date as _tv_date
+        from openpyxl.styles import Font as _TVF, PatternFill as _TVPF, Alignment as _TVA, Border as _TVB, Side as _TVS
+        from openpyxl.utils import get_column_letter as _tv_gcl
+
+        # ── Mapa categorías (mismo que Garzones) ─────────────────
+        _TV_CAT_MAP = {
+            "Lomito Clásico":"Alimentos","Lomito Clasico":"Alimentos",
+            "Ave Clásica":"Alimentos","Ave Clasica":"Alimentos",
+            "Churrasco Clásico":"Alimentos","Churrasco Clasico":"Alimentos",
+            "Pernil Clásico":"Alimentos","Pernil Clasico":"Alimentos",
+            "Filete Clásico":"Alimentos","Filete Clasico":"Alimentos",
+            "Mechada Clásica":"Alimentos","Mechada Clasica":"Alimentos",
+            "Sándwich Clásicos":"Alimentos","Sandwich Clasicos":"Alimentos",
+            "SÃ¡ndwich ClÃ¡sicos":"Alimentos",
+            "Niños":"Alimentos","NiÃ±os":"Alimentos","Ninos":"Alimentos",
+            "Hot-Dog":"Alimentos","Agregados":"Alimentos",
+            "Postres":"Postres",
+            "Cafeteria":"Cafetería","Cafetería":"Cafetería",
+            "Colacion":"Agregados","Menu Ejecutivo":"Agregados",
+            "Menú Ejecutivo":"Agregados","MenÃº Ejecutivo":"Agregados",
+            "Proteina Almuerzo":"Agregados",
+            "Cervezas":"Líquidos C/A","Cocteles":"Líquidos C/A",
+            "Piscos":"Líquidos C/A","Pisco Sour":"Líquidos C/A",
+            "Vinos":"Líquidos C/A","Espumantes":"Líquidos C/A",
+            "Bajativos":"Líquidos C/A","Ron":"Líquidos C/A",
+            "Whisky":"Líquidos C/A","Vodka":"Líquidos C/A",
+            "Tequila":"Líquidos C/A","Tragos":"Líquidos C/A",
+            "Royal Guard":"Líquidos C/A","Heineken":"Líquidos C/A",
+            "Cerveza":"Líquidos C/A","Vinos y Espumantes":"Líquidos C/A",
+            "Bebidas":"Líquidos S/A","Jugos Naturales":"Líquidos S/A",
+            "Limonadas":"Líquidos S/A","Aguas":"Líquidos S/A",
+            "Bebestibles":"Líquidos S/A","Tragos S/A":"Líquidos S/A",
+            "Jugos/Limonadas":"Líquidos S/A",
+        }
+        _TV_CATS_ALL  = ["Alimentos","Postres","Cafetería","Agregados","Líquidos C/A","Líquidos S/A"]
+        _TV_LOCALES   = ["Vitacura","Las Condes","Chicureo","La Dehesa","Macul",
+                         "La Reina","Quilin","Nueva Providencia","Providencia","Los Trapenses"]
+        _TV_CAT_COLOR = {
+            "Alimentos":     "#1F3864",
+            "Postres":       "#C00000",
+            "Cafetería":     "#7B3F00",
+            "Agregados":     "#375623",
+            "Líquidos C/A":  "#4472C4",
+            "Líquidos S/A":  "#70AD47",
+        }
 
         st.markdown("### 📈 Tendencia de Ventas")
 
-        # ── Selectores ───────────────────────────────────────────
-        _tv_col1, _tv_col2, _tv_col3 = st.columns([2, 2, 2])
+        # ── Filtros ──────────────────────────────────────────────
+        _tv_c1, _tv_c2, _tv_c3 = st.columns([2,2,3])
 
-        # Meses disponibles
         if 'tv_meses_cache' not in st.session_state:
             st.session_state['tv_meses_cache'] = run_query("""
                 SELECT DISTINCT DATE_TRUNC('month', fecha_venta)::date AS mes
                 FROM ventas WHERE fecha_venta IS NOT NULL
                 ORDER BY mes DESC LIMIT 24
             """)
-        _tv_meses_df = st.session_state['tv_meses_cache']
-        _tv_meses = [m for m in _tv_meses_df['mes'].tolist() if m is not None]
-        _tv_mes_labels = [m.strftime('%b %Y').upper() for m in _tv_meses]
+        _tv_meses    = [m for m in st.session_state['tv_meses_cache']['mes'].tolist() if m]
+        _tv_mlabels  = [m.strftime('%b %Y').upper() for m in _tv_meses]
 
-        with _tv_col1:
-            _tv_mes1_idx = st.selectbox("Mes base", range(len(_tv_meses)),
-                format_func=lambda i: _tv_mes_labels[i], key="tv_mes1")
-        with _tv_col2:
-            _tv_mes2_idx = st.selectbox("Mes comparación", range(len(_tv_meses)),
-                format_func=lambda i: _tv_mes_labels[i],
+        with _tv_c1:
+            _tv_idx1 = st.selectbox("📅 Mes base", range(len(_tv_meses)),
+                format_func=lambda i: _tv_mlabels[i], key="tv_mes1")
+        with _tv_c2:
+            _tv_idx2 = st.selectbox("📅 Mes comparación", range(len(_tv_meses)),
+                format_func=lambda i: _tv_mlabels[i],
                 index=min(1, len(_tv_meses)-1), key="tv_mes2")
-        with _tv_col3:
-            _tv_local = st.selectbox("Local", ["Todos"] + [
-                "Vitacura","Las Condes","Chicureo","La Dehesa","Macul",
-                "La Reina","Quilin","Nueva Providencia","Providencia","Los Trapenses"
-            ], key="tv_local")
+        with _tv_c3:
+            _tv_cats_sel = st.multiselect("🏷️ Categorías",
+                _TV_CATS_ALL, default=_TV_CATS_ALL, key="tv_cats")
 
-        _tv_m1 = _tv_meses[_tv_mes1_idx]
-        _tv_m2 = _tv_meses[_tv_mes2_idx]
-        _tv_fi1 = _tv_m1.replace(day=1)
-        import calendar as _tv_cal
-        _tv_ff1 = _tv_m1.replace(day=_tv_cal.monthrange(_tv_m1.year, _tv_m1.month)[1])
-        _tv_fi2 = _tv_m2.replace(day=1)
-        _tv_ff2 = _tv_m2.replace(day=_tv_cal.monthrange(_tv_m2.year, _tv_m2.month)[1])
-        _tv_loc_filter = "AND UPPER(local) = UPPER(:loc)" if _tv_local != "Todos" else ""
+        _tv_m1   = _tv_meses[_tv_idx1]
+        _tv_m2   = _tv_meses[_tv_idx2]
+        _tv_fi1  = _tv_m1.replace(day=1)
+        _tv_ff1  = _tv_m1.replace(day=_tv_cal.monthrange(_tv_m1.year, _tv_m1.month)[1])
+        _tv_fi2  = _tv_m2.replace(day=1)
+        _tv_ff2  = _tv_m2.replace(day=_tv_cal.monthrange(_tv_m2.year, _tv_m2.month)[1])
+        _tv_lbl1 = _tv_mlabels[_tv_idx1]
+        _tv_lbl2 = _tv_mlabels[_tv_idx2]
+
+        if not _tv_cats_sel:
+            st.warning("Selecciona al menos una categoría.")
+            st.stop()
 
         _tv_btn = st.button("📊 Generar Informe", key="tv_btn", type="primary")
 
-        if _tv_btn or st.session_state.get('tv_data') is not None:
+        if _tv_btn:
+            # ── Query ventas padre con ab_categoria ──────────────
+            _tv_q = """
+                SELECT local, ab_categoria,
+                       sku_producto, nombre_producto,
+                       SUM(cantidad_vendida) AS uds,
+                       SUM(monto_venta_real)  AS monto
+                FROM ventas
+                WHERE fecha_venta BETWEEN :fi AND :ff
+                  AND es_opcion = false
+                  AND local IS NOT NULL
+                  AND ab_categoria IS NOT NULL
+                GROUP BY local, ab_categoria, sku_producto, nombre_producto
+            """
+            with st.spinner("Consultando datos..."):
+                _tv_df1 = run_query(_tv_q, {'fi': str(_tv_fi1), 'ff': str(_tv_ff1)})
+                _tv_df2 = run_query(_tv_q, {'fi': str(_tv_fi2), 'ff': str(_tv_ff2)})
 
-            if _tv_btn:
-                # ── Query ventas padre ──────────────────────────
-                _tv_params1 = {'fi': str(_tv_fi1), 'ff': str(_tv_ff1)}
-                _tv_params2 = {'fi': str(_tv_fi2), 'ff': str(_tv_ff2)}
-                if _tv_local != "Todos":
-                    _tv_params1['loc'] = _tv_local
-                    _tv_params2['loc'] = _tv_local
-
-                _tv_q_padre = f"""
-                    SELECT sku_producto, nombre_producto,
-                           SUM(cantidad_vendida) AS uds,
-                           SUM(monto_venta_real) AS monto
-                    FROM ventas
-                    WHERE fecha_venta BETWEEN :fi AND :ff
-                      AND es_opcion = false
-                      AND local IS NOT NULL
-                      {_tv_loc_filter}
-                    GROUP BY sku_producto, nombre_producto
-                """
-
-                # ── Query opciones (misma lógica rentabilidad) ──
-                _tv_ba_sql = "', '".join(BA_COSTEABLES)
-                _tv_q_op = f"""
-                    WITH padres AS (
-                        SELECT id_orden, ab_categoria, sku_producto AS sku_padre,
-                               SUM(cantidad_vendida) AS cant_padre
-                        FROM ventas
-                        WHERE fecha_venta BETWEEN :fi AND :ff
-                          AND es_opcion = false
-                          AND ab_categoria IS NOT NULL
-                          {_tv_loc_filter}
-                        GROUP BY id_orden, ab_categoria, sku_producto
-                    ),
-                    total_por_ab_orden AS (
-                        SELECT id_orden, ab_categoria, SUM(cant_padre) AS total_padres
-                        FROM padres GROUP BY id_orden, ab_categoria
-                    ),
-                    opciones_raw AS (
-                        SELECT id_orden, ab_categoria, sku_producto AS sku_opcion,
-                               nombre_producto AS nombre_opcion,
-                               SUM(cantidad_vendida) AS cant_opcion,
-                               SUM(monto_venta_real) AS monto_opcion
-                        FROM ventas
-                        WHERE fecha_venta BETWEEN :fi AND :ff
-                          AND es_opcion = true
-                          {_tv_loc_filter}
-                        GROUP BY id_orden, ab_categoria, sku_producto, nombre_producto
-                    )
-                    SELECT p.sku_padre,
-                           o.sku_opcion, o.nombre_opcion,
-                           SUM(o.cant_opcion::float * p.cant_padre::float /
-                               NULLIF(t.total_padres, 0)) AS uds_opcion,
-                           SUM(o.monto_opcion::float * p.cant_padre::float /
-                               NULLIF(t.total_padres, 0)) AS monto_opcion
-                    FROM padres p
-                    JOIN total_por_ab_orden t
-                        ON t.id_orden = p.id_orden AND t.ab_categoria = p.ab_categoria
-                    JOIN opciones_raw o
-                        ON o.id_orden = p.id_orden AND o.ab_categoria = p.ab_categoria
-                    GROUP BY p.sku_padre, o.sku_opcion, o.nombre_opcion
-                """
-
-                with st.spinner("Consultando datos..."):
-                    _tv_df_p1 = run_query(_tv_q_padre, _tv_params1)
-                    _tv_df_p2 = run_query(_tv_q_padre, _tv_params2)
-                    _tv_df_o1 = run_query(_tv_q_op, _tv_params1)
-                    _tv_df_o2 = run_query(_tv_q_op, _tv_params2)
-
-                st.session_state['tv_data'] = {
-                    'df_p1': _tv_df_p1, 'df_p2': _tv_df_p2,
-                    'df_o1': _tv_df_o1, 'df_o2': _tv_df_o2,
-                    'lbl1': _tv_mes_labels[_tv_mes1_idx],
-                    'lbl2': _tv_mes_labels[_tv_mes2_idx],
-                    'local': _tv_local,
-                }
-
-            # ── Recuperar datos ──────────────────────────────────
-            _tv_d = st.session_state['tv_data']
-            _tv_df_p1 = _tv_d['df_p1'].copy()
-            _tv_df_p2 = _tv_d['df_p2'].copy()
-            _tv_df_o1 = _tv_d['df_o1'].copy()
-            _tv_df_o2 = _tv_d['df_o2'].copy()
-            _tv_lbl1  = _tv_d['lbl1']
-            _tv_lbl2  = _tv_d['lbl2']
-
-            for _df in [_tv_df_p1, _tv_df_p2]:
+            # Asignar categoría
+            for _df in [_tv_df1, _tv_df2]:
                 _df['uds']   = pd.to_numeric(_df['uds'],   errors='coerce').fillna(0)
                 _df['monto'] = pd.to_numeric(_df['monto'], errors='coerce').fillna(0)
-            for _df in [_tv_df_o1, _tv_df_o2]:
-                _df['uds_opcion']   = pd.to_numeric(_df['uds_opcion'],   errors='coerce').fillna(0)
-                _df['monto_opcion'] = pd.to_numeric(_df['monto_opcion'], errors='coerce').fillna(0)
+                _df['categoria'] = _df['ab_categoria'].map(_TV_CAT_MAP).fillna('Otros')
 
-            # ── Merge padres ─────────────────────────────────────
-            _tv_merge = pd.merge(
-                _tv_df_p1.rename(columns={'uds': 'uds_m1', 'monto': 'monto_m1'}),
-                _tv_df_p2.rename(columns={'uds': 'uds_m2', 'monto': 'monto_m2'})[['sku_producto','uds_m2','monto_m2']],
-                on='sku_producto', how='outer'
-            ).fillna(0)
-            _tv_merge['nombre_producto'] = _tv_merge['nombre_producto'].replace('', None).fillna(
-                _tv_df_p2.set_index('sku_producto')['nombre_producto'].to_dict()
-            )
-            _tv_merge['delta_uds']   = _tv_merge['uds_m1'] - _tv_merge['uds_m2']
-            _tv_merge['delta_pct']   = _tv_merge.apply(
-                lambda r: (r['uds_m1']/r['uds_m2'] - 1)*100 if r['uds_m2'] > 0 else None, axis=1
-            )
-            _tv_merge = _tv_merge.sort_values('monto_m1', ascending=False)
+            # Filtrar categorías seleccionadas
+            _tv_df1 = _tv_df1[_tv_df1['categoria'].isin(_tv_cats_sel)]
+            _tv_df2 = _tv_df2[_tv_df2['categoria'].isin(_tv_cats_sel)]
 
-            # ── KPIs ─────────────────────────────────────────────
-            _kc1, _kc2, _kc3, _kc4 = st.columns(4)
-            _kc1.metric(f"Platos {_tv_lbl1}", f"{int(_tv_merge['uds_m1'].sum()):,}")
-            _kc2.metric(f"Monto {_tv_lbl1}", f"${_tv_merge['monto_m1'].sum():,.0f}")
-            _kc3.metric(f"Platos {_tv_lbl2}", f"{int(_tv_merge['uds_m2'].sum()):,}")
-            _kc4.metric(f"Monto {_tv_lbl2}", f"${_tv_merge['monto_m2'].sum():,.0f}")
+            st.session_state['tv_data'] = {
+                'df1': _tv_df1, 'df2': _tv_df2,
+                'lbl1': _tv_lbl1, 'lbl2': _tv_lbl2,
+                'cats': _tv_cats_sel,
+            }
 
-            st.markdown("---")
+        if st.session_state.get('tv_data'):
+            _tvd    = st.session_state['tv_data']
+            _df1    = _tvd['df1']
+            _df2    = _tvd['df2']
+            _lbl1   = _tvd['lbl1']
+            _lbl2   = _tvd['lbl2']
+            _cats   = _tvd['cats']
 
-            # ── Tabla con expanders por plato ────────────────────
-            _tv_o1_idx = _tv_df_o1.groupby('sku_padre')
-            _tv_o2_idx = _tv_df_o2.groupby('sku_padre')
+            # ── helper delta ─────────────────────────────────────
+            def _tv_delta(a, b):
+                if b > 0: return (a/b - 1)*100
+                return None
 
-            for _, _row in _tv_merge.iterrows():
-                _sku = _row['sku_producto']
-                _nom = _row['nombre_producto']
-                _dpct = f"{_row['delta_pct']:+.1f}%" if _row['delta_pct'] is not None else "N/A"
-                _color = "#2ecc71" if (_row['delta_pct'] or 0) >= 0 else "#e74c3c"
+            def _tv_fmt_delta(v):
+                if v is None: return "N/A"
+                arrow = "▲" if v >= 0 else "▼"
+                return f"{arrow} {abs(v):.1f}%"
 
-                with st.expander(
-                    f"**{_nom}** — "
-                    f"{_tv_lbl1}: {int(_row['uds_m1']):,} uds · ${_row['monto_m1']:,.0f} | "
-                    f"{_tv_lbl2}: {int(_row['uds_m2']):,} uds · ${_row['monto_m2']:,.0f} | "
-                    f"Δ {_dpct}"
-                ):
-                    # Opciones del plato
-                    _o1 = _tv_o1_idx.get_group(_sku).copy() if _sku in _tv_o1_idx.groups else pd.DataFrame()
-                    _o2 = _tv_o2_idx.get_group(_sku).copy() if _sku in _tv_o2_idx.groups else pd.DataFrame()
+            def _tv_color_delta(v):
+                if v is None: return "color:#888"
+                return "color:#2ecc71" if v >= 0 else "color:#e74c3c"
 
-                    if _o1.empty and _o2.empty:
-                        st.caption("Sin opciones registradas.")
-                    else:
-                        _op_merge = pd.merge(
-                            _o1[['sku_opcion','nombre_opcion','uds_opcion','monto_opcion']].rename(
-                                columns={'uds_opcion':'uds_m1','monto_opcion':'monto_m1'}),
-                            _o2[['sku_opcion','uds_opcion','monto_opcion']].rename(
-                                columns={'uds_opcion':'uds_m2','monto_opcion':'monto_m2'}),
-                            on='sku_opcion', how='outer'
-                        ).fillna(0)
+            # ══════════════════════════════════════════════════════
+            # ① RESUMEN RED
+            # ══════════════════════════════════════════════════════
+            st.markdown(f"#### 🌐 Resumen Red — {_lbl1} vs {_lbl2}")
 
-                        # Fill nombre from o2 where missing
-                        if not _o2.empty:
-                            _n2 = _o2.set_index('sku_opcion')['nombre_opcion'].to_dict()
-                            _op_merge['nombre_opcion'] = _op_merge.apply(
-                                lambda r: r['nombre_opcion'] if r['nombre_opcion'] else _n2.get(r['sku_opcion'],''), axis=1
-                            )
+            # Totales por categoría
+            _tv_res1 = _df1.groupby('categoria').agg(uds=('uds','sum'), monto=('monto','sum')).reindex(_cats).fillna(0)
+            _tv_res2 = _df2.groupby('categoria').agg(uds=('uds','sum'), monto=('monto','sum')).reindex(_cats).fillna(0)
 
-                        # Filter out zero rows
-                        _op_merge = _op_merge[(_op_merge['uds_m1'] > 0) | (_op_merge['uds_m2'] > 0)]
-                        _op_merge = _op_merge.sort_values('uds_m1', ascending=False)
+            # Cards por categoría
+            _tv_ncats = len(_cats)
+            _tv_card_cols = st.columns(_tv_ncats)
+            for _ci, _cat in enumerate(_cats):
+                _u1 = _tv_res1.loc[_cat,'uds'] if _cat in _tv_res1.index else 0
+                _u2 = _tv_res2.loc[_cat,'uds'] if _cat in _tv_res2.index else 0
+                _m1 = _tv_res1.loc[_cat,'monto'] if _cat in _tv_res1.index else 0
+                _d  = _tv_delta(_u1, _u2)
+                _color = _TV_CAT_COLOR.get(_cat,"#333")
+                with _tv_card_cols[_ci]:
+                    st.markdown(f"""
+                    <div style="background:{_color};border-radius:10px;padding:14px 12px;text-align:center;margin-bottom:8px">
+                        <div style="font-size:0.7rem;color:rgba(255,255,255,0.7);text-transform:uppercase;letter-spacing:0.1em">{_cat}</div>
+                        <div style="font-size:1.6rem;font-weight:700;color:#fff;line-height:1.2">{int(_u1):,}</div>
+                        <div style="font-size:0.75rem;color:rgba(255,255,255,0.8)">${_m1:,.0f}</div>
+                        <div style="font-size:0.85rem;color:{'#7fffb0' if (_d or 0)>=0 else '#ff8080'};margin-top:4px;font-weight:600">
+                            {_tv_fmt_delta(_d)} vs {_lbl2} ({int(_u2):,})
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
 
-                        # % del padre
-                        _op_merge['pct_m1'] = _op_merge['uds_m1'] / _row['uds_m1'] * 100 if _row['uds_m1'] > 0 else 0
-                        _op_merge['pct_m2'] = _op_merge['uds_m2'] / _row['uds_m2'] * 100 if _row['uds_m2'] > 0 else 0
-                        _op_merge['delta_op'] = _op_merge.apply(
-                            lambda r: (r['uds_m1']/r['uds_m2'] - 1)*100 if r['uds_m2'] > 0 else None, axis=1
+            # Total general
+            _tv_tot1_u = _df1['uds'].sum()
+            _tv_tot2_u = _df2['uds'].sum()
+            _tv_tot1_m = _df1['monto'].sum()
+            _tv_tot2_m = _df2['monto'].sum()
+            _tv_tot_d  = _tv_delta(_tv_tot1_u, _tv_tot2_u)
+            st.markdown(f"""
+            <div style="background:#222;border-radius:10px;padding:12px 20px;display:flex;
+                        justify-content:space-between;align-items:center;margin-bottom:20px">
+                <div style="color:#aaa;font-size:0.8rem;text-transform:uppercase;letter-spacing:0.1em">TOTAL GENERAL</div>
+                <div style="color:#fff;font-size:1.1rem;font-weight:700">{int(_tv_tot1_u):,} uds · ${_tv_tot1_m:,.0f}</div>
+                <div style="color:#aaa;font-size:0.85rem">vs {_lbl2}: {int(_tv_tot2_u):,} uds · ${_tv_tot2_m:,.0f}</div>
+                <div style="font-size:1rem;font-weight:700;{_tv_color_delta(_tv_tot_d)}">{_tv_fmt_delta(_tv_tot_d)}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # ══════════════════════════════════════════════════════
+            # ② TABLA POR LOCAL
+            # ══════════════════════════════════════════════════════
+            st.markdown(f"#### 🏪 Comparativa por Local")
+
+            # Build pivot: filas=local, cols=categorías + total
+            _tv_piv1 = _df1.groupby(['local','categoria'])['uds'].sum().unstack(fill_value=0)
+            _tv_piv2 = _df2.groupby(['local','categoria'])['uds'].sum().unstack(fill_value=0)
+            _tv_piv1m = _df1.groupby(['local','categoria'])['monto'].sum().unstack(fill_value=0)
+
+            # Ensure all cats present
+            for _c in _cats:
+                if _c not in _tv_piv1.columns: _tv_piv1[_c] = 0
+                if _c not in _tv_piv2.columns: _tv_piv2[_c] = 0
+                if _c not in _tv_piv1m.columns: _tv_piv1m[_c] = 0
+
+            _tv_piv1  = _tv_piv1.reindex(_TV_LOCALES, fill_value=0)
+            _tv_piv2  = _tv_piv2.reindex(_TV_LOCALES, fill_value=0)
+            _tv_piv1m = _tv_piv1m.reindex(_TV_LOCALES, fill_value=0)
+
+            # Build display table HTML
+            _tv_th_style = "padding:8px 10px;text-align:center;background:#1F3864;color:#fff;font-size:0.78rem;white-space:nowrap"
+            _tv_td_style = "padding:6px 10px;text-align:right;font-size:0.8rem;border-bottom:1px solid #333"
+            _tv_td_loc   = "padding:6px 10px;font-weight:600;font-size:0.82rem;border-bottom:1px solid #333;white-space:nowrap"
+            _tv_td_tot   = "padding:6px 10px;text-align:right;font-size:0.8rem;border-bottom:1px solid #333;background:#f5f5f5;font-weight:600"
+
+            _tv_tbl = f"""<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;background:#1a1a1a;color:#eee">
+            <thead><tr>
+            <th style="{_tv_th_style};text-align:left">Local</th>"""
+            for _c in _cats:
+                _clr = _TV_CAT_COLOR.get(_c,"#333")
+                _tv_tbl += f'<th style="{_tv_th_style};background:{_clr}" colspan="2">{_c}</th>'
+            _tv_tbl += f'<th style="{_tv_th_style}" colspan="2">TOTAL</th></tr>'
+
+            # Sub-header
+            _tv_tbl += '<tr><th style="background:#111"></th>'
+            for _c in _cats:
+                _clr = _TV_CAT_COLOR.get(_c,"#333")
+                _tv_tbl += f'<th style="padding:4px 8px;font-size:0.7rem;background:{_clr};color:rgba(255,255,255,0.7);text-align:center">{_lbl1}</th>'
+                _tv_tbl += f'<th style="padding:4px 8px;font-size:0.7rem;background:{_clr};color:rgba(255,255,255,0.7);text-align:center">{_lbl2} / Δ%</th>'
+            _tv_tbl += f'<th style="padding:4px 8px;font-size:0.7rem;background:#1F3864;color:rgba(255,255,255,0.7);text-align:center">{_lbl1}</th>'
+            _tv_tbl += f'<th style="padding:4px 8px;font-size:0.7rem;background:#1F3864;color:rgba(255,255,255,0.7);text-align:center">{_lbl2} / Δ%</th></tr></thead><tbody>'
+
+            for _loc in _TV_LOCALES:
+                _tv_tbl += f'<tr><td style="{_tv_td_loc};background:#1a1a1a">{_loc}</td>'
+                _loc_tot1 = 0; _loc_tot2 = 0
+                for _c in _cats:
+                    _u1 = int(_tv_piv1.loc[_loc, _c]) if _loc in _tv_piv1.index else 0
+                    _u2 = int(_tv_piv2.loc[_loc, _c]) if _loc in _tv_piv2.index else 0
+                    _d  = _tv_delta(_u1, _u2)
+                    _loc_tot1 += _u1; _loc_tot2 += _u2
+                    _dc = "#7fffb0" if (_d or 0) >= 0 else "#ff8080"
+                    _tv_tbl += f'<td style="{_tv_td_style}">{_u1:,}</td>'
+                    _tv_tbl += f'<td style="{_tv_td_style}">{_u2:,} <span style="color:{_dc};font-size:0.75rem">{_tv_fmt_delta(_d)}</span></td>'
+                _dtot = _tv_delta(_loc_tot1, _loc_tot2)
+                _dc   = "#7fffb0" if (_dtot or 0) >= 0 else "#ff8080"
+                _tv_tbl += f'<td style="{_tv_td_style};font-weight:700">{_loc_tot1:,}</td>'
+                _tv_tbl += f'<td style="{_tv_td_style};font-weight:700">{_loc_tot2:,} <span style="color:{_dc};font-size:0.75rem">{_tv_fmt_delta(_dtot)}</span></td></tr>'
+
+            # Fila total red
+            _tv_tbl += '<tr style="border-top:2px solid #4472C4"><td style="padding:8px 10px;font-weight:800;font-size:0.85rem;background:#1F3864;color:#fff">TOTAL RED</td>'
+            _grand1 = 0; _grand2 = 0
+            for _c in _cats:
+                _ct1 = int(_tv_piv1[_c].sum())
+                _ct2 = int(_tv_piv2[_c].sum())
+                _grand1 += _ct1; _grand2 += _ct2
+                _d = _tv_delta(_ct1, _ct2)
+                _dc = "#7fffb0" if (_d or 0) >= 0 else "#ff8080"
+                _tv_tbl += f'<td style="padding:8px;text-align:right;font-weight:700;background:#1F3864;color:#fff">{_ct1:,}</td>'
+                _tv_tbl += f'<td style="padding:8px;text-align:right;font-weight:700;background:#1F3864;color:#fff">{_ct2:,} <span style="color:{_dc}">{_tv_fmt_delta(_d)}</span></td>'
+            _dg = _tv_delta(_grand1, _grand2)
+            _dc = "#7fffb0" if (_dg or 0) >= 0 else "#ff8080"
+            _tv_tbl += f'<td style="padding:8px;text-align:right;font-weight:800;background:#1F3864;color:#fff">{_grand1:,}</td>'
+            _tv_tbl += f'<td style="padding:8px;text-align:right;font-weight:800;background:#1F3864;color:#fff">{_grand2:,} <span style="color:{_dc}">{_tv_fmt_delta(_dg)}</span></td></tr>'
+            _tv_tbl += '</tbody></table></div>'
+            st.markdown(_tv_tbl, unsafe_allow_html=True)
+
+            # ══════════════════════════════════════════════════════
+            # ③ DETALLE POR LOCAL
+            # ══════════════════════════════════════════════════════
+            st.markdown(f"#### 🔍 Detalle por Local")
+
+            for _loc in _TV_LOCALES:
+                _dfl1 = _df1[_df1['local']==_loc].copy()
+                _dfl2 = _df2[_df2['local']==_loc].copy()
+
+                if _dfl1.empty and _dfl2.empty:
+                    continue
+
+                # Totales del local para el header
+                _lt1 = int(_dfl1['uds'].sum())
+                _lt2 = int(_dfl2['uds'].sum())
+                _ld  = _tv_delta(_lt1, _lt2)
+                _header_txt = (f"**{_loc}** — {_lbl1}: {_lt1:,} uds | "
+                               f"{_lbl2}: {_lt2:,} uds | Δ {_tv_fmt_delta(_ld)}")
+
+                with st.expander(_header_txt):
+                    # Por categoría dentro del local
+                    for _cat in _cats:
+                        _dc1 = _dfl1[_dfl1['categoria']==_cat]
+                        _dc2 = _dfl2[_dfl2['categoria']==_cat]
+                        if _dc1.empty and _dc2.empty:
+                            continue
+
+                        _clr = _TV_CAT_COLOR.get(_cat,"#333")
+                        _ctu1 = int(_dc1['uds'].sum())
+                        _ctu2 = int(_dc2['uds'].sum())
+                        _ctd  = _tv_delta(_ctu1, _ctu2)
+                        st.markdown(
+                            f'<div style="background:{_clr};color:#fff;padding:6px 12px;'
+                            f'border-radius:6px;margin:10px 0 6px;font-weight:700;font-size:0.85rem">'
+                            f'{_cat} — {_lbl1}: {_ctu1:,} | {_lbl2}: {_ctu2:,} | {_tv_fmt_delta(_ctd)}</div>',
+                            unsafe_allow_html=True
                         )
 
-                        _op_display = pd.DataFrame({
-                            'Opción': _op_merge['nombre_opcion'],
-                            f'Uds {_tv_lbl1}': _op_merge['uds_m1'].apply(lambda x: f"{x:,.0f}"),
-                            f'% padre {_tv_lbl1}': _op_merge['pct_m1'].apply(lambda x: f"{x:.1f}%"),
-                            f'Monto {_tv_lbl1}': _op_merge['monto_m1'].apply(lambda x: f"${x:,.0f}"),
-                            f'Uds {_tv_lbl2}': _op_merge['uds_m2'].apply(lambda x: f"{x:,.0f}"),
-                            f'% padre {_tv_lbl2}': _op_merge['pct_m2'].apply(lambda x: f"{x:.1f}%"),
-                            f'Monto {_tv_lbl2}': _op_merge['monto_m2'].apply(lambda x: f"${x:,.0f}"),
-                            'Δ%': _op_merge['delta_op'].apply(lambda x: f"{x:+.1f}%" if x is not None else "N/A"),
-                        })
-                        st.dataframe(_op_display, use_container_width=True, hide_index=True)
+                        # Merge productos
+                        _pm = pd.merge(
+                            _dc1.groupby(['sku_producto','nombre_producto']).agg(
+                                uds_m1=('uds','sum'), monto_m1=('monto','sum')).reset_index(),
+                            _dc2.groupby(['sku_producto','nombre_producto']).agg(
+                                uds_m2=('uds','sum'), monto_m2=('monto','sum')).reset_index(),
+                            on=['sku_producto','nombre_producto'], how='outer'
+                        ).fillna(0).sort_values('uds_m1', ascending=False)
 
-            # ── Export Excel ─────────────────────────────────────
+                        _pm = _pm[(_pm['uds_m1'] > 0) | (_pm['uds_m2'] > 0)]
+                        _pm['Δ%'] = _pm.apply(lambda r: _tv_fmt_delta(_tv_delta(r['uds_m1'], r['uds_m2'])), axis=1)
+
+                        _disp = pd.DataFrame({
+                            'Producto':        _pm['nombre_producto'],
+                            f'Uds {_lbl1}':    _pm['uds_m1'].apply(lambda x: f"{int(x):,}"),
+                            f'Monto {_lbl1}':  _pm['monto_m1'].apply(lambda x: f"${x:,.0f}"),
+                            f'Uds {_lbl2}':    _pm['uds_m2'].apply(lambda x: f"{int(x):,}"),
+                            f'Monto {_lbl2}':  _pm['monto_m2'].apply(lambda x: f"${x:,.0f}"),
+                            'Δ%':              _pm['Δ%'],
+                        })
+                        st.dataframe(_disp, use_container_width=True, hide_index=True)
+
+            # ══════════════════════════════════════════════════════
+            # ④ EXPORT EXCEL
+            # ══════════════════════════════════════════════════════
             st.markdown("---")
             if st.button("⬇️ Exportar Excel", key="tv_export"):
-                _tv_wb = _TVWb()
-                _tv_ws = _tv_wb.active
-                _tv_ws.title = "Tendencia de Ventas"
-                _tv_ws.sheet_properties.tabColor = "1F3864"
-                _tv_ws.sheet_view.showGridLines = False
+                _tvwb = _TVWb()
+                _tvwb.remove(_tvwb.active)
 
-                _tv_hdr_fill = _TVPF("solid", start_color="1F3864", end_color="1F3864")
-                _tv_hdr_font = _TVF(name="Calibri", bold=True, size=11, color="FFFFFF")
-                _tv_sub_fill = _TVPF("solid", start_color="2E4A7A", end_color="2E4A7A")
+                _hdr_fill = _TVPF("solid", start_color="1F3864", end_color="1F3864")
+                _hdr_font = _TVF(name="Calibri", bold=True, size=11, color="FFFFFF")
+                _sub_fill = _TVPF("solid", start_color="2E4A7A", end_color="2E4A7A")
+                _tot_fill = _TVPF("solid", start_color="D9E1F2", end_color="D9E1F2")
+                _tot_font = _TVF(name="Calibri", bold=True, size=10)
+                _ctr      = _TVA(horizontal="center", vertical="center")
+                _rgt      = _TVA(horizontal="right",  vertical="center")
+
+                def _tv_hdr_cell(ws, r, c, val, fill=None, font=None, align=None):
+                    cell = ws.cell(r, c, val)
+                    if fill:  cell.fill  = fill
+                    if font:  cell.font  = font
+                    if align: cell.alignment = align
+                    return cell
+
+                # ── Hoja Resumen ──────────────────────────────────
+                _ws_res = _tvwb.create_sheet("Resumen Red")
+                _ws_res.sheet_properties.tabColor = "1F3864"
+                _ws_res.sheet_view.showGridLines  = False
+
+                # Title
+                _ws_res.merge_cells(f"A1:{_tv_gcl(len(_cats)*3+2)}1")
+                _tc = _ws_res.cell(1,1, f"Tendencia de Ventas — {_lbl1} vs {_lbl2}")
+                _tc.font  = _TVF(name="Calibri", bold=True, size=14, color="FFFFFF")
+                _tc.fill  = _hdr_fill
+                _tc.alignment = _ctr
+                _ws_res.row_dimensions[1].height = 28
 
                 # Headers
-                _tv_cols = [
-                    "SKU", "Producto",
-                    f"Uds {_tv_lbl1}", f"Monto {_tv_lbl1}",
-                    f"Uds {_tv_lbl2}", f"Monto {_tv_lbl2}",
-                    "Δ Uds", "Δ%",
-                    "SKU Opción", "Opción",
-                    f"Uds Op {_tv_lbl1}", f"% Padre {_tv_lbl1}",
-                    f"Uds Op {_tv_lbl2}", f"% Padre {_tv_lbl2}",
-                    "Δ% Opción"
-                ]
-                for ci, h in enumerate(_tv_cols, 1):
-                    c = _tv_ws.cell(1, ci, h)
-                    c.font = _tv_hdr_font; c.fill = _tv_hdr_fill
-                    c.alignment = _TVA(horizontal="center", vertical="center")
+                _ws_res.cell(3,1,"Local").font = _hdr_font
+                _ws_res.cell(3,1).fill         = _hdr_fill
+                _ws_res.cell(3,1).alignment    = _ctr
+                _col = 2
+                for _c in _cats:
+                    _ws_res.merge_cells(start_row=3, start_column=_col, end_row=3, end_column=_col+2)
+                    _ch = _ws_res.cell(3, _col, _c)
+                    _clr_hex = _TV_CAT_COLOR.get(_c,"1F3864").lstrip("#")
+                    _ch.fill = _TVPF("solid", start_color=_clr_hex, end_color=_clr_hex)
+                    _ch.font = _hdr_font; _ch.alignment = _ctr
+                    _ws_res.cell(4, _col,   _lbl1).font = _TVF(name="Calibri", bold=True, size=9, color="FFFFFF")
+                    _ws_res.cell(4, _col,   _lbl1).fill = _TVPF("solid", start_color=_clr_hex, end_color=_clr_hex)
+                    _ws_res.cell(4, _col+1, _lbl2).font = _TVF(name="Calibri", bold=True, size=9, color="FFFFFF")
+                    _ws_res.cell(4, _col+1, _lbl2).fill = _TVPF("solid", start_color=_clr_hex, end_color=_clr_hex)
+                    _ws_res.cell(4, _col+2, "Δ%").font  = _TVF(name="Calibri", bold=True, size=9, color="FFFFFF")
+                    _ws_res.cell(4, _col+2, "Δ%").fill  = _TVPF("solid", start_color=_clr_hex, end_color=_clr_hex)
+                    _col += 3
+                # Total cols
+                _ws_res.merge_cells(start_row=3, start_column=_col, end_row=3, end_column=_col+2)
+                _ws_res.cell(3,_col,"TOTAL").fill = _hdr_fill
+                _ws_res.cell(3,_col,"TOTAL").font = _hdr_font
+                _ws_res.cell(3,_col,"TOTAL").alignment = _ctr
+                for _lbl, _ci in [(_lbl1,0),(_lbl2,1),("Δ%",2)]:
+                    _ws_res.cell(4,_col+_ci,_lbl).fill = _hdr_fill
+                    _ws_res.cell(4,_col+_ci,_lbl).font = _TVF(name="Calibri",bold=True,size=9,color="FFFFFF")
 
-                _tv_row = 2
-                for _, _row in _tv_merge.iterrows():
-                    _sku = _row['sku_producto']
-                    _dpct_val = _row['delta_pct']
-                    _o1 = _tv_o1_idx.get_group(_sku).copy() if _sku in _tv_o1_idx.groups else pd.DataFrame()
-                    _o2 = _tv_o2_idx.get_group(_sku).copy() if _sku in _tv_o2_idx.groups else pd.DataFrame()
+                _row = 5
+                for _loc in _TV_LOCALES:
+                    _dfl1 = _df1[_df1['local']==_loc]
+                    _dfl2 = _df2[_df2['local']==_loc]
+                    _ws_res.cell(_row,1,_loc).font = _TVF(name="Calibri",bold=True,size=10)
+                    _col = 2; _lt1=0; _lt2=0
+                    for _c in _cats:
+                        _u1=int(_dfl1[_dfl1['categoria']==_c]['uds'].sum())
+                        _u2=int(_dfl2[_dfl2['categoria']==_c]['uds'].sum())
+                        _lt1+=_u1; _lt2+=_u2
+                        _d=_tv_delta(_u1,_u2)
+                        _ws_res.cell(_row,_col,_u1).alignment=_rgt
+                        _ws_res.cell(_row,_col+1,_u2).alignment=_rgt
+                        _ws_res.cell(_row,_col+2,f"{_d:+.1f}%" if _d is not None else "N/A").alignment=_ctr
+                        _col+=3
+                    _dt=_tv_delta(_lt1,_lt2)
+                    _ws_res.cell(_row,_col,_lt1).fill=_tot_fill; _ws_res.cell(_row,_col).font=_tot_font; _ws_res.cell(_row,_col).alignment=_rgt
+                    _ws_res.cell(_row,_col+1,_lt2).fill=_tot_fill; _ws_res.cell(_row,_col+1).font=_tot_font; _ws_res.cell(_row,_col+1).alignment=_rgt
+                    _ws_res.cell(_row,_col+2,f"{_dt:+.1f}%" if _dt is not None else "N/A").fill=_tot_fill; _ws_res.cell(_row,_col+2).font=_tot_font; _ws_res.cell(_row,_col+2).alignment=_ctr
+                    _row+=1
 
-                    _op_merge2 = pd.merge(
-                        _o1[['sku_opcion','nombre_opcion','uds_opcion','monto_opcion']].rename(
-                            columns={'uds_opcion':'uds_m1','monto_opcion':'monto_m1'}) if not _o1.empty else pd.DataFrame(columns=['sku_opcion','nombre_opcion','uds_m1','monto_m1']),
-                        _o2[['sku_opcion','uds_opcion']].rename(columns={'uds_opcion':'uds_m2'}) if not _o2.empty else pd.DataFrame(columns=['sku_opcion','uds_m2']),
-                        on='sku_opcion', how='outer'
-                    ).fillna(0)
-                    _op_merge2 = _op_merge2[(_op_merge2['uds_m1'] > 0) | (_op_merge2['uds_m2'] > 0)]
+                # Total red row
+                _ws_res.cell(_row,1,"TOTAL RED").font=_TVF(name="Calibri",bold=True,size=11,color="FFFFFF")
+                _ws_res.cell(_row,1).fill=_hdr_fill
+                _col=2; _g1=0; _g2=0
+                for _c in _cats:
+                    _ct1=int(_df1[_df1['categoria']==_c]['uds'].sum())
+                    _ct2=int(_df2[_df2['categoria']==_c]['uds'].sum())
+                    _g1+=_ct1; _g2+=_ct2
+                    _d=_tv_delta(_ct1,_ct2)
+                    for _ci,_v in enumerate([_ct1,_ct2,f"{_d:+.1f}%" if _d is not None else "N/A"]):
+                        _cel=_ws_res.cell(_row,_col+_ci,_v)
+                        _cel.fill=_hdr_fill; _cel.font=_TVF(name="Calibri",bold=True,size=10,color="FFFFFF")
+                        _cel.alignment=_rgt if _ci<2 else _ctr
+                    _col+=3
+                _dg=_tv_delta(_g1,_g2)
+                for _ci,_v in enumerate([_g1,_g2,f"{_dg:+.1f}%" if _dg is not None else "N/A"]):
+                    _cel=_ws_res.cell(_row,_col+_ci,_v)
+                    _cel.fill=_hdr_fill; _cel.font=_TVF(name="Calibri",bold=True,size=11,color="FFFFFF")
+                    _cel.alignment=_rgt if _ci<2 else _ctr
 
-                    _padre_fill = _TVPF("solid", start_color="E8F0FE", end_color="E8F0FE")
-                    if _op_merge2.empty:
-                        vals = [_sku, _row['nombre_producto'],
-                                round(_row['uds_m1']), round(_row['monto_m1']),
-                                round(_row['uds_m2']), round(_row['monto_m2']),
-                                round(_row['delta_uds']),
-                                f"{_dpct_val:+.1f}%" if _dpct_val is not None else "N/A",
-                                "", "", "", "", "", "", ""]
-                        for ci, v in enumerate(vals, 1):
-                            c = _tv_ws.cell(_tv_row, ci, v)
-                            c.fill = _padre_fill
-                        _tv_row += 1
-                    else:
-                        for oi, _op in _op_merge2.iterrows():
-                            _pct1 = _op['uds_m1'] / _row['uds_m1'] * 100 if _row['uds_m1'] > 0 else 0
-                            _pct2 = _op['uds_m2'] / _row['uds_m2'] * 100 if _row['uds_m2'] > 0 else 0
-                            _dop = (_op['uds_m1']/_op['uds_m2'] - 1)*100 if _op['uds_m2'] > 0 else None
-                            vals = [_sku, _row['nombre_producto'],
-                                    round(_row['uds_m1']), round(_row['monto_m1']),
-                                    round(_row['uds_m2']), round(_row['monto_m2']),
-                                    round(_row['delta_uds']),
-                                    f"{_dpct_val:+.1f}%" if _dpct_val is not None else "N/A",
-                                    _op['sku_opcion'], _op.get('nombre_opcion',''),
-                                    round(_op['uds_m1']), f"{_pct1:.1f}%",
-                                    round(_op['uds_m2']), f"{_pct2:.1f}%",
-                                    f"{_dop:+.1f}%" if _dop is not None else "N/A"]
-                            for ci, v in enumerate(vals, 1):
-                                c = _tv_ws.cell(_tv_row, ci, v)
-                                if ci <= 8:
-                                    c.fill = _padre_fill
-                            _tv_row += 1
+                # Column widths resumen
+                _ws_res.column_dimensions['A'].width = 22
+                for _ci2 in range(2, _col+4):
+                    _ws_res.column_dimensions[_tv_gcl(_ci2)].width = 13
 
-                _tv_buf = _tv_io.BytesIO()
-                _tv_wb.save(_tv_buf)
-                _tv_buf.seek(0)
+                # ── Hoja por local ────────────────────────────────
+                for _loc in _TV_LOCALES:
+                    _dfl1 = _df1[_df1['local']==_loc]
+                    _dfl2 = _df2[_df2['local']==_loc]
+                    if _dfl1.empty and _dfl2.empty:
+                        continue
+
+                    _wsl = _tvwb.create_sheet(_loc[:31])
+                    _wsl.sheet_view.showGridLines = False
+
+                    # Title
+                    _wsl.merge_cells("A1:F1")
+                    _tlc = _wsl.cell(1,1,f"{_loc} — {_lbl1} vs {_lbl2}")
+                    _tlc.font=_TVF(name="Calibri",bold=True,size=13,color="FFFFFF")
+                    _tlc.fill=_hdr_fill; _tlc.alignment=_ctr
+                    _wsl.row_dimensions[1].height=26
+
+                    _wrow = 3
+                    for _cat in _cats:
+                        _dc1=_dfl1[_dfl1['categoria']==_cat]
+                        _dc2=_dfl2[_dfl2['categoria']==_cat]
+                        if _dc1.empty and _dc2.empty: continue
+
+                        # Category header
+                        _wsl.merge_cells(f"A{_wrow}:F{_wrow}")
+                        _clr_hex=_TV_CAT_COLOR.get(_cat,"1F3864").lstrip("#")
+                        _cath=_wsl.cell(_wrow,1,_cat)
+                        _cath.font=_TVF(name="Calibri",bold=True,size=11,color="FFFFFF")
+                        _cath.fill=_TVPF("solid",start_color=_clr_hex,end_color=_clr_hex)
+                        _wrow+=1
+
+                        # Col headers
+                        for _ci3,_h in enumerate(["Producto",f"Uds {_lbl1}",f"Monto {_lbl1}",f"Uds {_lbl2}",f"Monto {_lbl2}","Δ%"],1):
+                            _ch=_wsl.cell(_wrow,_ci3,_h)
+                            _ch.font=_TVF(name="Calibri",bold=True,size=10,color="FFFFFF")
+                            _ch.fill=_TVPF("solid",start_color=_clr_hex,end_color=_clr_hex)
+                            _ch.alignment=_ctr
+                        _wrow+=1
+
+                        _pm=pd.merge(
+                            _dc1.groupby(['sku_producto','nombre_producto']).agg(uds_m1=('uds','sum'),monto_m1=('monto','sum')).reset_index(),
+                            _dc2.groupby(['sku_producto','nombre_producto']).agg(uds_m2=('uds','sum'),monto_m2=('monto','sum')).reset_index(),
+                            on=['sku_producto','nombre_producto'],how='outer'
+                        ).fillna(0).sort_values('uds_m1',ascending=False)
+                        _pm=_pm[(_pm['uds_m1']>0)|(_pm['uds_m2']>0)]
+
+                        _alt_fill=_TVPF("solid",start_color="F2F5FB",end_color="F2F5FB")
+                        for _pi,(_,_pr) in enumerate(_pm.iterrows()):
+                            _d=_tv_delta(_pr['uds_m1'],_pr['uds_m2'])
+                            _row_fill=_alt_fill if _pi%2==1 else None
+                            for _ci3,_v in enumerate([
+                                _pr['nombre_producto'],int(_pr['uds_m1']),round(_pr['monto_m1'],0),
+                                int(_pr['uds_m2']),round(_pr['monto_m2'],0),
+                                f"{_d:+.1f}%" if _d is not None else "N/A"
+                            ],1):
+                                _pc=_wsl.cell(_wrow,_ci3,_v)
+                                if _row_fill: _pc.fill=_row_fill
+                                _pc.alignment=_rgt if _ci3>1 else _TVA(horizontal="left",vertical="center")
+                            _wrow+=1
+
+                        # Subtotal categoría
+                        _st1=int(_dc1['uds'].sum()); _st2=int(_dc2['uds'].sum())
+                        _sd=_tv_delta(_st1,_st2)
+                        for _ci3,_v in enumerate(["SUBTOTAL",_st1,round(float(_dc1['monto'].sum()),0),
+                            _st2,round(float(_dc2['monto'].sum()),0),
+                            f"{_sd:+.1f}%" if _sd is not None else "N/A"],1):
+                            _sc=_wsl.cell(_wrow,_ci3,_v)
+                            _sc.fill=_tot_fill; _sc.font=_tot_font
+                            _sc.alignment=_rgt if _ci3>1 else _TVA(horizontal="left",vertical="center")
+                        _wrow+=2
+
+                    # Col widths
+                    _wsl.column_dimensions['A'].width=35
+                    for _ci3 in range(2,7):
+                        _wsl.column_dimensions[_tv_gcl(_ci3)].width=15
+
+                _tv_buf=_tv_io.BytesIO()
+                _tvwb.save(_tv_buf); _tv_buf.seek(0)
                 st.download_button(
                     "📥 Descargar Excel",
                     _tv_buf,
-                    file_name=f"Tendencia_Ventas_{_tv_lbl1}_vs_{_tv_lbl2}.xlsx",
+                    file_name=f"Tendencia_{_lbl1}_vs_{_lbl2}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key="tv_dl"
                 )
+
+
 
     elif informe_sel in ("CuentasCasa", "Auditor", "Bar"):
         pass  # estos módulos se renderizan en sus propios elif globales
