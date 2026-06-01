@@ -9026,123 +9026,186 @@ elif modulo.startswith("📊"):
                 _tvwb = _TVWb()
                 _tvwb.remove(_tvwb.active)
 
-                _hdr_fill = _TVPF("solid", start_color="1F3864", end_color="1F3864")
-                _hdr_font = _TVF(name="Calibri", bold=True, size=11, color="FFFFFF")
-                _sub_fill = _TVPF("solid", start_color="2E4A7A", end_color="2E4A7A")
-                _tot_fill = _TVPF("solid", start_color="D9E1F2", end_color="D9E1F2")
-                _tot_font = _TVF(name="Calibri", bold=True, size=10)
-                _ctr      = _TVA(horizontal="center", vertical="center")
-                _rgt      = _TVA(horizontal="right",  vertical="center")
+                # ── Estilos globales ──────────────────────────────
+                from openpyxl.styles import Border as _TVBord, Side as _TVSide, GradientFill as _TVGF
+                _F = lambda bold=False, size=10, color="000000", italic=False: _TVF(
+                    name="Calibri", bold=bold, size=size, color=color, italic=italic)
+                _fill = lambda hex_: _TVPF("solid", start_color=hex_.lstrip("#"), end_color=hex_.lstrip("#"))
+                _bd_thin = _TVBord(
+                    bottom=_TVSide(style="thin", color="D0D7E3"),
+                    right=_TVSide(style="thin", color="D0D7E3"))
+                _bd_med  = _TVBord(
+                    top=_TVSide(style="medium", color="1F3864"),
+                    bottom=_TVSide(style="medium", color="1F3864"))
+                _al_c = _TVA(horizontal="center", vertical="center", wrap_text=True)
+                _al_r = _TVA(horizontal="right",  vertical="center")
+                _al_l = _TVA(horizontal="left",   vertical="center")
+                _num_fmt  = '#,##0'
+                _dec_fmt  = '#,##0.0'
+                _pct_fmt  = '+0.0%;-0.0%;"-"'
+                _money_fmt= '$#,##0'
 
-                def _tv_hdr_cell(ws, r, c, val, fill=None, font=None, align=None):
+                def _xc(ws, r, c, val, bold=False, size=10, color="000000",
+                        bg=None, align=None, fmt=None, border=None, italic=False):
                     cell = ws.cell(r, c, val)
-                    if fill:  cell.fill  = fill
-                    if font:  cell.font  = font
-                    if align: cell.alignment = align
+                    cell.font = _F(bold=bold, size=size, color=color, italic=italic)
+                    if bg:     cell.fill      = _fill(bg)
+                    if align:  cell.alignment = align
+                    if fmt:    cell.number_format = fmt
+                    if border: cell.border    = border
                     return cell
 
-                # ── Hoja Resumen ──────────────────────────────────
+                # ════════════════════════════════════════════════
+                # HOJA RESUMEN RED
+                # ════════════════════════════════════════════════
                 _ws_res = _tvwb.create_sheet("Resumen Red")
                 _ws_res.sheet_properties.tabColor = "1F3864"
                 _ws_res.sheet_view.showGridLines  = False
+                _ws_res.freeze_panes = "B6"
 
-                # Title
-                _ws_res.merge_cells(f"A1:{_tv_gcl(len(_cats)*3+2)}1")
-                _tc = _ws_res.cell(1,1, f"Tendencia de Ventas — {_lbl1} vs {_lbl2}")
-                _tc.font  = _TVF(name="Calibri", bold=True, size=14, color="FFFFFF")
-                _tc.fill  = _hdr_fill
-                _tc.alignment = _ctr
-                _ws_res.row_dimensions[1].height = 28
+                # Cols: Local | cat*(M1 | día M1 | M2 | día M2 | Δ%) | Total*(M1|día|M2|día|Δ%)
+                _ncols_per_cat = 5  # M1, día1, M2, día2, Δ%
+                _total_data_cols = len(_cats) * _ncols_per_cat + _ncols_per_cat
+                _last_col = 1 + _total_data_cols
 
-                # Headers
-                _ws_res.cell(3,1,"Local").font = _hdr_font
-                _ws_res.cell(3,1).fill         = _hdr_fill
-                _ws_res.cell(3,1).alignment    = _ctr
+                # Row 1 — Title banner
+                _ws_res.merge_cells(start_row=1, start_column=1, end_row=1, end_column=_last_col)
+                _xc(_ws_res, 1, 1, f"TENDENCIA DE VENTAS  ·  {_lbl1}  vs  {_lbl2}",
+                    bold=True, size=14, color="FFFFFF", bg="#1F3864", align=_al_c)
+                _ws_res.row_dimensions[1].height = 32
+
+                # Row 2 — subtitle with days info
+                _ws_res.merge_cells(start_row=2, start_column=1, end_row=2, end_column=_last_col)
+                _xc(_ws_res, 2, 1,
+                    f"{_lbl1}: {_tv_dias1} días  ·  {_lbl2}: {_tv_dias2} días",
+                    italic=True, size=9, color="FFFFFF", bg="#2E4A7A", align=_al_c)
+                _ws_res.row_dimensions[2].height = 16
+
+                # Row 3 — blank separator
+                _ws_res.row_dimensions[3].height = 6
+
+                # Row 4 — Category group headers
+                _xc(_ws_res, 4, 1, "", bg="#1F3864")
                 _col = 2
                 for _c in _cats:
-                    _ws_res.merge_cells(start_row=3, start_column=_col, end_row=3, end_column=_col+2)
-                    _ch = _ws_res.cell(3, _col, _c)
-                    _clr_hex = _TV_CAT_COLOR.get(_c,"1F3864").lstrip("#")
-                    _ch.fill = _TVPF("solid", start_color=_clr_hex, end_color=_clr_hex)
-                    _ch.font = _hdr_font; _ch.alignment = _ctr
-                    _ws_res.cell(4, _col,   _lbl1).font = _TVF(name="Calibri", bold=True, size=9, color="FFFFFF")
-                    _ws_res.cell(4, _col,   _lbl1).fill = _TVPF("solid", start_color=_clr_hex, end_color=_clr_hex)
-                    _ws_res.cell(4, _col+1, _lbl2).font = _TVF(name="Calibri", bold=True, size=9, color="FFFFFF")
-                    _ws_res.cell(4, _col+1, _lbl2).fill = _TVPF("solid", start_color=_clr_hex, end_color=_clr_hex)
-                    _ws_res.cell(4, _col+2, "Δ%").font  = _TVF(name="Calibri", bold=True, size=9, color="FFFFFF")
-                    _ws_res.cell(4, _col+2, "Δ%").fill  = _TVPF("solid", start_color=_clr_hex, end_color=_clr_hex)
-                    _col += 3
-                # Total cols
-                _ws_res.merge_cells(start_row=3, start_column=_col, end_row=3, end_column=_col+2)
-                _ws_res.cell(3,_col,"TOTAL").fill = _hdr_fill
-                _ws_res.cell(3,_col,"TOTAL").font = _hdr_font
-                _ws_res.cell(3,_col,"TOTAL").alignment = _ctr
-                for _lbl, _ci in [(_lbl1,0),(_lbl2,1),("Δ%",2)]:
-                    _ws_res.cell(4,_col+_ci,_lbl).fill = _hdr_fill
-                    _ws_res.cell(4,_col+_ci,_lbl).font = _TVF(name="Calibri",bold=True,size=9,color="FFFFFF")
+                    _clr = _TV_CAT_COLOR.get(_c,"#1F3864")
+                    _ws_res.merge_cells(start_row=4, start_column=_col, end_row=4, end_column=_col+4)
+                    _xc(_ws_res, 4, _col, _c.upper(), bold=True, size=10, color="FFFFFF",
+                        bg=_clr, align=_al_c)
+                    _col += _ncols_per_cat
+                _ws_res.merge_cells(start_row=4, start_column=_col, end_row=4, end_column=_col+4)
+                _xc(_ws_res, 4, _col, "TOTAL GENERAL", bold=True, size=10, color="FFFFFF",
+                    bg="#1F3864", align=_al_c)
+                _ws_res.row_dimensions[4].height = 20
 
-                _row = 5
-                for _loc in _TV_LOCALES:
+                # Row 5 — Sub-headers
+                _xc(_ws_res, 5, 1, "LOCAL", bold=True, size=9, color="FFFFFF", bg="#1F3864", align=_al_c)
+                _col = 2
+                _sub_hdrs = [_lbl1, f"día {_lbl1}", _lbl2, f"día {_lbl2}", "Δ%"]
+                for _c in _cats:
+                    _clr = _TV_CAT_COLOR.get(_c,"#1F3864")
+                    # Darken slightly for sub-header
+                    for _si, _sh in enumerate(_sub_hdrs):
+                        _xc(_ws_res, 5, _col+_si, _sh, bold=True, size=8, color="FFFFFF",
+                            bg=_clr, align=_al_c)
+                    _col += _ncols_per_cat
+                for _si, _sh in enumerate(_sub_hdrs):
+                    _xc(_ws_res, 5, _col+_si, _sh, bold=True, size=8, color="FFFFFF",
+                        bg="#1F3864", align=_al_c)
+                _ws_res.row_dimensions[5].height = 18
+
+                # Rows 6+ — Data
+                _row = 6
+                _alt1 = "F7FAFF"; _alt2 = "FFFFFF"
+                for _li, _loc in enumerate(_TV_LOCALES):
                     _dfl1 = _df1[_df1['local']==_loc]
                     _dfl2 = _df2[_df2['local']==_loc]
-                    _ws_res.cell(_row,1,_loc).font = _TVF(name="Calibri",bold=True,size=10)
+                    _bg_row = _alt1 if _li%2==0 else _alt2
+                    _xc(_ws_res, _row, 1, _loc, bold=True, size=10, bg=_bg_row, align=_al_l, border=_bd_thin)
                     _col = 2; _lt1=0; _lt2=0
                     for _c in _cats:
                         _u1=int(_dfl1[_dfl1['categoria']==_c]['uds'].sum())
                         _u2=int(_dfl2[_dfl2['categoria']==_c]['uds'].sum())
                         _lt1+=_u1; _lt2+=_u2
-                        _d=_tv_delta(_u1,_u2)
-                        _ws_res.cell(_row,_col,_u1).alignment=_rgt
-                        _ws_res.cell(_row,_col+1,_u2).alignment=_rgt
-                        _ws_res.cell(_row,_col+2,f"{_d:+.1f}%" if _d is not None else "N/A").alignment=_ctr
-                        _col+=3
-                    _dt=_tv_delta(_lt1,_lt2)
-                    _ws_res.cell(_row,_col,_lt1).fill=_tot_fill; _ws_res.cell(_row,_col).font=_tot_font; _ws_res.cell(_row,_col).alignment=_rgt
-                    _ws_res.cell(_row,_col+1,_lt2).fill=_tot_fill; _ws_res.cell(_row,_col+1).font=_tot_font; _ws_res.cell(_row,_col+1).alignment=_rgt
-                    _ws_res.cell(_row,_col+2,f"{_dt:+.1f}%" if _dt is not None else "N/A").fill=_tot_fill; _ws_res.cell(_row,_col+2).font=_tot_font; _ws_res.cell(_row,_col+2).alignment=_ctr
-                    _row+=1
+                        _d = (_u2/_u1-1) if _u1>0 else None
+                        _d1=round(_u1/_tv_dias1,1); _d2=round(_u2/_tv_dias2,1)
+                        _xc(_ws_res,_row,_col,  _u1, bg=_bg_row, align=_al_r, fmt=_num_fmt,  border=_bd_thin)
+                        _xc(_ws_res,_row,_col+1,_d1, bg=_bg_row, align=_al_r, fmt=_dec_fmt,  border=_bd_thin, italic=True, color="555555")
+                        _xc(_ws_res,_row,_col+2,_u2, bg=_bg_row, align=_al_r, fmt=_num_fmt,  border=_bd_thin)
+                        _xc(_ws_res,_row,_col+3,_d2, bg=_bg_row, align=_al_r, fmt=_dec_fmt,  border=_bd_thin, italic=True, color="555555")
+                        _dc = "006100" if (_d or 0)>=0 else "9C0006"
+                        _xc(_ws_res,_row,_col+4,_d,  bg="C6EFCE" if (_d or 0)>=0 else "FFC7CE",
+                            align=_al_c, fmt=_pct_fmt, border=_bd_thin, bold=True, color=_dc)
+                        _col += _ncols_per_cat
+                    # Total del local
+                    _dt = (_lt2/_lt1-1) if _lt1>0 else None
+                    _dtd1=round(_lt1/_tv_dias1,1); _dtd2=round(_lt2/_tv_dias2,1)
+                    _dc = "006100" if (_dt or 0)>=0 else "9C0006"
+                    _xc(_ws_res,_row,_col,  _lt1, bold=True, bg="DCE6F1", align=_al_r, fmt=_num_fmt,  border=_bd_thin)
+                    _xc(_ws_res,_row,_col+1,_dtd1,bold=False,bg="DCE6F1", align=_al_r, fmt=_dec_fmt,  border=_bd_thin, italic=True, color="555555")
+                    _xc(_ws_res,_row,_col+2,_lt2, bold=True, bg="DCE6F1", align=_al_r, fmt=_num_fmt,  border=_bd_thin)
+                    _xc(_ws_res,_row,_col+3,_dtd2,bold=False,bg="DCE6F1", align=_al_r, fmt=_dec_fmt,  border=_bd_thin, italic=True, color="555555")
+                    _xc(_ws_res,_row,_col+4,_dt,  bold=True, bg="C6EFCE" if (_dt or 0)>=0 else "FFC7CE",
+                        align=_al_c, fmt=_pct_fmt, border=_bd_thin, color=_dc)
+                    _ws_res.row_dimensions[_row].height = 16
+                    _row += 1
 
-                # Total red row
-                _ws_res.cell(_row,1,"TOTAL RED").font=_TVF(name="Calibri",bold=True,size=11,color="FFFFFF")
-                _ws_res.cell(_row,1).fill=_hdr_fill
+                # Total Red row
+                _xc(_ws_res,_row,1,"TOTAL RED",bold=True,size=11,color="FFFFFF",bg="#1F3864",align=_al_l,border=_bd_med)
                 _col=2; _g1=0; _g2=0
                 for _c in _cats:
                     _ct1=int(_df1[_df1['categoria']==_c]['uds'].sum())
                     _ct2=int(_df2[_df2['categoria']==_c]['uds'].sum())
                     _g1+=_ct1; _g2+=_ct2
-                    _d=_tv_delta(_ct1,_ct2)
-                    for _ci,_v in enumerate([_ct1,_ct2,f"{_d:+.1f}%" if _d is not None else "N/A"]):
-                        _cel=_ws_res.cell(_row,_col+_ci,_v)
-                        _cel.fill=_hdr_fill; _cel.font=_TVF(name="Calibri",bold=True,size=10,color="FFFFFF")
-                        _cel.alignment=_rgt if _ci<2 else _ctr
-                    _col+=3
-                _dg=_tv_delta(_g1,_g2)
-                for _ci,_v in enumerate([_g1,_g2,f"{_dg:+.1f}%" if _dg is not None else "N/A"]):
-                    _cel=_ws_res.cell(_row,_col+_ci,_v)
-                    _cel.fill=_hdr_fill; _cel.font=_TVF(name="Calibri",bold=True,size=11,color="FFFFFF")
-                    _cel.alignment=_rgt if _ci<2 else _ctr
+                    _d=(_ct2/_ct1-1) if _ct1>0 else None
+                    _cd1=round(_ct1/_tv_dias1,1); _cd2=round(_ct2/_tv_dias2,1)
+                    _dc="7FFF7F" if (_d or 0)>=0 else "FF8080"
+                    _xc(_ws_res,_row,_col,  _ct1,bold=True,color="FFFFFF",bg="#1F3864",align=_al_r,fmt=_num_fmt)
+                    _xc(_ws_res,_row,_col+1,_cd1,bold=False,color="AAAAAA",bg="#1F3864",align=_al_r,fmt=_dec_fmt,italic=True)
+                    _xc(_ws_res,_row,_col+2,_ct2,bold=True,color="FFFFFF",bg="#1F3864",align=_al_r,fmt=_num_fmt)
+                    _xc(_ws_res,_row,_col+3,_cd2,bold=False,color="AAAAAA",bg="#1F3864",align=_al_r,fmt=_dec_fmt,italic=True)
+                    _xc(_ws_res,_row,_col+4,_d,  bold=True,color=_dc,bg="#1F3864",align=_al_c,fmt=_pct_fmt)
+                    _col+=_ncols_per_cat
+                _dg=(_g2/_g1-1) if _g1>0 else None
+                _gd1=round(_g1/_tv_dias1,1); _gd2=round(_g2/_tv_dias2,1)
+                _dc="7FFF7F" if (_dg or 0)>=0 else "FF8080"
+                _xc(_ws_res,_row,_col,  _g1, bold=True,color="FFFFFF",bg="#1F3864",align=_al_r,fmt=_num_fmt)
+                _xc(_ws_res,_row,_col+1,_gd1,bold=False,color="AAAAAA",bg="#1F3864",align=_al_r,fmt=_dec_fmt,italic=True)
+                _xc(_ws_res,_row,_col+2,_g2, bold=True,color="FFFFFF",bg="#1F3864",align=_al_r,fmt=_num_fmt)
+                _xc(_ws_res,_row,_col+3,_gd2,bold=False,color="AAAAAA",bg="#1F3864",align=_al_r,fmt=_dec_fmt,italic=True)
+                _xc(_ws_res,_row,_col+4,_dg, bold=True,color=_dc,bg="#1F3864",align=_al_c,fmt=_pct_fmt)
+                _ws_res.row_dimensions[_row].height = 20
 
-                # Column widths resumen
+                # Column widths — Resumen
                 _ws_res.column_dimensions['A'].width = 22
-                for _ci2 in range(2, _col+4):
-                    _ws_res.column_dimensions[_tv_gcl(_ci2)].width = 13
+                _col = 2
+                for _ in range(len(_cats)+1):
+                    for _si in range(5):
+                        _ws_res.column_dimensions[_tv_gcl(_col+_si)].width = 10 if _si in (1,3) else 11
+                    _col += 5
 
-                # ── Hoja por local ────────────────────────────────
+                # ════════════════════════════════════════════════
+                # HOJAS POR LOCAL
+                # ════════════════════════════════════════════════
+                _LOC_COLS = ["Producto", "SKU",
+                             f"Uds {_lbl1}", f"día {_lbl1}", f"Monto {_lbl1}",
+                             f"Uds {_lbl2}", f"día {_lbl2}", f"Monto {_lbl2}", "Δ%"]
+
                 for _loc in _TV_LOCALES:
                     _dfl1 = _df1[_df1['local']==_loc]
                     _dfl2 = _df2[_df2['local']==_loc]
-                    if _dfl1.empty and _dfl2.empty:
-                        continue
+                    if _dfl1.empty and _dfl2.empty: continue
 
                     _wsl = _tvwb.create_sheet(_loc[:31])
+                    _wsl.sheet_properties.tabColor = _TV_CAT_COLOR.get(_cats[0],"1F3864").lstrip("#") if _cats else "1F3864"
                     _wsl.sheet_view.showGridLines = False
+                    _wsl.freeze_panes = "A4"
 
                     # Title
-                    _wsl.merge_cells("A1:F1")
-                    _tlc = _wsl.cell(1,1,f"{_loc} — {_lbl1} vs {_lbl2}")
-                    _tlc.font=_TVF(name="Calibri",bold=True,size=13,color="FFFFFF")
-                    _tlc.fill=_hdr_fill; _tlc.alignment=_ctr
-                    _wsl.row_dimensions[1].height=26
+                    _wsl.merge_cells(f"A1:{_tv_gcl(len(_LOC_COLS))}1")
+                    _xc(_wsl, 1, 1, f"{_loc.upper()}  ·  {_lbl1}  vs  {_lbl2}",
+                        bold=True, size=13, color="FFFFFF", bg="#1F3864", align=_al_c)
+                    _wsl.row_dimensions[1].height = 28
 
                     _wrow = 3
                     for _cat in _cats:
@@ -9150,58 +9213,76 @@ elif modulo.startswith("📊"):
                         _dc2=_dfl2[_dfl2['categoria']==_cat]
                         if _dc1.empty and _dc2.empty: continue
 
+                        _clr_hex = _TV_CAT_COLOR.get(_cat,"#1F3864")
+
                         # Category header
-                        _wsl.merge_cells(f"A{_wrow}:F{_wrow}")
-                        _clr_hex=_TV_CAT_COLOR.get(_cat,"1F3864").lstrip("#")
-                        _cath=_wsl.cell(_wrow,1,_cat)
-                        _cath.font=_TVF(name="Calibri",bold=True,size=11,color="FFFFFF")
-                        _cath.fill=_TVPF("solid",start_color=_clr_hex,end_color=_clr_hex)
-                        _wrow+=1
+                        _wsl.merge_cells(f"A{_wrow}:{_tv_gcl(len(_LOC_COLS))}{_wrow}")
+                        _xc(_wsl, _wrow, 1, f"  {_cat.upper()}", bold=True, size=11,
+                            color="FFFFFF", bg=_clr_hex, align=_al_l)
+                        _wsl.row_dimensions[_wrow].height = 22
+                        _wrow += 1
 
                         # Col headers
-                        for _ci3,_h in enumerate(["Producto",f"Uds {_lbl1}",f"Monto {_lbl1}",f"Uds {_lbl2}",f"Monto {_lbl2}","Δ%"],1):
-                            _ch=_wsl.cell(_wrow,_ci3,_h)
-                            _ch.font=_TVF(name="Calibri",bold=True,size=10,color="FFFFFF")
-                            _ch.fill=_TVPF("solid",start_color=_clr_hex,end_color=_clr_hex)
-                            _ch.alignment=_ctr
-                        _wrow+=1
+                        for _ci3, _h in enumerate(_LOC_COLS, 1):
+                            _xc(_wsl, _wrow, _ci3, _h, bold=True, size=9,
+                                color="FFFFFF", bg=_clr_hex, align=_al_c)
+                        _wsl.row_dimensions[_wrow].height = 16
+                        _wrow += 1
 
-                        _pm=pd.merge(
-                            _dc1.groupby(['sku_producto','nombre_producto']).agg(uds_m1=('uds','sum'),monto_m1=('monto','sum')).reset_index(),
-                            _dc2.groupby(['sku_producto','nombre_producto']).agg(uds_m2=('uds','sum'),monto_m2=('monto','sum')).reset_index(),
-                            on=['sku_producto','nombre_producto'],how='outer'
-                        ).fillna(0).sort_values('uds_m1',ascending=False)
-                        _pm=_pm[(_pm['uds_m1']>0)|(_pm['uds_m2']>0)]
+                        _pm = pd.merge(
+                            _dc1.groupby(['sku_producto','nombre_producto']).agg(
+                                uds_m1=('uds','sum'),monto_m1=('monto','sum')).reset_index(),
+                            _dc2.groupby(['sku_producto','nombre_producto']).agg(
+                                uds_m2=('uds','sum'),monto_m2=('monto','sum')).reset_index(),
+                            on=['sku_producto','nombre_producto'], how='outer'
+                        ).fillna(0).sort_values('uds_m1', ascending=False)
+                        _pm = _pm[(_pm['uds_m1']>0)|(_pm['uds_m2']>0)]
 
-                        _alt_fill=_TVPF("solid",start_color="F2F5FB",end_color="F2F5FB")
-                        for _pi,(_,_pr) in enumerate(_pm.iterrows()):
-                            _d=_tv_delta(_pr['uds_m1'],_pr['uds_m2'])
-                            _row_fill=_alt_fill if _pi%2==1 else None
-                            for _ci3,_v in enumerate([
-                                _pr['nombre_producto'],int(_pr['uds_m1']),round(_pr['monto_m1'],0),
-                                int(_pr['uds_m2']),round(_pr['monto_m2'],0),
-                                f"{_d:+.1f}%" if _d is not None else "N/A"
-                            ],1):
-                                _pc=_wsl.cell(_wrow,_ci3,_v)
-                                if _row_fill: _pc.fill=_row_fill
-                                _pc.alignment=_rgt if _ci3>1 else _TVA(horizontal="left",vertical="center")
-                            _wrow+=1
+                        for _pi, (_, _pr) in enumerate(_pm.iterrows()):
+                            _d = (_pr['uds_m2']/_pr['uds_m1']-1) if _pr['uds_m1']>0 else None
+                            _pd1 = round(_pr['uds_m1']/_tv_dias1, 1)
+                            _pd2 = round(_pr['uds_m2']/_tv_dias2, 1)
+                            _bg_r = "F7FAFF" if _pi%2==0 else "FFFFFF"
+                            _dc_r = "006100" if (_d or 0)>=0 else "9C0006"
+                            _bg_d = "C6EFCE" if (_d or 0)>=0 else "FFC7CE"
+                            vals = [_pr['nombre_producto'], _pr['sku_producto'],
+                                    int(_pr['uds_m1']), _pd1, round(_pr['monto_m1'],0),
+                                    int(_pr['uds_m2']), _pd2, round(_pr['monto_m2'],0), _d]
+                            fmts = [None,None,_num_fmt,_dec_fmt,_money_fmt,_num_fmt,_dec_fmt,_money_fmt,_pct_fmt]
+                            alns = [_al_l,_al_l,_al_r,_al_r,_al_r,_al_r,_al_r,_al_r,_al_c]
+                            for _ci3, (_v, _fmt, _aln) in enumerate(zip(vals,fmts,alns), 1):
+                                _bg_use = _bg_d if _ci3==9 else _bg_r
+                                _cl_use = _dc_r if _ci3==9 else ("555555" if _ci3 in (4,7) else "000000")
+                                _xc(_wsl, _wrow, _ci3, _v,
+                                    bg=_bg_use, align=_aln, fmt=_fmt,
+                                    color=_cl_use,
+                                    bold=(_ci3==9),
+                                    italic=(_ci3 in (4,7)),
+                                    border=_bd_thin)
+                            _wsl.row_dimensions[_wrow].height = 15
+                            _wrow += 1
 
-                        # Subtotal categoría
+                        # Subtotal
                         _st1=int(_dc1['uds'].sum()); _st2=int(_dc2['uds'].sum())
-                        _sd=_tv_delta(_st1,_st2)
-                        for _ci3,_v in enumerate(["SUBTOTAL",_st1,round(float(_dc1['monto'].sum()),0),
-                            _st2,round(float(_dc2['monto'].sum()),0),
-                            f"{_sd:+.1f}%" if _sd is not None else "N/A"],1):
-                            _sc=_wsl.cell(_wrow,_ci3,_v)
-                            _sc.fill=_tot_fill; _sc.font=_tot_font
-                            _sc.alignment=_rgt if _ci3>1 else _TVA(horizontal="left",vertical="center")
-                        _wrow+=2
+                        _sd=(_st2/_st1-1) if _st1>0 else None
+                        _sd1=round(_st1/_tv_dias1,1); _sd2=round(_st2/_tv_dias2,1)
+                        _dc_s="006100" if (_sd or 0)>=0 else "9C0006"
+                        _bg_sd="C6EFCE" if (_sd or 0)>=0 else "FFC7CE"
+                        sub_vals=["SUBTOTAL","",_st1,_sd1,round(float(_dc1['monto'].sum()),0),
+                                  _st2,_sd2,round(float(_dc2['monto'].sum()),0),_sd]
+                        sub_fmts=[None,None,_num_fmt,_dec_fmt,_money_fmt,_num_fmt,_dec_fmt,_money_fmt,_pct_fmt]
+                        sub_alns=[_al_l,_al_l,_al_r,_al_r,_al_r,_al_r,_al_r,_al_r,_al_c]
+                        for _ci3,(_v,_fmt,_aln) in enumerate(zip(sub_vals,sub_fmts,sub_alns),1):
+                            _bg_use = _bg_sd if _ci3==9 else "DCE6F1"
+                            _cl_use = _dc_s if _ci3==9 else "000000"
+                            _xc(_wsl,_wrow,_ci3,_v,bold=True,bg=_bg_use,align=_aln,fmt=_fmt,color=_cl_use,border=_bd_thin)
+                        _wsl.row_dimensions[_wrow].height = 16
+                        _wrow += 2
 
-                    # Col widths
-                    _wsl.column_dimensions['A'].width=35
-                    for _ci3 in range(2,7):
-                        _wsl.column_dimensions[_tv_gcl(_ci3)].width=15
+                    # Column widths per-local sheet
+                    _loc_widths = [38, 12, 9, 8, 13, 9, 8, 13, 9]
+                    for _ci3, _w in enumerate(_loc_widths, 1):
+                        _wsl.column_dimensions[_tv_gcl(_ci3)].width = _w
 
                 _tv_buf=_tv_io.BytesIO()
                 _tvwb.save(_tv_buf); _tv_buf.seek(0)
