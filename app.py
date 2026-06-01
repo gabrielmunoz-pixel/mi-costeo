@@ -8701,28 +8701,56 @@ elif modulo.startswith("📊"):
         _tv_btn = st.button("📊 Generar Informe", key="tv_btn", type="primary")
 
         if _tv_btn:
-            # ── Query ventas padre con ab_categoria ──────────────
+            # ── Query ventas padre — misma lógica que Garzones ──
             _tv_q = """
-                SELECT local, ab_categoria,
-                       sku_producto, nombre_producto,
+                SELECT local, categoria_menu, nombre_producto, sku_producto,
                        SUM(cantidad_vendida) AS uds,
                        SUM(monto_venta_real)  AS monto
                 FROM ventas
                 WHERE fecha_venta BETWEEN :fi AND :ff
                   AND es_opcion = false
                   AND local IS NOT NULL
-                  AND ab_categoria IS NOT NULL
-                GROUP BY local, ab_categoria, sku_producto, nombre_producto
+                GROUP BY local, categoria_menu, nombre_producto, sku_producto
             """
             with st.spinner("Consultando datos..."):
                 _tv_df1 = run_query(_tv_q, {'fi': str(_tv_fi1), 'ff': str(_tv_ff1)})
                 _tv_df2 = run_query(_tv_q, {'fi': str(_tv_fi2), 'ff': str(_tv_ff2)})
 
-            # Asignar categoría
+            # Categorizar — misma función que Garzones
+            def _tv_categorizar(cat_menu, nombre_producto):
+                cat_norm = str(cat_menu).strip() if cat_menu else ""
+                result = _TV_CAT_MAP.get(cat_norm)
+                if result:
+                    return result
+                nom = str(nombre_producto).strip() if nombre_producto else ""
+                _NOMBRE_MAP = {
+                    "Hot dog Italiano":"Alimentos","Hot dog Dinamico":"Alimentos",
+                    "Hot dog Completa":"Alimentos","Hot dog Tomate Mayo":"Alimentos",
+                    "Pisco Sour De La Casa":"Líquidos C/A","Pisco Sour Peruano":"Líquidos C/A",
+                    "Sangria  AE":"Líquidos C/A","Royal Guard":"Líquidos C/A","Heineken":"Líquidos C/A",
+                    "Coca Cola":"Líquidos S/A","Coca Cola Zero":"Líquidos S/A",
+                    "Coca Cola Light":"Líquidos S/A","Sprite":"Líquidos S/A",
+                    "Sprite Zero":"Líquidos S/A","Fanta Zero":"Líquidos S/A",
+                    "Agua con gas":"Líquidos S/A","Agua sin gas":"Líquidos S/A",
+                    "Mineral con Gas":"Líquidos S/A","Mineral sin gas":"Líquidos S/A",
+                    "Ginger Ale Ligh":"Líquidos S/A",
+                    "Mojito Clasico Sin Alcohol":"Líquidos S/A",
+                    "Mojito Berries Sin Alcohol":"Líquidos S/A",
+                    "Mojito Maracuya Sin Alcohol":"Líquidos S/A",
+                    "London Mule Sin Alcohol":"Líquidos S/A",
+                    "Gin Tonic Sin Alcohol":"Líquidos S/A",
+                }
+                for k, v in _NOMBRE_MAP.items():
+                    if k.lower() in nom.lower():
+                        return v
+                return None
+
             for _df in [_tv_df1, _tv_df2]:
                 _df['uds']   = pd.to_numeric(_df['uds'],   errors='coerce').fillna(0)
                 _df['monto'] = pd.to_numeric(_df['monto'], errors='coerce').fillna(0)
-                _df['categoria'] = _df['ab_categoria'].map(_TV_CAT_MAP).fillna('Otros')
+                _df['categoria'] = _df.apply(
+                    lambda r: _tv_categorizar(r['categoria_menu'], r['nombre_producto']), axis=1
+                )
 
             # Filtrar categorías seleccionadas
             _tv_df1 = _tv_df1[_tv_df1['categoria'].isin(_tv_cats_sel)]
