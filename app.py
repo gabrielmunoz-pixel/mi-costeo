@@ -7932,12 +7932,6 @@ elif modulo.startswith("📊"):
                         _ws_out.cell(38, 28).value = f'=AA38/AA42' if _gt_abr_t > 0 else 0
                         _ws_out.cell(37, 30).value = f'=AC37/AC42' if _gt_may_t > 0 else 0
                         _ws_out.cell(38, 30).value = f'=AC38/AC42' if _gt_may_t > 0 else 0
-                        # Fila 42 TOTAL GENERAL — incluye salón + delivery + apps
-                        _gt_abr_total = _gt_abr_t + sum(_gt_abr_apps.values())
-                        _gt_may_total = _gt_may_t + sum(_gt_may_apps.values())
-                        _ws_out.cell(42, 27).value = round(_gt_abr_total)
-                        _ws_out.cell(42, 29).value = round(_gt_may_total)
-                        # % fila 42 — no aplica (es el denominador), dejar en blanco
                         # E42=E38+E37, G42=G38+G37 (la plantilla tiene fórmulas pero openpyxl no las ejecuta)
                         _ws_out.cell(42, 5).value  = round(_gt_dia_s)  + round(_gt_dia_d)
                         _ws_out.cell(42, 7).value  = round(_gt_acum_s) + round(_gt_acum_d)
@@ -8004,6 +7998,12 @@ elif modulo.startswith("📊"):
                             _ws_out.cell(_app_row, 28).value = f'=AA{_app_row}/AA38' if _gt_abr_d > 0 else 0
                             _ws_out.cell(_app_row, 30).value = f'=AC{_app_row}/AC38' if _gt_may_d > 0 else 0
                             # Histórico apps cols I:AD — vienen del template, no sobreescribir
+
+                        # Fila 42 TOTAL GENERAL — calcula después de apps
+                        _gt_abr_total = _gt_abr_t + sum(_gt_abr_apps.values())
+                        _gt_may_total = _gt_may_t + sum(_gt_may_apps.values())
+                        _ws_out.cell(42, 27).value = round(_gt_abr_total)
+                        _ws_out.cell(42, 29).value = round(_gt_may_total)
 
                         # ── FILA 42: TOTAL GENERAL ────────────────────────────────
                         # E42=E38+E37 y G42=G38+G37 son fórmulas en la plantilla
