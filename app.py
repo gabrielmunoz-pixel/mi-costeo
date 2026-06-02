@@ -7932,9 +7932,12 @@ elif modulo.startswith("📊"):
                         _ws_out.cell(38, 28).value = f'=AA38/AA42' if _gt_abr_t > 0 else 0
                         _ws_out.cell(37, 30).value = f'=AC37/AC42' if _gt_may_t > 0 else 0
                         _ws_out.cell(38, 30).value = f'=AC38/AC42' if _gt_may_t > 0 else 0
-                        # Fila 42 TOTAL GENERAL
-                        _ws_out.cell(42, 27).value = round(_gt_abr_t)
-                        _ws_out.cell(42, 29).value = round(_gt_may_t)
+                        # Fila 42 TOTAL GENERAL — incluye salón + delivery + apps
+                        _gt_abr_total = _gt_abr_t + sum(_gt_abr_apps.values())
+                        _gt_may_total = _gt_may_t + sum(_gt_may_apps.values())
+                        _ws_out.cell(42, 27).value = round(_gt_abr_total)
+                        _ws_out.cell(42, 29).value = round(_gt_may_total)
+                        # % fila 42 — no aplica (es el denominador), dejar en blanco
                         # E42=E38+E37, G42=G38+G37 (la plantilla tiene fórmulas pero openpyxl no las ejecuta)
                         _ws_out.cell(42, 5).value  = round(_gt_dia_s)  + round(_gt_dia_d)
                         _ws_out.cell(42, 7).value  = round(_gt_acum_s) + round(_gt_acum_d)
@@ -7955,6 +7958,8 @@ elif modulo.startswith("📊"):
                             40: ['PedidosYa', 'PedidosYa Vouchers', 'PedidosYa Cash Collection'],
                             41: ['Rappi'],
                         }
+                        _gt_abr_apps = {39:0, 40:0, 41:0}
+                        _gt_may_apps = {39:0, 40:0, 41:0}
                         for _app_row, _fp_list in _APPS.items():
                             _fp_in = "','".join(_fp_list)
                             _df_app_dia = run_query(f"""
@@ -7969,12 +7974,35 @@ elif modulo.startswith("📊"):
                                 WHERE fecha_venta BETWEEN :fi AND :ff
                                   AND forma_pago IN ('{_fp_in}')
                             """, {'fi': str(_exp_fi), 'ff': str(_exp_ff)})
+                            # ABR 2026 por app
+                            _df_app_abr = run_query(f"""
+                                SELECT SUM(monto_venta_real) AS venta
+                                FROM ventas
+                                WHERE fecha_venta BETWEEN '2026-04-01' AND '2026-04-30'
+                                  AND forma_pago IN ('{_fp_in}')
+                            """)
+                            # MAY 2026 por app
+                            _df_app_may = run_query(f"""
+                                SELECT SUM(monto_venta_real) AS venta
+                                FROM ventas
+                                WHERE fecha_venta BETWEEN '2026-05-01' AND '2026-05-31'
+                                  AND forma_pago IN ('{_fp_in}')
+                            """)
                             _app_dia  = float(_df_app_dia['venta'].iloc[0])  if not _df_app_dia.empty  and _df_app_dia['venta'].iloc[0]  else 0
                             _app_acum = float(_df_app_acum['venta'].iloc[0]) if not _df_app_acum.empty and _df_app_acum['venta'].iloc[0] else 0
                             _app_proy = _app_acum / int(_exp_dias_cal) * _exp_dias_mes if int(_exp_dias_cal) > 0 else 0
+                            _app_abr  = float(_df_app_abr['venta'].iloc[0]) if not _df_app_abr.empty and _df_app_abr['venta'].iloc[0] else 0
+                            _app_may  = float(_df_app_may['venta'].iloc[0]) if not _df_app_may.empty and _df_app_may['venta'].iloc[0] else 0
+                            _gt_abr_apps[_app_row] = _app_abr
+                            _gt_may_apps[_app_row] = _app_may
                             _ws_out.cell(_app_row, 5).value  = round(_app_dia)
                             _ws_out.cell(_app_row, 7).value  = round(_app_acum)
                             _ws_out.cell(_app_row, 31).value = round(_app_proy)
+                            _ws_out.cell(_app_row, 27).value = round(_app_abr)
+                            _ws_out.cell(_app_row, 29).value = round(_app_may)
+                            # % sobre total delivery (fila 38)
+                            _ws_out.cell(_app_row, 28).value = f'=AA{_app_row}/AA38' if _gt_abr_d > 0 else 0
+                            _ws_out.cell(_app_row, 30).value = f'=AC{_app_row}/AC38' if _gt_may_d > 0 else 0
                             # Histórico apps cols I:AD — vienen del template, no sobreescribir
 
                         # ── FILA 42: TOTAL GENERAL ────────────────────────────────
