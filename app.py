@@ -7999,9 +7999,9 @@ elif modulo.startswith("📊"):
                             _ws_out.cell(_app_row, 30).value = f'=AC{_app_row}/AC38' if _gt_may_d > 0 else 0
                             # Histórico apps cols I:AD — vienen del template, no sobreescribir
 
-                        # Fila 42 TOTAL GENERAL — calcula después de apps
-                        _gt_abr_total = _gt_abr_t + sum(_gt_abr_apps.values())
-                        _gt_may_total = _gt_may_t + sum(_gt_may_apps.values())
+                        # Fila 42 TOTAL GENERAL = salón + delivery (apps están dentro del delivery)
+                        _gt_abr_total = _gt_abr_t  # ya incluye salón + delivery
+                        _gt_may_total = _gt_may_t
                         _ws_out.cell(42, 27).value = round(_gt_abr_total)
                         _ws_out.cell(42, 29).value = round(_gt_may_total)
 
