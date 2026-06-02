@@ -3951,16 +3951,26 @@ if modulo.startswith("📦"):
                         conn.commit()
 
                     total_filas = len(df_save2)
-                    CHUNK_SQL   = 5_000
+                    CHUNK_SQL   = 2_000
                     n_chunks    = (total_filas // CHUNK_SQL) + 1
                     prog        = st.progress(0, text="Insertando registros...")
 
                     for i in range(n_chunks):
-                        chunk_df = df_save2.iloc[i*CHUNK_SQL:(i+1)*CHUNK_SQL]
+                        chunk_df = df_save2.iloc[i*CHUNK_SQL:(i+1)*CHUNK_SQL].copy()
                         if chunk_df.empty:
                             break
-                        chunk_df.to_sql('ventas', engine, if_exists='append',
-                                        index=False, method='multi', chunksize=500)
+                        import io as _io_copy
+                        _buf = _io_copy.StringIO()
+                        chunk_df.to_csv(_buf, index=False, header=False, na_rep='')
+                        _buf.seek(0)
+                        with engine.raw_connection() as raw_conn:
+                            with raw_conn.cursor() as cur:
+                                cols_str = ', '.join(chunk_df.columns)
+                                cur.copy_expert(
+                                    f"COPY ventas ({cols_str}) FROM STDIN WITH (FORMAT CSV, NULL '')",
+                                    _buf
+                                )
+                            raw_conn.commit()
                         pct = min(int((i+1)/n_chunks*100), 100)
                         prog.progress(pct, text=f"Insertando... {min((i+1)*CHUNK_SQL, total_filas):,} / {total_filas:,} filas")
 
@@ -8694,7 +8704,7 @@ elif modulo.startswith("📊"):
         st.markdown("### 📈 Tendencia de Ventas")
 
         # ── Filtros ──────────────────────────────────────────────
-        _tv_c1, _tv_c2, _tv_c3 = st.columns([2,2,3])
+        _tv_c1, _tv_c2, _tv_c3, _tv_c4 = st.columns([2,2,2,2])
 
         if 'tv_meses_cache' not in st.session_state:
             st.session_state['tv_meses_cache'] = run_query("""
@@ -8715,6 +8725,9 @@ elif modulo.startswith("📊"):
         with _tv_c3:
             _tv_cats_sel = st.multiselect("🏷️ Categorías",
                 _TV_CATS_ALL, default=_TV_CATS_ALL, key="tv_cats")
+        with _tv_c4:
+            _tv_canal = st.selectbox("🏪 Canal",
+                ["Ambos", "Salón", "Delivery"], key="tv_canal")
 
         _tv_m1   = _tv_meses[_tv_idx1]
         _tv_m2   = _tv_meses[_tv_idx2]
@@ -8733,7 +8746,13 @@ elif modulo.startswith("📊"):
 
         if _tv_btn:
             # ── Query ventas padre — misma lógica que Garzones ──
-            _tv_q = """
+            _tv_canal_filter = ""
+            if _tv_canal == "Salón":
+                _tv_canal_filter = "AND (origen IS NULL OR origen = '')"
+            elif _tv_canal == "Delivery":
+                _tv_canal_filter = "AND (origen IS NOT NULL AND origen != '')"
+
+            _tv_q = f"""
                 SELECT local, categoria_menu, nombre_producto, sku_producto,
                        SUM(cantidad_vendida) AS uds,
                        SUM(monto_venta_real)  AS monto
@@ -8741,6 +8760,7 @@ elif modulo.startswith("📊"):
                 WHERE fecha_venta BETWEEN :fi AND :ff
                   AND es_opcion = false
                   AND local IS NOT NULL
+                  {_tv_canal_filter}
                 GROUP BY local, categoria_menu, nombre_producto, sku_producto
             """
             with st.spinner("Consultando datos..."):
@@ -8791,6 +8811,7 @@ elif modulo.startswith("📊"):
                 'df1': _tv_df1, 'df2': _tv_df2,
                 'lbl1': _tv_lbl1, 'lbl2': _tv_lbl2,
                 'cats': _tv_cats_sel,
+                'canal': _tv_canal,
             }
 
         if st.session_state.get('tv_data'):
