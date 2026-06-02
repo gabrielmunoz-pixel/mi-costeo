@@ -8083,6 +8083,13 @@ elif modulo.startswith("📊"):
                             if v is None:
                                 return 0.0
                             if isinstance(v, str) and v.startswith('='):
+                                # Para col AE(31) calcular proyección desde G
+                                if col == 31:
+                                    g_val = ws.cell(row, 7).value
+                                    try:
+                                        return float(g_val) / int(_exp_dias_cal) * _exp_dias_mes if int(_exp_dias_cal) > 0 else 0.0
+                                    except (TypeError, ValueError):
+                                        return 0.0
                                 return 0.0
                             try:
                                 return float(v)
