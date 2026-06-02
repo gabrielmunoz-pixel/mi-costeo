@@ -8029,7 +8029,7 @@ elif modulo.startswith("📊"):
                             _aliva_p = _aliva_a / int(_exp_dias_hab) * _exp_dias_hab_mes if int(_exp_dias_hab) > 0 else 0
                             _ws_out.cell(_ar, 5).value  = round(_aliva_d, 2) if _aliva_d else 0
                             _ws_out.cell(_ar, 7).value  = round(_aliva_a, 2) if _aliva_a else 0
-                            _ws_out.cell(_ar, 31).value = round(_aliva_p, 2) if _aliva_p else 0
+                            # Col AE(31) proyección ALIVA — formulada en template, NO sobreescribir
                             # Histórico Aliva desde ventas_aliva por mes
                             for _col_h, (_aa_h, _mm_h) in _EXP_COL_MES.items():
                                 _df_aliva_mes = run_query("""
