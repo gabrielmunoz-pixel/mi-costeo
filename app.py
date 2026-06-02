@@ -7916,10 +7916,8 @@ elif modulo.startswith("📊"):
                         # ── TOTAL LOCALES (filas 37=SALON, 38=DELIVERY) ──────────
                         _ws_out.cell(37, 5).value  = round(_gt_dia_s)
                         _ws_out.cell(37, 7).value  = round(_gt_acum_s)
-                        _ws_out.cell(37, 31).value = round(_gt_proy_s)
                         _ws_out.cell(38, 5).value  = round(_gt_dia_d)
                         _ws_out.cell(38, 7).value  = round(_gt_acum_d)
-                        _ws_out.cell(38, 31).value = round(_gt_proy_d)
                         # ABR y MAY totales red — filas 37/38
                         _gt_abr_t = _gt_abr_s + _gt_abr_d
                         _gt_may_t = _gt_may_s + _gt_may_d
@@ -7935,8 +7933,7 @@ elif modulo.startswith("📊"):
                         # E42=E38+E37, G42=G38+G37 (la plantilla tiene fórmulas pero openpyxl no las ejecuta)
                         _ws_out.cell(42, 5).value  = round(_gt_dia_s)  + round(_gt_dia_d)
                         _ws_out.cell(42, 7).value  = round(_gt_acum_s) + round(_gt_acum_d)
-                        _ws_out.cell(42, 31).value = round(_gt_proy_s) + round(_gt_proy_d)
-                        # Histórico mensual de totales locales
+                                                # Histórico mensual de totales locales
                         # Cols I(9) a AD(30) vienen hardcodeadas en el template — no sobreescribir
                         for _col_h, (_aa_h, _mm_h) in _EXP_COL_MES.items():
                             if _col_h <= 30:
@@ -7991,7 +7988,6 @@ elif modulo.startswith("📊"):
                             _gt_may_apps[_app_row] = _app_may
                             _ws_out.cell(_app_row, 5).value  = round(_app_dia)
                             _ws_out.cell(_app_row, 7).value  = round(_app_acum)
-                            _ws_out.cell(_app_row, 31).value = round(_app_proy)
                             _ws_out.cell(_app_row, 27).value = round(_app_abr)
                             _ws_out.cell(_app_row, 29).value = round(_app_may)
                             # % sobre total delivery (fila 38)
