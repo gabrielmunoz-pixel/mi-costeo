@@ -8044,10 +8044,13 @@ elif modulo.startswith("📊"):
                             _may_aliva_row = _df_aliva_may[_df_aliva_may['local'].str.upper()==_aloc.upper()]
                             _may_aliva_v = float(_may_aliva_row.iloc[0]['venta']) if not _may_aliva_row.empty and _may_aliva_row.iloc[0]['venta'] else 0
                             _ws_out.cell(_ar, 29).value = round(_may_aliva_v, 2)
-                            # Col AD(30) = % sobre total del local (ventas_aliva no tiene total fila, usa valor de E col)
-                            # % = venta_local_may / SUM(venta_todos_locales_may)
-                            _tot_may_aliva = float(_df_aliva_may['venta'].sum()) if not _df_aliva_may.empty else 0
-                            _ws_out.cell(_ar, 30).value = f'=AC{_ar}/SUM(AC45:AC54)' if _tot_may_aliva > 0 else 0
+                            # Col AD(30) = % sobre total del local en MAY (fila TOTAL del local)
+                            _ALIVA_TO_LOCAL_TOT = {
+                                45:8, 46:11, 47:14, 48:17, 49:20,
+                                50:23, 51:26, 52:29, 53:32, 54:35
+                            }
+                            _loc_tot_row = _ALIVA_TO_LOCAL_TOT.get(_ar, 8)
+                            _ws_out.cell(_ar, 30).value = f'=AC{_ar}/AC{_loc_tot_row}' if _may_aliva_v > 0 else 0
 
                         # ── GENERAR GRÁFICOS CON MATPLOTLIB ─────────────────
                         import matplotlib
