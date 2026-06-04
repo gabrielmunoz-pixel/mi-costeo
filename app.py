@@ -9438,7 +9438,6 @@ elif modulo.startswith("📊"):
 
     elif informe_sel == "ControlProduccion":
         import calendar as _cp_cal
-        from scipy import stats as _cp_stats
 
         st.markdown("### 🏭 Control de Producción")
 
@@ -9656,11 +9655,10 @@ elif modulo.startswith("📊"):
 
                 def _cp_stats_mode(s):
                     try:
-                        from scipy.stats import mode as _mode
-                        result = _mode(s, keepdims=True)
-                        return result.mode[0]
+                        m = s.mode()
+                        return float(m.iloc[0]) if not m.empty else 0
                     except:
-                        return s.value_counts().index[0] if not s.empty else 0
+                        return 0
 
                 # Ventas de platos por día (sin ingredientes)
                 _uds_dia = _df_v.groupby(['nombre_producto','dia_nombre','semana_label'])['uds'].sum().reset_index()
