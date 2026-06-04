@@ -9480,19 +9480,21 @@ elif modulo.startswith("📊"):
                 ),
                 opciones_raw AS (
                     SELECT id_orden, ab_categoria, sku_producto AS sku_opcion,
+                           ba_opcion,
                            SUM(cantidad_vendida) AS cant_opcion
                     FROM ventas
                     WHERE fecha_venta BETWEEN :i AND :f
                       AND es_opcion = true
                       AND ba_opcion IN ('{_ba_sql}')
                       {_filtro_local}
-                    GROUP BY id_orden, ab_categoria, sku_producto
+                    GROUP BY id_orden, ab_categoria, sku_producto, ba_opcion
                 ),
                 opciones_cap AS (
                     SELECT
                         o.id_orden,
                         o.ab_categoria,
                         o.sku_opcion,
+                        o.ba_opcion,
                         o.cant_opcion,
                         SUM(o.cant_opcion) OVER (PARTITION BY o.id_orden, o.ab_categoria) AS total_opciones,
                         SUM(p.cant_padre * p.scoops_por_unidad) AS total_esperado
@@ -9504,11 +9506,11 @@ elif modulo.startswith("📊"):
                         FROM padres
                         GROUP BY id_orden, ab_categoria
                     ) p ON p.id_orden = o.id_orden AND p.ab_categoria = o.ab_categoria
-                    GROUP BY o.id_orden, o.ab_categoria, o.sku_opcion, o.cant_opcion
+                    GROUP BY o.id_orden, o.ab_categoria, o.sku_opcion, o.ba_opcion, o.cant_opcion
                 ),
                 opciones AS (
                     SELECT
-                        id_orden, ab_categoria, sku_opcion,
+                        id_orden, ab_categoria, sku_opcion, ba_opcion,
                         CASE
                             WHEN total_opciones > total_esperado AND total_opciones > 0
                             THEN cant_opcion * total_esperado::float / total_opciones::float
@@ -9519,19 +9521,52 @@ elif modulo.startswith("📊"):
                 SELECT
                     p.sku_padre,
                     o.sku_opcion,
+                    o.ba_opcion,
                     SUM(o.cant_opcion::float * p.cant_padre::float / NULLIF(t.total_padres, 0)) AS cant_opcion_total
                 FROM padres p
                 JOIN total_por_ab_orden t ON t.id_orden = p.id_orden AND t.ab_categoria = p.ab_categoria
                 JOIN opciones o            ON o.id_orden = p.id_orden AND o.ab_categoria = p.ab_categoria
-                GROUP BY p.sku_padre, o.sku_opcion
+                GROUP BY p.sku_padre, o.sku_opcion, o.ba_opcion
             """
 
             _df = run_query(_q, _params)
-            st.write(f"Filas resultado: {len(_df)}")
             if not _df.empty:
-                _ae06 = _df[_df['sku_padre'] == 'AE06']
-                st.write(f"AE06 opciones: {len(_ae06)}")
-                st.dataframe(_ae06)
+                _ae06 = _df[_df['sku_padre'] == 'AE06'].copy()
+
+                # Mapear sku_opcion por prefijo → categoría de control
+                _PREFIX_CAT = {
+                    'CHUX': 'CH POSTA',
+                    'CHUSIT': 'CH POSTA',
+                    'FILX': 'CH FILETE',
+                    'FILSIT': 'CH FILETE',
+                    'LOMX': 'LOMITO',
+                    'LOMSIT': 'LOMITO',
+                    'AVEX': 'AVE/POLLO',
+                    'AVESIT': 'AVE/POLLO',
+                    'HAMX': 'HAMBURGUESA',
+                    'HAMSIT': 'HAMBURGUESA',
+                    'HAQX': 'HAMB QUINOA',
+                    'PERX': 'PERNIL',
+                    'PERSIT': 'PERNIL',
+                    'MECX': 'MECHADA',
+                    'PANX': 'Pan',
+                }
+                def _get_cat(sku):
+                    for prefix, cat in _PREFIX_CAT.items():
+                        if str(sku).startswith(prefix):
+                            return cat
+                    return sku
+
+                _ae06['categoria'] = _ae06['sku_opcion'].apply(_get_cat)
+                _ae06['cant_opcion_total'] = pd.to_numeric(_ae06['cant_opcion_total'], errors='coerce').fillna(0)
+
+                _resumen = _ae06.groupby('categoria')['cant_opcion_total'].sum().reset_index()
+                _resumen.columns = ['Categoría', 'Unidades']
+                _resumen = _resumen.sort_values('Unidades', ascending=False)
+                _resumen['Unidades'] = _resumen['Unidades'].round(1)
+
+                st.markdown("**AE06 — Opciones por categoría (Marzo 2026 · Vitacura)**")
+                st.dataframe(_resumen, use_container_width=True, hide_index=True)
             else:
                 st.warning("Sin resultados")
 
