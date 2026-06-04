@@ -9729,8 +9729,10 @@ elif modulo.startswith("📊"):
                     _cp_ctr      = _CPA(horizontal="center", vertical="center")
                     _cp_lft      = _CPA(horizontal="left",   vertical="center")
 
+                    import re as _cp_re
                     for _plato in _platos:
-                        _ws = _cpwb.create_sheet(_plato[:31])
+                        _safe_name = _cp_re.sub(r'[\\/*?\[\]:]', '', _plato)[:31]
+                        _ws = _cpwb.create_sheet(_safe_name or f"Plato")
                         _ws.sheet_view.showGridLines = False
 
                         # Title
