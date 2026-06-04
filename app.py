@@ -9441,94 +9441,99 @@ elif modulo.startswith("📊"):
         st.markdown("### 🏭 Control de Producción — Debug AE06")
 
         if st.button("Consultar AE06", type="primary"):
-            _fi = _cp_dt.date(2026, 3, 1)
-            _ff = _cp_dt.date(2026, 3, 31)
+            _fi  = _cp_dt.date(2026, 3, 1)
+            _ff  = _cp_dt.date(2026, 3, 31)
             _loc = 'Vitacura'
 
-            # Llamar EXACTAMENTE a calcular_cmv_con_opciones — función ya validada
-            _cmv = calcular_cmv_con_opciones(_fi, _ff, _loc)
-            st.write(f"calcular_cmv_con_opciones retornó {len(_cmv)} filas")
+            # Variables EXACTAS de calcular_cmv_con_opciones
+            filtro_local      = "AND UPPER(local) = UPPER(:l)"
+            params_loc        = {'i': str(_fi), 'f': str(_ff), 'l': _loc}
+            ba_costeables_sql = "', '".join(BA_COSTEABLES)
+            filtro_v          = filtro_local
+            _plates_2_scoops_sql = 'POS-002'
+            _plates_3_scoops_sql = 'POS-008'
 
-            # Extraer df_op directamente de la función usando sus mismos parámetros
-            _filtro_local = "AND UPPER(local) = UPPER(:l)"
-            _params = {'i': str(_fi), 'f': str(_ff), 'l': _loc}
-            _ba_sql = "', '".join(BA_COSTEABLES)
-            _plates_2 = 'POS-002'
-            _plates_3 = 'POS-008'
+            # Query COPIADA EXACTA de calcular_cmv_con_opciones
+            q_opciones = f"""
+        WITH skus_con_opciones AS (
+            -- Solo padres que tienen opciones costeables declaradas en su receta
+            SELECT DISTINCT codigo_venta AS sku_padre
+            FROM recetas
+            WHERE es_opcion IN (1, 2, 3, 6)
+        ),
+        padres AS (
+            SELECT id_orden, ab_categoria, sku_producto AS sku_padre,
+                   SUM(cantidad_vendida) AS cant_padre,
+                   CASE
+                       WHEN sku_producto = '{_plates_3_scoops_sql}' THEN 3
+                       WHEN sku_producto = '{_plates_2_scoops_sql}' THEN 2
+                       ELSE 1
+                   END AS scoops_por_unidad
+            FROM ventas
+            WHERE fecha_venta BETWEEN :i AND :f
+              AND es_opcion = false
+              AND ab_categoria IS NOT NULL
+              AND sku_producto IN (SELECT sku_padre FROM skus_con_opciones)
+              {filtro_v}
+            GROUP BY id_orden, ab_categoria, sku_producto
+        ),
+        total_por_ab_orden AS (
+            SELECT id_orden, ab_categoria, SUM(cant_padre) AS total_padres
+            FROM padres
+            GROUP BY id_orden, ab_categoria
+        ),
+        opciones_raw AS (
+            SELECT id_orden, ab_categoria, sku_producto AS sku_opcion,
+                   SUM(cantidad_vendida) AS cant_opcion
+            FROM ventas
+            WHERE fecha_venta BETWEEN :i AND :f
+              AND es_opcion = true
+              AND ba_opcion IN ('{ba_costeables_sql}')
+              {filtro_v}
+            GROUP BY id_orden, ab_categoria, sku_producto
+        ),
+        -- Cap total options per (order, ab_categoria) to expected scoops
+        opciones_cap AS (
+            SELECT
+                o.id_orden,
+                o.ab_categoria,
+                o.sku_opcion,
+                o.cant_opcion,
+                SUM(o.cant_opcion) OVER (PARTITION BY o.id_orden, o.ab_categoria) AS total_opciones,
+                SUM(p.cant_padre * p.scoops_por_unidad) AS total_esperado
+            FROM opciones_raw o
+            JOIN (
+                SELECT id_orden, ab_categoria,
+                       SUM(cant_padre * scoops_por_unidad) AS cant_padre,
+                       SUM(cant_padre * scoops_por_unidad) AS scoops_por_unidad
+                FROM padres
+                GROUP BY id_orden, ab_categoria
+            ) p ON p.id_orden = o.id_orden AND p.ab_categoria = o.ab_categoria
+            GROUP BY o.id_orden, o.ab_categoria, o.sku_opcion, o.cant_opcion
+        ),
+        opciones AS (
+            SELECT
+                id_orden, ab_categoria, sku_opcion,
+                -- Scale down cant_opcion if total options exceed expected scoops
+                CASE
+                    WHEN total_opciones > total_esperado AND total_opciones > 0
+                    THEN cant_opcion * total_esperado::float / total_opciones::float
+                    ELSE cant_opcion
+                END AS cant_opcion
+            FROM opciones_cap
+        )
+        SELECT
+            p.sku_padre,
+            o.sku_opcion,
+            SUM(o.cant_opcion::float * p.cant_padre::float / NULLIF(t.total_padres, 0)) AS cant_opcion_total
+        FROM padres p
+        JOIN total_por_ab_orden t ON t.id_orden = p.id_orden AND t.ab_categoria = p.ab_categoria
+        JOIN opciones o            ON o.id_orden = p.id_orden AND o.ab_categoria = p.ab_categoria
+        GROUP BY p.sku_padre, o.sku_opcion
+    """
+            df_op = run_query(q_opciones, params_loc)
 
-            _q_op = f"""
-                WITH skus_con_opciones AS (
-                    SELECT DISTINCT codigo_venta AS sku_padre
-                    FROM recetas
-                    WHERE es_opcion IN (1, 2, 3, 6)
-                ),
-                padres AS (
-                    SELECT id_orden, ab_categoria, sku_producto AS sku_padre,
-                           SUM(cantidad_vendida) AS cant_padre,
-                           CASE
-                               WHEN sku_producto = '{_plates_3}' THEN 3
-                               WHEN sku_producto = '{_plates_2}' THEN 2
-                               ELSE 1
-                           END AS scoops_por_unidad
-                    FROM ventas
-                    WHERE fecha_venta BETWEEN :i AND :f
-                      AND es_opcion = false
-                      AND ab_categoria IS NOT NULL
-                      AND sku_producto IN (SELECT sku_padre FROM skus_con_opciones)
-                      {_filtro_local}
-                    GROUP BY id_orden, ab_categoria, sku_producto
-                ),
-                total_por_ab_orden AS (
-                    SELECT id_orden, ab_categoria, SUM(cant_padre) AS total_padres
-                    FROM padres
-                    GROUP BY id_orden, ab_categoria
-                ),
-                opciones_raw AS (
-                    SELECT id_orden, ab_categoria, sku_producto AS sku_opcion,
-                           SUM(cantidad_vendida) AS cant_opcion
-                    FROM ventas
-                    WHERE fecha_venta BETWEEN :i AND :f
-                      AND es_opcion = true
-                      AND ba_opcion IN ('{_ba_sql}')
-                      {_filtro_local}
-                    GROUP BY id_orden, ab_categoria, sku_producto
-                ),
-                opciones_cap AS (
-                    SELECT
-                        o.id_orden, o.ab_categoria, o.sku_opcion, o.cant_opcion,
-                        SUM(o.cant_opcion) OVER (PARTITION BY o.id_orden, o.ab_categoria) AS total_opciones,
-                        SUM(p.cant_padre * p.scoops_por_unidad) AS total_esperado
-                    FROM opciones_raw o
-                    JOIN (
-                        SELECT id_orden, ab_categoria,
-                               SUM(cant_padre * scoops_por_unidad) AS cant_padre,
-                               SUM(cant_padre * scoops_por_unidad) AS scoops_por_unidad
-                        FROM padres GROUP BY id_orden, ab_categoria
-                    ) p ON p.id_orden = o.id_orden AND p.ab_categoria = o.ab_categoria
-                    GROUP BY o.id_orden, o.ab_categoria, o.sku_opcion, o.cant_opcion
-                ),
-                opciones AS (
-                    SELECT id_orden, ab_categoria, sku_opcion,
-                        CASE
-                            WHEN total_opciones > total_esperado AND total_opciones > 0
-                            THEN cant_opcion * total_esperado::float / total_opciones::float
-                            ELSE cant_opcion
-                        END AS cant_opcion
-                    FROM opciones_cap
-                )
-                SELECT
-                    p.sku_padre,
-                    o.sku_opcion,
-                    SUM(o.cant_opcion::float * p.cant_padre::float / NULLIF(t.total_padres, 0)) AS cant_opcion_total
-                FROM padres p
-                JOIN total_por_ab_orden t ON t.id_orden = p.id_orden AND t.ab_categoria = p.ab_categoria
-                JOIN opciones o            ON o.id_orden = p.id_orden AND o.ab_categoria = p.ab_categoria
-                GROUP BY p.sku_padre, o.sku_opcion
-            """
-            _df_op = run_query(_q_op, _params)
-            st.write(f"Query directa retornó {len(_df_op)} filas")
-
-            _ae06 = _df_op[_df_op['sku_padre'] == 'AE06'].copy()
+            _ae06 = df_op[df_op['sku_padre'] == 'AE06'].copy()
             _ae06['cant_opcion_total'] = pd.to_numeric(_ae06['cant_opcion_total'], errors='coerce').fillna(0)
 
             _PREFIX_CAT = {
@@ -9557,13 +9562,13 @@ elif modulo.startswith("📊"):
             st.dataframe(_ae06[['sku_opcion','categoria','cant_opcion_total']].sort_values('cant_opcion_total',ascending=False), use_container_width=True, hide_index=True)
 
             st.markdown("**③ Padre vs proteínas**")
-            _prot = _ae06[_ae06['categoria']!='Pan']['cant_opcion_total'].sum()
-            _pan  = _ae06[_ae06['categoria']=='Pan']['cant_opcion_total'].sum()
-            _padre_q = run_query(f"SELECT SUM(cantidad_vendida) AS n FROM ventas WHERE fecha_venta BETWEEN :i AND :f AND es_opcion=false AND sku_producto='AE06' AND UPPER(local)=UPPER(:l)", _params)
-            _padre = float(_padre_q['n'].iloc[0]) if not _padre_q.empty else 0
+            _prot  = _ae06[_ae06['categoria']!='Pan']['cant_opcion_total'].sum()
+            _pan   = _ae06[_ae06['categoria']=='Pan']['cant_opcion_total'].sum()
+            _padre = run_query("SELECT SUM(cantidad_vendida) AS n FROM ventas WHERE fecha_venta BETWEEN :i AND :f AND es_opcion=false AND sku_producto='AE06' AND UPPER(local)=UPPER(:l)", params_loc)
+            _n_padre = float(_padre['n'].iloc[0]) if not _padre.empty else 0
             st.dataframe(pd.DataFrame({
                 'Métrica':['Ventas padre','Proteínas','Pan','Sin proteína'],
-                'Unidades':[round(_padre,0),round(_prot,1),round(_pan,1),round(_padre-_prot,1)]
+                'Unidades':[round(_n_padre,0),round(_prot,1),round(_pan,1),round(_n_padre-_prot,1)]
             }), use_container_width=True, hide_index=True)
 
 
