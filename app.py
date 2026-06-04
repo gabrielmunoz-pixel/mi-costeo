@@ -9530,6 +9530,18 @@ elif modulo.startswith("📊"):
             """
 
             _df = run_query(_q, _params)
+
+            # Ventas padre AE06
+            _q2 = f"""
+                SELECT sku_producto, SUM(cantidad_vendida) AS cant_padre
+                FROM ventas
+                WHERE fecha_venta BETWEEN :i AND :f
+                  AND es_opcion = false
+                  {_filtro_local}
+                  AND sku_producto = 'AE06'
+                GROUP BY sku_producto
+            """
+            _df2 = run_query(_q2, _params)
             if not _df.empty:
                 _ae06 = _df[_df['sku_padre'] == 'AE06'].copy()
 
@@ -9584,17 +9596,6 @@ elif modulo.startswith("📊"):
             else:
                 st.warning("Sin resultados")
 
-            # También mostrar cant_padre de AE06
-            _q2 = f"""
-                SELECT sku_producto, SUM(cantidad_vendida) AS cant_padre
-                FROM ventas
-                WHERE fecha_venta BETWEEN :i AND :f
-                  AND es_opcion = false
-                  {_filtro_local}
-                  AND sku_producto = 'AE06'
-                GROUP BY sku_producto
-            """
-            _df2 = run_query(_q2, _params)
             st.write("Ventas AE06 (padre):")
             st.dataframe(_df2)
 
