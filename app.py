@@ -9535,19 +9535,13 @@ elif modulo.startswith("📊"):
 
                 # Mapear sku_opcion por prefijo → categoría de control
                 _PREFIX_CAT = {
-                    'CHUX': 'CH POSTA',
-                    'CHUSIT': 'CH POSTA',
-                    'FILX': 'CH FILETE',
-                    'FILSIT': 'CH FILETE',
-                    'LOMX': 'LOMITO',
-                    'LOMSIT': 'LOMITO',
-                    'AVEX': 'AVE/POLLO',
-                    'AVESIT': 'AVE/POLLO',
-                    'HAMX': 'HAMBURGUESA',
-                    'HAMSIT': 'HAMBURGUESA',
+                    'CHUX': 'CH POSTA', 'CHUSIT': 'CH POSTA',
+                    'FILX': 'CH FILETE', 'FILSIT': 'CH FILETE',
+                    'LOMX': 'LOMITO', 'LOMSIT': 'LOMITO',
+                    'AVEX': 'AVE/POLLO', 'AVESIT': 'AVE/POLLO',
+                    'HAMX': 'HAMBURGUESA', 'HAMSIT': 'HAMBURGUESA',
                     'HAQX': 'HAMB QUINOA',
-                    'PERX': 'PERNIL',
-                    'PERSIT': 'PERNIL',
+                    'PERX': 'PERNIL', 'PERSIT': 'PERNIL',
                     'MECX': 'MECHADA',
                     'PANX': 'Pan',
                 }
@@ -9560,13 +9554,33 @@ elif modulo.startswith("📊"):
                 _ae06['categoria'] = _ae06['sku_opcion'].apply(_get_cat)
                 _ae06['cant_opcion_total'] = pd.to_numeric(_ae06['cant_opcion_total'], errors='coerce').fillna(0)
 
+                # Tabla 1: resumen por categoría
+                st.markdown("**① Resumen por categoría**")
                 _resumen = _ae06.groupby('categoria')['cant_opcion_total'].sum().reset_index()
                 _resumen.columns = ['Categoría', 'Unidades']
                 _resumen = _resumen.sort_values('Unidades', ascending=False)
                 _resumen['Unidades'] = _resumen['Unidades'].round(1)
-
-                st.markdown("**AE06 — Opciones por categoría (Marzo 2026 · Vitacura)**")
                 st.dataframe(_resumen, use_container_width=True, hide_index=True)
+
+                # Tabla 2: detalle por sku_opcion
+                st.markdown("**② Detalle por SKU opción**")
+                _det = _ae06[['sku_opcion','ba_opcion','categoria','cant_opcion_total']].copy()
+                _det['cant_opcion_total'] = _det['cant_opcion_total'].round(1)
+                _det = _det.sort_values('cant_opcion_total', ascending=False)
+                st.dataframe(_det, use_container_width=True, hide_index=True)
+
+                # Tabla 3: ventas padre vs total opciones
+                st.markdown("**③ Ventas AE06 (padre) vs total opciones**")
+                _cant_padre = float(_df2['cant_padre'].iloc[0]) if not _df2.empty else 0
+                _tot_opciones = _ae06['cant_opcion_total'].sum()
+                st.dataframe(pd.DataFrame({
+                    'Métrica': ['Ventas padre (AE06)', 'Total opciones registradas', 'Sin opción registrada'],
+                    'Unidades': [
+                        round(_cant_padre, 0),
+                        round(_tot_opciones, 1),
+                        round(_cant_padre - _tot_opciones, 1)
+                    ]
+                }), use_container_width=True, hide_index=True)
             else:
                 st.warning("Sin resultados")
 
