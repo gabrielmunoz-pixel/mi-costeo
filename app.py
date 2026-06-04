@@ -9549,6 +9549,7 @@ elif modulo.startswith("📊"):
         _cp_btn = st.button("📊 Generar", key="cp_btn", type="primary")
 
         if _cp_btn:
+            st.session_state.pop('cp_data', None)
             with st.spinner("Consultando ventas..."):
                 # Query ventas acotada a SKUs incluidos
                 _cp_df_v = run_query(f"""
