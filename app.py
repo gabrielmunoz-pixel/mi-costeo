@@ -9651,10 +9651,11 @@ elif modulo.startswith("📊"):
                     {0:'Lunes',1:'Martes',2:'Miércoles',3:'Jueves',4:'Viernes',5:'Sábado',6:'Domingo'})
                 _cp_df_op['semana'] = 'S' + (_cp_df_op['fecha_dt'].dt.isocalendar().week -
                     _cp_df_op['fecha_dt'].dt.isocalendar().week.min() + 1).astype(str)
-                _cp_df_op['categoria'] = _cp_df_op['sku_opcion'].map(_CP_SKU_CAT)
-                _cp_df_op_clean = _cp_df_op.rename(columns={'uds_opcion':'uds'})[
-                    ['fecha_venta','sku_opcion','uds','fecha_dt','dia','semana','categoria']
-                ].rename(columns={'sku_opcion':'sku_producto'})
+                # Categoría desde el PADRE — igual que rentabilidad
+                _cp_df_op['categoria'] = _cp_df_op['sku_padre'].map(_CP_SKU_CAT)
+                _cp_df_op_clean = _cp_df_op.rename(columns={'uds_opcion':'uds','sku_opcion':'sku_producto'})[
+                    ['fecha_venta','sku_producto','uds','fecha_dt','dia','semana','categoria']
+                ]
                 _cp_all = pd.concat([
                     _cp_df_v[['fecha_venta','sku_producto','uds','fecha_dt','dia','semana','categoria']],
                     _cp_df_op_clean
