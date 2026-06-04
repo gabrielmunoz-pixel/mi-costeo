@@ -9439,37 +9439,92 @@ elif modulo.startswith("📊"):
     elif informe_sel == "ControlProduccion":
         import calendar as _cp_cal
 
-        # ── Lista de SKUs incluidos (hoja Incluidos de ANALIS_1.XLS) ──
-        _CP_SKUS_INCLUIDOS = [
-            'AVE-001','AVE-005','AVE-004','AVE-003','AVE-002','AVE-010','AVE-006','AVE-009',
-            'AE22','ENS-003','NIN-001','NIN-008','PLC-010','PAC-015','ENS-019','PAC-002',
-            'FIL-001','FIL-005','FIL-004','FIL-003','FIL-002','FIL-010','FIL-006','NIN-009',
-            'NIN-003','PAC-014','CHU-001','CHU-005','CHU-004','CHU-003','CHU-007','CHU-002',
-            'AE24','CHU-010','CHU-006','CHU-008','AE25','AE02','PAC-001','AE05','AE09','AE08',
-            'AE07','AE06','AE10','PLC-019','AE26','PLC-018','PLC-002','PLC-001','PLC-020',
-            'PLA-003','PLA-004','PLA-001','PLA-002','PLC-004','PLC-006','PLC-007','HAC-013',
-            'HAC-001','SUB002','AE01','SUB003','NIN-004','NIN-007','NIN-006','HAQ-005',
-            'HAQ-001','HAQ-002','HAQ-004','HAQ-003','HAC-021','HAC-009','HAC-022','HAC-010',
-            'SUB001','HAC-003','PLC-014','HAM-001','HAM-005','HAC-015','HAM-004','HAM-003',
-            'HAM-007','HAM-002','HAM-010','HAM-006','HAM-009','PLC-013','AE04','AE03',
-            'HAC-019','HAC-007','HAC-024','HAC-012','HAC-018','HAC-006','HAC-020','HAC-008',
-            'HAC-017','HAC-005','HAC-014','HAC-002','LOM-001','LOM-005','LOM-004','LOM-003',
-            'LOM-002','LOM-010','LOM-006','PLC-008','PLC-022','MEC-001','MEC-005','HAC-023',
-            'MEC-004','MEC-003','MEC-002','MEC-010','MEC-006','PER-001','PER-005','PER-004',
-            'PER-003','PER-007','PER-002','PER-010','PER-006','PER-009','ENS-007','AE23',
-            'PLC-012','PLC-021','NIN-011'
+        # ── SKU → Categoría de control ───────────────────────────
+        _CP_SKU_CAT = {
+            'ENS-001':'ATÚN','ENS-008':'ATÚN','PLC-016':'ATÚN',
+            'PAC-005':'ATÚN','PAC-004':'ATÚN','PAC-018':'ATÚN',
+            'AVE-001':'AVE/POLLO','AVE-005':'AVE/POLLO','AVE-004':'AVE/POLLO',
+            'AVE-003':'AVE/POLLO','AVE-002':'AVE/POLLO','AVE-010':'AVE/POLLO',
+            'AVE-006':'AVE/POLLO','AVE-009':'AVE/POLLO','AE22':'AVE/POLLO',
+            'ENS-003':'AVE/POLLO','NIN-001':'AVE/POLLO','NIN-008':'AVE/POLLO',
+            'PLC-010':'AVE/POLLO',
+            'PAC-015':'CARPACIO FILETE','ENS-019':'CARPACIO FILETE',
+            'FIL-001':'CH FILETE','FIL-005':'CH FILETE','FIL-004':'CH FILETE',
+            'FIL-003':'CH FILETE','FIL-002':'CH FILETE','FIL-010':'CH FILETE',
+            'FIL-006':'CH FILETE',
+            'NIN-009':'CH NIÑO','NIN-003':'CH NIÑO',
+            'PAC-014':'CH PARA ESPECIALES',
+            'CHU-001':'CH POSTA','CHU-005':'CH POSTA','CHU-004':'CH POSTA',
+            'CHU-003':'CH POSTA','CHU-007':'CH POSTA','CHU-002':'CH POSTA',
+            'AE24':'CH POSTA','CHU-010':'CH POSTA','CHU-006':'CH POSTA',
+            'CHU-008':'CH POSTA','AE05':'CH POSTA','AE09':'CH POSTA',
+            'AE08':'CH POSTA','AE07':'CH POSTA','AE06':'CH POSTA','AE10':'CH POSTA',
+            'PLC-019':'COSTILLAS','AE26':'COSTILLAS','PLC-018':'COSTILLAS',
+            'PLC-002':'COSTILLAS','PLC-001':'COSTILLAS','PLC-020':'COSTILLAS',
+            'AE25':'CRUDO ALEMÁN','AE02':'CRUDO ALEMÁN','PAC-001':'CRUDO ALEMÁN',
+            'PAC-002':'CRUDO FILETE',
+            'PLA-003':'ESCALOPAS','PLA-004':'ESCALOPAS','PLA-001':'ESCALOPAS','PLA-002':'ESCALOPAS',
+            'PLC-004':'FILETE MEDALLON','PLC-006':'FILETE MEDALLON','PLC-007':'FILETE MEDALLON',
+            'HAC-013':'HAM GRAN EXPERTO','HAC-001':'HAM GRAN EXPERTO','SUB002':'HAM GRAN EXPERTO',
+            'AE01':'HAMB NIÑO','SUB003':'HAMB NIÑO','NIN-004':'HAMB NIÑO',
+            'NIN-007':'HAMB NIÑO','NIN-006':'HAMB NIÑO',
+            'HAQ-005':'HAMB QUINOA','HAQ-001':'HAMB QUINOA','HAQ-002':'HAMB QUINOA',
+            'HAQ-004':'HAMB QUINOA','HAQ-003':'HAMB QUINOA',
+            'HAC-021':'HAMBURGUESA','HAC-009':'HAMBURGUESA','HAC-022':'HAMBURGUESA',
+            'HAC-010':'HAMBURGUESA','SUB001':'HAMBURGUESA','HAC-003':'HAMBURGUESA',
+            'PLC-014':'HAMBURGUESA','HAM-001':'HAMBURGUESA','HAM-005':'HAMBURGUESA',
+            'HAC-015':'HAMBURGUESA','HAM-004':'HAMBURGUESA','HAM-003':'HAMBURGUESA',
+            'HAM-007':'HAMBURGUESA','HAM-002':'HAMBURGUESA','HAM-010':'HAMBURGUESA',
+            'HAM-006':'HAMBURGUESA','HAM-009':'HAMBURGUESA','PLC-013':'HAMBURGUESA',
+            'AE04':'HAMBURGUESA','AE03':'HAMBURGUESA','HAC-019':'HAMBURGUESA',
+            'HAC-007':'HAMBURGUESA','HAC-024':'HAMBURGUESA','HAC-012':'HAMBURGUESA',
+            'HAC-018':'HAMBURGUESA','HAC-006':'HAMBURGUESA','HAC-020':'HAMBURGUESA',
+            'HAC-008':'HAMBURGUESA','HAC-017':'HAMBURGUESA','HAC-005':'HAMBURGUESA',
+            'HAC-014':'HAMBURGUESA','HAC-002':'HAMBURGUESA',
+            'LOM-001':'LOMITO','LOM-005':'LOMITO','LOM-004':'LOMITO',
+            'LOM-003':'LOMITO','LOM-002':'LOMITO','LOM-010':'LOMITO','LOM-006':'LOMITO',
+            'PLC-008':'LOMO LISO','PLC-022':'LOMO VETADO',
+            'MEC-001':'MECHADA','MEC-005':'MECHADA','HAC-023':'MECHADA',
+            'MEC-004':'MECHADA','MEC-003':'MECHADA','MEC-002':'MECHADA',
+            'MEC-010':'MECHADA','MEC-006':'MECHADA',
+            'PER-001':'PERNIL','PER-005':'PERNIL','PER-004':'PERNIL',
+            'PER-003':'PERNIL','PER-007':'PERNIL','PER-002':'PERNIL',
+            'PER-010':'PERNIL','PER-006':'PERNIL','PER-009':'PERNIL',
+            'ENS-007':'POLLO PANKO','AE23':'POLLO PANKO','PLC-012':'POLLO PANKO',
+            'PLC-021':'POLLO PANKO','NIN-011':'POLLO PANKO',
+        }
+        _CP_CATS_ORDER = [
+            'CH POSTA','CH FILETE','CH NIÑO','CH PARA ESPECIALES',
+            'CRUDO ALEMÁN','CRUDO FILETE',
+            'COSTILLAS','ESCALOPAS',
+            'HAMBURGUESA','HAM GRAN EXPERTO','HAMB NIÑO','HAMB QUINOA',
+            'FILETE MEDALLON','CARPACIO FILETE',
+            'LOMITO','LOMO LISO','LOMO VETADO',
+            'MECHADA','PERNIL',
+            'POLLO PANKO','AVE/POLLO','ATÚN',
         ]
-        _CP_SKUS_SQL = "','".join(_CP_SKUS_INCLUIDOS)
+        _CP_CAT_COLOR = {
+            'CH POSTA':'#C00000','CH FILETE':'#C00000','CH NIÑO':'#C00000',
+            'CH PARA ESPECIALES':'#C00000','CRUDO ALEMÁN':'#C00000','CRUDO FILETE':'#C00000',
+            'COSTILLAS':'#833C00','ESCALOPAS':'#833C00',
+            'HAMBURGUESA':'#375623','HAM GRAN EXPERTO':'#375623',
+            'HAMB NIÑO':'#375623','HAMB QUINOA':'#375623',
+            'FILETE MEDALLON':'#1F3864','CARPACIO FILETE':'#1F3864',
+            'LOMITO':'#7030A0','LOMO LISO':'#7030A0','LOMO VETADO':'#7030A0',
+            'MECHADA':'#4472C4',
+            'PERNIL':'#ED7D31',
+            'POLLO PANKO':'#70AD47','AVE/POLLO':'#70AD47',
+            'ATÚN':'#00B0F0',
+        }
+        _CP_SKUS_SQL = "','".join(_CP_SKU_CAT.keys())
+        _CP_DIAS = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo']
+        _CP_LOCALES = ['Vitacura','Las Condes','Chicureo','La Dehesa','Macul',
+                       'La Reina','Quilin','Nueva Providencia','Providencia','Los Trapenses']
 
         st.markdown("### 🏭 Control de Producción")
 
         # ── Filtros ──────────────────────────────────────────────
-        _cp_c1, _cp_c2, _cp_c3 = st.columns([2,2,2])
-
-        _CP_LOCALES = ["Vitacura","Las Condes","Chicureo","La Dehesa","Macul",
-                       "La Reina","Quilin","Nueva Providencia","Providencia","Los Trapenses"]
-        _CP_DIAS    = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"]
-
+        _cp_c1, _cp_c2, _cp_c3 = st.columns([2,2,3])
         with _cp_c1:
             if 'cp_meses_cache' not in st.session_state:
                 st.session_state['cp_meses_cache'] = run_query("""
@@ -9486,37 +9541,31 @@ elif modulo.startswith("📊"):
         with _cp_c3:
             _cp_dias_sel = st.multiselect("📆 Días", _CP_DIAS, default=_CP_DIAS, key="cp_dias")
 
-        _cp_m    = _cp_meses[_cp_idx]
-        _cp_fi   = _cp_m.replace(day=1)
-        _cp_ff   = _cp_m.replace(day=_cp_cal.monthrange(_cp_m.year, _cp_m.month)[1])
+        _cp_m   = _cp_meses[_cp_idx]
+        _cp_fi  = _cp_m.replace(day=1)
+        _cp_ff  = _cp_m.replace(day=_cp_cal.monthrange(_cp_m.year, _cp_m.month)[1])
+        _cp_lbl = _cp_mlabels[_cp_idx]
 
         _cp_btn = st.button("📊 Generar", key="cp_btn", type="primary")
 
         if _cp_btn:
-            with st.spinner("Consultando ventas y recetas..."):
-
-                # ── 1. Ventas padre por fecha ────────────────────
-                _cp_q_v = f"""
-                    SELECT fecha_venta, sku_producto, nombre_producto,
-                           SUM(cantidad_vendida) AS uds
+            with st.spinner("Consultando ventas..."):
+                # Query ventas acotada a SKUs incluidos
+                _cp_df_v = run_query(f"""
+                    SELECT fecha_venta, sku_producto, SUM(cantidad_vendida) AS uds
                     FROM ventas
                     WHERE fecha_venta BETWEEN :fi AND :ff
                       AND es_opcion = false
                       AND UPPER(local) = UPPER(:loc)
                       AND local IS NOT NULL
                       AND sku_producto IN ('{_CP_SKUS_SQL}')
-                    GROUP BY fecha_venta, sku_producto, nombre_producto
-                """
-                _cp_df_v = run_query(_cp_q_v, {'fi':str(_cp_fi),'ff':str(_cp_ff),'loc':_cp_local})
+                    GROUP BY fecha_venta, sku_producto
+                """, {'fi':str(_cp_fi),'ff':str(_cp_ff),'loc':_cp_local})
 
-                # ── 2. Opciones — misma lógica que rentabilidad ──
+                # Opciones — misma lógica rentabilidad, solo padres incluidos
                 _ba_sql = "', '".join(BA_COSTEABLES)
-                _cp_q_op = f"""
-                    WITH skus_con_opciones AS (
-                        SELECT DISTINCT codigo_venta AS sku_padre FROM recetas
-                        WHERE es_opcion IN (1,2,3,6)
-                    ),
-                    padres AS (
+                _cp_df_op = run_query(f"""
+                    WITH padres AS (
                         SELECT fecha_venta, id_orden, ab_categoria,
                                sku_producto AS sku_padre,
                                SUM(cantidad_vendida) AS cant_padre
@@ -9525,7 +9574,6 @@ elif modulo.startswith("📊"):
                           AND es_opcion = false
                           AND UPPER(local) = UPPER(:loc)
                           AND sku_producto IN ('{_CP_SKUS_SQL}')
-                          AND sku_producto IN (SELECT sku_padre FROM skus_con_opciones)
                         GROUP BY fecha_venta, id_orden, ab_categoria, sku_producto
                     ),
                     total_ab AS (
@@ -9549,290 +9597,236 @@ elif modulo.startswith("📊"):
                     JOIN total_ab t ON t.id_orden=p.id_orden AND t.ab_categoria=p.ab_categoria
                     JOIN opciones_raw o ON o.id_orden=p.id_orden AND o.ab_categoria=p.ab_categoria
                     GROUP BY p.fecha_venta, p.sku_padre, o.sku_opcion
-                """
-                _cp_df_op = run_query(_cp_q_op, {'fi':str(_cp_fi),'ff':str(_cp_ff),'loc':_cp_local})
+                """, {'fi':str(_cp_fi),'ff':str(_cp_ff),'loc':_cp_local})
 
-                # ── 3. Recetas ───────────────────────────────────
-                _cp_df_rec = run_query("""
-                    SELECT codigo_venta, sku_ingrediente, nombre_ingrediente,
-                           cant_real, cant_efic, rendimiento, porcion,
-                           es_procesado, um_salida
-                    FROM recetas
-                """)
-
-            # ── Explotar ingredientes por fecha ──────────────────
+            # ── Procesar ─────────────────────────────────────────
             _cp_df_v['uds'] = pd.to_numeric(_cp_df_v['uds'], errors='coerce').fillna(0)
-            _cp_df_v['dia_semana'] = pd.to_datetime(_cp_df_v['fecha_venta']).dt.dayofweek  # 0=lun
-            _cp_df_v['semana_mes'] = pd.to_datetime(_cp_df_v['fecha_venta']).dt.isocalendar().week.astype(int)
-            _cp_df_v['dia_nombre'] = _cp_df_v['dia_semana'].map(
-                {0:'Lunes',1:'Martes',2:'Miércoles',3:'Jueves',4:'Viernes',5:'Sábado',6:'Domingo'})
-
-            # Asignar número de semana dentro del mes (S1,S2,S3,S4)
             _cp_df_v['fecha_dt'] = pd.to_datetime(_cp_df_v['fecha_venta'])
-            _min_week = _cp_df_v['semana_mes'].min()
-            _cp_df_v['semana_label'] = 'S' + (_cp_df_v['semana_mes'] - _min_week + 1).astype(str)
+            _cp_df_v['dia'] = _cp_df_v['fecha_dt'].dt.dayofweek.map(
+                {0:'Lunes',1:'Martes',2:'Miércoles',3:'Jueves',4:'Viernes',5:'Sábado',6:'Domingo'})
+            _cp_df_v['semana'] = 'S' + (_cp_df_v['fecha_dt'].dt.isocalendar().week -
+                _cp_df_v['fecha_dt'].dt.isocalendar().week.min() + 1).astype(str)
+            _cp_df_v['categoria'] = _cp_df_v['sku_producto'].map(_CP_SKU_CAT)
 
-            # Filtrar días seleccionados
-            _cp_df_v = _cp_df_v[_cp_df_v['dia_nombre'].isin(_cp_dias_sel)]
-
-            def _explotar_ingredientes(df_v, df_rec):
-                """Explota ventas contra recetas incluyendo procesados."""
-                df_rec = df_rec.copy()
-                df_rec['cant_real'] = pd.to_numeric(df_rec['cant_real'], errors='coerce').fillna(0)
-                df_rec['cant_efic'] = pd.to_numeric(df_rec['cant_efic'], errors='coerce').fillna(0)
-                df_rec['rendimiento'] = pd.to_numeric(df_rec['rendimiento'], errors='coerce').fillna(0)
-
-                df_dir  = df_rec[df_rec['es_procesado']==False].copy()
-                df_proc = df_rec[df_rec['es_procesado']==True].copy()
-
-                rows = []
-                for _, vrow in df_v.iterrows():
-                    sku_v = vrow['sku_producto']
-                    uds   = vrow['uds']
-                    fecha = vrow['fecha_venta']
-                    dia   = vrow['dia_nombre']
-                    sem   = vrow['semana_label']
-                    nom_p = vrow['nombre_producto']
-
-                    ing_rows = df_dir[df_dir['codigo_venta']==sku_v]
-                    for _, ing in ing_rows.iterrows():
-                        if ing['sku_ingrediente'].startswith('PRO-'):
-                            # Explotar procesado
-                            pro_sku  = ing['sku_ingrediente']
-                            cant_pro = ing['cant_real']
-                            sub_rows = df_proc[df_proc['codigo_venta']==pro_sku]
-                            if sub_rows.empty: continue
-                            rend_total = df_proc[df_proc['codigo_venta']==pro_sku]['rendimiento'].max()
-                            if not rend_total or rend_total <= 1:
-                                rend_total = sub_rows['cant_real'].sum() or 1
-                            porcion = sub_rows['porcion'].iloc[0] if not sub_rows.empty else 0
-                            for _, sub in sub_rows.iterrows():
-                                if porcion == 1:
-                                    consumo = uds * cant_pro * sub['cant_real']
-                                else:
-                                    consumo = uds * (cant_pro / rend_total) * sub['cant_real']
-                                rows.append({'fecha':fecha,'dia':dia,'semana':sem,
-                                    'sku_plato':sku_v,'nombre_plato':nom_p,
-                                    'sku_ingrediente':sub['sku_ingrediente'],
-                                    'nombre_ingrediente':sub['nombre_ingrediente'],
-                                    'um_salida':sub['um_salida'],
-                                    'uds_plato':uds,'kg':consumo})
-                        else:
-                            consumo = uds * ing['cant_real']
-                            rows.append({'fecha':fecha,'dia':dia,'semana':sem,
-                                'sku_plato':sku_v,'nombre_plato':nom_p,
-                                'sku_ingrediente':ing['sku_ingrediente'],
-                                'nombre_ingrediente':ing['nombre_ingrediente'],
-                                'um_salida':ing['um_salida'],
-                                'uds_plato':uds,'kg':consumo})
-                return pd.DataFrame(rows)
-
-            _cp_df_exp = _explotar_ingredientes(_cp_df_v, _cp_df_rec)
-
-            # Agregar opciones al df de ventas
+            # Agregar opciones mapeadas a su categoría
             if not _cp_df_op.empty:
                 _cp_df_op['uds_opcion'] = pd.to_numeric(_cp_df_op['uds_opcion'], errors='coerce').fillna(0)
-                _cp_df_op['dia_semana'] = pd.to_datetime(_cp_df_op['fecha_venta']).dt.dayofweek
-                _cp_df_op['dia_nombre'] = _cp_df_op['dia_semana'].map(
+                _cp_df_op['fecha_dt'] = pd.to_datetime(_cp_df_op['fecha_venta'])
+                _cp_df_op['dia'] = _cp_df_op['fecha_dt'].dt.dayofweek.map(
                     {0:'Lunes',1:'Martes',2:'Miércoles',3:'Jueves',4:'Viernes',5:'Sábado',6:'Domingo'})
-                _cp_df_op['semana_mes'] = pd.to_datetime(_cp_df_op['fecha_venta']).dt.isocalendar().week.astype(int)
-                _cp_df_op['semana_label'] = 'S' + (_cp_df_op['semana_mes'] - _min_week + 1).astype(str)
-                _cp_df_op = _cp_df_op[_cp_df_op['dia_nombre'].isin(_cp_dias_sel)]
+                _cp_df_op['semana'] = 'S' + (_cp_df_op['fecha_dt'].dt.isocalendar().week -
+                    _cp_df_op['fecha_dt'].dt.isocalendar().week.min() + 1).astype(str)
+                _cp_df_op['categoria'] = _cp_df_op['sku_opcion'].map(_CP_SKU_CAT)
+                _cp_df_op_clean = _cp_df_op.rename(columns={'uds_opcion':'uds'})[
+                    ['fecha_venta','sku_opcion','uds','fecha_dt','dia','semana','categoria']
+                ].rename(columns={'sku_opcion':'sku_producto'})
+                _cp_all = pd.concat([
+                    _cp_df_v[['fecha_venta','sku_producto','uds','fecha_dt','dia','semana','categoria']],
+                    _cp_df_op_clean
+                ], ignore_index=True)
+            else:
+                _cp_all = _cp_df_v[['fecha_venta','sku_producto','uds','fecha_dt','dia','semana','categoria']].copy()
 
-                # Explotar opciones como ventas
-                _cp_op_v = _cp_df_op.rename(columns={
-                    'sku_opcion':'sku_producto','uds_opcion':'uds'})
-                _cp_op_v['nombre_producto'] = _cp_op_v['sku_producto']
-                _cp_df_exp_op = _explotar_ingredientes(_cp_op_v, _cp_df_rec)
-                _cp_df_exp = pd.concat([_cp_df_exp, _cp_df_exp_op], ignore_index=True)
+            _cp_all = _cp_all[_cp_all['dia'].isin(_cp_dias_sel)]
+            _cp_all = _cp_all[_cp_all['categoria'].notna()]
 
             st.session_state['cp_data'] = {
-                'exp': _cp_df_exp, 'v': _cp_df_v,
-                'lbl': _cp_mlabels[_cp_idx], 'local': _cp_local
+                'all': _cp_all, 'lbl': _cp_lbl, 'local': _cp_local,
+                'dias': _cp_dias_sel,
             }
 
         if st.session_state.get('cp_data'):
-            _cpd   = st.session_state['cp_data']
-            _exp   = _cpd['exp']
-            _df_v  = _cpd['v']
-            _lbl   = _cpd['lbl']
-            _loc   = _cpd['local']
+            _cpd    = st.session_state['cp_data']
+            _all    = _cpd['all']
+            _lbl    = _cpd['lbl']
+            _loc    = _cpd['local']
 
-            if _exp.empty:
+            if _all.empty:
                 st.warning("Sin datos para el período y local seleccionados.")
             else:
-                st.markdown(f"**{_loc} — {_lbl}**")
+                _semanas = sorted(_all['semana'].unique())
 
-                # ── Stats por plato + día ─────────────────────────
-                def _cp_stats(series):
+                def _stats(series):
                     s = series.dropna()
-                    if s.empty: return {'min':0,'max':0,'prom':0,'mediana':0,'moda':0}
-                    try: moda = float(_cp_stats_mode(s))
-                    except: moda = 0
-                    return {
-                        'min':    round(s.min(),2),
-                        'max':    round(s.max(),2),
-                        'prom':   round(s.mean(),2),
-                        'mediana':round(s.median(),2),
-                        'moda':   round(moda,2),
-                    }
+                    if s.empty: return (0,0,0,0,0)
+                    m = s.mode()
+                    moda = float(m.iloc[0]) if not m.empty else 0
+                    return (round(s.min(),1), round(s.max(),1),
+                            round(s.mean(),1), round(s.median(),1), round(moda,1))
 
-                def _cp_stats_mode(s):
-                    try:
-                        m = s.mode()
-                        return float(m.iloc[0]) if not m.empty else 0
-                    except:
-                        return 0
+                # ── KPIs globales ─────────────────────────────────
+                st.markdown(f"""
+                <div style="background:#1F3864;border-radius:10px;padding:14px 20px;
+                            display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+                    <div style="color:#fff;font-size:1.2rem;font-weight:800">🏭 {_loc}</div>
+                    <div style="color:#acd4ff;font-size:0.95rem">{_lbl}</div>
+                    <div style="color:#fff;font-size:0.9rem">
+                        <b>{int(_all['uds'].sum()):,}</b> uds totales ·
+                        <b>{len(_all['categoria'].unique())}</b> categorías ·
+                        <b>{len(_semanas)}</b> semanas
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
 
-                # Ventas de platos por día (sin ingredientes)
-                _uds_dia = _df_v.groupby(['nombre_producto','dia_nombre','semana_label'])['uds'].sum().reset_index()
+                # ── Una card por categoría ────────────────────────
+                for _cat in _CP_CATS_ORDER:
+                    _cd = _all[_all['categoria']==_cat]
+                    if _cd.empty: continue
 
-                # Tabs por plato
-                _platos = sorted(_df_v['nombre_producto'].unique())
-                _dias_orden = {d:i for i,d in enumerate(_CP_DIAS)}
+                    _clr = _CP_CAT_COLOR.get(_cat, '#1F3864')
+                    _tot = int(_cd['uds'].sum())
 
-                st.markdown(f"**{len(_platos)} platos encontrados**")
+                    # Agrupar por fecha para estadísticas diarias
+                    _by_date_dia = _cd.groupby(['fecha_venta','dia'])['uds'].sum().reset_index()
 
-                for _plato in _platos:
-                    with st.expander(f"🍽️ {_plato}"):
-                        _pu = _uds_dia[_uds_dia['nombre_producto']==_plato]
-                        _semanas = sorted(_pu['semana_label'].unique())
+                    with st.expander(f"**{_cat}** — {_tot:,} uds en el período", expanded=False):
+                        # Header de color
+                        st.markdown(f"""
+                        <div style="background:{_clr};border-radius:8px;padding:10px 16px;
+                                    margin-bottom:12px;display:flex;justify-content:space-between">
+                            <span style="color:#fff;font-weight:700;font-size:1rem">{_cat}</span>
+                            <span style="color:rgba(255,255,255,0.8);font-size:0.85rem">
+                                Total período: {_tot:,} uds
+                            </span>
+                        </div>
+                        """, unsafe_allow_html=True)
 
-                        # ── Tabla estadísticas por día ────────────
-                        st.markdown("**Unidades vendidas por día de semana**")
+                        # Tabla estadísticas por día
                         _stat_rows = []
                         for _dia in _CP_DIAS:
                             if _dia not in _cp_dias_sel: continue
-                            _dseries = _pu[_pu['dia_nombre']==_dia]['uds']
-                            _st = _cp_stats(_dseries)
-                            _row = {'Día':_dia, **_st}
-                            # Semanas
+                            _ds = _by_date_dia[_by_date_dia['dia']==_dia]['uds']
+                            _mn,_mx,_pr,_med,_mod = _stats(_ds)
+                            _row = {
+                                'Día': _dia,
+                                'Días con venta': int((_ds > 0).sum()),
+                                'Mín': _mn,
+                                'Máx': _mx,
+                                'Promedio': _pr,
+                                'Mediana': _med,
+                                'Moda': _mod,
+                            }
                             for _s in _semanas:
-                                _sv = _pu[(_pu['dia_nombre']==_dia)&(_pu['semana_label']==_s)]['uds'].sum()
+                                _sv = _cd[(_cd['dia']==_dia)&(_cd['semana']==_s)]['uds'].sum()
                                 _row[_s] = round(_sv,1)
                             _stat_rows.append(_row)
 
-                        _stat_df = pd.DataFrame(_stat_rows)
-                        if not _stat_df.empty:
-                            st.dataframe(_stat_df, use_container_width=True, hide_index=True)
-
-                        # ── Tabla ingredientes ───────────────────
-                        st.markdown("**Explosión de ingredientes (kg/unidad)**")
-                        _pi = _exp[_exp['nombre_plato']==_plato]
-                        if not _pi.empty:
-                            _ing_stats = []
-                            for _ing in _pi['nombre_ingrediente'].unique():
-                                _is = _pi[_pi['nombre_ingrediente']==_ing]
-                                _ing_stat_rows = []
-                                for _dia in _CP_DIAS:
-                                    if _dia not in _cp_dias_sel: continue
-                                    _ds = _is[_is['dia']==_dia]['kg']
-                                    _st2 = _cp_stats(_ds)
-                                    _row2 = {'Ingrediente':_ing,'Día':_dia,**_st2}
-                                    for _s in _semanas:
-                                        _sv2 = _is[(_is['dia']==_dia)&(_is['semana']==_s)]['kg'].sum()
-                                        _row2[_s] = round(_sv2,3)
-                                    _ing_stat_rows.append(_row2)
-                                _ing_stats.extend(_ing_stat_rows)
-                            if _ing_stats:
-                                st.dataframe(pd.DataFrame(_ing_stats), use_container_width=True, hide_index=True)
+                        if _stat_rows:
+                            _stat_df = pd.DataFrame(_stat_rows)
+                            st.dataframe(
+                                _stat_df.style
+                                    .background_gradient(subset=['Promedio'], cmap='Blues')
+                                    .format({'Mín':'{:.0f}','Máx':'{:.0f}',
+                                             'Promedio':'{:.1f}','Mediana':'{:.1f}','Moda':'{:.0f}',
+                                             **{s:'{:.0f}' for s in _semanas}}),
+                                use_container_width=True, hide_index=True
+                            )
 
                 # ── Export Excel ─────────────────────────────────
                 st.markdown("---")
                 if st.button("⬇️ Exportar Excel", key="cp_export"):
-                    import io as _cp_io
+                    import io as _cp_io, re as _cp_re
                     from openpyxl import Workbook as _CPWb
-                    from openpyxl.styles import Font as _CPF, PatternFill as _CPPF, Alignment as _CPA
+                    from openpyxl.styles import (Font as _CPF, PatternFill as _CPPF,
+                                                  Alignment as _CPA, Border as _CPBord,
+                                                  Side as _CPSide)
 
                     _cpwb = _CPWb()
                     _cpwb.remove(_cpwb.active)
+                    _cp_ctr = _CPA(horizontal="center", vertical="center")
+                    _cp_lft = _CPA(horizontal="left",   vertical="center")
+                    _cp_rgt = _CPA(horizontal="right",  vertical="center")
+                    _thin   = _CPBord(
+                        bottom=_CPSide(style="thin", color="D0D7E3"),
+                        right=_CPSide(style="thin",  color="D0D7E3"),
+                        left=_CPSide(style="thin",   color="D0D7E3"),
+                        top=_CPSide(style="thin",    color="D0D7E3"),
+                    )
 
-                    _cp_hdr_fill = _CPPF("solid", start_color="1F3864", end_color="1F3864")
-                    _cp_hdr_font = _CPF(name="Calibri", bold=True, size=10, color="FFFFFF")
-                    _cp_alt_fill = _CPPF("solid", start_color="F0F4FB", end_color="F0F4FB")
-                    _cp_ctr      = _CPA(horizontal="center", vertical="center")
-                    _cp_lft      = _CPA(horizontal="left",   vertical="center")
+                    # Hoja resumen
+                    _ws_sum = _cpwb.create_sheet("Resumen")
+                    _ws_sum.sheet_view.showGridLines = False
+                    _ws_sum.sheet_properties.tabColor = "1F3864"
 
-                    import re as _cp_re
-                    for _plato in _platos:
-                        _safe_name = _cp_re.sub(r'[\\/*?\[\]:]', '', _plato)[:31]
-                        _ws = _cpwb.create_sheet(_safe_name or f"Plato")
-                        _ws.sheet_view.showGridLines = False
+                    # Title
+                    _ncols = 2 + len(_CP_DIAS) + len(_semanas)
+                    from openpyxl.utils import get_column_letter as _gcl2
+                    _ws_sum.merge_cells(f"A1:{_gcl2(_ncols)}1")
+                    _tc = _ws_sum.cell(1, 1, f"CONTROL DE PRODUCCIÓN  ·  {_loc}  ·  {_lbl}")
+                    _tc.font = _CPF(name="Calibri", bold=True, size=14, color="FFFFFF")
+                    _tc.fill = _CPPF("solid", start_color="1F3864", end_color="1F3864")
+                    _tc.alignment = _cp_ctr
+                    _ws_sum.row_dimensions[1].height = 30
 
-                        # Title
-                        _ws.merge_cells("A1:L1")
-                        _tc = _ws.cell(1,1,f"{_plato}  ·  {_loc}  ·  {_lbl}")
-                        _tc.font=_CPF(name="Calibri",bold=True,size=12,color="FFFFFF")
-                        _tc.fill=_cp_hdr_fill; _tc.alignment=_cp_ctr
-                        _ws.row_dimensions[1].height=24
+                    # Sub-header días
+                    _ws_sum.cell(2, 1, "Categoría").font = _CPF(name="Calibri", bold=True, size=10, color="FFFFFF")
+                    _ws_sum.cell(2, 1).fill = _CPPF("solid", start_color="2E4A7A", end_color="2E4A7A")
+                    _ws_sum.cell(2, 1).alignment = _cp_ctr
+                    _ws_sum.cell(2, 2, "Stat").font = _CPF(name="Calibri", bold=True, size=10, color="FFFFFF")
+                    _ws_sum.cell(2, 2).fill = _CPPF("solid", start_color="2E4A7A", end_color="2E4A7A")
+                    _ws_sum.cell(2, 2).alignment = _cp_ctr
+                    for _di, _dia in enumerate([d for d in _CP_DIAS if d in _cp_dias_sel], 3):
+                        _ws_sum.cell(2, _di, _dia).font = _CPF(name="Calibri", bold=True, size=10, color="FFFFFF")
+                        _ws_sum.cell(2, _di).fill = _CPPF("solid", start_color="2E4A7A", end_color="2E4A7A")
+                        _ws_sum.cell(2, _di).alignment = _cp_ctr
+                    _n_dias_sel = len([d for d in _CP_DIAS if d in _cp_dias_sel])
+                    for _si, _s in enumerate(_semanas, 3 + _n_dias_sel):
+                        _ws_sum.cell(2, _si, _s).font = _CPF(name="Calibri", bold=True, size=10, color="FFFFFF")
+                        _ws_sum.cell(2, _si).fill = _CPPF("solid", start_color="375623", end_color="375623")
+                        _ws_sum.cell(2, _si).alignment = _cp_ctr
+                    _ws_sum.row_dimensions[2].height = 18
 
-                        _pu = _uds_dia[_uds_dia['nombre_producto']==_plato]
-                        _semanas = sorted(_pu['semana_label'].unique())
-                        _base_cols = ['Día','min','max','prom','mediana','moda'] + _semanas
+                    _xrow = 3
+                    for _cat in _CP_CATS_ORDER:
+                        _cd = _all[_all['categoria']==_cat]
+                        if _cd.empty: continue
+                        _clr_hex = _CP_CAT_COLOR.get(_cat,'#1F3864').lstrip('#')
+                        _by_date_dia = _cd.groupby(['fecha_venta','dia'])['uds'].sum().reset_index()
 
-                        # Section: Unidades
-                        _ws.cell(3,1,"UNIDADES VENDIDAS").font=_CPF(name="Calibri",bold=True,size=10,color="FFFFFF")
-                        _ws.cell(3,1).fill=_cp_hdr_fill
-                        _ws.merge_cells(f"A3:{chr(64+len(_base_cols))}3")
+                        for _si2, _stat_name in enumerate(['Promedio','Mediana','Moda','Mín','Máx']):
+                            # Cat name only on first row
+                            _c = _ws_sum.cell(_xrow, 1, _cat if _si2==0 else '')
+                            _c.font = _CPF(name="Calibri", bold=(_si2==0), size=10, color="FFFFFF")
+                            _c.fill = _CPPF("solid", start_color=_clr_hex, end_color=_clr_hex)
+                            _c.alignment = _cp_lft; _c.border = _thin
 
-                        for _ci,_h in enumerate(_base_cols,1):
-                            _ch=_ws.cell(4,_ci,_h.upper())
-                            _ch.font=_cp_hdr_font; _ch.fill=_cp_hdr_fill; _ch.alignment=_cp_ctr
+                            _c2 = _ws_sum.cell(_xrow, 2, _stat_name)
+                            _c2.font = _CPF(name="Calibri", size=9, color="FFFFFF")
+                            _c2.fill = _CPPF("solid", start_color=_clr_hex, end_color=_clr_hex)
+                            _c2.alignment = _cp_ctr; _c2.border = _thin
 
-                        _wrow=5
-                        for _pi2,_dia in enumerate(_CP_DIAS):
-                            if _dia not in _cp_dias_sel: continue
-                            _dseries=_pu[_pu['dia_nombre']==_dia]['uds']
-                            _st=_cp_stats(_dseries)
-                            _fill=_cp_alt_fill if _pi2%2==0 else _CPPF("solid",start_color="FFFFFF",end_color="FFFFFF")
-                            vals=[_dia,_st['min'],_st['max'],_st['prom'],_st['mediana'],_st['moda']]
-                            for _s in _semanas:
-                                vals.append(round(_pu[(_pu['dia_nombre']==_dia)&(_pu['semana_label']==_s)]['uds'].sum(),1))
-                            for _ci,_v in enumerate(vals,1):
-                                _c=_ws.cell(_wrow,_ci,_v)
-                                _c.fill=_fill
-                                _c.alignment=_cp_lft if _ci==1 else _cp_ctr
-                            _wrow+=1
+                            _alt = _CPPF("solid", start_color="F7FAFF", end_color="F7FAFF") if _si2%2==0 else _CPPF("solid", start_color="FFFFFF", end_color="FFFFFF")
+                            for _di2, _dia in enumerate([d for d in _CP_DIAS if d in _cp_dias_sel], 3):
+                                _ds = _by_date_dia[_by_date_dia['dia']==_dia]['uds']
+                                _mn,_mx,_pr,_med,_mod = _stats(_ds)
+                                _val = {'Promedio':_pr,'Mediana':_med,'Moda':_mod,'Mín':_mn,'Máx':_mx}[_stat_name]
+                                _dc = _ws_sum.cell(_xrow, _di2, _val)
+                                _dc.font = _CPF(name="Calibri", size=10)
+                                _dc.fill = _alt; _dc.alignment = _cp_rgt
+                                _dc.number_format = '#,##0.0'; _dc.border = _thin
 
-                        # Section: Ingredientes
-                        _wrow+=1
-                        _pi_data=_exp[_exp['nombre_plato']==_plato]
-                        if not _pi_data.empty:
-                            _ing_cols=['Ingrediente','UM','Día','min','max','prom','mediana','moda']+_semanas
-                            _ws.cell(_wrow,1,"EXPLOSIÓN INGREDIENTES (kg)").font=_CPF(name="Calibri",bold=True,size=10,color="FFFFFF")
-                            _ws.cell(_wrow,1).fill=_CPPF("solid",start_color="375623",end_color="375623")
-                            _ws.merge_cells(f"A{_wrow}:{chr(64+len(_ing_cols))}{_wrow}")
-                            _wrow+=1
-                            for _ci,_h in enumerate(_ing_cols,1):
-                                _ch=_ws.cell(_wrow,_ci,_h.upper())
-                                _ch.font=_cp_hdr_font
-                                _ch.fill=_CPPF("solid",start_color="375623",end_color="375623")
-                                _ch.alignment=_cp_ctr
-                            _wrow+=1
-                            for _pi3,_ing in enumerate(_pi_data['nombre_ingrediente'].unique()):
-                                _is=_pi_data[_pi_data['nombre_ingrediente']==_ing]
-                                _um=_is['um_salida'].iloc[0] if not _is.empty else ''
-                                for _pi4,_dia in enumerate(_CP_DIAS):
-                                    if _dia not in _cp_dias_sel: continue
-                                    _ds=_is[_is['dia']==_dia]['kg']
-                                    _st2=_cp_stats(_ds)
-                                    _fill=_cp_alt_fill if _pi4%2==0 else _CPPF("solid",start_color="FFFFFF",end_color="FFFFFF")
-                                    vals=[_ing,_um,_dia,_st2['min'],_st2['max'],_st2['prom'],_st2['mediana'],_st2['moda']]
-                                    for _s in _semanas:
-                                        vals.append(round(_is[(_is['dia']==_dia)&(_is['semana']==_s)]['kg'].sum(),3))
-                                    for _ci,_v in enumerate(vals,1):
-                                        _c=_ws.cell(_wrow,_ci,_v)
-                                        _c.fill=_fill
-                                        _c.alignment=_cp_lft if _ci==1 else _cp_ctr
-                                    _wrow+=1
-                            _wrow+=1
+                            for _si3, _s in enumerate(_semanas, 3+_n_dias_sel):
+                                if _stat_name == 'Promedio':
+                                    _sv = _cd[_cd['semana']==_s].groupby('fecha_venta')['uds'].sum()
+                                    _val = round(_sv.mean(), 1) if not _sv.empty else 0
+                                else:
+                                    _val = ''
+                                _dc2 = _ws_sum.cell(_xrow, _si3, _val)
+                                _dc2.font = _CPF(name="Calibri", size=10, color="555555", italic=True)
+                                _dc2.fill = _alt; _dc2.alignment = _cp_rgt
+                                if _val: _dc2.number_format = '#,##0.0'
+                                _dc2.border = _thin
+                            _ws_sum.row_dimensions[_xrow].height = 15
+                            _xrow += 1
+                        _xrow += 1  # blank row between categories
 
-                        # Column widths
-                        _ws.column_dimensions['A'].width=30
-                        for _ci2 in range(2,len(_ing_cols)+1 if not _pi_data.empty else len(_base_cols)+1):
-                            _ws.column_dimensions[chr(64+_ci2)].width=10
+                    # Column widths
+                    _ws_sum.column_dimensions['A'].width = 24
+                    _ws_sum.column_dimensions['B'].width = 10
+                    for _ci2 in range(3, _ncols+1):
+                        _ws_sum.column_dimensions[_gcl2(_ci2)].width = 10
 
-                    _cp_buf=_cp_io.BytesIO()
+                    _cp_buf = _cp_io.BytesIO()
                     _cpwb.save(_cp_buf); _cp_buf.seek(0)
                     st.download_button(
                         "📥 Descargar Excel",
@@ -9841,6 +9835,7 @@ elif modulo.startswith("📊"):
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         key="cp_dl"
                     )
+
 
     elif informe_sel in ("CuentasCasa", "Auditor", "Bar"):
         pass  # estos módulos se renderizan en sus propios elif globales
