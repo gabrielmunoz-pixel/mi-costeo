@@ -9827,6 +9827,80 @@ elif modulo.startswith("📊"):
                     for _ci2 in range(3, _ncols+1):
                         _ws_sum.column_dimensions[_gcl2(_ci2)].width = 10
 
+                    # Hoja detalle venta (para validación)
+                    _ws_det = _cpwb.create_sheet("Detalle Venta")
+                    _ws_det.sheet_view.showGridLines = False
+                    _ws_det.sheet_properties.tabColor = "375623"
+
+                    # Title
+                    _ws_det.merge_cells("A1:K1")
+                    _td = _ws_det.cell(1, 1, f"DETALLE VENTA — {_loc} — {_lbl}")
+                    _td.font = _CPF(name="Calibri", bold=True, size=13, color="FFFFFF")
+                    _td.fill = _CPPF("solid", start_color="375623", end_color="375623")
+                    _td.alignment = _cp_ctr
+                    _ws_det.row_dimensions[1].height = 26
+
+                    # Headers
+                    _det_hdrs = ['Fecha','Día','Semana','SKU','Categoría',
+                                 'Tipo','Uds','Fuente']
+                    for _ci3, _h in enumerate(_det_hdrs, 1):
+                        _ch = _ws_det.cell(2, _ci3, _h)
+                        _ch.font = _CPF(name="Calibri", bold=True, size=10, color="FFFFFF")
+                        _ch.fill = _CPPF("solid", start_color="375623", end_color="375623")
+                        _ch.alignment = _cp_ctr
+                        _ch.border = _thin
+                    _ws_det.row_dimensions[2].height = 16
+
+                    # Ventas directas
+                    _det_rows = []
+                    for _, _dr in _cp_df_v.iterrows():
+                        _det_rows.append({
+                            'Fecha': str(_dr['fecha_venta']),
+                            'Día': _dr['dia'],
+                            'Semana': _dr['semana'],
+                            'SKU': _dr['sku_producto'],
+                            'Categoría': _dr['categoria'],
+                            'Tipo': 'Plato directo',
+                            'Uds': round(_dr['uds'], 2),
+                            'Fuente': 'ventas (es_opcion=false)',
+                        })
+
+                    # Opciones
+                    if not _cp_df_op.empty:
+                        for _, _or in _cp_df_op.iterrows():
+                            _cat_op = _CP_SKU_CAT.get(_or['sku_opcion'], '')
+                            if not _cat_op: continue
+                            _dia_op = pd.to_datetime(_or['fecha_venta']).strftime('%A') if _or['fecha_venta'] else ''
+                            _det_rows.append({
+                                'Fecha': str(_or['fecha_venta']),
+                                'Día': _or.get('dia', ''),
+                                'Semana': _or.get('semana', ''),
+                                'SKU': _or['sku_opcion'],
+                                'Categoría': _cat_op,
+                                'Tipo': f"Opción de {_or['sku_padre']}",
+                                'Uds': round(_or['uds_opcion'], 2),
+                                'Fuente': 'ventas (es_opcion=true, ba_opcion)',
+                            })
+
+                    _det_df = pd.DataFrame(_det_rows).sort_values(['Fecha','Categoría','SKU'])
+                    _alt1 = _CPPF("solid", start_color="F0F7F0", end_color="F0F7F0")
+                    _alt2 = _CPPF("solid", start_color="FFFFFF", end_color="FFFFFF")
+                    for _ri, (_, _rr) in enumerate(_det_df.iterrows()):
+                        _fill_r = _alt1 if _ri % 2 == 0 else _alt2
+                        for _ci3, _col in enumerate(_det_hdrs, 1):
+                            _val = _rr.get(_col, '')
+                            _dc3 = _ws_det.cell(3 + _ri, _ci3, _val)
+                            _dc3.font = _CPF(name="Calibri", size=10)
+                            _dc3.fill = _fill_r
+                            _dc3.alignment = _cp_ctr if _ci3 > 5 else _cp_lft
+                            _dc3.border = _thin
+                        _ws_det.row_dimensions[3 + _ri].height = 14
+
+                    # Widths
+                    _det_widths = [14, 12, 9, 14, 24, 22, 9, 28]
+                    for _ci3, _w in enumerate(_det_widths, 1):
+                        _ws_det.column_dimensions[_gcl2(_ci3)].width = _w
+
                     _cp_buf = _cp_io.BytesIO()
                     _cpwb.save(_cp_buf); _cp_buf.seek(0)
                     st.download_button(
