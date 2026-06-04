@@ -9634,6 +9634,8 @@ elif modulo.startswith("📊"):
             st.session_state['cp_data'] = {
                 'all': _cp_all, 'lbl': _cp_lbl, 'local': _cp_local,
                 'dias': _cp_dias_sel,
+                'df_v': _cp_df_v,
+                'df_op': _cp_df_op if not _cp_df_op.empty else pd.DataFrame(),
             }
 
         if st.session_state.get('cp_data'):
@@ -9641,6 +9643,8 @@ elif modulo.startswith("📊"):
             _all    = _cpd['all']
             _lbl    = _cpd['lbl']
             _loc    = _cpd['local']
+            _cp_df_v  = _cpd['df_v']
+            _cp_df_op = _cpd['df_op']
 
             if _all.empty:
                 st.warning("Sin datos para el período y local seleccionados.")
