@@ -9563,40 +9563,74 @@ elif modulo.startswith("📊"):
                     GROUP BY fecha_venta, sku_producto
                 """, {'fi':str(_cp_fi),'ff':str(_cp_ff),'loc':_cp_local})
 
-                # Opciones — misma lógica rentabilidad, solo padres incluidos
+                # Opciones — lógica exacta de rentabilidad con cap de scoops
                 _ba_sql = "', '".join(BA_COSTEABLES)
+                _plates_2 = 'POS-002'
+                _plates_3 = 'POS-008'
                 _cp_df_op = run_query(f"""
-                    WITH padres AS (
+                    WITH skus_con_opciones AS (
+                        SELECT DISTINCT codigo_venta AS sku_padre
+                        FROM recetas WHERE es_opcion IN (1,2,3,6)
+                    ),
+                    padres AS (
                         SELECT fecha_venta, id_orden, ab_categoria,
                                sku_producto AS sku_padre,
-                               SUM(cantidad_vendida) AS cant_padre
+                               SUM(cantidad_vendida) AS cant_padre,
+                               CASE
+                                   WHEN sku_producto = '{_plates_3}' THEN 3
+                                   WHEN sku_producto = '{_plates_2}' THEN 2
+                                   ELSE 1
+                               END AS scoops_por_unidad
                         FROM ventas
                         WHERE fecha_venta BETWEEN :fi AND :ff
                           AND es_opcion = false
                           AND UPPER(local) = UPPER(:loc)
+                          AND sku_producto IN (SELECT sku_padre FROM skus_con_opciones)
                           AND sku_producto IN ('{_CP_SKUS_SQL}')
                         GROUP BY fecha_venta, id_orden, ab_categoria, sku_producto
                     ),
-                    total_ab AS (
+                    total_por_ab_orden AS (
                         SELECT id_orden, ab_categoria, SUM(cant_padre) AS total_padres
                         FROM padres GROUP BY id_orden, ab_categoria
                     ),
                     opciones_raw AS (
                         SELECT id_orden, ab_categoria, sku_producto AS sku_opcion,
-                               SUM(cantidad_vendida) AS cant_op
+                               SUM(cantidad_vendida) AS cant_opcion
                         FROM ventas
                         WHERE fecha_venta BETWEEN :fi AND :ff
                           AND es_opcion = true
                           AND ba_opcion IN ('{_ba_sql}')
                           AND UPPER(local) = UPPER(:loc)
                         GROUP BY id_orden, ab_categoria, sku_producto
+                    ),
+                    opciones_cap AS (
+                        SELECT o.id_orden, o.ab_categoria, o.sku_opcion, o.cant_opcion,
+                               SUM(o.cant_opcion) OVER (PARTITION BY o.id_orden, o.ab_categoria) AS total_opciones,
+                               SUM(p.cant_padre * p.scoops_por_unidad) AS total_esperado
+                        FROM opciones_raw o
+                        JOIN (
+                            SELECT id_orden, ab_categoria,
+                                   SUM(cant_padre * scoops_por_unidad) AS cant_padre,
+                                   SUM(cant_padre * scoops_por_unidad) AS scoops_por_unidad
+                            FROM padres GROUP BY id_orden, ab_categoria
+                        ) p ON p.id_orden=o.id_orden AND p.ab_categoria=o.ab_categoria
+                        GROUP BY o.id_orden, o.ab_categoria, o.sku_opcion, o.cant_opcion
+                    ),
+                    opciones AS (
+                        SELECT id_orden, ab_categoria, sku_opcion,
+                               CASE
+                                   WHEN total_opciones > total_esperado AND total_opciones > 0
+                                   THEN cant_opcion * total_esperado::float / total_opciones::float
+                                   ELSE cant_opcion
+                               END AS cant_opcion
+                        FROM opciones_cap
                     )
                     SELECT p.fecha_venta, p.sku_padre, o.sku_opcion,
-                           SUM(o.cant_op::float * p.cant_padre::float /
+                           SUM(o.cant_opcion::float * p.cant_padre::float /
                                NULLIF(t.total_padres,0)) AS uds_opcion
                     FROM padres p
-                    JOIN total_ab t ON t.id_orden=p.id_orden AND t.ab_categoria=p.ab_categoria
-                    JOIN opciones_raw o ON o.id_orden=p.id_orden AND o.ab_categoria=p.ab_categoria
+                    JOIN total_por_ab_orden t ON t.id_orden=p.id_orden AND t.ab_categoria=p.ab_categoria
+                    JOIN opciones o ON o.id_orden=p.id_orden AND o.ab_categoria=p.ab_categoria
                     GROUP BY p.fecha_venta, p.sku_padre, o.sku_opcion
                 """, {'fi':str(_cp_fi),'ff':str(_cp_ff),'loc':_cp_local})
 
