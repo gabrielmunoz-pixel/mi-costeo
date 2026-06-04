@@ -9437,21 +9437,26 @@ elif modulo.startswith("📊"):
 
 
     elif informe_sel == "ControlProduccion":
+        import datetime as _cp_dt
         st.markdown("### 🏭 Control de Producción — Debug AE06")
 
         if st.button("Consultar AE06", type="primary"):
-            # Parámetros exactos de rentabilidad
-            _fi = '2026-03-01'
-            _ff = '2026-03-31'
+            _fi = _cp_dt.date(2026, 3, 1)
+            _ff = _cp_dt.date(2026, 3, 31)
             _loc = 'Vitacura'
-            _params = {'i': _fi, 'f': _ff, 'l': _loc}
-            _ba_sql = "', '".join(BA_COSTEABLES)
-            _filtro_local = "AND UPPER(local) = UPPER(:l)"
-            _plates_2_scoops_sql = 'POS-002'
-            _plates_3_scoops_sql = 'POS-008'
 
-            # Query COPIADA EXACTA de calcular_cmv_con_opciones
-            _q = f"""
+            # Llamar EXACTAMENTE a calcular_cmv_con_opciones — función ya validada
+            _cmv = calcular_cmv_con_opciones(_fi, _ff, _loc)
+            st.write(f"calcular_cmv_con_opciones retornó {len(_cmv)} filas")
+
+            # Extraer df_op directamente de la función usando sus mismos parámetros
+            _filtro_local = "AND UPPER(local) = UPPER(:l)"
+            _params = {'i': str(_fi), 'f': str(_ff), 'l': _loc}
+            _ba_sql = "', '".join(BA_COSTEABLES)
+            _plates_2 = 'POS-002'
+            _plates_3 = 'POS-008'
+
+            _q_op = f"""
                 WITH skus_con_opciones AS (
                     SELECT DISTINCT codigo_venta AS sku_padre
                     FROM recetas
@@ -9461,8 +9466,8 @@ elif modulo.startswith("📊"):
                     SELECT id_orden, ab_categoria, sku_producto AS sku_padre,
                            SUM(cantidad_vendida) AS cant_padre,
                            CASE
-                               WHEN sku_producto = '{_plates_3_scoops_sql}' THEN 3
-                               WHEN sku_producto = '{_plates_2_scoops_sql}' THEN 2
+                               WHEN sku_producto = '{_plates_3}' THEN 3
+                               WHEN sku_producto = '{_plates_2}' THEN 2
                                ELSE 1
                            END AS scoops_por_unidad
                     FROM ventas
@@ -9480,22 +9485,17 @@ elif modulo.startswith("📊"):
                 ),
                 opciones_raw AS (
                     SELECT id_orden, ab_categoria, sku_producto AS sku_opcion,
-                           ba_opcion,
                            SUM(cantidad_vendida) AS cant_opcion
                     FROM ventas
                     WHERE fecha_venta BETWEEN :i AND :f
                       AND es_opcion = true
                       AND ba_opcion IN ('{_ba_sql}')
                       {_filtro_local}
-                    GROUP BY id_orden, ab_categoria, sku_producto, ba_opcion
+                    GROUP BY id_orden, ab_categoria, sku_producto
                 ),
                 opciones_cap AS (
                     SELECT
-                        o.id_orden,
-                        o.ab_categoria,
-                        o.sku_opcion,
-                        o.ba_opcion,
-                        o.cant_opcion,
+                        o.id_orden, o.ab_categoria, o.sku_opcion, o.cant_opcion,
                         SUM(o.cant_opcion) OVER (PARTITION BY o.id_orden, o.ab_categoria) AS total_opciones,
                         SUM(p.cant_padre * p.scoops_por_unidad) AS total_esperado
                     FROM opciones_raw o
@@ -9503,14 +9503,12 @@ elif modulo.startswith("📊"):
                         SELECT id_orden, ab_categoria,
                                SUM(cant_padre * scoops_por_unidad) AS cant_padre,
                                SUM(cant_padre * scoops_por_unidad) AS scoops_por_unidad
-                        FROM padres
-                        GROUP BY id_orden, ab_categoria
+                        FROM padres GROUP BY id_orden, ab_categoria
                     ) p ON p.id_orden = o.id_orden AND p.ab_categoria = o.ab_categoria
-                    GROUP BY o.id_orden, o.ab_categoria, o.sku_opcion, o.ba_opcion, o.cant_opcion
+                    GROUP BY o.id_orden, o.ab_categoria, o.sku_opcion, o.cant_opcion
                 ),
                 opciones AS (
-                    SELECT
-                        id_orden, ab_categoria, sku_opcion, ba_opcion,
+                    SELECT id_orden, ab_categoria, sku_opcion,
                         CASE
                             WHEN total_opciones > total_esperado AND total_opciones > 0
                             THEN cant_opcion * total_esperado::float / total_opciones::float
@@ -9521,85 +9519,52 @@ elif modulo.startswith("📊"):
                 SELECT
                     p.sku_padre,
                     o.sku_opcion,
-                    o.ba_opcion,
                     SUM(o.cant_opcion::float * p.cant_padre::float / NULLIF(t.total_padres, 0)) AS cant_opcion_total
                 FROM padres p
                 JOIN total_por_ab_orden t ON t.id_orden = p.id_orden AND t.ab_categoria = p.ab_categoria
                 JOIN opciones o            ON o.id_orden = p.id_orden AND o.ab_categoria = p.ab_categoria
-                GROUP BY p.sku_padre, o.sku_opcion, o.ba_opcion
+                GROUP BY p.sku_padre, o.sku_opcion
             """
+            _df_op = run_query(_q_op, _params)
+            st.write(f"Query directa retornó {len(_df_op)} filas")
 
-            _df = run_query(_q, _params)
+            _ae06 = _df_op[_df_op['sku_padre'] == 'AE06'].copy()
+            _ae06['cant_opcion_total'] = pd.to_numeric(_ae06['cant_opcion_total'], errors='coerce').fillna(0)
 
-            # Ventas padre AE06
-            _q2 = f"""
-                SELECT sku_producto, SUM(cantidad_vendida) AS cant_padre
-                FROM ventas
-                WHERE fecha_venta BETWEEN :i AND :f
-                  AND es_opcion = false
-                  {_filtro_local}
-                  AND sku_producto = 'AE06'
-                GROUP BY sku_producto
-            """
-            _df2 = run_query(_q2, _params)
-            if not _df.empty:
-                _ae06 = _df[_df['sku_padre'] == 'AE06'].copy()
+            _PREFIX_CAT = {
+                'CHUX':'CH POSTA','CHUSIT':'CH POSTA',
+                'FILX':'CH FILETE','FILSIT':'CH FILETE',
+                'LOMX':'LOMITO','LOMSIT':'LOMITO',
+                'AVEX':'AVE/POLLO','AVESIT':'AVE/POLLO',
+                'HAMX':'HAMBURGUESA','HAMSIT':'HAMBURGUESA',
+                'HAQX':'HAMB QUINOA','PERX':'PERNIL','PERSIT':'PERNIL',
+                'MECX':'MECHADA','PANX':'Pan',
+            }
+            def _get_cat(sku):
+                for p, c in _PREFIX_CAT.items():
+                    if str(sku).startswith(p): return c
+                return sku
 
-                # Mapear sku_opcion por prefijo → categoría de control
-                _PREFIX_CAT = {
-                    'CHUX': 'CH POSTA', 'CHUSIT': 'CH POSTA',
-                    'FILX': 'CH FILETE', 'FILSIT': 'CH FILETE',
-                    'LOMX': 'LOMITO', 'LOMSIT': 'LOMITO',
-                    'AVEX': 'AVE/POLLO', 'AVESIT': 'AVE/POLLO',
-                    'HAMX': 'HAMBURGUESA', 'HAMSIT': 'HAMBURGUESA',
-                    'HAQX': 'HAMB QUINOA',
-                    'PERX': 'PERNIL', 'PERSIT': 'PERNIL',
-                    'MECX': 'MECHADA',
-                    'PANX': 'Pan',
-                }
-                def _get_cat(sku):
-                    for prefix, cat in _PREFIX_CAT.items():
-                        if str(sku).startswith(prefix):
-                            return cat
-                    return sku
+            _ae06['categoria'] = _ae06['sku_opcion'].apply(_get_cat)
 
-                _ae06['categoria'] = _ae06['sku_opcion'].apply(_get_cat)
-                _ae06['cant_opcion_total'] = pd.to_numeric(_ae06['cant_opcion_total'], errors='coerce').fillna(0)
+            st.markdown("**① Resumen por categoría**")
+            _res = _ae06.groupby('categoria')['cant_opcion_total'].sum().reset_index()
+            _res.columns = ['Categoría','Unidades']
+            _res['Unidades'] = _res['Unidades'].round(1)
+            st.dataframe(_res.sort_values('Unidades',ascending=False), use_container_width=True, hide_index=True)
 
-                # Tabla 1: resumen por categoría
-                st.markdown("**① Resumen por categoría**")
-                _resumen = _ae06.groupby('categoria')['cant_opcion_total'].sum().reset_index()
-                _resumen.columns = ['Categoría', 'Unidades']
-                _resumen = _resumen.sort_values('Unidades', ascending=False)
-                _resumen['Unidades'] = _resumen['Unidades'].round(1)
-                st.dataframe(_resumen, use_container_width=True, hide_index=True)
+            st.markdown("**② Detalle por SKU**")
+            st.dataframe(_ae06[['sku_opcion','categoria','cant_opcion_total']].sort_values('cant_opcion_total',ascending=False), use_container_width=True, hide_index=True)
 
-                # Tabla 2: detalle por sku_opcion
-                st.markdown("**② Detalle por SKU opción**")
-                _det = _ae06[['sku_opcion','ba_opcion','categoria','cant_opcion_total']].copy()
-                _det['cant_opcion_total'] = _det['cant_opcion_total'].round(1)
-                _det = _det.sort_values('cant_opcion_total', ascending=False)
-                st.dataframe(_det, use_container_width=True, hide_index=True)
-
-                # Tabla 3: ventas padre vs proteínas (excluye Pan)
-                st.markdown("**③ Ventas AE06 (padre) vs proteínas registradas**")
-                _prot = _ae06[_ae06['categoria'] != 'Pan']['cant_opcion_total'].sum()
-                _pan  = _ae06[_ae06['categoria'] == 'Pan']['cant_opcion_total'].sum()
-                _cant_padre = float(_df2['cant_padre'].iloc[0]) if not _df2.empty else 0
-                st.dataframe(pd.DataFrame({
-                    'Métrica': ['Ventas padre (AE06)', 'Total proteínas', 'Total pan', 'Sin proteína registrada'],
-                    'Unidades': [
-                        round(_cant_padre, 0),
-                        round(_prot, 1),
-                        round(_pan, 1),
-                        round(_cant_padre - _prot, 1)
-                    ]
-                }), use_container_width=True, hide_index=True)
-            else:
-                st.warning("Sin resultados")
-
-            st.write("Ventas AE06 (padre):")
-            st.dataframe(_df2)
+            st.markdown("**③ Padre vs proteínas**")
+            _prot = _ae06[_ae06['categoria']!='Pan']['cant_opcion_total'].sum()
+            _pan  = _ae06[_ae06['categoria']=='Pan']['cant_opcion_total'].sum()
+            _padre_q = run_query(f"SELECT SUM(cantidad_vendida) AS n FROM ventas WHERE fecha_venta BETWEEN :i AND :f AND es_opcion=false AND sku_producto='AE06' AND UPPER(local)=UPPER(:l)", _params)
+            _padre = float(_padre_q['n'].iloc[0]) if not _padre_q.empty else 0
+            st.dataframe(pd.DataFrame({
+                'Métrica':['Ventas padre','Proteínas','Pan','Sin proteína'],
+                'Unidades':[round(_padre,0),round(_prot,1),round(_pan,1),round(_padre-_prot,1)]
+            }), use_container_width=True, hide_index=True)
 
 
     elif informe_sel in ("CuentasCasa", "Auditor", "Bar"):
