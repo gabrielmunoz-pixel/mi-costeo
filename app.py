@@ -9581,16 +9581,18 @@ elif modulo.startswith("📊"):
                 _det = _det.sort_values('cant_opcion_total', ascending=False)
                 st.dataframe(_det, use_container_width=True, hide_index=True)
 
-                # Tabla 3: ventas padre vs total opciones
-                st.markdown("**③ Ventas AE06 (padre) vs total opciones**")
+                # Tabla 3: ventas padre vs proteínas (excluye Pan)
+                st.markdown("**③ Ventas AE06 (padre) vs proteínas registradas**")
+                _prot = _ae06[_ae06['categoria'] != 'Pan']['cant_opcion_total'].sum()
+                _pan  = _ae06[_ae06['categoria'] == 'Pan']['cant_opcion_total'].sum()
                 _cant_padre = float(_df2['cant_padre'].iloc[0]) if not _df2.empty else 0
-                _tot_opciones = _ae06['cant_opcion_total'].sum()
                 st.dataframe(pd.DataFrame({
-                    'Métrica': ['Ventas padre (AE06)', 'Total opciones registradas', 'Sin opción registrada'],
+                    'Métrica': ['Ventas padre (AE06)', 'Total proteínas', 'Total pan', 'Sin proteína registrada'],
                     'Unidades': [
                         round(_cant_padre, 0),
-                        round(_tot_opciones, 1),
-                        round(_cant_padre - _tot_opciones, 1)
+                        round(_prot, 1),
+                        round(_pan, 1),
+                        round(_cant_padre - _prot, 1)
                     ]
                 }), use_container_width=True, hide_index=True)
             else:
