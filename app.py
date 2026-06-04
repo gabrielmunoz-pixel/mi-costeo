@@ -9439,6 +9439,28 @@ elif modulo.startswith("📊"):
     elif informe_sel == "ControlProduccion":
         import calendar as _cp_cal
 
+        # ── Lista de SKUs incluidos (hoja Incluidos de ANALIS_1.XLS) ──
+        _CP_SKUS_INCLUIDOS = [
+            'AVE-001','AVE-005','AVE-004','AVE-003','AVE-002','AVE-010','AVE-006','AVE-009',
+            'AE22','ENS-003','NIN-001','NIN-008','PLC-010','PAC-015','ENS-019','PAC-002',
+            'FIL-001','FIL-005','FIL-004','FIL-003','FIL-002','FIL-010','FIL-006','NIN-009',
+            'NIN-003','PAC-014','CHU-001','CHU-005','CHU-004','CHU-003','CHU-007','CHU-002',
+            'AE24','CHU-010','CHU-006','CHU-008','AE25','AE02','PAC-001','AE05','AE09','AE08',
+            'AE07','AE06','AE10','PLC-019','AE26','PLC-018','PLC-002','PLC-001','PLC-020',
+            'PLA-003','PLA-004','PLA-001','PLA-002','PLC-004','PLC-006','PLC-007','HAC-013',
+            'HAC-001','SUB002','AE01','SUB003','NIN-004','NIN-007','NIN-006','HAQ-005',
+            'HAQ-001','HAQ-002','HAQ-004','HAQ-003','HAC-021','HAC-009','HAC-022','HAC-010',
+            'SUB001','HAC-003','PLC-014','HAM-001','HAM-005','HAC-015','HAM-004','HAM-003',
+            'HAM-007','HAM-002','HAM-010','HAM-006','HAM-009','PLC-013','AE04','AE03',
+            'HAC-019','HAC-007','HAC-024','HAC-012','HAC-018','HAC-006','HAC-020','HAC-008',
+            'HAC-017','HAC-005','HAC-014','HAC-002','LOM-001','LOM-005','LOM-004','LOM-003',
+            'LOM-002','LOM-010','LOM-006','PLC-008','PLC-022','MEC-001','MEC-005','HAC-023',
+            'MEC-004','MEC-003','MEC-002','MEC-010','MEC-006','PER-001','PER-005','PER-004',
+            'PER-003','PER-007','PER-002','PER-010','PER-006','PER-009','ENS-007','AE23',
+            'PLC-012','PLC-021','NIN-011'
+        ]
+        _CP_SKUS_SQL = "','".join(_CP_SKUS_INCLUIDOS)
+
         st.markdown("### 🏭 Control de Producción")
 
         # ── Filtros ──────────────────────────────────────────────
@@ -9474,7 +9496,7 @@ elif modulo.startswith("📊"):
             with st.spinner("Consultando ventas y recetas..."):
 
                 # ── 1. Ventas padre por fecha ────────────────────
-                _cp_q_v = """
+                _cp_q_v = f"""
                     SELECT fecha_venta, sku_producto, nombre_producto,
                            SUM(cantidad_vendida) AS uds
                     FROM ventas
@@ -9482,6 +9504,7 @@ elif modulo.startswith("📊"):
                       AND es_opcion = false
                       AND UPPER(local) = UPPER(:loc)
                       AND local IS NOT NULL
+                      AND sku_producto IN ('{_CP_SKUS_SQL}')
                     GROUP BY fecha_venta, sku_producto, nombre_producto
                 """
                 _cp_df_v = run_query(_cp_q_v, {'fi':str(_cp_fi),'ff':str(_cp_ff),'loc':_cp_local})
@@ -9501,6 +9524,7 @@ elif modulo.startswith("📊"):
                         WHERE fecha_venta BETWEEN :fi AND :ff
                           AND es_opcion = false
                           AND UPPER(local) = UPPER(:loc)
+                          AND sku_producto IN ('{_CP_SKUS_SQL}')
                           AND sku_producto IN (SELECT sku_padre FROM skus_con_opciones)
                         GROUP BY fecha_venta, id_orden, ab_categoria, sku_producto
                     ),
