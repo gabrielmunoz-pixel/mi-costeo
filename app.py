@@ -9487,8 +9487,8 @@ elif modulo.startswith("📊"):
                 st.dataframe(_df_all[['grupo_ba','sku','nombre','categoria','cant']].sort_values('cant',ascending=False), use_container_width=True, hide_index=True)
 
                 st.markdown("**③ Padre vs proteínas**")
-                _prot = _df_all[_df_all['categoria']!='Pan']['cant'].sum()
-                _pan  = _df_all[_df_all['categoria']=='Pan']['cant'].sum()
+                _prot = _df_all[(_df_all['categoria']!='Pan') & (_df_all['grupo_ba']=='Proteína')]['cant'].sum()
+                _pan  = _df_all[_df_all['grupo_ba']=='Pan']['cant'].sum()
                 _padre_q = run_query("SELECT SUM(cantidad_vendida) AS n FROM ventas WHERE fecha_venta BETWEEN :i AND :f AND es_opcion=false AND sku_producto='AE06' AND UPPER(local)=UPPER(:l)",
                     {'i':str(_fi),'f':str(_ff),'l':_loc})
                 _n_padre = float(_padre_q['n'].iloc[0]) if not _padre_q.empty else 0
