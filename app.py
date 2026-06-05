@@ -9815,8 +9815,87 @@ elif modulo.startswith("📊"):
                         "📥 Descargar tabla (CSV)",
                         _vista.to_csv(index=False).encode('utf-8'),
                         file_name=f"estadistica_dia_semana_{f_local}_{f_inicio}_{f_fin}.csv",
+
                         mime="text/csv", key='cp_dl_csv'
                     )
+
+        # ──────────────────────────────────────────────────────────────
+        # 🔎 CUADRE / DEBUG  — verificar montos contra numeros a mano
+        # ──────────────────────────────────────────────────────────────
+        with st.expander("🔎 Cuadre / Debug — verificar montos"):
+            st.caption("Para el período y local del sidebar compara: lo que suma la **capa diaria** "
+                       "vs la **función validada de período**, y te deja una columna **Esperado** "
+                       "para escribir tus números a mano. Verde = cuadra (dif < 0.5).")
+
+            _dc1, _dc2 = st.columns(2)
+            with _dc1:
+                _dbg_sku = st.text_input("Plato (sku_padre) a cuadrar", value="AE06", key="cp_dbg_sku")
+            with _dc2:
+                _dbg_ab = st.text_input("ab_categoria del plato", value="AB.010140", key="cp_dbg_ab")
+
+            if st.button("🔍 Cuadrar", key="cp_dbg_btn"):
+                _lf = "AND UPPER(local)=UPPER(:l)" if f_local != "Todos" else ""
+                _pp = {"i": str(f_inicio), "f": str(f_fin), "sku": _dbg_sku}
+                if f_local != "Todos":
+                    _pp["l"] = f_local
+
+                _df_capa = run_query(f"""
+                    SELECT sku_opcion, MAX(nombre_producto) AS nombre,
+                           MAX(ba_opcion) AS ba_opcion, SUM(cant) AS cant_capa
+                    FROM opciones_diarias
+                    WHERE fecha_venta BETWEEN :i AND :f
+                      AND sku_padre = :sku
+                      {_lf}
+                    GROUP BY sku_opcion
+                """, _pp)
+
+                _grupos = get_opciones_producto(f_inicio, f_fin, f_local, _dbg_ab, sku_padre=_dbg_sku)
+                _rows_per = []
+                for _g, _dfg in (_grupos or {}).items():
+                    for _, _r in _dfg.iterrows():
+                        _rows_per.append({"sku_opcion": _r["sku_producto"],
+                                          "cant_periodo": float(_r["cant"])})
+                _df_per = (pd.DataFrame(_rows_per) if _rows_per
+                           else pd.DataFrame(columns=["sku_opcion", "cant_periodo"]))
+
+                if _df_capa.empty and _df_per.empty:
+                    st.warning("Sin datos. ¿Cargaste la capa diaria de ese mes? (botón Actualizar mes)")
+                else:
+                    _m = _df_capa.merge(_df_per, on="sku_opcion", how="outer")
+                    _m["cant_capa"]    = pd.to_numeric(_m["cant_capa"], errors="coerce").fillna(0).round(2)
+                    _m["cant_periodo"] = pd.to_numeric(_m["cant_periodo"], errors="coerce").fillna(0).round(2)
+                    _m["dif_cp"]       = (_m["cant_capa"] - _m["cant_periodo"]).round(2)
+                    _m["Esperado"]     = 0.0
+                    _m = _m.sort_values("cant_periodo", ascending=False).reset_index(drop=True)
+
+                    st.markdown("**Escribe tus números a mano en la columna `Esperado`:**")
+                    _ed = st.data_editor(
+                        _m[["sku_opcion", "nombre", "cant_capa", "cant_periodo", "dif_cp", "Esperado"]]
+                          .rename(columns={"sku_opcion": "SKU", "nombre": "Opción",
+                                           "cant_capa": "Capa diaria",
+                                           "cant_periodo": "Período (validado)",
+                                           "dif_cp": "Dif capa-período"}),
+                        use_container_width=True, hide_index=True, key="cp_dbg_editor",
+                        disabled=["SKU", "Opción", "Capa diaria", "Período (validado)", "Dif capa-período"]
+                    )
+
+                    _cap = pd.to_numeric(_ed["Capa diaria"], errors="coerce").fillna(0)
+                    _esp = pd.to_numeric(_ed["Esperado"], errors="coerce").fillna(0)
+                    _ed["Dif esperado"] = (_cap - _esp).round(2)
+                    _ed["Cuadra"] = _ed["Dif esperado"].abs().lt(0.5).map({True: "✅", False: "❌"})
+                    st.dataframe(_ed, use_container_width=True, hide_index=True)
+
+                    _t1 = float(_ed["Capa diaria"].sum())
+                    _t2 = float(_ed["Período (validado)"].sum())
+                    _t3 = float(_esp.sum())
+                    st.markdown(
+                        f"**Totales** — Capa diaria: `{_t1:,.1f}`  ·  "
+                        f"Período validado: `{_t2:,.1f}`  ·  Esperado: `{_t3:,.1f}`"
+                    )
+                    if abs(_t1 - _t2) < 0.5:
+                        st.success("La capa diaria y la función validada CUADRAN. ✅")
+                    else:
+                        st.error(f"Capa diaria vs período difieren en {abs(_t1 - _t2):,.1f}. Revisar.")
 
 
     elif informe_sel in ("CuentasCasa", "Auditor", "Bar"):
