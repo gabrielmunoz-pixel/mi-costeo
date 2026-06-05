@@ -9779,6 +9779,7 @@ elif modulo.startswith("📊"):
                     sku_padre=(_cp_skus[0] if len(_cp_skus) == 1 else None)
                 )
             if _df_est is None or _df_est.empty:
+                st.session_state.pop('cp_est_df', None)
                 st.warning("Sin datos en la capa diaria para ese período/local. "
                            "Usa primero **Actualizar mes en capa diaria**.")
             else:
@@ -9786,38 +9787,102 @@ elif modulo.startswith("📊"):
                     _df_est = _df_est[_df_est['sku_padre'].isin(_cp_skus)]
                 if _cp_grupo != "Todos":
                     _df_est = _df_est[_df_est['grupo_ba'] == _cp_grupo]
+                st.session_state['cp_est_df'] = _df_est.reset_index(drop=True)
+                st.session_state['cp_est_meta'] = {
+                    'grupo': _cp_grupo, 'local': f_local,
+                    'fi': str(f_inicio), 'ff': str(f_fin)
+                }
 
-                if _df_est.empty:
-                    st.warning(f"No hay opciones del grupo «{_cp_grupo}» para esa selección.")
-                else:
-                    _cols = {
-                        'dia_semana':'Día', 'sku_padre':'Plato', 'sku_opcion':'SKU',
-                        'nombre_producto':'Opción', 'n_dias':'N° días',
-                        'minimo':'Mín', 'maximo':'Máx', 'promedio':'Promedio',
-                        'mediana':'Mediana', 'moda':'Moda', 'p75':'P75', 'p90':'P90',
-                        'desv':'Desv', 'cv':'CV'
-                    }
-                    _vista = (_df_est
-                              .sort_values(['dow', 'sku_padre', 'promedio'],
-                                           ascending=[True, True, False])
-                              [list(_cols.keys())]
-                              .rename(columns=_cols))
-                    st.markdown(f"**Grupo: {_cp_grupo}**  ·  una fila por opción y día de semana")
-                    st.dataframe(_vista, use_container_width=True, hide_index=True)
-                    st.caption(
-                        "Todas las métricas a la vista para decidir el criterio de producción:  "
-                        "**Promedio/Mediana** = centro de la demanda · **P75/P90** = nivel de servicio "
-                        "(cubrir 75% / 90% de los días) · **Mín/Máx** = piso y techo · "
-                        "**Moda** = valor más frecuente · **CV** = variabilidad (alto = errático).  "
-                        "Los días operativos sin venta cuentan como 0."
-                    )
-                    st.download_button(
-                        "📥 Descargar tabla (CSV)",
-                        _vista.to_csv(index=False).encode('utf-8'),
-                        file_name=f"estadistica_dia_semana_{f_local}_{f_inicio}_{f_fin}.csv",
+        # ── Informe ejecutivo (persistente: cambiar criterio no pierde los datos) ──
+        if 'cp_est_df' in st.session_state and not st.session_state['cp_est_df'].empty:
+            import math as _math
+            _df_est = st.session_state['cp_est_df']
+            _meta   = st.session_state.get('cp_est_meta', {})
+            _dow_nom = {1: 'Lun', 2: 'Mar', 3: 'Mié', 4: 'Jue', 5: 'Vie', 6: 'Sáb', 7: 'Dom'}
+            _dow_ord = [1, 2, 3, 4, 5, 6, 7]
 
-                        mime="text/csv", key='cp_dl_csv'
-                    )
+            st.markdown("---")
+            st.markdown(f"## 🏭 Plan de producción — {_meta.get('grupo','')}  ·  {_meta.get('local','')}")
+            st.caption(f"Período analizado: {_meta.get('fi','')} → {_meta.get('ff','')}  ·  "
+                       "una fila por proteína; las cantidades son unidades a producir por día.")
+
+            _crit_opts = {
+                "P75 · recomendado (cubre 3 de cada 4 días)": "p75",
+                "P90 · alta cobertura (minimiza quiebres)":   "p90",
+                "Promedio":                                   "promedio",
+                "Mediana · robusta a días atípicos":          "mediana",
+                "Máximo histórico":                           "maximo",
+            }
+            _crit_lbl = st.selectbox("🎯 Criterio de producción", list(_crit_opts.keys()),
+                                     key="cp_crit_sel")
+            _crit = _crit_opts[_crit_lbl]
+
+            _plan = _df_est.copy()
+            _plan['etiqueta'] = _plan['nombre_producto'].fillna(_plan['sku_opcion'])
+            _plan['_base'] = pd.to_numeric(_plan[_crit], errors='coerce').fillna(0)
+            _plan['producir'] = _plan['_base'].apply(lambda v: int(_math.ceil(v)) if v > 0 else 0)
+
+            _piv = (_plan.pivot_table(index='etiqueta', columns='dow',
+                                      values='producir', aggfunc='sum', fill_value=0)
+                         .reindex(columns=_dow_ord, fill_value=0)
+                         .rename(columns=_dow_nom))
+            _piv['Σ semana'] = _piv.sum(axis=1)
+            _piv = _piv.sort_values('Σ semana', ascending=False)
+
+            _tot_sem  = int(_piv['Σ semana'].sum())
+            _n_prot   = int(_piv.shape[0])
+            _por_dia  = _piv[list(_dow_nom.values())].sum(axis=0)
+            _peak_lbl = _por_dia.idxmax() if not _por_dia.empty else '—'
+            _k1, _k2, _k3 = st.columns(3)
+            _k1.metric("Producción semanal total", f"{_tot_sem:,} u")
+            _k2.metric("Proteínas en plan", f"{_n_prot}")
+            _k3.metric("Día de mayor demanda", str(_peak_lbl))
+
+            _piv_show = _piv.copy()
+            _piv_show.loc['TOTAL'] = _piv_show.sum(axis=0)
+            _piv_show = _piv_show.astype(int)
+            st.dataframe(_piv_show, use_container_width=True)
+            st.caption(f"Unidades por día según criterio **{_crit_lbl.split(' · ')[0]}** "
+                       "(redondeo hacia arriba). Días operativos sin venta = 0.")
+
+            st.markdown("#### 📊 Demanda por día de semana")
+            _chart = _piv[list(_dow_nom.values())].T
+            st.bar_chart(_chart)
+
+            _var = _df_est.copy()
+            _var['etiqueta'] = _var['nombre_producto'].fillna(_var['sku_opcion'])
+            _cvm = _var.groupby('etiqueta')['cv'].apply(
+                lambda s: pd.to_numeric(s, errors='coerce').mean())
+            _err = [e for e, v in _cvm.items() if pd.notna(v) and v >= 0.5]
+            if _err:
+                st.warning("⚠️ Demanda irregular (CV alto) en: " + ", ".join(map(str, _err)) +
+                           ". Para estas conviene un criterio más alto (P90) o dejar buffer.")
+
+            with st.expander("📋 Ver detalle estadístico completo (todas las métricas)"):
+                _cols = {
+                    'dia_semana': 'Día', 'sku_padre': 'Plato', 'sku_opcion': 'SKU',
+                    'nombre_producto': 'Opción', 'n_dias': 'N° días',
+                    'minimo': 'Mín', 'maximo': 'Máx', 'promedio': 'Promedio',
+                    'mediana': 'Mediana', 'moda': 'Moda', 'p75': 'P75', 'p90': 'P90',
+                    'desv': 'Desv', 'cv': 'CV'
+                }
+                _vista = (_df_est
+                          .sort_values(['dow', 'sku_padre', 'promedio'],
+                                       ascending=[True, True, False])
+                          [list(_cols.keys())].rename(columns=_cols))
+                st.dataframe(_vista, use_container_width=True, hide_index=True)
+
+            _dl1, _dl2 = st.columns(2)
+            with _dl1:
+                st.download_button("📥 Plan de producción (CSV)",
+                    _piv_show.to_csv().encode('utf-8'),
+                    file_name=f"plan_produccion_{_meta.get('local','')}_{_meta.get('fi','')}_{_meta.get('ff','')}.csv",
+                    mime="text/csv", key='cp_dl_plan')
+            with _dl2:
+                st.download_button("📥 Detalle estadístico (CSV)",
+                    _vista.to_csv(index=False).encode('utf-8'),
+                    file_name=f"detalle_dia_semana_{_meta.get('local','')}_{_meta.get('fi','')}_{_meta.get('ff','')}.csv",
+                    mime="text/csv", key='cp_dl_csv')
 
         # ──────────────────────────────────────────────────────────────
         # 🔎 CUADRE / DEBUG  — verificar montos contra numeros a mano
