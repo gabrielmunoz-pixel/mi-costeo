@@ -908,6 +908,21 @@ def _init_db():
         "CREATE INDEX IF NOT EXISTS idx_compras_rut        ON compras(rut_proveedor)",
         "CREATE INDEX IF NOT EXISTS idx_ventas_aliva_fecha ON ventas_aliva(fecha)",
         "CREATE INDEX IF NOT EXISTS idx_ventas_aliva_local ON ventas_aliva(local)",
+        # --- Capa diaria de opciones (creada automaticamente) ---
+        """CREATE TABLE IF NOT EXISTS opciones_diarias (
+            fecha_venta     date              NOT NULL,
+            local           text              NOT NULL,
+            ab_categoria    text              NOT NULL,
+            sku_padre       text              NOT NULL,
+            sku_opcion      text              NOT NULL,
+            nombre_producto text,
+            ba_opcion       text,
+            cant            double precision  NOT NULL,
+            PRIMARY KEY (fecha_venta, local, ab_categoria, sku_padre, sku_opcion)
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_opdia_local_fecha ON opciones_diarias (local, fecha_venta)",
+        "CREATE INDEX IF NOT EXISTS idx_opdia_padre       ON opciones_diarias (sku_padre, sku_opcion)",
+        "CREATE INDEX IF NOT EXISTS idx_ventas_esopcion_ab ON ventas (es_opcion, ab_categoria, fecha_venta)",
     ]
     try:
         with engine.begin() as conn:
@@ -1657,6 +1672,199 @@ def get_opciones_por_local(fecha_i, fecha_f, ab_categoria_padre):
     df['cant'] = pd.to_numeric(df['cant'], errors='coerce').fillna(0)
     df['grupo'] = df['ba_opcion'].apply(lambda x: BA_A_GRUPO.get(str(x or '').strip(), 'Otros'))
     return df
+
+
+def refrescar_opciones_diarias(fecha_i, fecha_f=None, platos=None, ab_categorias=None):
+    """
+    Recalcula la capa diaria de opciones (tabla opciones_diarias) para un rango.
+    Idempotente: borra y reinserta el rango (acotado por 'platos' si se indica).
+
+    Parametros:
+        fecha_i, fecha_f : rango de fechas ('YYYY-MM-DD' o date). Si fecha_f es None,
+                           procesa un solo dia (fecha_i).
+        platos           : lista de sku_padre a incluir. Si None -> TODOS los platos.
+                           Este filtro se aplica SOLO en el WHERE final (y en el DELETE),
+                           NUNCA dentro de 'padres', para no inflar el denominador.
+        ab_categorias    : lista de ab_categoria para acotar el escaneo (va en 'padres'
+                           y 'opciones'). Si None -> todas las categorias.
+
+    Usos:
+        refrescar_opciones_diarias('2026-06-04')                          # 1 dia (nocturno)
+        refrescar_opciones_diarias('2026-03-01', '2026-03-31')            # mes completo
+        refrescar_opciones_diarias('2026-03-01', '2026-03-31',
+                                   platos=['AE06','AE07'],
+                                   ab_categorias=['AB.010140'])            # mes + lista
+
+    Levanta el statement_timeout SOLO para esta transaccion (SET LOCAL), asi el backfill
+    no choca con el limite de 30s del engine de la app. Devuelve True/False.
+    """
+    engine = get_engine()
+    if engine is None:
+        return False
+    fecha_f = fecha_f or fecha_i
+    params = {"i": str(fecha_i), "f": str(fecha_f)}
+
+    f_ab = ""
+    if ab_categorias:
+        f_ab = "AND ab_categoria = ANY(:abs)"
+        params["abs"] = list(ab_categorias)
+
+    f_padre_out = ""
+    f_delete = ""
+    if platos:
+        f_padre_out = "WHERE p.sku_padre = ANY(:platos)"
+        f_delete = "AND sku_padre = ANY(:platos)"
+        params["platos"] = list(platos)
+
+    sql_delete = f"""
+        DELETE FROM opciones_diarias
+        WHERE fecha_venta BETWEEN :i AND :f
+        {f_delete}
+    """
+
+    sql_insert = f"""
+        INSERT INTO opciones_diarias
+            (fecha_venta, local, ab_categoria, sku_padre, sku_opcion,
+             nombre_producto, ba_opcion, cant)
+        WITH padres AS (
+            SELECT fecha_venta, local, id_orden, ab_categoria,
+                   sku_producto AS sku_padre,
+                   SUM(cantidad_vendida) AS cant_padre
+            FROM ventas
+            WHERE fecha_venta BETWEEN :i AND :f
+              AND es_opcion = false
+              {f_ab}
+            GROUP BY fecha_venta, local, id_orden, ab_categoria, sku_producto
+        ),
+        total_por_ab_orden AS (
+            SELECT fecha_venta, local, id_orden, ab_categoria,
+                   SUM(cant_padre) AS total_padres
+            FROM padres
+            GROUP BY fecha_venta, local, id_orden, ab_categoria
+        ),
+        opciones AS (
+            SELECT fecha_venta, local, id_orden, ab_categoria,
+                   sku_producto AS sku_opcion, nombre_producto, ba_opcion,
+                   SUM(cantidad_vendida) AS cant_opcion
+            FROM ventas
+            WHERE fecha_venta BETWEEN :i AND :f
+              AND es_opcion = true
+              {f_ab}
+            GROUP BY fecha_venta, local, id_orden, ab_categoria,
+                     sku_producto, nombre_producto, ba_opcion
+        )
+        SELECT
+            p.fecha_venta, p.local, p.ab_categoria, p.sku_padre, o.sku_opcion,
+            MAX(o.nombre_producto) AS nombre_producto,
+            MAX(o.ba_opcion)       AS ba_opcion,
+            SUM(o.cant_opcion::float * p.cant_padre::float
+                / NULLIF(t.total_padres, 0)) AS cant
+        FROM padres p
+        JOIN total_por_ab_orden t
+               ON t.fecha_venta  = p.fecha_venta
+              AND t.local        = p.local
+              AND t.id_orden     = p.id_orden
+              AND t.ab_categoria = p.ab_categoria
+        JOIN opciones o
+               ON o.fecha_venta  = p.fecha_venta
+              AND o.local        = p.local
+              AND o.id_orden     = p.id_orden
+              AND o.ab_categoria = p.ab_categoria
+        {f_padre_out}
+        GROUP BY p.fecha_venta, p.local, p.ab_categoria, p.sku_padre, o.sku_opcion
+    """
+
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("SET LOCAL statement_timeout = 0"))
+            conn.execute(text(sql_delete), params)
+            conn.execute(text(sql_insert), params)
+        return True
+    except Exception as e:
+        st.error(f"Error refrescando opciones_diarias: {e}")
+        return False
+
+
+def get_estadisticas_opciones_dia_semana(fecha_i, fecha_f, local="Todos",
+                                         sku_padre=None, ab_categoria=None):
+    """
+    Estadistica de opciones por DIA DE SEMANA sobre la capa diaria (opciones_diarias).
+    Rellena con 0 los dias operativos del local sin venta de esa opcion.
+    Entrega: n_dias, minimo, maximo, promedio, desv, cv, mediana, p75, p90, moda.
+    Devuelve un pd.DataFrame (NO el dict de get_opciones_producto).
+    """
+    filtros = []
+    params = {"i": str(fecha_i), "f": str(fecha_f)}
+    if local and local != "Todos":
+        filtros.append("AND UPPER(local) = UPPER(:l)")
+        params["l"] = local
+    if sku_padre:
+        filtros.append("AND sku_padre = :sku")
+        params["sku"] = sku_padre
+    if ab_categoria:
+        filtros.append("AND ab_categoria = :ab")
+        params["ab"] = ab_categoria
+    f_combos = "\n              ".join(filtros)
+
+    q = f"""
+        WITH dias AS (
+            SELECT DISTINCT local, fecha_venta
+            FROM opciones_diarias
+            WHERE fecha_venta BETWEEN :i AND :f
+        ),
+        combos AS (
+            SELECT DISTINCT local, ab_categoria, sku_padre, sku_opcion,
+                   nombre_producto, ba_opcion
+            FROM opciones_diarias
+            WHERE fecha_venta BETWEEN :i AND :f
+              {f_combos}
+        ),
+        serie AS (
+            SELECT c.local, c.ab_categoria, c.sku_padre, c.sku_opcion,
+                   c.nombre_producto, c.ba_opcion,
+                   EXTRACT(ISODOW FROM d.fecha_venta)::int AS dow,
+                   COALESCE(o.cant, 0) AS cant
+            FROM combos c
+            JOIN dias d ON d.local = c.local
+            LEFT JOIN opciones_diarias o
+                   ON o.local        = c.local
+                  AND o.fecha_venta  = d.fecha_venta
+                  AND o.ab_categoria = c.ab_categoria
+                  AND o.sku_padre    = c.sku_padre
+                  AND o.sku_opcion   = c.sku_opcion
+        )
+        SELECT
+            local, ab_categoria, sku_padre, sku_opcion, nombre_producto, ba_opcion,
+            dow,
+            CASE dow WHEN 1 THEN 'Lunes'  WHEN 2 THEN 'Martes' WHEN 3 THEN 'Miercoles'
+                     WHEN 4 THEN 'Jueves' WHEN 5 THEN 'Viernes' WHEN 6 THEN 'Sabado'
+                     WHEN 7 THEN 'Domingo' END                       AS dia_semana,
+            COUNT(*)                                                 AS n_dias,
+            ROUND(MIN(cant)::numeric, 2)                             AS minimo,
+            ROUND(MAX(cant)::numeric, 2)                             AS maximo,
+            ROUND(AVG(cant)::numeric, 2)                             AS promedio,
+            ROUND(COALESCE(STDDEV_SAMP(cant), 0)::numeric, 2)        AS desv,
+            ROUND((COALESCE(STDDEV_SAMP(cant), 0)
+                   / NULLIF(AVG(cant), 0))::numeric, 2)              AS cv,
+            ROUND(PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY cant)::numeric, 2) AS mediana,
+            ROUND(PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY cant)::numeric, 2) AS p75,
+            ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY cant)::numeric, 2) AS p90,
+            ROUND(MODE() WITHIN GROUP (ORDER BY cant)::numeric, 2)   AS moda
+        FROM serie
+        GROUP BY local, ab_categoria, sku_padre, sku_opcion,
+                 nombre_producto, ba_opcion, dow
+        ORDER BY local, sku_padre, ba_opcion, dow
+    """
+
+    df = run_query(q, params)
+    if df.empty:
+        return df
+
+    df["grupo_ba"] = df["ba_opcion"].apply(
+        lambda x: BA_A_GRUPO.get(str(x or "").strip(), "Otros")
+    )
+    return df
+
 
 
 
@@ -9496,8 +9704,119 @@ elif modulo.startswith("📊"):
                     'Métrica':['Ventas padre','Proteínas','Pan','Sin proteína'],
                     'Unidades':[round(_n_padre,0),round(_prot,1),round(_pan,1),round(_n_padre-_prot,1)]
                 }), use_container_width=True, hide_index=True)
+
             else:
                 st.warning("Sin datos de opciones")
+
+        # ──────────────────────────────────────────────────────────────
+        # ESTADISTICA DE OPCIONES POR DIA DE SEMANA  (capa diaria)
+        # ──────────────────────────────────────────────────────────────
+        st.markdown("---")
+        st.markdown("### 📅 Estadística de opciones por día de semana")
+        st.caption("Lee de la capa diaria `opciones_diarias`. Si el mes elegido no está cargado, "
+                   "usa primero **Actualizar mes en capa diaria**.")
+
+        if 'cp_platos_opts' not in st.session_state:
+            _dpl = run_query("""
+                SELECT DISTINCT sku_producto, MAX(nombre_producto) AS nombre_producto
+                FROM ventas WHERE es_opcion = false
+                GROUP BY sku_producto ORDER BY sku_producto
+            """)
+            st.session_state['cp_platos_opts'] = (
+                _dpl.apply(lambda r: f"{r['sku_producto']} — {r['nombre_producto']}", axis=1).tolist()
+                if not _dpl.empty else []
+            )
+        _cp_opts = st.session_state['cp_platos_opts']
+
+        _cpc1, _cpc2 = st.columns([2, 1])
+        with _cpc1:
+            _cp_platos_sel = st.multiselect(
+                "🍽️ Platos a analizar (vacío = todos)",
+                _cp_opts, key='cp_platos_sel',
+                placeholder="Busca por SKU o nombre…"
+            )
+        with _cpc2:
+            _cp_grupo = st.selectbox(
+                "Grupo de opción",
+                ["Proteína"] + [g for g in BA_GRUPOS.keys() if g != "Proteína"] + ["Todos"],
+                key='cp_grupo_sel'
+            )
+        _cp_skus = [p.split(' — ')[0].strip() for p in _cp_platos_sel] if _cp_platos_sel else []
+
+        st.caption(f"Período: **{f_inicio} → {f_fin}**  ·  Local: **{f_local}**  (filtros globales del sidebar)")
+
+        _cpb1, _cpb2 = st.columns(2)
+        with _cpb1:
+            _cp_btn_upd = st.button("🔄 Actualizar mes en capa diaria", key='cp_btn_upd')
+        with _cpb2:
+            _cp_btn_ver = st.button("📊 Ver estadística", type="primary", key='cp_btn_ver')
+
+        if _cp_btn_upd:
+            _abs = None
+            if _cp_skus:
+                _q_ab = run_query(
+                    "SELECT DISTINCT ab_categoria FROM ventas "
+                    "WHERE es_opcion = false AND sku_producto = ANY(:s)",
+                    {'s': _cp_skus}
+                )
+                _abs = _q_ab['ab_categoria'].dropna().tolist() if not _q_ab.empty else None
+            with st.spinner("Recalculando capa diaria del período…"):
+                _ok = refrescar_opciones_diarias(
+                    f_inicio, f_fin,
+                    platos=(_cp_skus or None),
+                    ab_categorias=_abs
+                )
+            if _ok:
+                st.success("Capa diaria actualizada para el período seleccionado.")
+            else:
+                st.error("No se pudo actualizar la capa diaria. Revisa la conexión.")
+
+        if _cp_btn_ver:
+            with st.spinner("Calculando estadística por día de semana…"):
+                _df_est = get_estadisticas_opciones_dia_semana(
+                    f_inicio, f_fin,
+                    local=f_local,
+                    sku_padre=(_cp_skus[0] if len(_cp_skus) == 1 else None)
+                )
+            if _df_est is None or _df_est.empty:
+                st.warning("Sin datos en la capa diaria para ese período/local. "
+                           "Usa primero **Actualizar mes en capa diaria**.")
+            else:
+                if len(_cp_skus) > 1:
+                    _df_est = _df_est[_df_est['sku_padre'].isin(_cp_skus)]
+                if _cp_grupo != "Todos":
+                    _df_est = _df_est[_df_est['grupo_ba'] == _cp_grupo]
+
+                if _df_est.empty:
+                    st.warning(f"No hay opciones del grupo «{_cp_grupo}» para esa selección.")
+                else:
+                    _cols = {
+                        'dia_semana':'Día', 'sku_padre':'Plato', 'sku_opcion':'SKU',
+                        'nombre_producto':'Opción', 'n_dias':'N° días',
+                        'minimo':'Mín', 'maximo':'Máx', 'promedio':'Promedio',
+                        'mediana':'Mediana', 'moda':'Moda', 'p75':'P75', 'p90':'P90',
+                        'desv':'Desv', 'cv':'CV'
+                    }
+                    _vista = (_df_est
+                              .sort_values(['dow', 'sku_padre', 'promedio'],
+                                           ascending=[True, True, False])
+                              [list(_cols.keys())]
+                              .rename(columns=_cols))
+                    st.markdown(f"**Grupo: {_cp_grupo}**  ·  una fila por opción y día de semana")
+                    st.dataframe(_vista, use_container_width=True, hide_index=True)
+                    st.caption(
+                        "Todas las métricas a la vista para decidir el criterio de producción:  "
+                        "**Promedio/Mediana** = centro de la demanda · **P75/P90** = nivel de servicio "
+                        "(cubrir 75% / 90% de los días) · **Mín/Máx** = piso y techo · "
+                        "**Moda** = valor más frecuente · **CV** = variabilidad (alto = errático).  "
+                        "Los días operativos sin venta cuentan como 0."
+                    )
+                    st.download_button(
+                        "📥 Descargar tabla (CSV)",
+                        _vista.to_csv(index=False).encode('utf-8'),
+                        file_name=f"estadistica_dia_semana_{f_local}_{f_inicio}_{f_fin}.csv",
+                        mime="text/csv", key='cp_dl_csv'
+                    )
 
 
     elif informe_sel in ("CuentasCasa", "Auditor", "Bar"):
