@@ -15785,8 +15785,9 @@ buildTree(data, 1, null);
 
             _sec1, _tot1 = _tabla_macro_sg(_sg_loc)      # sección 1: TODO el local
             _sec2, _tot2 = _tabla_macro_sg(_sg_loc_gz)   # sección 2: garzones whitelist
-            # TODO SENIOR: confirmar que sección 2 = venta de garzones whitelist.
-            # Hipótesis basada en que su total = total general de secciones de garzones.
+            # CONFIRMADO (instructivo v2 §1): sección 1 = todo salón del local;
+            # sección 2 = solo garzones whitelist. Macro-sumas cuadran exacto contra
+            # el PDF (Vitacura: sec1 $72.892.130 > sec2 $59.216.110).
 
             def _render_macro_html_sg(g, total, titulo):
                 html = f"<div style='font-weight:bold;color:#1F3864;margin:6px 0'>{titulo}</div>"
@@ -15817,7 +15818,7 @@ buildTree(data, 1, null);
             with _s2col:
                 st.markdown("#### 2 · Ventas por Categoría")
                 st.markdown(_render_macro_html_sg(_sec2, _tot2, "Garzones evaluados"), unsafe_allow_html=True)
-            st.caption("Sección 1 = toda la venta salón del local. Sección 2 = solo garzones de la whitelist (hipótesis del instructivo, confirmar con product owner).")
+            st.caption("Sección 1 = toda la venta salón del local. Sección 2 = solo garzones de la whitelist. Confirmado contra PDF (sección 1 > sección 2).")
             st.markdown("---")
 
             # ════════════════════════════════════════════════════════════════
@@ -15903,12 +15904,31 @@ buildTree(data, 1, null);
             ])
             st.markdown(_render_subcat_html_sg(_g_cp, _g_cp['monto'].sum(), "VENTAS CAFETERÍA Y POSTRES",
                                                _tot_venta_salon_gz, _sg_qgar), unsafe_allow_html=True)
-            # Metas del local (referencia)
+            # Q (unidades) vs META (v2 §5: Cafetería/Postres se miden en Q vs meta, no en %).
+            # Meta de la semana = meta diaria × nº de días del rango seleccionado.
             _meta_loc = _METAS_SG.get(_sg_local, {})
             if _meta_loc:
-                _mc = _meta_loc.get('Cafetería', {}).get('diaria', 0)
-                _mp = _meta_loc.get('Postres', {}).get('diaria', 0)
-                st.caption(f"Meta diaria · Cafetería: {_mc} · Postres: {_mp} (semana ≈ ×7).")
+                _dias_sem = (_sg_ff - _sg_fi).days + 1
+                _mc_dia = _meta_loc.get('Cafetería', {}).get('diaria', 0)
+                _mp_dia = _meta_loc.get('Postres', {}).get('diaria', 0)
+                _meta_cafe = _mc_dia * _dias_sem
+                _meta_post = _mp_dia * _dias_sem
+                _cmpl_cafe = (_q_cafe / _meta_cafe * 100) if _meta_cafe > 0 else 0
+                _cmpl_post = (_q_post / _meta_post * 100) if _meta_post > 0 else 0
+                def _color_meta(p):
+                    return '#2E7D32' if p >= 100 else ('#D4A853' if p >= 80 else '#B71C1C')
+                _meta_html = "<div style='display:flex;flex-wrap:wrap;gap:10px;margin:6px 0'>"
+                for _lbl, _q, _meta, _cmpl in [("Cafetería", _q_cafe, _meta_cafe, _cmpl_cafe),
+                                               ("Postres", _q_post, _meta_post, _cmpl_post)]:
+                    _meta_html += (
+                        f"<div style='border:1px solid #E0E0E0;border-radius:8px;padding:8px 14px;background:#FFFFFF'>"
+                        f"<div style='font-size:0.78rem;color:#555'>{_lbl}</div>"
+                        f"<div style='font-size:1.05rem;font-weight:bold;color:#1F3864'>{_fmt_q_sg(_q)} <span style='color:#888;font-weight:normal'>/ {_fmt_q_sg(_meta)} meta</span></div>"
+                        f"<div style='font-size:0.85rem;font-weight:bold;color:{_color_meta(_cmpl)}'>{_fmt_pct_sg(_cmpl)} cumplimiento</div>"
+                        f"</div>")
+                _meta_html += "</div>"
+                st.markdown(_meta_html, unsafe_allow_html=True)
+                st.caption(f"Meta = meta diaria × {_dias_sem} días del período. Cafetería {_mc_dia}/día · Postres {_mp_dia}/día.")
 
             # --- 3c. LÍQUIDOS C/A ---
             _df_ca = _sg_loc_gz[_sg_loc_gz['cat_agr'] == 'Líquidos C/A'].copy()
@@ -16029,8 +16049,7 @@ buildTree(data, 1, null);
                 _gh += "</tbody></table></div>"
                 st.markdown(_gh, unsafe_allow_html=True)
                 st.caption("Agregados, Líq S/A y Líq C/A en % sobre la venta del garzón. Cafetería y Postres en unidades (Q). "
-                           "El % TOTAL suma los 5 porcentajes de categoría (incluye Café/Postres en %), según validación del instructivo.")
-                # TODO SENIOR: confirmar que el %TOTAL sigue sumando las 5 categorías aunque Café/Postres se muestren en Q.
+                           "El % TOTAL suma los 5 porcentajes de categoría (Café/Postres también en %), confirmado contra los PDFs de referencia (v2 §4).")
             st.markdown("---")
 
             # ════════════════════════════════════════════════════════════════
@@ -16087,6 +16106,47 @@ buildTree(data, 1, null);
             _lh += "</tbody></table></div>"
             st.markdown(_lh, unsafe_allow_html=True)
             st.caption(f"Ranking por % adicionales total. **{_sg_local}** resaltado en dorado (posición {_sg_rank_pos}/10).")
+            st.markdown("---")
+
+            # ════════════════════════════════════════════════════════════════
+            # SECCIÓN 7 — Comparativa Productos Estratégicos (matriz local × producto)
+            # Valor = promedio diario por garzón = Q producto / días período / nº garzones.
+            # Universo: toda la red, garzones whitelist (§8, §3.7).
+            # ════════════════════════════════════════════════════════════════
+            st.markdown("#### 7 · Comparativa Productos Estratégicos (promedio diario × garzón)")
+            _dias_periodo = max((_sg_ff - _sg_fi).days + 1, 1)
+            _sg_red_nom = _sg_red_gz.copy()
+            _sg_red_nom['_nom_low'] = _sg_red_nom['nombre_producto'].astype(str).str.strip().str.lower()
+            _estr_cols = list(_PRODUCTOS_ESTRATEGICOS_SG.keys())
+            _m7_rows = []
+            for _lc in _LOCALES_ORDEN_SG:
+                _dfl = _sg_red_nom[_sg_red_nom['local'] == _lc]
+                _ngar = max(int(_dfl['garzon'].nunique()), 1)
+                _fila = {"local": _lc}
+                for _et, _variantes in _PRODUCTOS_ESTRATEGICOS_SG.items():
+                    _mask = _dfl['_nom_low'].apply(lambda n: any(v in n for v in _variantes))
+                    _q = _dfl[_mask]['cantidad_vendida'].sum()
+                    # promedio diario por garzón
+                    _fila[_et] = _q / _dias_periodo / _ngar if (_dias_periodo > 0 and _ngar > 0) else 0
+                _m7_rows.append(_fila)
+            _m7_df = pd.DataFrame(_m7_rows)
+            _m7h = "<div style='overflow-x:auto'><table style='width:100%;border-collapse:collapse;font-size:0.78rem'>"
+            _m7h += "<thead><tr><th style='text-align:left;padding:6px 8px;background:#1F3864;color:#fff'>Local</th>"
+            for _et in _estr_cols:
+                _m7h += f"<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>{_et}</th>"
+            _m7h += "</tr></thead><tbody>"
+            for _ri, _row in _m7_df.iterrows():
+                _es_actual = _row['local'] == _sg_local
+                _bg = '#D4A853' if _es_actual else ('#F5F5F5' if _ri % 2 == 0 else '#FFFFFF')
+                _col = '#1F3864' if _es_actual else '#222'
+                _fw = 'bold' if _es_actual else 'normal'
+                _m7h += f"<tr><td style='padding:6px 8px;background:{_bg};color:{_col};font-weight:{_fw}'>{_row['local']}</td>"
+                for _et in _estr_cols:
+                    _m7h += f"<td style='text-align:right;padding:6px 8px;background:{_bg};color:{_col}'>{('%.2f' % _row[_et]).replace('.', ',')}</td>"
+                _m7h += "</tr>"
+            _m7h += "</tbody></table></div>"
+            st.markdown(_m7h, unsafe_allow_html=True)
+            st.caption(f"Promedio diario por garzón = unidades del producto ÷ {_dias_periodo} días ÷ nº garzones del local.")
             st.markdown("---")
 
             # ════════════════════════════════════════════════════════════════
@@ -16173,6 +16233,94 @@ buildTree(data, 1, null);
             else:
                 st.info("Sin datos suficientes para el comportamiento mensual.")
             st.markdown("---")
+
+            # ════════════════════════════════════════════════════════════════
+            # TEST DE REFERENCIA FIJO (§6) — solo MONTOS (el PDF no sirve para Q).
+            # Se muestra automáticamente cuando local+semana coinciden con un caso conocido.
+            # ════════════════════════════════════════════════════════════════
+            _REF_SG = {
+                ("Vitacura", "2026-06-01", "2026-06-07"): {
+                    "cafe_monto": 1447250, "post_monto": 1884300,
+                    "sec1_total": 72892130, "sec2_total": 59216110},
+                ("Nueva Providencia", "2026-06-01", "2026-06-07"): {
+                    "sec2_total": 40590080},
+            }
+            _ref_key = (_sg_local, str(_sg_fi), str(_sg_ff))
+            if _ref_key in _REF_SG:
+                _ref = _REF_SG[_ref_key]
+                st.markdown("#### ✅ Test de referencia (contra PDF — solo montos)")
+                _ref_checks = []
+                if "cafe_monto" in _ref:
+                    _ref_checks.append(("Cafetería $", _m_cafe, _ref["cafe_monto"]))
+                if "post_monto" in _ref:
+                    _ref_checks.append(("Postres $", _m_post, _ref["post_monto"]))
+                if "sec1_total" in _ref:
+                    _ref_checks.append(("Sección 1 total $", _tot1, _ref["sec1_total"]))
+                if "sec2_total" in _ref:
+                    _ref_checks.append(("Sección 2 total $", _tot2, _ref["sec2_total"]))
+                _rc_html = "<div style='font-size:0.88rem'>"
+                for _lbl, _val, _esp in _ref_checks:
+                    _ok = abs(_val - _esp) < 1
+                    _ic = '✅' if _ok else '❌'
+                    _rc_html += (f"<div>{_ic} <b>{_lbl}</b>: {_fmt_clp_sg(_val)} "
+                                 f"<span style='color:#888'>(esperado {_fmt_clp_sg(_esp)})</span></div>")
+                _rc_html += "</div>"
+                st.markdown(_rc_html, unsafe_allow_html=True)
+                st.markdown("---")
+
+            # ════════════════════════════════════════════════════════════════
+            # MODO DEBUG / VALIDACIÓN DE MONTOS (§6) — detrás de checkbox.
+            # Cada chequeo compara una suma reconstruida vs un total ya calculado.
+            # Cualquier ❌ es un descuadre a reportar, NO a parchar a mano.
+            # ════════════════════════════════════════════════════════════════
+            if st.checkbox("🔧 Modo debug / validación de montos", key="sg_debug"):
+                _dbg = []
+
+                # 1) Sección 1 = suma de las 3 macro-familias = venta salón total del local.
+                _tot_macro_sec1 = _sec1['monto'].sum()
+                _venta_salon_total_local = _sg_loc['monto_venta_real'].sum()
+                _dbg.append(("Sección 1 = suma de 3 familias = venta salón local",
+                             abs(_tot_macro_sec1 - _venta_salon_total_local) < 1))
+
+                # 2) Sección 2 (whitelist) <= Sección 1 (todo).
+                _dbg.append(("Sección 2 (whitelist) ≤ Sección 1 (todo)",
+                             _tot2 <= _tot1 + 1))
+
+                # 3) % TOTAL de cada garzón == suma de sus 5 % adicionales (tol. 0,15 pp).
+                if _gz_seg is not None and not _gz_seg.empty:
+                    _n_ok_gz, _n_tot_gz = 0, 0
+                    for _, _grow in _gz_seg.iterrows():
+                        _suma5 = (_grow.get('Agregados', 0)
+                                  + _grow.get('Cafetería_pct', 0)
+                                  + _grow.get('Postres_pct', 0)
+                                  + _grow.get('Líquidos S/A', 0)
+                                  + _grow.get('Líquidos C/A', 0))
+                        _n_tot_gz += 1
+                        if abs(_suma5 - _grow['pct_total']) < 0.15:
+                            _n_ok_gz += 1
+                    _dbg.append((f"%TOTAL = Σ 5 categorías en cada garzón ({_n_ok_gz}/{_n_tot_gz})",
+                                 _n_ok_gz == _n_tot_gz))
+
+                # 4) Suma de montos por garzón == monto total del local (whitelist).
+                if _gz_seg is not None and not _gz_seg.empty:
+                    _suma_gz = _gz_seg['venta_total'].sum()
+                    _venta_local_wl = _sg_loc_gz['monto_venta_real'].sum()
+                    _dbg.append(("Σ venta garzones = venta local (whitelist)",
+                                 abs(_suma_gz - _venta_local_wl) < 1))
+
+                # 5) Cafetería/Postres: monto whitelist ≤ monto sin filtro (coherencia universo).
+                _m_cafe_all = _sg_loc[_sg_loc['ab_categoria'] == _AB_CAFETERIA_SG]['monto_venta_real'].sum()
+                _m_post_all = _sg_loc[_sg_loc['ab_categoria'] == _AB_POSTRES_SG]['monto_venta_real'].sum()
+                _dbg.append(("Cafetería $ whitelist ≤ todo salón", _m_cafe <= _m_cafe_all + 1))
+                _dbg.append(("Postres $ whitelist ≤ todo salón", _m_post <= _m_post_all + 1))
+
+                _n_ok = sum(1 for _, _ok in _dbg if _ok)
+                st.markdown(f"**Resultado: {_n_ok}/{len(_dbg)} chequeos OK**")
+                for _txt, _ok in _dbg:
+                    st.markdown(f"{'✅' if _ok else '❌'} {_txt}")
+                st.caption("Tolerancia: ±1 peso en montos, ±0,15 punto en porcentajes. "
+                           "Cualquier ❌ es un descuadre real a revisar, no a corregir a mano.")
+                st.markdown("---")
 
             # ════════════════════════════════════════════════════════════════
             # SALIDA PDF (§7) — estilo casa: oscuro + dorado + logo
