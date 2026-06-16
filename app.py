@@ -2892,7 +2892,7 @@ with st.sidebar:
     if _is_admin:
         menu_items["📦 Gestión de Datos"] = []
     if _user_puede("📊 Informes"):
-        menu_items["📊 Informes"] = ["Rentabilidad", "Desviación", "Variación Precio Compras", "Informe de Costos", "Auditor Categorías", "Tendencias Bar", "Cuentas Casa", "Venta Diaria", "Rendimiento Garzones", "Tendencia de Ventas", "Control de Producción"]
+        menu_items["📊 Informes"] = ["Rentabilidad", "Desviación", "Variación Precio Compras", "Informe de Costos", "Auditor Categorías", "Tendencias Bar", "Cuentas Casa", "Venta Diaria", "Rendimiento Garzones", "Tendencia de Ventas", "Control de Producción", "Seguimiento Garzones"]
     if _is_admin or _user_puede("📋 Notas de Crédito"):
         menu_items["📋 Notas de Crédito"] = []
     if _is_admin:
@@ -7375,6 +7375,8 @@ elif modulo.startswith("📊"):
         informe_sel = "TendenciaVentas"
     elif "Control de Producción" in modulo or "Control de Produccion" in modulo:
         informe_sel = "ControlProduccion"
+    elif "Seguimiento Garzones" in modulo:
+        informe_sel = "SeguimientoGarzones"
     else:
         informe_sel = "Informe 1"  # default
 
@@ -15415,6 +15417,922 @@ buildTree(data, 1, null);
                 periodo_safe = d['periodo'].replace(' ','_').replace('/','_')
                 nombre_file  = f"Informe_{local_rpt}_{periodo_safe}.xlsx"
 
+    elif informe_sel == "SeguimientoGarzones":
+        # ══════════════════════════════════════════════════════════════════
+        #  SEGUIMIENTO GARZONES  (replica del PDF "Control de Ventas Salón")
+        #  Informe semanal de trazabilidad de ventas por garzón / local / red.
+        #  Construido replicando la lógica del informe Garzones SIN modificarlo:
+        #  todas las constantes/funciones llevan sufijo _SG y son autónomas.
+        # ══════════════════════════════════════════════════════════════════
+        import plotly.graph_objects as go
+        from datetime import date as _d, timedelta as _td
+
+        # ── 1. Mapa de categorías (réplica EXACTA de _CAT_MENU_MAP de Garzones) ──
+        _CAT_MENU_MAP_SG = {
+            "Acompañamiento Almuerzo": "Alimentos", "AcompaÃ±amiento Almuerzo": "Alimentos",
+            "Acompañamientos": "Alimentos", "AcompaÃ±amientos": "Alimentos",
+            "Acompanamiento Almuerzo": "Alimentos", "Acompanamientos": "Alimentos",
+            "Ensaladas Y Otros": "Alimentos", "Ensaladas Almuerzo": "Alimentos",
+            "Para Compartir": "Alimentos",
+            "Platos Clásicos": "Alimentos", "Platos Clasicos": "Alimentos",
+            "PlÃ¡sicos": "Alimentos",
+            "Platos Alemanes": "Alimentos",
+            "Hamburguesa Clásica": "Alimentos", "Hamburguesa Clasica": "Alimentos",
+            "Hamburguesa De La Casa": "Alimentos", "Hamburguesa De Quinoa": "Alimentos",
+            "Lomito Clásico": "Alimentos", "Lomito Clasico": "Alimentos",
+            "Ave Clásica": "Alimentos", "Ave Clasica": "Alimentos",
+            "Churrasco Clásico": "Alimentos", "Churrasco Clasico": "Alimentos",
+            "Pernil Clásico": "Alimentos", "Pernil Clasico": "Alimentos",
+            "Filete Clásico": "Alimentos", "Filete Clasico": "Alimentos",
+            "Mechada Clásica": "Alimentos", "Mechada Clasica": "Alimentos",
+            "Sándwich Clásicos": "Alimentos", "Sandwich Clasicos": "Alimentos",
+            "SÃ¡ndwich ClÃ¡sicos": "Alimentos",
+            "Niños": "Alimentos", "NiÃ±os": "Alimentos", "Ninos": "Alimentos",
+            "Hot-Dog": "Alimentos", "Hot Dog": "Alimentos",
+            "ACOMPANAMIENTO ALMUERZO": "Colación",
+            "ENSALADAS ALMUERZO": "Colación",
+            "Seleccionados Para Ti": "Alimentos",
+            "PROTEINA ALMUERZO": "Colación",
+            "Postres": "Postres",
+            "Cafeteria": "Cafetería", "Cafetería": "Cafetería",
+            "Agregados": "Agregados", "Colacion": "Colación",
+            "Menu Ejecutivo": "Colación", "Menú Ejecutivo": "Colación",
+            "MenÃº Ejecutivo": "Colación",
+            "Proteina Almuerzo": "Colación",
+            "Cervezas": "Líquidos C/A", "Cocteles": "Líquidos C/A",
+            "Piscos": "Líquidos C/A", "Pisco Sour": "Líquidos C/A",
+            "Vinos": "Líquidos C/A", "Espumantes": "Líquidos C/A",
+            "Bajativos": "Líquidos C/A", "Ron": "Líquidos C/A",
+            "Whisky": "Líquidos C/A", "Vodka": "Líquidos C/A",
+            "Tequila": "Líquidos C/A", "Tragos": "Líquidos C/A",
+            "Royal Guard": "Líquidos C/A", "Heineken": "Líquidos C/A",
+            "Cerveza": "Líquidos C/A", "Vinos y Espumantes": "Líquidos C/A",
+            "Bebidas": "Líquidos S/A", "Jugos Naturales": "Líquidos S/A",
+            "Limonadas": "Líquidos S/A", "Aguas": "Líquidos S/A",
+            "Bebestibles": "Líquidos S/A", "Tragos S/A": "Líquidos S/A",
+            "Tragos Sin Alcohol": "Líquidos S/A",
+            "Jugos/Limonadas": "Líquidos S/A",
+        }
+
+        # ── 2. Whitelist de garzones (réplica EXACTA de _GARZONES_VALIDOS) ──
+        _GARZONES_VALIDOS_SG = {
+            "Johann Bermudez","Francisco Navarro","Yirfrey Alexander Valero Ramirez","Yurubi",
+            "Genesis Penafiel","Raul Figueroa","David Ramirez","Miguel Menacho Oliveira",
+            "Maria Campos","Alejandro Vergara","Sofia Andarcia","Jesus Rodriguez Molina",
+            "Jose Ricardo Valdes Contreras","Jose Tomas Mora Castillo","Eduard Cabrera",
+            "Enrique Jose Saavedra Briceno","Jose Daniel Vera","Manuel Chacon","Robert Duran",
+            "Felipe Hueiquil","Joaquin Arandia","Alexander Quintero","Eloy Sandoval",
+            "Carlos Alberto Abarca Suarez","Yuliana Valdebenito","Victor Escalona",
+            "Eliscar Torres","Mariely Karina Rivera Linares","Yovanny Duarte","Manuel Rodriguez",
+            "Jose Chacin","Jesus Alberto Segovia Aranguren","Pedro Ruiz","Pedro Maldonado",
+            "Jonnatha Araujo","Wilmer Causil","Pablo Oviedo","Carolina Rodriguez",
+            "Maria Paula Gonzalez Franco","Carlos David Colina","Yusney Jaimes","Marco Valdez",
+            "Rocio Gutierrez Opazo","David Alcivar Rosero","Magdalena Castro","Manuel Aguila",
+            "Nayiber Campos","Daniel Espinoza","Julio Gil","Lascano Gaming","Jhoiner Garcia",
+            "Ivan Mazaby","Kevin Gaitan","Ana Araque","Eduard Quinones Quinones Yepez",
+            "Jhonny Gomez","Prospero Alexis Gutierrez Ramirez","Charlotte Gonzalez","Juan Agudelo",
+            "BERNARDO CASTRO Castro","Wilmer Alfonso","Evelyn jaque","Frettzy Lucena Querales",
+            "Ivan Eduardo Salazar Alvarez","Jeremit Orlando Asicle Suarez","Gustavo Alvarado",
+            "Lisette Morell Coloma","Junior Mora","Yenifer Pabon","Jose Aquiles Mora Ramirez",
+            "Gustavo Saldias","Jorge Grandon","Rodrigo Alejandro Romero Castillo",
+            "NICOLAS TERRAZA","Jose Castillo","Juan Rodriguez","Cindy Santander","Abelmary Romero",
+            "Edwar Pernalete","Jimmy Gallo","Jesus Antonio Ramirez","Yosman Rangel",
+            "Jonathan Araujo","Nasslo Beltran","Keiber Eduardo Munoz Urribarri","Jose Pacheco",
+            "Nestor Rosas","dubuc_juan Dubuc Martinez","Jackson Moreno","Richard Gonzalez",
+        }
+
+        # ── 3. Función de categorización (réplica EXACTA de _gz_categorizar) ──
+        def _categorizar_sg(cat_menu, nombre_producto):
+            """Traduce categoria_menu → categoría agrupada (igual que el PowerPivot)."""
+            cat_norm = str(cat_menu).strip() if cat_menu else ""
+            result = _CAT_MENU_MAP_SG.get(cat_norm)
+            if result:
+                return result
+            nom = str(nombre_producto).strip() if nombre_producto else ""
+            _NOMBRE_MAP = {
+                "Hot dog Italiano": "Alimentos", "Hot dog Dinamico": "Alimentos",
+                "Hot dog Completa": "Alimentos", "Hot dog Tomate Mayo": "Alimentos",
+                "Pisco Sour De La Casa": "Líquidos C/A", "Pisco Sour Peruano": "Líquidos C/A",
+                "Sangria  AE": "Líquidos C/A", "Royal Guard": "Líquidos C/A",
+                "Heineken": "Líquidos C/A",
+                "Coca Cola": "Líquidos S/A", "Coca Cola Zero": "Líquidos S/A",
+                "Coca Cola Light": "Líquidos S/A", "Sprite": "Líquidos S/A",
+                "Sprite Zero": "Líquidos S/A", "Fanta Zero": "Líquidos S/A",
+                "Agua con gas": "Líquidos S/A", "Agua sin gas": "Líquidos S/A",
+                "Mineral con Gas": "Líquidos S/A", "Mineral sin gas": "Líquidos S/A",
+                "Ginger Ale Ligh": "Líquidos S/A",
+                "Mojito Clasico Sin Alcohol": "Líquidos S/A",
+                "Mojito Berries Sin Alcohol": "Líquidos S/A",
+                "Mojito Maracuya Sin Alcohol": "Líquidos S/A",
+                "London Mule Sin Alcohol": "Líquidos S/A",
+                "Gin Tonic Sin Alcohol": "Líquidos S/A",
+            }
+            for k, v in _NOMBRE_MAP.items():
+                if k.lower() in nom.lower():
+                    return v
+            return None
+
+        # ── 4. Macro-familia para secciones 1 y 2 (3 grupos del PDF, §3.1) ──
+        def _macro_familia_sg(cat_agrupada):
+            if cat_agrupada in ("Alimentos", "Agregados", "Colación"):
+                return "ALIMENTOS"
+            if cat_agrupada in ("Líquidos C/A", "Líquidos S/A"):
+                return "BAR"
+            if cat_agrupada in ("Cafetería", "Postres"):
+                return "CAFETERÍA Y POSTRES"
+            return None
+
+        # ── 5. Venta Salón (criterio del Word: forma_pago, §3.3) ──
+        # NOTA: el módulo Resumen Ventas usa 'origen' para Salón/Delivery; este
+        # informe usa 'forma_pago' por indicación del instructivo (switch del Word).
+        _FORMAS_PAGO_SALON_SG = [
+            "Amipass", "Cuenta casa", "Getnet PDV", "Efectivo",
+            "Tarjeta Crédito", "Tarjeta Débito", "Tarjeta Debito", "Tarjeta Credito",
+        ]
+
+        # ── 6. Jefatura por local (§6.1, llave = local canónico de la BD) ──
+        _JEFATURA_LOCAL_SG = {
+            "La Reina":          {"supervisor": "Cristian Ramirez", "jefe": "Jose Mendoza Escalante",    "subjefe": "Gerardo Delgado Villalobos"},
+            "Quilin":            {"supervisor": "Cristian Ramirez", "jefe": "Jose Gil Romero",            "subjefe": "Giovanni Rojas"},
+            "La Dehesa":         {"supervisor": "Cristian Ramirez", "jefe": "Miguel Quintero Rodriguez",  "subjefe": "Oscar Barrera Valdebenito"},
+            "Macul":             {"supervisor": "Cristian Ramirez", "jefe": "Alexander Marin Torrealba",  "subjefe": "Nathaly Papa Colmenares"},
+            "Los Trapenses":     {"supervisor": "Cristian Ramirez", "jefe": "Elicmer Uzcategui Rondon",   "subjefe": "Rodrigo Montt Creixell"},
+            "Providencia":       {"supervisor": "Luis Mendoza",     "jefe": "Jose Mora Carrero",          "subjefe": "Oscar Loyola Sepulveda"},
+            "Nueva Providencia": {"supervisor": "Luis Mendoza",     "jefe": "Rodrigo Calderon Villaseca", "subjefe": "Angel Seidel Caldero"},
+            "Chicureo":          {"supervisor": "Luis Mendoza",     "jefe": "Angel Molina Contreras",     "subjefe": "Maria Espina Cairasco"},
+            "Vitacura":          {"supervisor": "Luis Mendoza",     "jefe": "Sergio Salas Cazorla",       "subjefe": "Michelle Maleville Muñoz"},
+            "Las Condes":        {"supervisor": "Luis Mendoza",     "jefe": "Yuleidi Zambrano Hernandez", "subjefe": "Johelvi Pineda Salas"},
+        }
+
+        # ── 7. Metas Cafetería/Postres (réplica EXACTA de _METAS) ──
+        _METAS_SG = {
+            "La Reina":           {"Cafetería": {"mensual": 1499, "diaria": 50},  "Postres": {"mensual": 1543, "diaria": 51}},
+            "Quilin":             {"Cafetería": {"mensual": 1112, "diaria": 37},  "Postres": {"mensual": 1412, "diaria": 47}},
+            "Macul":              {"Cafetería": {"mensual": 1840, "diaria": 61},  "Postres": {"mensual": 2226, "diaria": 74}},
+            "Chicureo":           {"Cafetería": {"mensual": 1653, "diaria": 55},  "Postres": {"mensual": 1926, "diaria": 64}},
+            "La Dehesa":          {"Cafetería": {"mensual": 1736, "diaria": 58},  "Postres": {"mensual": 1658, "diaria": 55}},
+            "Las Condes":         {"Cafetería": {"mensual": 2024, "diaria": 67},  "Postres": {"mensual": 1984, "diaria": 66}},
+            "Los Trapenses":      {"Cafetería": {"mensual": 1857, "diaria": 62},  "Postres": {"mensual": 1962, "diaria": 65}},
+            "Nueva Providencia":  {"Cafetería": {"mensual": 1119, "diaria": 37},  "Postres": {"mensual": 1244, "diaria": 41}},
+            "Providencia":        {"Cafetería": {"mensual":  728, "diaria": 24},  "Postres": {"mensual":  942, "diaria": 31}},
+            "Vitacura":           {"Cafetería": {"mensual": 2764, "diaria": 92},  "Postres": {"mensual": 2431, "diaria": 81}},
+        }
+
+        # ── 8. Subcategorías finas de líquidos (§3.4) ──
+        def _subcat_liquidos_sg(sku, macro):
+            pref = str(sku).split('-')[0].upper() if '-' in str(sku) else ''
+            if macro == "Líquidos C/A":
+                if pref == "CER": return "CERVEZAS"
+                if pref in ("COC","PIS","RON","TEQ","VOD","WHI","BAJ"): return "TRAGOS Y COCTAILS"
+                if pref in ("VIN","ESP"): return "VINOS Y ESPUMANTES"
+                return "TRAGOS Y COCTAILS"
+            if macro == "Líquidos S/A":
+                if pref in ("BEB","BET"): return "BEBIDAS Y AGUAS"
+                if pref in ("JUG","LIM"): return "JUGOS, LIMONADAS Y TRAGOS S/A"
+                return "JUGOS, LIMONADAS Y TRAGOS S/A"
+            return None
+
+        # ── 9. Subcategorías de ALIMENTOS (§3.5) ──
+        def _subcat_alimentos_sg(cat_menu, cat_agrupada):
+            c = str(cat_menu).strip()
+            if cat_agrupada == "Alimentos":
+                if c in ("Para Compartir",): return "PARA COMPARTIR"
+                if c in ("Ensaladas Y Otros","Ensaladas y Otros","ENSALADAS ALMUERZO"): return "ENSALADAS Y OTROS"
+                if c in ("Niños","Ninos","NiÃ±os"): return "NIÑOS"
+                if c in ("Platos Clásicos","Platos Clasicos","Platos Alemanes","Platos"): return "PLATOS"
+                return "SANDWICH Y HAMBURGUESAS"
+            if cat_agrupada in ("Agregados",):
+                return "AGREGADOS Y ACOMPAÑAMIENTOS"
+            if cat_agrupada in ("Colación",):
+                return None  # colaciones NO van en este informe de salón. # TODO SENIOR: confirmar
+            return None
+
+        # ── 10. Productos estratégicos (§6.5, identificación por nombre) ──
+        _PRODUCTOS_ESTRATEGICOS_SG = {
+            "ALCAPARRAS":          ["alcaparras"],
+            "MAYONESA TRUFADA":    ["mayonesa trufada"],
+            "SALSA A LA PIMIENTA": ["salsa a la pimienta"],
+            "SALSA DE QUESO AZUL": ["salsa de queso azul", "salsa queso azul"],
+            "AJI VERDE":           ["aji verde", "ají verde"],
+        }
+
+        # ── 11. Constantes varias del informe ──
+        _CATS_ADICIONALES_SG = ["Agregados", "Cafetería", "Postres", "Líquidos S/A", "Líquidos C/A"]
+        _APORTE_PROPINA_PCT_SG = 0.10  # §6.6: propina estándar Chile = 10% de la venta del garzón
+        _AB_CAFETERIA_SG = "AB.210260"
+        _AB_POSTRES_SG   = "AB.210250"
+        _LOCALES_ORDEN_SG = ['La Reina','Quilin','La Dehesa','Las Condes','Los Trapenses',
+                             'Nueva Providencia','Vitacura','Providencia','Macul','Chicureo']
+
+        # ── Helpers de formato (réplica de _fmt_clp / _render_html_table) ──
+        def _fmt_clp_sg(v):
+            try: return f"${int(round(v)):,}".replace(',', '.')
+            except: return '-'
+
+        def _fmt_pct_sg(v):
+            try: return f"{v:.1f}%".replace('.', ',')
+            except: return '-'
+
+        def _fmt_q_sg(v):
+            try: return f"{int(round(v)):,}".replace(',', '.')
+            except: return '-'
+
+        st.markdown("---")
+
+        # ── CONTROLES (§6.0) ───────────────────────────────────────────────
+        _sg_c1, _sg_c2, _sg_c3, _sg_c4 = st.columns([2, 2, 2, 1])
+        with _sg_c1:
+            _sg_hoy = _d.today()
+            _sg_lunes_actual = _sg_hoy - _td(days=_sg_hoy.weekday())
+            _sg_fi = st.date_input("Semana desde", value=_sg_lunes_actual - _td(days=7), key="sg_fi")
+        with _sg_c2:
+            _sg_ff = st.date_input("Semana hasta", value=_sg_lunes_actual - _td(days=1), key="sg_ff")
+        with _sg_c3:
+            _sg_local = st.selectbox("Local", _LOCALES_ORDEN_SG, key="sg_local")
+        with _sg_c4:
+            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+            _sg_btn = st.button("Generar", key="sg_btn", type="primary", use_container_width=True)
+
+        # ── CARGA / CACHÉ ───────────────────────────────────────────────────
+        if _sg_btn:
+            with st.spinner("Cargando ventas de salón..."):
+                # Query base (§6.2): detalle de la semana, SOLO ventas salón, TODA la red
+                # (se necesita toda la red para ranking y comparativas 6, 7, 10, 11).
+                _sg_sql = """
+                    SELECT fecha_venta, local, garzon, sku_producto, nombre_producto,
+                           categoria_menu, ab_categoria, es_opcion,
+                           cantidad_vendida, monto_venta_real, propina, forma_pago
+                    FROM ventas
+                    WHERE fecha_venta BETWEEN :fi AND :ff
+                      AND local IS NOT NULL
+                      AND forma_pago = ANY(:formas_salon)
+                """
+                _sg_params = {"fi": str(_sg_fi), "ff": str(_sg_ff),
+                              "formas_salon": _FORMAS_PAGO_SALON_SG}
+                _sg_raw = run_query(_sg_sql, _sg_params)
+
+                # Query evolución 4 semanas (§6.8): mismo filtro, 3 semanas más atrás.
+                _sg_fi_4w = _sg_fi - _td(weeks=3)
+                _sg_params_4w = {"fi": str(_sg_fi_4w), "ff": str(_sg_ff),
+                                 "formas_salon": _FORMAS_PAGO_SALON_SG}
+                _sg_raw_4w = run_query(_sg_sql, _sg_params_4w)
+
+                # Query mensual (§6.8, sección 11): ~4 meses hacia atrás desde el inicio de semana.
+                _sg_fi_mes = (_sg_fi.replace(day=1) - _td(days=1)).replace(day=1)
+                _sg_fi_mes = (_sg_fi_mes.replace(day=1) - _td(days=1)).replace(day=1)
+                _sg_fi_mes = (_sg_fi_mes.replace(day=1) - _td(days=1)).replace(day=1)
+                _sg_params_mes = {"fi": str(_sg_fi_mes), "ff": str(_sg_ff),
+                                  "formas_salon": _FORMAS_PAGO_SALON_SG}
+                _sg_raw_mes = run_query(_sg_sql, _sg_params_mes)
+
+                st.session_state["sg_data"]     = _sg_raw
+                st.session_state["sg_data_4w"]   = _sg_raw_4w
+                st.session_state["sg_data_mes"]  = _sg_raw_mes
+                st.session_state["sg_fi_val"]    = str(_sg_fi)
+                st.session_state["sg_ff_val"]    = str(_sg_ff)
+                st.session_state["sg_local_val"] = _sg_local
+
+        _sg_raw     = st.session_state.get("sg_data", pd.DataFrame())
+        _sg_raw_4w  = st.session_state.get("sg_data_4w", pd.DataFrame())
+        _sg_raw_mes = st.session_state.get("sg_data_mes", pd.DataFrame())
+
+        if _sg_raw is None or _sg_raw.empty:
+            st.info("Selecciona la semana y el local, luego presiona **Generar**.")
+        else:
+            # ── PREPARACIÓN EN PANDAS (§6.2) ────────────────────────────────
+            _sg_raw = _sg_raw.copy()
+            _sg_raw['monto_venta_real'] = pd.to_numeric(_sg_raw['monto_venta_real'], errors='coerce').fillna(0)
+            _sg_raw['cantidad_vendida'] = pd.to_numeric(_sg_raw['cantidad_vendida'], errors='coerce').fillna(0)
+            _sg_raw['propina']          = pd.to_numeric(_sg_raw.get('propina', 0), errors='coerce').fillna(0)
+            # es_opcion puede venir como bool, 't'/'f' o 0/1: normalizar a bool
+            def _to_bool_sg(x):
+                if isinstance(x, bool): return x
+                return str(x).strip().lower() in ('true', 't', '1', 'yes', 'y')
+            _sg_raw['es_opcion'] = _sg_raw['es_opcion'].apply(_to_bool_sg)
+
+            # Productos vendibles (es_opcion = False)
+            _sg_vend = _sg_raw[~_sg_raw['es_opcion']].copy()
+            _sg_vend['cat_agr'] = _sg_vend.apply(
+                lambda r: _categorizar_sg(r['categoria_menu'], r['nombre_producto']), axis=1)
+            _sg_vend['macro'] = _sg_vend['cat_agr'].apply(_macro_familia_sg)
+
+            # Subsets del local seleccionado
+            _sg_loc    = _sg_vend[_sg_vend['local'] == _sg_local].copy()
+            _sg_loc_gz = _sg_loc[_sg_loc['garzon'].isin(_GARZONES_VALIDOS_SG)].copy()
+
+            # ── CABECERA (§6.1) ─────────────────────────────────────────────
+            _sg_jef = _JEFATURA_LOCAL_SG.get(_sg_local, {"supervisor": "-", "jefe": "-", "subjefe": "-"})
+            _sg_qg_auto = int(_sg_loc_gz['garzon'].nunique())
+
+            _h1, _h2 = st.columns([3, 1])
+            with _h1:
+                st.markdown(
+                    f"<div style='font-family:DM Serif Display,serif;font-size:1.6rem;color:#1F3864'>"
+                    f"INFORME DE CONTROL DE VENTAS SALÓN</div>"
+                    f"<div style='color:#555;font-size:0.95rem'><b>{_sg_local}</b> · "
+                    f"Semana {_sg_fi.strftime('%d-%m')} al {_sg_ff.strftime('%d-%m-%Y')}</div>",
+                    unsafe_allow_html=True)
+            with _h2:
+                _sg_qgar = st.number_input("Cantidad Garzones", min_value=0,
+                                           value=_sg_qg_auto, step=1, key="sg_qgar")
+            _sg_qgar = _sg_qgar if _sg_qgar > 0 else 1  # evita /0
+
+            st.markdown(
+                f"<div style='display:flex;flex-wrap:wrap;gap:10px;margin:8px 0 4px 0'>"
+                f"<span style='background:#1F3864;color:#fff;padding:4px 12px;border-radius:6px;font-size:0.82rem'>Supervisor: <b>{_sg_jef['supervisor']}</b></span>"
+                f"<span style='background:#1F3864;color:#fff;padding:4px 12px;border-radius:6px;font-size:0.82rem'>Jefe: <b>{_sg_jef['jefe']}</b></span>"
+                f"<span style='background:#1F3864;color:#fff;padding:4px 12px;border-radius:6px;font-size:0.82rem'>Sub Jefe: <b>{_sg_jef['subjefe']}</b></span>"
+                f"<span style='background:#1F3864;color:#fff;padding:4px 12px;border-radius:6px;font-size:0.82rem'>Garzones: <b>{_sg_qgar}</b></span>"
+                f"</div>", unsafe_allow_html=True)
+
+            # ── % ADICIONALES POR LOCAL (toda la red) → RANKING (§6.6/6.7) ──
+            # Para cada local: suma de los 5 % de categorías adicionales sobre su venta total.
+            _sg_red_gz = _sg_vend[_sg_vend['garzon'].isin(_GARZONES_VALIDOS_SG)].copy()
+            def _pct_adicionales_local(df_local):
+                tot = df_local['monto_venta_real'].sum()
+                if tot <= 0:
+                    return 0.0
+                s = 0.0
+                for _cat in _CATS_ADICIONALES_SG:
+                    s += df_local[df_local['cat_agr'] == _cat]['monto_venta_real'].sum() / tot * 100
+                return s
+            _sg_rank_rows = []
+            for _lc in _LOCALES_ORDEN_SG:
+                _df_lc = _sg_red_gz[_sg_red_gz['local'] == _lc]
+                _sg_rank_rows.append({"local": _lc, "pct_total": _pct_adicionales_local(_df_lc)})
+            _sg_rank_df = pd.DataFrame(_sg_rank_rows).sort_values("pct_total", ascending=False).reset_index(drop=True)
+            _sg_rank_df['ranking'] = _sg_rank_df.index + 1
+            _sg_rank_pos = int(_sg_rank_df[_sg_rank_df['local'] == _sg_local]['ranking'].iloc[0]) \
+                if _sg_local in _sg_rank_df['local'].values else 0
+
+            st.markdown(
+                f"<div style='display:inline-block;background:#D4A853;color:#1F3864;padding:6px 16px;"
+                f"border-radius:8px;font-weight:bold;font-size:1.05rem;margin:6px 0'>"
+                f"RANKING {_sg_rank_pos}/10</div>", unsafe_allow_html=True)
+            st.markdown("---")
+
+            # ════════════════════════════════════════════════════════════════
+            # SECCIÓN 1 y 2 — Ventas por macro-familia (§6.3)
+            # ════════════════════════════════════════════════════════════════
+            def _tabla_macro_sg(df):
+                g = df.groupby('macro').agg(
+                    monto=('monto_venta_real', 'sum'),
+                    q=('cantidad_vendida', 'sum')
+                ).reindex(['ALIMENTOS', 'BAR', 'CAFETERÍA Y POSTRES']).fillna(0)
+                total = g['monto'].sum()
+                g['pct'] = (g['monto'] / total * 100) if total > 0 else 0
+                return g, total
+
+            _sec1, _tot1 = _tabla_macro_sg(_sg_loc)      # sección 1: TODO el local
+            _sec2, _tot2 = _tabla_macro_sg(_sg_loc_gz)   # sección 2: garzones whitelist
+            # TODO SENIOR: confirmar que sección 2 = venta de garzones whitelist.
+            # Hipótesis basada en que su total = total general de secciones de garzones.
+
+            def _render_macro_html_sg(g, total, titulo):
+                html = f"<div style='font-weight:bold;color:#1F3864;margin:6px 0'>{titulo}</div>"
+                html += "<div style='overflow-x:auto'><table style='width:100%;border-collapse:collapse;font-size:0.85rem'>"
+                html += ("<thead><tr>"
+                         "<th style='text-align:left;padding:8px 10px;background:#1F3864;color:#fff'>Macro-familia</th>"
+                         "<th style='text-align:right;padding:8px 10px;background:#1F3864;color:#fff'>$ Acumulado</th>"
+                         "<th style='text-align:right;padding:8px 10px;background:#1F3864;color:#fff'>Q Productos</th>"
+                         "<th style='text-align:right;padding:8px 10px;background:#1F3864;color:#fff'>%</th>"
+                         "</tr></thead><tbody>")
+                for _ri, (_idx, _row) in enumerate(g.iterrows()):
+                    _bg = '#F5F5F5' if _ri % 2 == 0 else '#FFFFFF'
+                    html += (f"<tr><td style='padding:7px 10px;background:{_bg};color:#222'>{_idx}</td>"
+                             f"<td style='text-align:right;padding:7px 10px;background:{_bg}'>{_fmt_clp_sg(_row['monto'])}</td>"
+                             f"<td style='text-align:right;padding:7px 10px;background:{_bg}'>{_fmt_q_sg(_row['q'])}</td>"
+                             f"<td style='text-align:right;padding:7px 10px;background:{_bg}'>{_fmt_pct_sg(_row['pct'])}</td></tr>")
+                html += (f"<tr><td style='padding:7px 10px;background:#1F3864;color:#fff;font-weight:bold'>TOTAL</td>"
+                         f"<td style='text-align:right;padding:7px 10px;background:#1F3864;color:#fff;font-weight:bold'>{_fmt_clp_sg(total)}</td>"
+                         f"<td style='text-align:right;padding:7px 10px;background:#1F3864;color:#fff;font-weight:bold'>{_fmt_q_sg(g['q'].sum())}</td>"
+                         f"<td style='text-align:right;padding:7px 10px;background:#1F3864;color:#D4A853;font-weight:bold'>100,0%</td></tr>")
+                html += "</tbody></table></div>"
+                return html
+
+            _s1col, _s2col = st.columns(2)
+            with _s1col:
+                st.markdown("#### 1 · Ventas Totales Salón")
+                st.markdown(_render_macro_html_sg(_sec1, _tot1, "Todo el local"), unsafe_allow_html=True)
+            with _s2col:
+                st.markdown("#### 2 · Ventas por Categoría")
+                st.markdown(_render_macro_html_sg(_sec2, _tot2, "Garzones evaluados"), unsafe_allow_html=True)
+            st.caption("Sección 1 = toda la venta salón del local. Sección 2 = solo garzones de la whitelist (hipótesis del instructivo, confirmar con product owner).")
+            st.markdown("---")
+
+            # ════════════════════════════════════════════════════════════════
+            # SECCIÓN 3 — Ventas por Categoría detalladas (§6.4)
+            # Universo = garzones whitelist (cuadra con sección 2).
+            # ════════════════════════════════════════════════════════════════
+            _tot_venta_salon_gz = _sg_loc_gz['monto_venta_real'].sum()
+
+            def _bloque_subcat_sg(filas_df, col_subcat_func, titulo, usa_func_args="alim"):
+                """Construye un bloque de subcategorías con $, Q, % y Q prom x garzón."""
+                df = filas_df.copy()
+                if usa_func_args == "alim":
+                    df['subcat'] = df.apply(lambda r: col_subcat_func(r['categoria_menu'], r['cat_agr']), axis=1)
+                else:  # liquidos
+                    df['subcat'] = df.apply(lambda r: col_subcat_func(r['sku_producto'], r['cat_agr_macro']), axis=1)
+                df = df[df['subcat'].notna()]
+                if df.empty:
+                    return None, 0.0
+                g = df.groupby('subcat').agg(
+                    monto=('monto_venta_real', 'sum'),
+                    q=('cantidad_vendida', 'sum')).reset_index()
+                return g, g['monto'].sum()
+
+            def _render_subcat_html_sg(g, total_bloque, titulo, tot_global, qgar):
+                if g is None or g.empty:
+                    return f"<div style='color:#888;margin:6px 0'><b>{titulo}</b>: sin datos.</div>"
+                html = f"<div style='font-weight:bold;color:#1F3864;margin:10px 0 4px 0'>{titulo}</div>"
+                html += "<div style='overflow-x:auto'><table style='width:100%;border-collapse:collapse;font-size:0.82rem'>"
+                html += ("<thead><tr>"
+                         "<th style='text-align:left;padding:6px 10px;background:#1F3864;color:#fff'>Subcategoría</th>"
+                         "<th style='text-align:right;padding:6px 10px;background:#1F3864;color:#fff'>$ Acumulado</th>"
+                         "<th style='text-align:right;padding:6px 10px;background:#1F3864;color:#fff'>Q</th>"
+                         "<th style='text-align:right;padding:6px 10px;background:#1F3864;color:#fff'>% s/ venta salón</th>"
+                         "<th style='text-align:right;padding:6px 10px;background:#1F3864;color:#fff'>Q prom x garzón</th>"
+                         "</tr></thead><tbody>")
+                for _ri, _row in g.reset_index(drop=True).iterrows():
+                    _bg = '#F5F5F5' if _ri % 2 == 0 else '#FFFFFF'
+                    _pct = (_row['monto'] / tot_global * 100) if tot_global > 0 else 0
+                    _qprom = _row['q'] / qgar if qgar > 0 else 0
+                    html += (f"<tr><td style='padding:6px 10px;background:{_bg};color:#222'>{_row['subcat']}</td>"
+                             f"<td style='text-align:right;padding:6px 10px;background:{_bg}'>{_fmt_clp_sg(_row['monto'])}</td>"
+                             f"<td style='text-align:right;padding:6px 10px;background:{_bg}'>{_fmt_q_sg(_row['q'])}</td>"
+                             f"<td style='text-align:right;padding:6px 10px;background:{_bg}'>{_fmt_pct_sg(_pct)}</td>"
+                             f"<td style='text-align:right;padding:6px 10px;background:{_bg}'>{('%.1f' % _qprom).replace('.', ',')}</td></tr>")
+                _pct_tot = (total_bloque / tot_global * 100) if tot_global > 0 else 0
+                html += (f"<tr><td style='padding:6px 10px;background:#1F3864;color:#fff;font-weight:bold'>TOTAL</td>"
+                         f"<td style='text-align:right;padding:6px 10px;background:#1F3864;color:#fff;font-weight:bold'>{_fmt_clp_sg(total_bloque)}</td>"
+                         f"<td style='text-align:right;padding:6px 10px;background:#1F3864;color:#fff;font-weight:bold'>{_fmt_q_sg(g['q'].sum())}</td>"
+                         f"<td style='text-align:right;padding:6px 10px;background:#1F3864;color:#D4A853;font-weight:bold'>{_fmt_pct_sg(_pct_tot)}</td>"
+                         f"<td style='background:#1F3864'></td></tr>")
+                html += "</tbody></table></div>"
+                return html
+
+            st.markdown("#### 3 · Ventas por Categoría (detalle)")
+
+            # --- 3a. ALIMENTOS ---
+            _g_alim, _t_alim = _bloque_subcat_sg(
+                _sg_loc_gz[_sg_loc_gz['cat_agr'].isin(['Alimentos', 'Agregados', 'Colación'])],
+                _subcat_alimentos_sg, "VENTAS ALIMENTOS", usa_func_args="alim")
+            st.markdown(_render_subcat_html_sg(_g_alim, _t_alim, "VENTAS ALIMENTOS", _tot_venta_salon_gz, _sg_qgar),
+                        unsafe_allow_html=True)
+
+            # --- 3b. CAFETERÍA Y POSTRES (conteo de PADRE por ab_categoria, §6.4) ---
+            # REGLA: Q = suma cantidad_vendida del SKU padre (es_opcion=false), NO opciones.
+            _q_cafe = (_sg_loc_gz[(_sg_loc_gz['ab_categoria'] == _AB_CAFETERIA_SG)]
+                       ['cantidad_vendida'].sum())
+            _m_cafe = (_sg_loc_gz[(_sg_loc_gz['ab_categoria'] == _AB_CAFETERIA_SG)]
+                       ['monto_venta_real'].sum())
+            _q_post = (_sg_loc_gz[(_sg_loc_gz['ab_categoria'] == _AB_POSTRES_SG)]
+                       ['cantidad_vendida'].sum())
+            _m_post = (_sg_loc_gz[(_sg_loc_gz['ab_categoria'] == _AB_POSTRES_SG)]
+                       ['monto_venta_real'].sum())
+            # Fallback: si ab_categoria no viene poblado, usar cat_agr
+            if _q_cafe == 0 and _m_cafe == 0:
+                _df_c = _sg_loc_gz[_sg_loc_gz['cat_agr'] == 'Cafetería']
+                _q_cafe, _m_cafe = _df_c['cantidad_vendida'].sum(), _df_c['monto_venta_real'].sum()
+            if _q_post == 0 and _m_post == 0:
+                _df_p = _sg_loc_gz[_sg_loc_gz['cat_agr'] == 'Postres']
+                _q_post, _m_post = _df_p['cantidad_vendida'].sum(), _df_p['monto_venta_real'].sum()
+            _g_cp = pd.DataFrame([
+                {"subcat": "CAFETERÍA", "monto": _m_cafe, "q": _q_cafe},
+                {"subcat": "POSTRES",   "monto": _m_post, "q": _q_post},
+            ])
+            st.markdown(_render_subcat_html_sg(_g_cp, _g_cp['monto'].sum(), "VENTAS CAFETERÍA Y POSTRES",
+                                               _tot_venta_salon_gz, _sg_qgar), unsafe_allow_html=True)
+            # Metas del local (referencia)
+            _meta_loc = _METAS_SG.get(_sg_local, {})
+            if _meta_loc:
+                _mc = _meta_loc.get('Cafetería', {}).get('diaria', 0)
+                _mp = _meta_loc.get('Postres', {}).get('diaria', 0)
+                st.caption(f"Meta diaria · Cafetería: {_mc} · Postres: {_mp} (semana ≈ ×7).")
+
+            # --- 3c. LÍQUIDOS C/A ---
+            _df_ca = _sg_loc_gz[_sg_loc_gz['cat_agr'] == 'Líquidos C/A'].copy()
+            _df_ca['cat_agr_macro'] = 'Líquidos C/A'
+            _g_ca, _t_ca = _bloque_subcat_sg(_df_ca, _subcat_liquidos_sg, "VENTAS LIQUIDOS C/A", usa_func_args="liq")
+            st.markdown(_render_subcat_html_sg(_g_ca, _t_ca, "VENTAS LIQUIDOS C/A", _tot_venta_salon_gz, _sg_qgar),
+                        unsafe_allow_html=True)
+
+            # --- 3d. LÍQUIDOS S/A ---
+            _df_sa = _sg_loc_gz[_sg_loc_gz['cat_agr'] == 'Líquidos S/A'].copy()
+            _df_sa['cat_agr_macro'] = 'Líquidos S/A'
+            _g_sa, _t_sa = _bloque_subcat_sg(_df_sa, _subcat_liquidos_sg, "VENTAS LIQUIDOS S/A", usa_func_args="liq")
+            st.markdown(_render_subcat_html_sg(_g_sa, _t_sa, "VENTAS LIQUIDOS S/A", _tot_venta_salon_gz, _sg_qgar),
+                        unsafe_allow_html=True)
+            st.markdown("---")
+
+            # ════════════════════════════════════════════════════════════════
+            # SECCIÓN 4 — Control de Productos Estratégicos (§6.5)
+            # ════════════════════════════════════════════════════════════════
+            st.markdown("#### 4 · Control de Productos Estratégicos")
+            _sg_loc_gz_nom = _sg_loc_gz.copy()
+            _sg_loc_gz_nom['_nom_low'] = _sg_loc_gz_nom['nombre_producto'].astype(str).str.strip().str.lower()
+            _estr_rows = []
+            for _et, _variantes in _PRODUCTOS_ESTRATEGICOS_SG.items():
+                _mask = _sg_loc_gz_nom['_nom_low'].apply(lambda n: any(v in n for v in _variantes))
+                _df_e = _sg_loc_gz_nom[_mask]
+                _q = _df_e['cantidad_vendida'].sum()
+                _m = _df_e['monto_venta_real'].sum()
+                _pct = (_m / _tot_venta_salon_gz * 100) if _tot_venta_salon_gz > 0 else 0
+                _estr_rows.append({"prod": _et, "q": _q, "monto": _m, "pct": _pct,
+                                   "qprom": _q / _sg_qgar if _sg_qgar > 0 else 0})
+            _estr_df = pd.DataFrame(_estr_rows)
+            _eh = "<div style='overflow-x:auto'><table style='width:100%;border-collapse:collapse;font-size:0.82rem'>"
+            _eh += ("<thead><tr>"
+                    "<th style='text-align:left;padding:6px 10px;background:#1F3864;color:#fff'>Producto</th>"
+                    "<th style='text-align:right;padding:6px 10px;background:#1F3864;color:#fff'>Q</th>"
+                    "<th style='text-align:right;padding:6px 10px;background:#1F3864;color:#fff'>$ Acumulado</th>"
+                    "<th style='text-align:right;padding:6px 10px;background:#1F3864;color:#fff'>% s/ venta</th>"
+                    "<th style='text-align:right;padding:6px 10px;background:#1F3864;color:#fff'>Q prom x garzón</th>"
+                    "</tr></thead><tbody>")
+            for _ri, _row in _estr_df.iterrows():
+                _bg = '#F5F5F5' if _ri % 2 == 0 else '#FFFFFF'
+                _eh += (f"<tr><td style='padding:6px 10px;background:{_bg};color:#222'>{_row['prod']}</td>"
+                        f"<td style='text-align:right;padding:6px 10px;background:{_bg}'>{_fmt_q_sg(_row['q'])}</td>"
+                        f"<td style='text-align:right;padding:6px 10px;background:{_bg}'>{_fmt_clp_sg(_row['monto'])}</td>"
+                        f"<td style='text-align:right;padding:6px 10px;background:{_bg}'>{_fmt_pct_sg(_row['pct'])}</td>"
+                        f"<td style='text-align:right;padding:6px 10px;background:{_bg}'>{('%.1f' % _row['qprom']).replace('.', ',')}</td></tr>")
+            _eh += "</tbody></table></div>"
+            st.markdown(_eh, unsafe_allow_html=True)
+            st.markdown("---")
+
+            # ════════════════════════════════════════════════════════════════
+            # SECCIONES 5 y 9 — Por garzón del local (§6.6)
+            # Trazabilidad: venta, días trabajados, propina, y % adicionales.
+            # Cafetería/Postres → Q (unidades). Resto → % participación.
+            # %TOTAL = suma de los 5 % (test de cuadre Wilmer = 36,2%).
+            # ════════════════════════════════════════════════════════════════
+            st.markdown("#### 5 · Seguimiento por Garzón")
+
+            _gz_rows = []
+            for _gar, _gdf in _sg_loc_gz.groupby('garzon'):
+                _vt = _gdf['monto_venta_real'].sum()
+                if _vt <= 0:
+                    continue
+                _dias = _gdf['fecha_venta'].nunique()
+                _vdp = _vt / _dias if _dias > 0 else 0
+                _aporte_prop = _vt * _APORTE_PROPINA_PCT_SG
+                _row = {"garzon": _gar, "venta_total": _vt, "dias": _dias,
+                        "venta_diaria_prom": _vdp, "aporte_propina": _aporte_prop}
+                _pct_total = 0.0
+                for _cat in _CATS_ADICIONALES_SG:
+                    _cdf = _gdf[_gdf['cat_agr'] == _cat]
+                    _mc = _cdf['monto_venta_real'].sum()
+                    _qc = _cdf['cantidad_vendida'].sum()
+                    _pc = (_mc / _vt * 100) if _vt > 0 else 0
+                    _pct_total += _pc
+                    if _cat in ('Cafetería', 'Postres'):
+                        _row[_cat] = _qc          # se muestra como Q
+                        _row[_cat + "_pct"] = _pc  # se usa solo para %TOTAL
+                    else:
+                        _row[_cat] = _pc           # se muestra como %
+                _row["pct_total"] = _pct_total
+                _gz_rows.append(_row)
+
+            _gz_seg = pd.DataFrame(_gz_rows).sort_values("venta_total", ascending=False) \
+                if _gz_rows else pd.DataFrame()
+
+            if _gz_seg.empty:
+                st.info("No hay ventas de garzones válidos en este local/semana.")
+            else:
+                _gh = "<div style='overflow-x:auto'><table style='width:100%;border-collapse:collapse;font-size:0.78rem'>"
+                _gh += ("<thead><tr>"
+                        "<th style='text-align:left;padding:6px 8px;background:#1F3864;color:#fff'>Garzón</th>"
+                        "<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>Venta Total</th>"
+                        "<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>Días</th>"
+                        "<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>Venta Diaria Prom.</th>"
+                        "<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>Aporte Propina (10%)</th>"
+                        "<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>Agregados %</th>"
+                        "<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>Cafetería Q</th>"
+                        "<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>Postres Q</th>"
+                        "<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>Líq S/A %</th>"
+                        "<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>Líq C/A %</th>"
+                        "<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>% TOTAL</th>"
+                        "</tr></thead><tbody>")
+                for _ri, _row in _gz_seg.reset_index(drop=True).iterrows():
+                    _bg = '#F5F5F5' if _ri % 2 == 0 else '#FFFFFF'
+                    _gh += (f"<tr><td style='padding:6px 8px;background:{_bg};color:#222'>{_row['garzon']}</td>"
+                            f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{_fmt_clp_sg(_row['venta_total'])}</td>"
+                            f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{int(_row['dias'])}</td>"
+                            f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{_fmt_clp_sg(_row['venta_diaria_prom'])}</td>"
+                            f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{_fmt_clp_sg(_row['aporte_propina'])}</td>"
+                            f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{_fmt_pct_sg(_row.get('Agregados', 0))}</td>"
+                            f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{_fmt_q_sg(_row.get('Cafetería', 0))}</td>"
+                            f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{_fmt_q_sg(_row.get('Postres', 0))}</td>"
+                            f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{_fmt_pct_sg(_row.get('Líquidos S/A', 0))}</td>"
+                            f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{_fmt_pct_sg(_row.get('Líquidos C/A', 0))}</td>"
+                            f"<td style='text-align:right;padding:6px 8px;background:{_bg};font-weight:bold;color:#1F3864'>{_fmt_pct_sg(_row['pct_total'])}</td></tr>")
+                _gh += "</tbody></table></div>"
+                st.markdown(_gh, unsafe_allow_html=True)
+                st.caption("Agregados, Líq S/A y Líq C/A en % sobre la venta del garzón. Cafetería y Postres en unidades (Q). "
+                           "El % TOTAL suma los 5 porcentajes de categoría (incluye Café/Postres en %), según validación del instructivo.")
+                # TODO SENIOR: confirmar que el %TOTAL sigue sumando las 5 categorías aunque Café/Postres se muestren en Q.
+            st.markdown("---")
+
+            # ════════════════════════════════════════════════════════════════
+            # SECCIONES 6 y 7 — Comparativa por local (toda la red) (§6.7)
+            # ════════════════════════════════════════════════════════════════
+            st.markdown("#### 6 · Comparativa por Local (red completa)")
+
+            _loc_rows = []
+            for _lc in _LOCALES_ORDEN_SG:
+                _dfl = _sg_red_gz[_sg_red_gz['local'] == _lc]
+                _vt = _dfl['monto_venta_real'].sum()
+                _row = {"local": _lc, "venta_total": _vt}
+                _pct_total = 0.0
+                for _cat in _CATS_ADICIONALES_SG:
+                    _cdf = _dfl[_dfl['cat_agr'] == _cat]
+                    _mc = _cdf['monto_venta_real'].sum()
+                    _qc = _cdf['cantidad_vendida'].sum()
+                    _pc = (_mc / _vt * 100) if _vt > 0 else 0
+                    _pct_total += _pc
+                    if _cat in ('Cafetería', 'Postres'):
+                        _row[_cat] = _qc
+                    else:
+                        _row[_cat] = _pc
+                _row["pct_total"] = _pct_total
+                _loc_rows.append(_row)
+            _loc_df = pd.DataFrame(_loc_rows).sort_values("pct_total", ascending=False).reset_index(drop=True)
+
+            _lh = "<div style='overflow-x:auto'><table style='width:100%;border-collapse:collapse;font-size:0.78rem'>"
+            _lh += ("<thead><tr>"
+                    "<th style='text-align:left;padding:6px 8px;background:#1F3864;color:#fff'>#</th>"
+                    "<th style='text-align:left;padding:6px 8px;background:#1F3864;color:#fff'>Local</th>"
+                    "<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>Venta Total</th>"
+                    "<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>Agregados %</th>"
+                    "<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>Cafetería Q</th>"
+                    "<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>Postres Q</th>"
+                    "<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>Líq S/A %</th>"
+                    "<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>Líq C/A %</th>"
+                    "<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>% TOTAL</th>"
+                    "</tr></thead><tbody>")
+            for _ri, _row in _loc_df.iterrows():
+                _es_actual = _row['local'] == _sg_local
+                _bg = '#D4A853' if _es_actual else ('#F5F5F5' if _ri % 2 == 0 else '#FFFFFF')
+                _col = '#1F3864' if _es_actual else '#222'
+                _fw = 'bold' if _es_actual else 'normal'
+                _lh += (f"<tr><td style='padding:6px 8px;background:{_bg};color:{_col};font-weight:{_fw}'>{_ri+1}</td>"
+                        f"<td style='padding:6px 8px;background:{_bg};color:{_col};font-weight:{_fw}'>{_row['local']}</td>"
+                        f"<td style='text-align:right;padding:6px 8px;background:{_bg};color:{_col}'>{_fmt_clp_sg(_row['venta_total'])}</td>"
+                        f"<td style='text-align:right;padding:6px 8px;background:{_bg};color:{_col}'>{_fmt_pct_sg(_row.get('Agregados', 0))}</td>"
+                        f"<td style='text-align:right;padding:6px 8px;background:{_bg};color:{_col}'>{_fmt_q_sg(_row.get('Cafetería', 0))}</td>"
+                        f"<td style='text-align:right;padding:6px 8px;background:{_bg};color:{_col}'>{_fmt_q_sg(_row.get('Postres', 0))}</td>"
+                        f"<td style='text-align:right;padding:6px 8px;background:{_bg};color:{_col}'>{_fmt_pct_sg(_row.get('Líquidos S/A', 0))}</td>"
+                        f"<td style='text-align:right;padding:6px 8px;background:{_bg};color:{_col}'>{_fmt_pct_sg(_row.get('Líquidos C/A', 0))}</td>"
+                        f"<td style='text-align:right;padding:6px 8px;background:{_bg};color:{_col};font-weight:bold'>{_fmt_pct_sg(_row['pct_total'])}</td></tr>")
+            _lh += "</tbody></table></div>"
+            st.markdown(_lh, unsafe_allow_html=True)
+            st.caption(f"Ranking por % adicionales total. **{_sg_local}** resaltado en dorado (posición {_sg_rank_pos}/10).")
+            st.markdown("---")
+
+            # ════════════════════════════════════════════════════════════════
+            # SECCIONES 8 y 10 — Evolución 4 semanas (§6.8)
+            # ════════════════════════════════════════════════════════════════
+            st.markdown("#### 8 · Evolución 4 Semanas (% adicionales)")
+
+            # Helper compartido por secciones 8, 10 y 11.
+            def _pct_adic_group(df_g):
+                tot = df_g['monto_venta_real'].sum()
+                if tot <= 0:
+                    return 0.0
+                s = 0.0
+                for _cat in _CATS_ADICIONALES_SG:
+                    s += df_g[df_g['cat_agr'] == _cat]['monto_venta_real'].sum() / tot * 100
+                return s
+
+            if _sg_raw_4w is not None and not _sg_raw_4w.empty:
+                _w = _sg_raw_4w.copy()
+                _w['monto_venta_real'] = pd.to_numeric(_w['monto_venta_real'], errors='coerce').fillna(0)
+                _w['cantidad_vendida'] = pd.to_numeric(_w['cantidad_vendida'], errors='coerce').fillna(0)
+                _w['es_opcion'] = _w['es_opcion'].apply(_to_bool_sg)
+                _w = _w[~_w['es_opcion']].copy()
+                _w['cat_agr'] = _w.apply(lambda r: _categorizar_sg(r['categoria_menu'], r['nombre_producto']), axis=1)
+                _w = _w[_w['garzon'].isin(_GARZONES_VALIDOS_SG)].copy()
+                _w['semana'] = pd.to_datetime(_w['fecha_venta']).dt.isocalendar().week.astype(int)
+                _semanas = sorted(_w['semana'].unique())[-4:]
+
+                # --- Sección 8: evolución del local seleccionado por garzón ---
+                _w_loc = _w[_w['local'] == _sg_local]
+                _fig8 = go.Figure()
+                _gar_list = _w_loc.groupby('garzon')['monto_venta_real'].sum().nlargest(12).index.tolist()
+                for _gar in _gar_list:
+                    _ys = []
+                    for _sem in _semanas:
+                        _dfg = _w_loc[(_w_loc['garzon'] == _gar) & (_w_loc['semana'] == _sem)]
+                        _ys.append(round(_pct_adic_group(_dfg), 1))
+                    _fig8.add_trace(go.Bar(name=str(_gar), x=[f"Sem {s}" for s in _semanas], y=_ys))
+                _fig8.update_layout(barmode='group', height=420, title=f"% Adicionales por garzón — {_sg_local}",
+                                    legend=dict(orientation='h', yanchor='bottom', y=-0.4),
+                                    margin=dict(t=40, b=80))
+                st.plotly_chart(_fig8, use_container_width=True, key="sg_fig8")
+
+                # --- Sección 10: evolución por local (red) ---
+                st.markdown("#### 10 · Evolución 4 Semanas por Local (red)")
+                _fig10 = go.Figure()
+                for _lc in _LOCALES_ORDEN_SG:
+                    _ys = []
+                    for _sem in _semanas:
+                        _dfl = _w[(_w['local'] == _lc) & (_w['semana'] == _sem)]
+                        _ys.append(round(_pct_adic_group(_dfl), 1))
+                    _fig10.add_trace(go.Bar(name=_lc, x=[f"Sem {s}" for s in _semanas], y=_ys))
+                _fig10.update_layout(barmode='group', height=420, title="% Adicionales por local",
+                                     legend=dict(orientation='h', yanchor='bottom', y=-0.4),
+                                     margin=dict(t=40, b=80))
+                st.plotly_chart(_fig10, use_container_width=True, key="sg_fig10")
+            else:
+                st.info("Sin datos suficientes para la evolución de 4 semanas.")
+            st.markdown("---")
+
+            # ════════════════════════════════════════════════════════════════
+            # SECCIÓN 11 — Comportamiento mensual por local (§6.8)
+            # ════════════════════════════════════════════════════════════════
+            st.markdown("#### 11 · Comportamiento Mensual (% adicionales)")
+            if _sg_raw_mes is not None and not _sg_raw_mes.empty:
+                _m = _sg_raw_mes.copy()
+                _m['monto_venta_real'] = pd.to_numeric(_m['monto_venta_real'], errors='coerce').fillna(0)
+                _m['es_opcion'] = _m['es_opcion'].apply(_to_bool_sg)
+                _m = _m[~_m['es_opcion']].copy()
+                _m['cat_agr'] = _m.apply(lambda r: _categorizar_sg(r['categoria_menu'], r['nombre_producto']), axis=1)
+                _m = _m[_m['garzon'].isin(_GARZONES_VALIDOS_SG)].copy()
+                _m['mes'] = pd.to_datetime(_m['fecha_venta']).dt.to_period('M').astype(str)
+                _meses = sorted(_m['mes'].unique())[-4:]
+                _m_loc = _m[_m['local'] == _sg_local]
+                _ys = []
+                for _mm in _meses:
+                    _dfm = _m_loc[_m_loc['mes'] == _mm]
+                    _ys.append(round(_pct_adic_group(_dfm), 1))
+                _fig11 = go.Figure()
+                _fig11.add_trace(go.Bar(name=_sg_local, x=_meses, y=_ys, marker_color='#1F3864'))
+                _fig11.update_layout(height=360, title=f"% Adicionales mensual — {_sg_local}",
+                                     margin=dict(t=40, b=40))
+                st.plotly_chart(_fig11, use_container_width=True, key="sg_fig11")
+            else:
+                st.info("Sin datos suficientes para el comportamiento mensual.")
+            st.markdown("---")
+
+            # ════════════════════════════════════════════════════════════════
+            # SALIDA PDF (§7) — estilo casa: oscuro + dorado + logo
+            # ════════════════════════════════════════════════════════════════
+            def _generar_pdf_sg(local, semana_label, ranking, jefatura, qgar,
+                                sec1, sec2, gz_seg, loc_df, estr_df):
+                import os
+                from reportlab.lib.pagesizes import A4, landscape
+                from reportlab.lib import colors as rc
+                from reportlab.lib.units import mm
+                from reportlab.platypus import (SimpleDocTemplate, Table, TableStyle,
+                                                Paragraph, Spacer, HRFlowable, PageBreak)
+                from reportlab.lib.styles import ParagraphStyle
+                from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
+                from reportlab.platypus import Image as RLImage
+
+                CB  = rc.HexColor('#0d0d0d'); CP = rc.HexColor('#1a1a1a')
+                CG  = rc.HexColor('#d4a853'); CT = rc.HexColor('#f0ede8')
+                CM  = rc.HexColor('#666666'); CM2 = rc.HexColor('#2a2a2a')
+                CH  = rc.HexColor('#0d0d0d'); CBo = rc.HexColor('#2a2a2a')
+
+                PAGE = landscape(A4); W, H = PAGE
+                LM = RM = 12*mm; AVAIL = W - LM - RM
+
+                def sty(sz, col, bold=False, align=TA_LEFT):
+                    return ParagraphStyle('_', fontSize=sz, textColor=col,
+                        fontName='Helvetica-Bold' if bold else 'Helvetica',
+                        alignment=align, leading=sz*1.25)
+
+                def P(txt, sz=7, col=None, bold=False, align=TA_RIGHT):
+                    return Paragraph(str(txt), sty(sz, col or CT, bold=bold, align=align))
+
+                def _clp(v):
+                    try: return f"${int(round(v)):,}".replace(',', '.')
+                    except: return '-'
+
+                def _pct(v):
+                    try: return f"{v:.1f}%".replace('.', ',')
+                    except: return '-'
+
+                buf = io.BytesIO()
+                doc = SimpleDocTemplate(buf, pagesize=PAGE, leftMargin=LM, rightMargin=RM,
+                                        topMargin=8*mm, bottomMargin=7*mm)
+                story = []
+
+                # ── Encabezado ──
+                logo_cell = Spacer(28*mm, 22*mm)
+                if os.path.exists(LOGO_PATH):
+                    logo_cell = RLImage(LOGO_PATH, width=28*mm, height=28*mm)
+                hdr = [[logo_cell,
+                        [Paragraph("INFORME DE CONTROL DE VENTAS SALÓN", sty(13, CG, bold=True, align=TA_CENTER)),
+                         Spacer(1, 1*mm),
+                         Paragraph("ALEMAN EXPERTO", sty(7, CM, align=TA_CENTER))],
+                        [Paragraph(local.upper(), sty(10, CT, bold=True, align=TA_RIGHT)),
+                         Spacer(1, 1*mm),
+                         Paragraph(semana_label, sty(7.5, CM, align=TA_RIGHT)),
+                         Spacer(1, 1*mm),
+                         Paragraph(f"RANKING {ranking}/10", sty(9, CG, bold=True, align=TA_RIGHT))]]]
+                hdr_tbl = Table(hdr, colWidths=[30*mm, 160*mm, 83*mm])
+                hdr_tbl.setStyle(TableStyle([
+                    ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+                    ('LINEBELOW', (0,0), (-1,0), 1.5, CG),
+                    ('TOPPADDING', (0,0), (-1,-1), 0), ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+                    ('LEFTPADDING', (0,0), (-1,-1), 0), ('RIGHTPADDING', (0,0), (-1,-1), 0)]))
+                story += [hdr_tbl, Spacer(1, 2*mm)]
+
+                # ── Jefatura ──
+                jef_txt = (f"Supervisor: {jefatura['supervisor']}   ·   Jefe: {jefatura['jefe']}"
+                           f"   ·   Sub Jefe: {jefatura['subjefe']}   ·   Garzones: {qgar}")
+                story += [P(jef_txt, 7, CM, align=TA_LEFT), Spacer(1, 3*mm)]
+
+                def _tbl_simple(titulo, headers, rows, aligns=None, col_t=CG):
+                    out = [P(titulo, 8, col_t, bold=True), Spacer(1, 1.5*mm)]
+                    aligns = aligns or [TA_LEFT] + [TA_RIGHT]*(len(headers)-1)
+                    data = [[P(h, 6, CM, bold=True, align=aligns[i]) for i, h in enumerate(headers)]]
+                    for r in rows:
+                        data.append([P(c, 6.5, CT if i == 0 else CM, align=aligns[i]) for i, c in enumerate(r)])
+                    t = Table(data, repeatRows=1)
+                    rs = [('BACKGROUND', (0,0), (-1,0), CH), ('LINEBELOW', (0,0), (-1,0), 0.8, col_t),
+                          ('TOPPADDING', (0,0), (-1,-1), 2), ('BOTTOMPADDING', (0,0), (-1,-1), 2),
+                          ('LEFTPADDING', (0,0), (-1,-1), 4), ('RIGHTPADDING', (0,0), (-1,-1), 4)]
+                    for i in range(1, len(data)):
+                        rs += [('BACKGROUND', (0,i), (-1,i), CP if i % 2 else CM2),
+                               ('LINEBELOW', (0,i), (-1,i), 0.2, CM2)]
+                    t.setStyle(TableStyle(rs))
+                    out.append(t)
+                    return out
+
+                # ── Sec 1 y 2 lado a lado ──
+                _r1 = [[idx, _clp(row['monto']), f"{int(round(row['q']))}", _pct(row['pct'])]
+                       for idx, row in sec1.iterrows()]
+                _r2 = [[idx, _clp(row['monto']), f"{int(round(row['q']))}", _pct(row['pct'])]
+                       for idx, row in sec2.iterrows()]
+                _b1 = _tbl_simple("1 · VENTAS TOTALES SALÓN", ["Familia", "$ Acum.", "Q", "%"], _r1)
+                _b2 = _tbl_simple("2 · VENTAS POR CATEGORÍA", ["Familia", "$ Acum.", "Q", "%"], _r2)
+                _dos = Table([[_b1, [Spacer(4*mm, 1)], _b2]], colWidths=[(AVAIL-4*mm)/2, 4*mm, (AVAIL-4*mm)/2])
+                _dos.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'TOP')]))
+                story += [_dos, Spacer(1, 4*mm)]
+
+                # ── Sec 4 estratégicos ──
+                if estr_df is not None and not estr_df.empty:
+                    _re = [[r['prod'], f"{int(round(r['q']))}", _clp(r['monto']), _pct(r['pct'])]
+                           for _, r in estr_df.iterrows()]
+                    story += _tbl_simple("4 · PRODUCTOS ESTRATÉGICOS",
+                                         ["Producto", "Q", "$ Acum.", "%"], _re)
+                    story += [Spacer(1, 4*mm)]
+
+                # ── Sec 5 garzones ──
+                if gz_seg is not None and not gz_seg.empty:
+                    story += [PageBreak()]
+                    _rg = []
+                    for _, r in gz_seg.iterrows():
+                        _rg.append([r['garzon'], _clp(r['venta_total']), str(int(r['dias'])),
+                                    _clp(r['venta_diaria_prom']), _clp(r['aporte_propina']),
+                                    _pct(r.get('Agregados', 0)),
+                                    f"{int(round(r.get('Cafetería', 0)))}",
+                                    f"{int(round(r.get('Postres', 0)))}",
+                                    _pct(r.get('Líquidos S/A', 0)), _pct(r.get('Líquidos C/A', 0)),
+                                    _pct(r['pct_total'])])
+                    story += _tbl_simple("5 · SEGUIMIENTO POR GARZÓN",
+                        ["Garzón", "Venta", "Días", "V.Diaria", "Propina10%", "Agreg%",
+                         "Café Q", "Postre Q", "LíqS/A%", "LíqC/A%", "%TOT"], _rg)
+                    story += [Spacer(1, 4*mm)]
+
+                # ── Sec 6 locales ──
+                if loc_df is not None and not loc_df.empty:
+                    _rl = []
+                    for i, r in loc_df.reset_index(drop=True).iterrows():
+                        _rl.append([str(i+1), r['local'], _clp(r['venta_total']),
+                                    _pct(r.get('Agregados', 0)),
+                                    f"{int(round(r.get('Cafetería', 0)))}",
+                                    f"{int(round(r.get('Postres', 0)))}",
+                                    _pct(r.get('Líquidos S/A', 0)), _pct(r.get('Líquidos C/A', 0)),
+                                    _pct(r['pct_total'])])
+                    story += _tbl_simple("6 · COMPARATIVA POR LOCAL (RED)",
+                        ["#", "Local", "Venta", "Agreg%", "Café Q", "Postre Q",
+                         "LíqS/A%", "LíqC/A%", "%TOT"], _rl,
+                        aligns=[TA_CENTER, TA_LEFT, TA_RIGHT, TA_RIGHT, TA_RIGHT, TA_RIGHT, TA_RIGHT, TA_RIGHT, TA_RIGHT])
+
+                story += [Spacer(1, 3*mm), HRFlowable(width="100%", thickness=0.4, color=CBo),
+                          Spacer(1, 1*mm),
+                          P(f"Aleman Experto · {local} · {semana_label} · Control de Ventas Salón",
+                            5.5, CM, align=TA_CENTER)]
+
+                def add_bg(c, d):
+                    c.saveState(); c.setFillColor(CB); c.rect(0, 0, W, H, fill=1, stroke=0); c.restoreState()
+                doc.build(story, onFirstPage=add_bg, onLaterPages=add_bg)
+                buf.seek(0)
+                return buf.getvalue()
+
+            st.markdown("#### 📄 Exportar")
+            try:
+                _sem_label = f"{_sg_fi.strftime('%d-%m')} al {_sg_ff.strftime('%d-%m-%Y')}"
+                _pdf_bytes = _generar_pdf_sg(_sg_local, _sem_label, _sg_rank_pos, _sg_jef, _sg_qgar,
+                                             _sec1, _sec2, _gz_seg, _loc_df, _estr_df)
+                st.download_button("📄 Descargar PDF", _pdf_bytes,
+                    f"Control_Ventas_Salon_{_sg_local}_{_sg_fi}_{_sg_ff}.pdf",
+                    mime="application/pdf", key="sg_pdf_dl")
+            except Exception as _e_pdf:
+                st.warning(f"No se pudo generar el PDF: {_e_pdf}")
 elif informe_sel == "Auditor":
     from datetime import date as _date2
 
