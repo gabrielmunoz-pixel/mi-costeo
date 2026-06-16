@@ -15850,8 +15850,12 @@ buildTree(data, 1, null);
                 st.markdown("---")
 
                 # ════════════════════════════════════════════════════════════════
-                # SECCIÓN 1 y 2 — Ventas por macro-familia (§6.3)
-                # Doble eje período (v2 §0.5): SEMANAL + ACUMULADO MENSUAL.
+                # SECCIÓN 1 y 2 — Ventas por macro-familia
+                # Tres bloques de columnas (orden PDF): ACUMULADO · DIARIO · SEMANAL.
+                #   ACUMULADO = 1 del mes → fin de semana.
+                #   DIARIO    = SEMANAL ÷ días trabajados (fechas distintas con venta).
+                #   SEMANAL   = la semana.
+                # Secciones 1-4 comparten exactamente estas columnas.
                 # ════════════════════════════════════════════════════════════════
                 def _tabla_macro_sg(df):
                     g = df.groupby('macro').agg(
@@ -15862,155 +15866,193 @@ buildTree(data, 1, null);
                     g['pct'] = (g['monto'] / total * 100) if total > 0 else 0
                     return g, total
 
-                # SEMANAL — secciones 1 y 2 ambas sobre TODO el local (venta total, con opciones)
-                _sec1, _tot1 = _tabla_macro_sg(_sg_loc_vt)       # sección 1: todo el local
-                _sec2, _tot2 = _tabla_macro_sg(_sg_loc_vt)       # sección 2: todo el local
-                # ACUMULADO MENSUAL (1 del mes → fin de semana)
+                # Días trabajados en la semana (fechas distintas con venta del local)
+                _sg_dias_trab = max(int(pd.to_datetime(_sg_loc_vt['fecha_venta']).dt.date.nunique()), 1) \
+                    if not _sg_loc_vt.empty else 1
+
+                # SEMANAL y ACUMULADO (secciones 1 y 2 = todo el local, venta total)
+                _sec1, _tot1 = _tabla_macro_sg(_sg_loc_vt)
+                _sec2, _tot2 = _tabla_macro_sg(_sg_loc_vt)
                 _sec1_acum, _tot1_acum = _tabla_macro_sg(_sg_loc_vt_acum)
                 _sec2_acum, _tot2_acum = _tabla_macro_sg(_sg_loc_vt_acum)
-                # Secciones 1 y 2 = TODO el local, venta total (mismo criterio Resumen de Ventas).
 
-                def _render_macro_html_sg(g_sem, total_sem, g_acum, total_acum, titulo):
-                    html = f"<div style='font-weight:bold;color:#1F3864;margin:6px 0'>{titulo}</div>"
-                    html += "<div style='overflow-x:auto'><table style='width:100%;border-collapse:collapse;font-size:0.82rem'>"
-                    html += ("<thead>"
-                             "<tr>"
-                             "<th rowspan='2' style='text-align:left;padding:6px 8px;background:#1F3864;color:#fff;vertical-align:bottom'>Macro-familia</th>"
-                             "<th colspan='3' style='text-align:center;padding:6px 8px;background:#1F3864;color:#D4A853;border-left:2px solid #0d0d0d'>SEMANAL</th>"
-                             "<th colspan='3' style='text-align:center;padding:6px 8px;background:#16284a;color:#D4A853;border-left:2px solid #0d0d0d'>ACUMULADO MES</th>"
-                             "</tr>"
-                             "<tr>"
-                             "<th style='text-align:right;padding:5px 8px;background:#1F3864;color:#fff;border-left:2px solid #0d0d0d'>$</th>"
-                             "<th style='text-align:right;padding:5px 8px;background:#1F3864;color:#fff'>Q</th>"
-                             "<th style='text-align:right;padding:5px 8px;background:#1F3864;color:#fff'>%</th>"
-                             "<th style='text-align:right;padding:5px 8px;background:#16284a;color:#fff;border-left:2px solid #0d0d0d'>$</th>"
-                             "<th style='text-align:right;padding:5px 8px;background:#16284a;color:#fff'>Q</th>"
-                             "<th style='text-align:right;padding:5px 8px;background:#16284a;color:#fff'>%</th>"
-                             "</tr></thead><tbody>")
-                    for _ri, _fam in enumerate(['ALIMENTOS', 'BAR', 'CAFETERÍA Y POSTRES']):
+                # ── Render genérico de 3 bloques (ACUMULADO · DIARIO · SEMANAL) ──
+                # filas: lista de dicts con claves: nombre, ac_monto, ac_q, ac_pct,
+                #        sem_monto, sem_q, sem_pct. El DIARIO se calcula aquí (÷ días).
+                # totales: dict con ac_monto, ac_q, sem_monto, sem_q (para fila TOTAL).
+                def _render_3bloques_sg(filas, totales, primera_col="ITEM", dias_trab=1,
+                                        total_label="TOTAL VENTA SALÓN", q_label="Q PRODUCTOS"):
+                    _A = '#1F3864'   # acumulado (azul)
+                    _D = '#16284a'   # diario (azul oscuro)
+                    _S = '#243a66'   # semanal (azul medio)
+                    html = "<div style='overflow-x:auto'><table style='width:100%;border-collapse:collapse;font-size:0.80rem'>"
+                    html += ("<thead><tr>"
+                             f"<th rowspan='2' style='text-align:center;padding:6px 8px;background:{_A};color:#fff;vertical-align:middle'>{primera_col}</th>"
+                             f"<th colspan='3' style='text-align:center;padding:6px 8px;background:{_A};color:#D4A853;border-left:2px solid #0d0d0d'>ACUMULADO</th>"
+                             f"<th colspan='3' style='text-align:center;padding:6px 8px;background:{_D};color:#D4A853;border-left:2px solid #0d0d0d'>DIARIO</th>"
+                             f"<th colspan='3' style='text-align:center;padding:6px 8px;background:{_S};color:#D4A853;border-left:2px solid #0d0d0d'>SEMANAL</th>"
+                             "</tr><tr>")
+                    for _bgc in (_A, _D, _S):
+                        html += (f"<th style='text-align:right;padding:5px 8px;background:{_bgc};color:#fff;border-left:2px solid #0d0d0d'>$</th>"
+                                 f"<th style='text-align:right;padding:5px 8px;background:{_bgc};color:#fff'>{q_label}</th>"
+                                 f"<th style='text-align:right;padding:5px 8px;background:{_bgc};color:#fff'>%</th>")
+                    html += "</tr></thead><tbody>"
+                    for _ri, _f in enumerate(filas):
                         _bg = '#F5F5F5' if _ri % 2 == 0 else '#FFFFFF'
-                        _bg2 = '#ECEFF4' if _ri % 2 == 0 else '#F7F8FA'
-                        _rs = g_sem.loc[_fam]; _ra = g_acum.loc[_fam]
-                        html += (f"<tr><td style='padding:6px 8px;background:{_bg};color:#222'>{_fam}</td>"
-                                 f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{_fmt_clp_sg(_rs['monto'])}</td>"
-                                 f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{_fmt_q_sg(_rs['q'])}</td>"
-                                 f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{_fmt_pct_sg(_rs['pct'])}</td>"
-                                 f"<td style='text-align:right;padding:6px 8px;background:{_bg2};border-left:2px solid #D4D8E0'>{_fmt_clp_sg(_ra['monto'])}</td>"
-                                 f"<td style='text-align:right;padding:6px 8px;background:{_bg2}'>{_fmt_q_sg(_ra['q'])}</td>"
-                                 f"<td style='text-align:right;padding:6px 8px;background:{_bg2}'>{_fmt_pct_sg(_ra['pct'])}</td></tr>")
-                    html += (f"<tr><td style='padding:6px 8px;background:#1F3864;color:#fff;font-weight:bold'>TOTAL</td>"
-                             f"<td style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff;font-weight:bold'>{_fmt_clp_sg(total_sem)}</td>"
-                             f"<td style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff;font-weight:bold'>{_fmt_q_sg(g_sem['q'].sum())}</td>"
-                             f"<td style='text-align:right;padding:6px 8px;background:#1F3864;color:#D4A853;font-weight:bold'>100,0%</td>"
-                             f"<td style='text-align:right;padding:6px 8px;background:#16284a;color:#fff;font-weight:bold;border-left:2px solid #0d0d0d'>{_fmt_clp_sg(total_acum)}</td>"
-                             f"<td style='text-align:right;padding:6px 8px;background:#16284a;color:#fff;font-weight:bold'>{_fmt_q_sg(g_acum['q'].sum())}</td>"
-                             f"<td style='text-align:right;padding:6px 8px;background:#16284a;color:#D4A853;font-weight:bold'>100,0%</td></tr>")
+                        _di_m = _f['sem_monto'] / dias_trab if dias_trab > 0 else 0
+                        _di_q = _f['sem_q'] / dias_trab if dias_trab > 0 else 0
+                        html += (f"<tr><td style='padding:6px 8px;background:{_bg};color:#222;font-weight:600'>{_f['nombre']}</td>"
+                                 # ACUMULADO
+                                 f"<td style='text-align:right;padding:6px 8px;background:{_bg};border-left:2px solid #D4D8E0'>{_fmt_clp_sg(_f['ac_monto'])}</td>"
+                                 f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{_fmt_q_sg(_f['ac_q'])}</td>"
+                                 f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{_fmt_pct_sg(_f['ac_pct'])}</td>"
+                                 # DIARIO
+                                 f"<td style='text-align:right;padding:6px 8px;background:{_bg};border-left:2px solid #D4D8E0'>{_fmt_clp_sg(_di_m)}</td>"
+                                 f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{_fmt_q_sg(_di_q)}</td>"
+                                 f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{_fmt_pct_sg(_f['sem_pct'])}</td>"
+                                 # SEMANAL
+                                 f"<td style='text-align:right;padding:6px 8px;background:{_bg};border-left:2px solid #D4D8E0'>{_fmt_clp_sg(_f['sem_monto'])}</td>"
+                                 f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{_fmt_q_sg(_f['sem_q'])}</td>"
+                                 f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{_fmt_pct_sg(_f['sem_pct'])}</td></tr>")
+                    # Fila TOTAL
+                    _td_m = totales['sem_monto'] / dias_trab if dias_trab > 0 else 0
+                    _td_q = totales['sem_q'] / dias_trab if dias_trab > 0 else 0
+                    html += (f"<tr><td style='padding:6px 8px;background:{_A};color:#fff;font-weight:bold'>{total_label}</td>"
+                             f"<td style='text-align:right;padding:6px 8px;background:{_A};color:#fff;font-weight:bold;border-left:2px solid #0d0d0d'>{_fmt_clp_sg(totales['ac_monto'])}</td>"
+                             f"<td style='text-align:right;padding:6px 8px;background:{_A};color:#fff;font-weight:bold'>{_fmt_q_sg(totales['ac_q'])}</td>"
+                             f"<td style='text-align:right;padding:6px 8px;background:{_A};color:#D4A853;font-weight:bold'>100,0%</td>"
+                             f"<td style='text-align:right;padding:6px 8px;background:{_D};color:#fff;font-weight:bold;border-left:2px solid #0d0d0d'>{_fmt_clp_sg(_td_m)}</td>"
+                             f"<td style='text-align:right;padding:6px 8px;background:{_D};color:#fff;font-weight:bold'>{_fmt_q_sg(_td_q)}</td>"
+                             f"<td style='text-align:right;padding:6px 8px;background:{_D};color:#D4A853;font-weight:bold'>100,0%</td>"
+                             f"<td style='text-align:right;padding:6px 8px;background:{_S};color:#fff;font-weight:bold;border-left:2px solid #0d0d0d'>{_fmt_clp_sg(totales['sem_monto'])}</td>"
+                             f"<td style='text-align:right;padding:6px 8px;background:{_S};color:#fff;font-weight:bold'>{_fmt_q_sg(totales['sem_q'])}</td>"
+                             f"<td style='text-align:right;padding:6px 8px;background:{_S};color:#D4A853;font-weight:bold'>100,0%</td></tr>")
                     html += "</tbody></table></div>"
                     return html
 
+                # Construir filas de macro-familia para el render de 3 bloques
+                def _filas_macro_sg(g_sem, g_acum):
+                    filas = []
+                    for _fam in ['ALIMENTOS', 'BAR', 'CAFETERÍA Y POSTRES']:
+                        _rs = g_sem.loc[_fam]; _ra = g_acum.loc[_fam]
+                        filas.append({
+                            'nombre': _fam,
+                            'ac_monto': _ra['monto'], 'ac_q': _ra['q'], 'ac_pct': _ra['pct'],
+                            'sem_monto': _rs['monto'], 'sem_q': _rs['q'], 'sem_pct': _rs['pct'],
+                        })
+                    return filas
+
+                _filas1 = _filas_macro_sg(_sec1, _sec1_acum)
+                _tot1_d = {'ac_monto': _tot1_acum, 'ac_q': _sec1_acum['q'].sum(),
+                           'sem_monto': _tot1, 'sem_q': _sec1['q'].sum()}
+
                 st.markdown("#### 1 · Ventas Totales Salón")
-                st.markdown(_render_macro_html_sg(_sec1, _tot1, _sec1_acum, _tot1_acum, "Todo el local"),
-                            unsafe_allow_html=True)
+                st.markdown(_render_3bloques_sg(_filas1, _tot1_d, primera_col="ITEM",
+                                                dias_trab=_sg_dias_trab), unsafe_allow_html=True)
                 st.markdown("#### 2 · Ventas por Categoría")
-                st.markdown(_render_macro_html_sg(_sec2, _tot2, _sec2_acum, _tot2_acum, "Todo el local"),
-                            unsafe_allow_html=True)
-                st.caption(f"SEMANAL = {_sg_fi.strftime('%d-%m')} al {_sg_ff.strftime('%d-%m')}. "
-                           f"ACUMULADO MES = {_sg_fi_acum.strftime('%d-%m')} al {_sg_ff_acum.strftime('%d-%m')}. "
-                           "Secciones 1 y 2 = todo el local (venta salón completa).")
+                st.markdown(_render_3bloques_sg(_filas1, _tot1_d, primera_col="ITEM",
+                                                dias_trab=_sg_dias_trab), unsafe_allow_html=True)
+                st.caption(f"ACUMULADO = {_sg_fi_acum.strftime('%d-%m')} al {_sg_ff_acum.strftime('%d-%m')}. "
+                           f"SEMANAL = {_sg_fi.strftime('%d-%m')} al {_sg_ff.strftime('%d-%m')}. "
+                           f"DIARIO = semanal ÷ {_sg_dias_trab} días trabajados. "
+                           "Secciones 1 y 2 = todo el local.")
                 st.markdown("---")
 
                 # ════════════════════════════════════════════════════════════════
-                # SECCIÓN 3 — Ventas por Categoría detalladas (§6.4)
-                # Universo = garzones whitelist (cuadra con sección 2).
+                # SECCIÓN 3 — Ventas por Categoría detalladas
+                # Mismas columnas que 1/2: ACUMULADO · DIARIO · SEMANAL. Todo el local.
                 # ════════════════════════════════════════════════════════════════
-                _tot_venta_salon_gz = _sg_loc_gz['monto_venta_real'].sum()
+                _tot_sem_loc = _sg_loc_vt['monto_venta_real'].sum()
+                _tot_acum_loc = _sg_loc_vt_acum['monto_venta_real'].sum() if not _sg_loc_vt_acum.empty else 0
 
-                def _bloque_subcat_sg(filas_df, col_subcat_func, titulo, usa_func_args="alim"):
-                    """Construye un bloque de subcategorías con $, Q, % y Q prom x garzón."""
-                    df = filas_df.copy()
-                    if usa_func_args == "alim":
-                        df['subcat'] = df.apply(lambda r: col_subcat_func(r['categoria_menu'], r['cat_agr']), axis=1)
-                    else:  # liquidos
-                        df['subcat'] = df.apply(lambda r: col_subcat_func(r['sku_producto'], r['cat_agr_macro']), axis=1)
-                    df = df[df['subcat'].notna()]
-                    if df.empty:
-                        return None, 0.0
-                    g = df.groupby('subcat').agg(
-                        monto=('monto_venta_real', 'sum'),
-                        q=('cantidad_vendida', 'sum')).reset_index()
-                    return g, g['monto'].sum()
+                # Agrupa un universo por subcategoría → dict {subcat: (monto, q)}
+                def _agg_subcat_sg(df, col_subcat_func, modo="alim"):
+                    if df is None or df.empty:
+                        return {}
+                    d = df.copy()
+                    if modo == "alim":
+                        d['subcat'] = d.apply(lambda r: col_subcat_func(r['categoria_menu'], r['cat_agr']), axis=1)
+                    else:
+                        d['_macro_liq'] = d['cat_agr']
+                        d['subcat'] = d.apply(lambda r: col_subcat_func(r['sku_producto'], r['_macro_liq']), axis=1)
+                    d = d[d['subcat'].notna()]
+                    if d.empty:
+                        return {}
+                    g = d.groupby('subcat').agg(monto=('monto_venta_real', 'sum'),
+                                                q=('cantidad_vendida', 'sum'))
+                    return {idx: (row['monto'], row['q']) for idx, row in g.iterrows()}
 
-                def _render_subcat_html_sg(g, total_bloque, titulo, tot_global, qgar):
-                    if g is None or g.empty:
-                        return f"<div style='color:#888;margin:6px 0'><b>{titulo}</b>: sin datos.</div>"
-                    html = f"<div style='font-weight:bold;color:#1F3864;margin:10px 0 4px 0'>{titulo}</div>"
-                    html += "<div style='overflow-x:auto'><table style='width:100%;border-collapse:collapse;font-size:0.82rem'>"
-                    html += ("<thead><tr>"
-                             "<th style='text-align:left;padding:6px 10px;background:#1F3864;color:#fff'>Subcategoría</th>"
-                             "<th style='text-align:right;padding:6px 10px;background:#1F3864;color:#fff'>$ Acumulado</th>"
-                             "<th style='text-align:right;padding:6px 10px;background:#1F3864;color:#fff'>Q</th>"
-                             "<th style='text-align:right;padding:6px 10px;background:#1F3864;color:#fff'>% s/ venta salón</th>"
-                             "<th style='text-align:right;padding:6px 10px;background:#1F3864;color:#fff'>Q prom x garzón</th>"
-                             "</tr></thead><tbody>")
-                    for _ri, _row in g.reset_index(drop=True).iterrows():
-                        _bg = '#F5F5F5' if _ri % 2 == 0 else '#FFFFFF'
-                        _pct = (_row['monto'] / tot_global * 100) if tot_global > 0 else 0
-                        _qprom = _row['q'] / qgar if qgar > 0 else 0
-                        html += (f"<tr><td style='padding:6px 10px;background:{_bg};color:#222'>{_row['subcat']}</td>"
-                                 f"<td style='text-align:right;padding:6px 10px;background:{_bg}'>{_fmt_clp_sg(_row['monto'])}</td>"
-                                 f"<td style='text-align:right;padding:6px 10px;background:{_bg}'>{_fmt_q_sg(_row['q'])}</td>"
-                                 f"<td style='text-align:right;padding:6px 10px;background:{_bg}'>{_fmt_pct_sg(_pct)}</td>"
-                                 f"<td style='text-align:right;padding:6px 10px;background:{_bg}'>{('%.1f' % _qprom).replace('.', ',')}</td></tr>")
-                    _pct_tot = (total_bloque / tot_global * 100) if tot_global > 0 else 0
-                    html += (f"<tr><td style='padding:6px 10px;background:#1F3864;color:#fff;font-weight:bold'>TOTAL</td>"
-                             f"<td style='text-align:right;padding:6px 10px;background:#1F3864;color:#fff;font-weight:bold'>{_fmt_clp_sg(total_bloque)}</td>"
-                             f"<td style='text-align:right;padding:6px 10px;background:#1F3864;color:#fff;font-weight:bold'>{_fmt_q_sg(g['q'].sum())}</td>"
-                             f"<td style='text-align:right;padding:6px 10px;background:#1F3864;color:#D4A853;font-weight:bold'>{_fmt_pct_sg(_pct_tot)}</td>"
-                             f"<td style='background:#1F3864'></td></tr>")
-                    html += "</tbody></table></div>"
-                    return html
+                # Construye filas {nombre, ac_*, sem_*} uniendo semanal y acumulado
+                def _filas_subcat_sg(df_sem, df_acum, col_func, modo, tot_sem, tot_acum):
+                    a_sem = _agg_subcat_sg(df_sem, col_func, modo)
+                    a_acu = _agg_subcat_sg(df_acum, col_func, modo)
+                    _orden = list(dict.fromkeys(list(a_sem.keys()) + list(a_acu.keys())))
+                    filas = []
+                    for _sc in _orden:
+                        _ms, _qs = a_sem.get(_sc, (0, 0))
+                        _ma, _qa = a_acu.get(_sc, (0, 0))
+                        filas.append({
+                            'nombre': _sc,
+                            'ac_monto': _ma, 'ac_q': _qa,
+                            'ac_pct': (_ma / tot_acum * 100) if tot_acum > 0 else 0,
+                            'sem_monto': _ms, 'sem_q': _qs,
+                            'sem_pct': (_ms / tot_sem * 100) if tot_sem > 0 else 0,
+                        })
+                    return filas
+
+                def _totales_filas_sg(filas):
+                    return {'ac_monto': sum(f['ac_monto'] for f in filas),
+                            'ac_q': sum(f['ac_q'] for f in filas),
+                            'sem_monto': sum(f['sem_monto'] for f in filas),
+                            'sem_q': sum(f['sem_q'] for f in filas)}
 
                 st.markdown("#### 3 · Ventas por Categoría (detalle)")
 
                 # --- 3a. ALIMENTOS ---
-                _g_alim, _t_alim = _bloque_subcat_sg(
-                    _sg_loc_gz[_sg_loc_gz['cat_agr'].isin(['Alimentos', 'Agregados', 'Colación'])],
-                    _subcat_alimentos_sg, "VENTAS ALIMENTOS", usa_func_args="alim")
-                st.markdown(_render_subcat_html_sg(_g_alim, _t_alim, "VENTAS ALIMENTOS", _tot_venta_salon_gz, _sg_qgar),
-                            unsafe_allow_html=True)
+                _alim_sem = _sg_loc_vt[_sg_loc_vt['cat_agr'].isin(['Alimentos', 'Agregados', 'Colación'])]
+                _alim_acu = _sg_loc_vt_acum[_sg_loc_vt_acum['cat_agr'].isin(['Alimentos', 'Agregados', 'Colación'])] if not _sg_loc_vt_acum.empty else _sg_loc_vt_acum
+                _filas_alim = _filas_subcat_sg(_alim_sem, _alim_acu, _subcat_alimentos_sg, "alim", _tot_sem_loc, _tot_acum_loc)
+                if _filas_alim:
+                    st.markdown("**VENTAS ALIMENTOS**")
+                    st.markdown(_render_3bloques_sg(_filas_alim, _totales_filas_sg(_filas_alim),
+                                primera_col="ITEM", dias_trab=_sg_dias_trab, total_label="TOTAL ALIMENTOS"),
+                                unsafe_allow_html=True)
 
-                # --- 3b. CAFETERÍA Y POSTRES (conteo de PADRE por ab_categoria, §6.4) ---
-                # REGLA: Q = suma cantidad_vendida del SKU padre (es_opcion=false), NO opciones.
-                _q_cafe = (_sg_loc_gz[(_sg_loc_gz['ab_categoria'] == _AB_CAFETERIA_SG)]
-                           ['cantidad_vendida'].sum())
-                _m_cafe = (_sg_loc_gz[(_sg_loc_gz['ab_categoria'] == _AB_CAFETERIA_SG)]
-                           ['monto_venta_real'].sum())
-                _q_post = (_sg_loc_gz[(_sg_loc_gz['ab_categoria'] == _AB_POSTRES_SG)]
-                           ['cantidad_vendida'].sum())
-                _m_post = (_sg_loc_gz[(_sg_loc_gz['ab_categoria'] == _AB_POSTRES_SG)]
-                           ['monto_venta_real'].sum())
-                # Fallback: si ab_categoria no viene poblado, usar cat_agr
-                if _q_cafe == 0 and _m_cafe == 0:
-                    _df_c = _sg_loc_gz[_sg_loc_gz['cat_agr'] == 'Cafetería']
-                    _q_cafe, _m_cafe = _df_c['cantidad_vendida'].sum(), _df_c['monto_venta_real'].sum()
-                if _q_post == 0 and _m_post == 0:
-                    _df_p = _sg_loc_gz[_sg_loc_gz['cat_agr'] == 'Postres']
-                    _q_post, _m_post = _df_p['cantidad_vendida'].sum(), _df_p['monto_venta_real'].sum()
-                _g_cp = pd.DataFrame([
-                    {"subcat": "CAFETERÍA", "monto": _m_cafe, "q": _q_cafe},
-                    {"subcat": "POSTRES",   "monto": _m_post, "q": _q_post},
-                ])
-                st.markdown(_render_subcat_html_sg(_g_cp, _g_cp['monto'].sum(), "VENTAS CAFETERÍA Y POSTRES",
-                                                   _tot_venta_salon_gz, _sg_qgar), unsafe_allow_html=True)
-                # Q (unidades) vs META (v2 §5: Cafetería/Postres se miden en Q vs meta, no en %).
-                # Meta de la semana = meta diaria × nº de días del rango seleccionado.
+                # --- 3b. CAFETERÍA Y POSTRES (Q = padres por ab_categoria) ---
+                def _cafe_post_vals(df):
+                    _qc = df[df['ab_categoria'] == _AB_CAFETERIA_SG]['cantidad_vendida'].sum()
+                    _mc = df[df['ab_categoria'] == _AB_CAFETERIA_SG]['monto_venta_real'].sum()
+                    _qp = df[df['ab_categoria'] == _AB_POSTRES_SG]['cantidad_vendida'].sum()
+                    _mp = df[df['ab_categoria'] == _AB_POSTRES_SG]['monto_venta_real'].sum()
+                    if _qc == 0 and _mc == 0:
+                        _dc = df[df['cat_agr'] == 'Cafetería']; _qc, _mc = _dc['cantidad_vendida'].sum(), _dc['monto_venta_real'].sum()
+                    if _qp == 0 and _mp == 0:
+                        _dp = df[df['cat_agr'] == 'Postres']; _qp, _mp = _dp['cantidad_vendida'].sum(), _dp['monto_venta_real'].sum()
+                    return _mc, _qc, _mp, _qp
+                _mc_s, _qc_s, _mp_s, _qp_s = _cafe_post_vals(_sg_loc_vt)
+                _mc_a, _qc_a, _mp_a, _qp_a = _cafe_post_vals(_sg_loc_vt_acum) if not _sg_loc_vt_acum.empty else (0, 0, 0, 0)
+                _q_cafe, _m_cafe, _q_post, _m_post = _qc_s, _mc_s, _qp_s, _mp_s  # para metas/debug
+                _filas_cp = [
+                    {'nombre': 'CAFETERÍA', 'ac_monto': _mc_a, 'ac_q': _qc_a,
+                     'ac_pct': (_mc_a / _tot_acum_loc * 100) if _tot_acum_loc > 0 else 0,
+                     'sem_monto': _mc_s, 'sem_q': _qc_s,
+                     'sem_pct': (_mc_s / _tot_sem_loc * 100) if _tot_sem_loc > 0 else 0},
+                    {'nombre': 'POSTRES', 'ac_monto': _mp_a, 'ac_q': _qp_a,
+                     'ac_pct': (_mp_a / _tot_acum_loc * 100) if _tot_acum_loc > 0 else 0,
+                     'sem_monto': _mp_s, 'sem_q': _qp_s,
+                     'sem_pct': (_mp_s / _tot_sem_loc * 100) if _tot_sem_loc > 0 else 0},
+                ]
+                st.markdown("**VENTAS CAFETERÍA Y POSTRES**")
+                st.markdown(_render_3bloques_sg(_filas_cp, _totales_filas_sg(_filas_cp),
+                            primera_col="ITEM", dias_trab=_sg_dias_trab, total_label="TOTAL CAF. Y POSTRES"),
+                            unsafe_allow_html=True)
+                # Q vs META (semanal)
                 _meta_loc = _METAS_SG.get(_sg_local, {})
                 if _meta_loc:
                     _dias_sem = (_sg_ff - _sg_fi).days + 1
                     _mc_dia = _meta_loc.get('Cafetería', {}).get('diaria', 0)
                     _mp_dia = _meta_loc.get('Postres', {}).get('diaria', 0)
-                    _meta_cafe = _mc_dia * _dias_sem
-                    _meta_post = _mp_dia * _dias_sem
+                    _meta_cafe = _mc_dia * _dias_sem; _meta_post = _mp_dia * _dias_sem
                     _cmpl_cafe = (_q_cafe / _meta_cafe * 100) if _meta_cafe > 0 else 0
                     _cmpl_post = (_q_post / _meta_post * 100) if _meta_post > 0 else 0
                     def _color_meta(p):
@@ -16018,64 +16060,69 @@ buildTree(data, 1, null);
                     _meta_html = "<div style='display:flex;flex-wrap:wrap;gap:10px;margin:6px 0'>"
                     for _lbl, _q, _meta, _cmpl in [("Cafetería", _q_cafe, _meta_cafe, _cmpl_cafe),
                                                    ("Postres", _q_post, _meta_post, _cmpl_post)]:
-                        _meta_html += (
-                            f"<div style='border:1px solid #E0E0E0;border-radius:8px;padding:8px 14px;background:#FFFFFF'>"
+                        _meta_html += (f"<div style='border:1px solid #E0E0E0;border-radius:8px;padding:8px 14px;background:#FFFFFF'>"
                             f"<div style='font-size:0.78rem;color:#555'>{_lbl}</div>"
                             f"<div style='font-size:1.05rem;font-weight:bold;color:#1F3864'>{_fmt_q_sg(_q)} <span style='color:#888;font-weight:normal'>/ {_fmt_q_sg(_meta)} meta</span></div>"
-                            f"<div style='font-size:0.85rem;font-weight:bold;color:{_color_meta(_cmpl)}'>{_fmt_pct_sg(_cmpl)} cumplimiento</div>"
-                            f"</div>")
+                            f"<div style='font-size:0.85rem;font-weight:bold;color:{_color_meta(_cmpl)}'>{_fmt_pct_sg(_cmpl)} cumplimiento</div></div>")
                     _meta_html += "</div>"
                     st.markdown(_meta_html, unsafe_allow_html=True)
-                    st.caption(f"Meta = meta diaria × {_dias_sem} días del período. Cafetería {_mc_dia}/día · Postres {_mp_dia}/día.")
+                    st.caption(f"Meta = meta diaria × {_dias_sem} días. Cafetería {_mc_dia}/día · Postres {_mp_dia}/día.")
 
                 # --- 3c. LÍQUIDOS C/A ---
-                _df_ca = _sg_loc_gz[_sg_loc_gz['cat_agr'] == 'Líquidos C/A'].copy()
-                _df_ca['cat_agr_macro'] = 'Líquidos C/A'
-                _g_ca, _t_ca = _bloque_subcat_sg(_df_ca, _subcat_liquidos_sg, "VENTAS LIQUIDOS C/A", usa_func_args="liq")
-                st.markdown(_render_subcat_html_sg(_g_ca, _t_ca, "VENTAS LIQUIDOS C/A", _tot_venta_salon_gz, _sg_qgar),
-                            unsafe_allow_html=True)
+                _ca_sem = _sg_loc_vt[_sg_loc_vt['cat_agr'] == 'Líquidos C/A']
+                _ca_acu = _sg_loc_vt_acum[_sg_loc_vt_acum['cat_agr'] == 'Líquidos C/A'] if not _sg_loc_vt_acum.empty else _sg_loc_vt_acum
+                _filas_ca = _filas_subcat_sg(_ca_sem, _ca_acu, _subcat_liquidos_sg, "liq", _tot_sem_loc, _tot_acum_loc)
+                if _filas_ca:
+                    st.markdown("**VENTAS LÍQUIDOS C/A**")
+                    st.markdown(_render_3bloques_sg(_filas_ca, _totales_filas_sg(_filas_ca),
+                                primera_col="ITEM", dias_trab=_sg_dias_trab, total_label="TOTAL LÍQUIDOS C/A"),
+                                unsafe_allow_html=True)
 
                 # --- 3d. LÍQUIDOS S/A ---
-                _df_sa = _sg_loc_gz[_sg_loc_gz['cat_agr'] == 'Líquidos S/A'].copy()
-                _df_sa['cat_agr_macro'] = 'Líquidos S/A'
-                _g_sa, _t_sa = _bloque_subcat_sg(_df_sa, _subcat_liquidos_sg, "VENTAS LIQUIDOS S/A", usa_func_args="liq")
-                st.markdown(_render_subcat_html_sg(_g_sa, _t_sa, "VENTAS LIQUIDOS S/A", _tot_venta_salon_gz, _sg_qgar),
-                            unsafe_allow_html=True)
+                _sa_sem = _sg_loc_vt[_sg_loc_vt['cat_agr'] == 'Líquidos S/A']
+                _sa_acu = _sg_loc_vt_acum[_sg_loc_vt_acum['cat_agr'] == 'Líquidos S/A'] if not _sg_loc_vt_acum.empty else _sg_loc_vt_acum
+                _filas_sa = _filas_subcat_sg(_sa_sem, _sa_acu, _subcat_liquidos_sg, "liq", _tot_sem_loc, _tot_acum_loc)
+                if _filas_sa:
+                    st.markdown("**VENTAS LÍQUIDOS S/A**")
+                    st.markdown(_render_3bloques_sg(_filas_sa, _totales_filas_sg(_filas_sa),
+                                primera_col="ITEM", dias_trab=_sg_dias_trab, total_label="TOTAL LÍQUIDOS S/A"),
+                                unsafe_allow_html=True)
                 st.markdown("---")
 
                 # ════════════════════════════════════════════════════════════════
-                # SECCIÓN 4 — Control de Productos Estratégicos (§6.5)
+                # SECCIÓN 4 — Control de Productos Estratégicos
+                # Mismas columnas: ACUMULADO · DIARIO · SEMANAL. Todo el local.
                 # ════════════════════════════════════════════════════════════════
                 st.markdown("#### 4 · Control de Productos Estratégicos")
-                _sg_loc_gz_nom = _sg_loc_gz.copy()
-                _sg_loc_gz_nom['_nom_low'] = _sg_loc_gz_nom['nombre_producto'].astype(str).str.strip().str.lower()
-                _estr_rows = []
-                for _et, _variantes in _PRODUCTOS_ESTRATEGICOS_SG.items():
-                    _mask = _sg_loc_gz_nom['_nom_low'].apply(lambda n: any(v in n for v in _variantes))
-                    _df_e = _sg_loc_gz_nom[_mask]
-                    _q = _df_e['cantidad_vendida'].sum()
-                    _m = _df_e['monto_venta_real'].sum()
-                    _pct = (_m / _tot_venta_salon_gz * 100) if _tot_venta_salon_gz > 0 else 0
-                    _estr_rows.append({"prod": _et, "q": _q, "monto": _m, "pct": _pct,
-                                       "qprom": _q / _sg_qgar if _sg_qgar > 0 else 0})
-                _estr_df = pd.DataFrame(_estr_rows)
-                _eh = "<div style='overflow-x:auto'><table style='width:100%;border-collapse:collapse;font-size:0.82rem'>"
-                _eh += ("<thead><tr>"
-                        "<th style='text-align:left;padding:6px 10px;background:#1F3864;color:#fff'>Producto</th>"
-                        "<th style='text-align:right;padding:6px 10px;background:#1F3864;color:#fff'>Q</th>"
-                        "<th style='text-align:right;padding:6px 10px;background:#1F3864;color:#fff'>$ Acumulado</th>"
-                        "<th style='text-align:right;padding:6px 10px;background:#1F3864;color:#fff'>% s/ venta</th>"
-                        "<th style='text-align:right;padding:6px 10px;background:#1F3864;color:#fff'>Q prom x garzón</th>"
-                        "</tr></thead><tbody>")
-                for _ri, _row in _estr_df.iterrows():
-                    _bg = '#F5F5F5' if _ri % 2 == 0 else '#FFFFFF'
-                    _eh += (f"<tr><td style='padding:6px 10px;background:{_bg};color:#222'>{_row['prod']}</td>"
-                            f"<td style='text-align:right;padding:6px 10px;background:{_bg}'>{_fmt_q_sg(_row['q'])}</td>"
-                            f"<td style='text-align:right;padding:6px 10px;background:{_bg}'>{_fmt_clp_sg(_row['monto'])}</td>"
-                            f"<td style='text-align:right;padding:6px 10px;background:{_bg}'>{_fmt_pct_sg(_row['pct'])}</td>"
-                            f"<td style='text-align:right;padding:6px 10px;background:{_bg}'>{('%.1f' % _row['qprom']).replace('.', ',')}</td></tr>")
-                _eh += "</tbody></table></div>"
-                st.markdown(_eh, unsafe_allow_html=True)
+                def _estrat_vals(df):
+                    d = df.copy()
+                    d['_nom_low'] = d['nombre_producto'].astype(str).str.strip().str.lower()
+                    out = {}
+                    for _et, _variantes in _PRODUCTOS_ESTRATEGICOS_SG.items():
+                        _mask = d['_nom_low'].apply(lambda n: any(v in n for v in _variantes))
+                        _de = d[_mask]
+                        out[_et] = (_de['monto_venta_real'].sum(), _de['cantidad_vendida'].sum())
+                    return out
+                _es_sem = _estrat_vals(_sg_loc_vt)
+                _es_acu = _estrat_vals(_sg_loc_vt_acum) if not _sg_loc_vt_acum.empty else {}
+                _filas_estr = []
+                for _et in _PRODUCTOS_ESTRATEGICOS_SG.keys():
+                    _ms, _qs = _es_sem.get(_et, (0, 0))
+                    _ma, _qa = _es_acu.get(_et, (0, 0))
+                    _filas_estr.append({
+                        'nombre': _et,
+                        'ac_monto': _ma, 'ac_q': _qa,
+                        'ac_pct': (_ma / _tot_acum_loc * 100) if _tot_acum_loc > 0 else 0,
+                        'sem_monto': _ms, 'sem_q': _qs,
+                        'sem_pct': (_ms / _tot_sem_loc * 100) if _tot_sem_loc > 0 else 0,
+                    })
+                # _estr_df para compatibilidad con el PDF (usa columnas prod/q/monto/pct)
+                _estr_df = pd.DataFrame([{'prod': f['nombre'], 'q': f['sem_q'], 'monto': f['sem_monto'],
+                                          'pct': f['sem_pct'], 'qprom': f['sem_q'] / _sg_qgar if _sg_qgar > 0 else 0}
+                                         for f in _filas_estr])
+                st.markdown(_render_3bloques_sg(_filas_estr, _totales_filas_sg(_filas_estr),
+                            primera_col="PRODUCTO", dias_trab=_sg_dias_trab, total_label="TOTAL ESTRATÉGICOS"),
+                            unsafe_allow_html=True)
                 st.markdown("---")
 
                 # ════════════════════════════════════════════════════════════════
