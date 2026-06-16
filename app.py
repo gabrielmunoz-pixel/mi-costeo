@@ -15549,13 +15549,11 @@ buildTree(data, 1, null);
                 return "CAFETERÍA Y POSTRES"
             return None
 
-        # ── 5. Venta Salón (criterio del Word: forma_pago, §3.3) ──
-        # NOTA: el módulo Resumen Ventas usa 'origen' para Salón/Delivery; este
-        # informe usa 'forma_pago' por indicación del instructivo (switch del Word).
-        _FORMAS_PAGO_SALON_SG = [
-            "Amipass", "Cuenta casa", "Getnet PDV", "Efectivo",
-            "Tarjeta Crédito", "Tarjeta Débito", "Tarjeta Debito", "Tarjeta Credito",
-        ]
+        # ── 5. Venta Salón = MISMO criterio que "Resumen de Ventas" (gestión de datos) ──
+        # La venta real es monto_venta_real SIN filtro es_opcion ni forma_pago.
+        # Salón vs Delivery se define por 'origen': vacío/null = Salón, con valor = Delivery.
+        def _es_salon_sg(origen):
+            return (origen is None) or (str(origen).strip() == '') or (str(origen).strip().lower() in ('none', 'nan'))
 
         # ── 6. Jefatura por local (§6.1, llave = local canónico de la BD) ──
         _JEFATURA_LOCAL_SG = {
@@ -15665,31 +15663,30 @@ buildTree(data, 1, null);
             with st.spinner("Cargando ventas de salón..."):
                 # Query base (§6.2): detalle de la semana, SOLO ventas salón, TODA la red
                 # (se necesita toda la red para ranking y comparativas 6, 7, 10, 11).
+                # MISMO criterio que "Resumen de Ventas": monto_venta_real, sin filtro
+                # es_opcion. Venta Salón = origen vacío/null (delivery tiene origen con valor).
                 _sg_sql = """
                     SELECT fecha_venta, local, garzon, sku_producto, nombre_producto,
                            categoria_menu, ab_categoria, es_opcion,
-                           cantidad_vendida, monto_venta_real, propina, forma_pago
+                           cantidad_vendida, monto_venta_real, propina, origen
                     FROM ventas
                     WHERE fecha_venta BETWEEN :fi AND :ff
                       AND local IS NOT NULL
-                      AND forma_pago = ANY(:formas_salon)
+                      AND (origen IS NULL OR TRIM(origen) = '')
                 """
-                _sg_params = {"fi": str(_sg_fi), "ff": str(_sg_ff),
-                              "formas_salon": _FORMAS_PAGO_SALON_SG}
+                _sg_params = {"fi": str(_sg_fi), "ff": str(_sg_ff)}
                 _sg_raw = run_query(_sg_sql, _sg_params)
 
-                # Query evolución 4 semanas (§6.8): mismo filtro, 3 semanas más atrás.
+                # Query evolución 4 semanas (§6.8): mismo criterio, 3 semanas más atrás.
                 _sg_fi_4w = _sg_fi - _td(weeks=3)
-                _sg_params_4w = {"fi": str(_sg_fi_4w), "ff": str(_sg_ff),
-                                 "formas_salon": _FORMAS_PAGO_SALON_SG}
+                _sg_params_4w = {"fi": str(_sg_fi_4w), "ff": str(_sg_ff)}
                 _sg_raw_4w = run_query(_sg_sql, _sg_params_4w)
 
                 # Query mensual (§6.8, sección 11): ~4 meses hacia atrás desde el inicio de semana.
                 _sg_fi_mes = (_sg_fi.replace(day=1) - _td(days=1)).replace(day=1)
                 _sg_fi_mes = (_sg_fi_mes.replace(day=1) - _td(days=1)).replace(day=1)
                 _sg_fi_mes = (_sg_fi_mes.replace(day=1) - _td(days=1)).replace(day=1)
-                _sg_params_mes = {"fi": str(_sg_fi_mes), "ff": str(_sg_ff),
-                                  "formas_salon": _FORMAS_PAGO_SALON_SG}
+                _sg_params_mes = {"fi": str(_sg_fi_mes), "ff": str(_sg_ff)}
                 _sg_raw_mes = run_query(_sg_sql, _sg_params_mes)
 
                 st.session_state["sg_data"]     = _sg_raw
@@ -15740,8 +15737,26 @@ buildTree(data, 1, null);
                 _sg_fi_acum = _sg_ff.replace(day=1)   # primer día del mes del fin de semana
                 _sg_ff_acum = _sg_ff
 
-                # Universo SEMANAL (productos vendibles de la semana)
+                # Universo SEMANAL (productos vendibles de la semana, sin opciones)
                 _sg_vend = _preparar_vend_sg(_sg_raw)
+
+                # Universo de VENTA TOTAL (igual que Resumen de Ventas): NO quita opciones,
+                # solo excluye colaciones. Para que el total de $ cuadre exacto con el
+                # Resumen de Ventas aunque las opciones tengan monto propio.
+                def _preparar_venta_total_sg(df_raw):
+                    if df_raw is None or df_raw.empty:
+                        return pd.DataFrame()
+                    d = df_raw.copy()
+                    d['monto_venta_real'] = pd.to_numeric(d['monto_venta_real'], errors='coerce').fillna(0)
+                    d['cantidad_vendida'] = pd.to_numeric(d['cantidad_vendida'], errors='coerce').fillna(0)
+                    d['_cat_up'] = d['categoria_menu'].astype(str).str.strip().str.upper()
+                    d = d[~d['_cat_up'].isin(_CATS_COLACION_EXCL)].copy()
+                    d['cat_agr'] = d.apply(
+                        lambda r: _categorizar_sg(r['categoria_menu'], r['nombre_producto']), axis=1)
+                    d['macro'] = d['cat_agr'].apply(_macro_familia_sg)
+                    return d
+                _sg_venta_total = _preparar_venta_total_sg(_sg_raw)
+                _sg_venta_total_acum_full = _preparar_venta_total_sg(_sg_raw_mes)
 
                 # Universo ACUMULADO: se deriva de _sg_raw_mes (ya cargado, cubre el mes)
                 # filtrando al rango [_sg_fi_acum, _sg_ff_acum]. No requiere query nueva.
@@ -15756,6 +15771,16 @@ buildTree(data, 1, null);
                 # Subsets del local seleccionado — SEMANAL
                 _sg_loc    = _sg_vend[_sg_vend['local'] == _sg_local].copy()
                 _sg_loc_gz = _sg_loc[_sg_loc['garzon'].isin(_GARZONES_VALIDOS_SG)].copy()
+
+                # Subsets de VENTA TOTAL del local (secciones 1 y 2) — incluye opciones
+                _sg_loc_vt = _sg_venta_total[_sg_venta_total['local'] == _sg_local].copy()
+                if _sg_venta_total_acum_full is not None and not _sg_venta_total_acum_full.empty:
+                    _fvt = pd.to_datetime(_sg_venta_total_acum_full['fecha_venta']).dt.date
+                    _sg_loc_vt_acum = _sg_venta_total_acum_full[
+                        (_sg_venta_total_acum_full['local'] == _sg_local)
+                        & (_fvt >= _sg_fi_acum) & (_fvt <= _sg_ff_acum)].copy()
+                else:
+                    _sg_loc_vt_acum = pd.DataFrame(columns=_sg_loc_vt.columns)
 
                 # Subsets del local seleccionado — ACUMULADO MENSUAL
                 if not _sg_vend_acum.empty:
@@ -15829,15 +15854,13 @@ buildTree(data, 1, null);
                     g['pct'] = (g['monto'] / total * 100) if total > 0 else 0
                     return g, total
 
-                # SEMANAL
-                _sec1, _tot1 = _tabla_macro_sg(_sg_loc)          # sección 1: TODO el local
-                _sec2, _tot2 = _tabla_macro_sg(_sg_loc_gz)       # sección 2: garzones whitelist
+                # SEMANAL — secciones 1 y 2 ambas sobre TODO el local (venta total, con opciones)
+                _sec1, _tot1 = _tabla_macro_sg(_sg_loc_vt)       # sección 1: todo el local
+                _sec2, _tot2 = _tabla_macro_sg(_sg_loc_vt)       # sección 2: todo el local
                 # ACUMULADO MENSUAL (1 del mes → fin de semana)
-                _sec1_acum, _tot1_acum = _tabla_macro_sg(_sg_loc_acum)
-                _sec2_acum, _tot2_acum = _tabla_macro_sg(_sg_loc_gz_acum)
-                # CONFIRMADO (instructivo v2 §1): sección 1 = todo salón del local;
-                # sección 2 = solo garzones whitelist. Macro-sumas cuadran exacto contra
-                # el PDF (Vitacura: sec1 $72.892.130 > sec2 $59.216.110).
+                _sec1_acum, _tot1_acum = _tabla_macro_sg(_sg_loc_vt_acum)
+                _sec2_acum, _tot2_acum = _tabla_macro_sg(_sg_loc_vt_acum)
+                # Secciones 1 y 2 = TODO el local, venta total (mismo criterio Resumen de Ventas).
 
                 def _render_macro_html_sg(g_sem, total_sem, g_acum, total_acum, titulo):
                     html = f"<div style='font-weight:bold;color:#1F3864;margin:6px 0'>{titulo}</div>"
@@ -15881,11 +15904,11 @@ buildTree(data, 1, null);
                 st.markdown(_render_macro_html_sg(_sec1, _tot1, _sec1_acum, _tot1_acum, "Todo el local"),
                             unsafe_allow_html=True)
                 st.markdown("#### 2 · Ventas por Categoría")
-                st.markdown(_render_macro_html_sg(_sec2, _tot2, _sec2_acum, _tot2_acum, "Garzones evaluados"),
+                st.markdown(_render_macro_html_sg(_sec2, _tot2, _sec2_acum, _tot2_acum, "Todo el local"),
                             unsafe_allow_html=True)
                 st.caption(f"SEMANAL = {_sg_fi.strftime('%d-%m')} al {_sg_ff.strftime('%d-%m')}. "
                            f"ACUMULADO MES = {_sg_fi_acum.strftime('%d-%m')} al {_sg_ff_acum.strftime('%d-%m')}. "
-                           "Sección 1 = todo salón; Sección 2 = garzones whitelist.")
+                           "Secciones 1 y 2 = todo el local (venta salón completa).")
                 st.markdown("---")
 
                 # ════════════════════════════════════════════════════════════════
@@ -16300,13 +16323,10 @@ buildTree(data, 1, null);
                 # TEST DE REFERENCIA FIJO (§6) — solo MONTOS (el PDF no sirve para Q).
                 # Se muestra automáticamente cuando local+semana coinciden con un caso conocido.
                 # ════════════════════════════════════════════════════════════════
-                _REF_SG = {
-                    ("Vitacura", "2026-06-01", "2026-06-07"): {
-                        "cafe_monto": 1447250, "post_monto": 1884300,
-                        "sec1_total": 72892130, "sec2_total": 59216110},
-                    ("Nueva Providencia", "2026-06-01", "2026-06-07"): {
-                        "sec2_total": 40590080},
-                }
+                # Test de referencia: vacío hasta validar los montos con el criterio
+                # nuevo (origen, todo el local) contra el Resumen de Ventas. Cuando
+                # confirmes las cifras correctas, agrégalas aquí para auto-chequeo.
+                _REF_SG = {}
                 _ref_key = (_sg_local, str(_sg_fi), str(_sg_ff))
                 if _ref_key in _REF_SG:
                     _ref = _REF_SG[_ref_key]
@@ -16340,13 +16360,13 @@ buildTree(data, 1, null);
 
                     # 1) Sección 1 = suma de las 3 macro-familias = venta salón total del local.
                     _tot_macro_sec1 = _sec1['monto'].sum()
-                    _venta_salon_total_local = _sg_loc['monto_venta_real'].sum()
+                    _venta_salon_total_local = _sg_loc_vt['monto_venta_real'].sum()
                     _dbg.append(("Sección 1 = suma de 3 familias = venta salón local",
                                  abs(_tot_macro_sec1 - _venta_salon_total_local) < 1))
 
-                    # 2) Sección 2 (whitelist) <= Sección 1 (todo).
-                    _dbg.append(("Sección 2 (whitelist) ≤ Sección 1 (todo)",
-                                 _tot2 <= _tot1 + 1))
+                    # 2) Sección 1 = Sección 2 (ambas son todo el local).
+                    _dbg.append(("Sección 1 = Sección 2 (ambas todo el local)",
+                                 abs(_tot2 - _tot1) < 1))
 
                     # 3) % TOTAL de cada garzón == suma de sus 5 % adicionales (tol. 0,15 pp).
                     if _gz_seg is not None and not _gz_seg.empty:
