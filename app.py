@@ -15661,10 +15661,14 @@ buildTree(data, 1, null);
         # ── CARGA / CACHÉ ───────────────────────────────────────────────────
         if _sg_btn:
             with st.spinner("Cargando ventas de salón..."):
-                # Query base (§6.2): detalle de la semana, SOLO ventas salón, TODA la red
-                # (se necesita toda la red para ranking y comparativas 6, 7, 10, 11).
-                # MISMO criterio que "Resumen de Ventas": monto_venta_real, sin filtro
-                # es_opcion. Venta Salón = origen vacío/null (delivery tiene origen con valor).
+                # UNA SOLA query con el rango más amplio (~4 meses): contiene la semana
+                # y las 4 semanas, así que la semana y el 4w se derivan en pandas sin
+                # volver a la BD ni duplicar datos en memoria. MISMO criterio que
+                # "Resumen de Ventas": monto_venta_real, sin filtro es_opcion,
+                # Venta Salón = origen vacío/null. TODA la red (para ranking y comparativas).
+                _sg_fi_mes = (_sg_fi.replace(day=1) - _td(days=1)).replace(day=1)
+                _sg_fi_mes = (_sg_fi_mes.replace(day=1) - _td(days=1)).replace(day=1)
+                _sg_fi_mes = (_sg_fi_mes.replace(day=1) - _td(days=1)).replace(day=1)
                 _sg_sql = """
                     SELECT fecha_venta, local, garzon, sku_producto, nombre_producto,
                            categoria_menu, ab_categoria, es_opcion,
@@ -15674,31 +15678,35 @@ buildTree(data, 1, null);
                       AND local IS NOT NULL
                       AND (origen IS NULL OR TRIM(origen) = '')
                 """
-                _sg_params = {"fi": str(_sg_fi), "ff": str(_sg_ff)}
-                _sg_raw = run_query(_sg_sql, _sg_params)
+                _sg_full = run_query(_sg_sql, {"fi": str(_sg_fi_mes), "ff": str(_sg_ff)})
 
-                # Query evolución 4 semanas (§6.8): mismo criterio, 3 semanas más atrás.
-                _sg_fi_4w = _sg_fi - _td(weeks=3)
-                _sg_params_4w = {"fi": str(_sg_fi_4w), "ff": str(_sg_ff)}
-                _sg_raw_4w = run_query(_sg_sql, _sg_params_4w)
+                # Reducir memoria: convertir columnas de texto repetido a 'category'
+                if _sg_full is not None and not _sg_full.empty:
+                    _sg_full['fecha_venta'] = pd.to_datetime(_sg_full['fecha_venta'], errors='coerce')
+                    for _c in ('local', 'garzon', 'categoria_menu', 'ab_categoria', 'origen'):
+                        if _c in _sg_full.columns:
+                            _sg_full[_c] = _sg_full[_c].astype('category')
 
-                # Query mensual (§6.8, sección 11): ~4 meses hacia atrás desde el inicio de semana.
-                _sg_fi_mes = (_sg_fi.replace(day=1) - _td(days=1)).replace(day=1)
-                _sg_fi_mes = (_sg_fi_mes.replace(day=1) - _td(days=1)).replace(day=1)
-                _sg_fi_mes = (_sg_fi_mes.replace(day=1) - _td(days=1)).replace(day=1)
-                _sg_params_mes = {"fi": str(_sg_fi_mes), "ff": str(_sg_ff)}
-                _sg_raw_mes = run_query(_sg_sql, _sg_params_mes)
-
-                st.session_state["sg_data"]     = _sg_raw
-                st.session_state["sg_data_4w"]   = _sg_raw_4w
-                st.session_state["sg_data_mes"]  = _sg_raw_mes
+                # Guardar UN solo dataframe (el amplio). La semana y el 4w se derivan al vuelo.
+                st.session_state["sg_data_full"] = _sg_full
                 st.session_state["sg_fi_val"]    = str(_sg_fi)
                 st.session_state["sg_ff_val"]    = str(_sg_ff)
                 st.session_state["sg_local_val"] = _sg_local
+                # Limpiar dataframes antiguos de versiones previas (liberar memoria)
+                for _k in ("sg_data", "sg_data_4w", "sg_data_mes"):
+                    st.session_state.pop(_k, None)
 
-        _sg_raw     = st.session_state.get("sg_data", pd.DataFrame())
-        _sg_raw_4w  = st.session_state.get("sg_data_4w", pd.DataFrame())
-        _sg_raw_mes = st.session_state.get("sg_data_mes", pd.DataFrame())
+        _sg_full = st.session_state.get("sg_data_full", pd.DataFrame())
+
+        # Derivar los tres rangos en pandas desde el único dataframe (sin tocar la BD)
+        if _sg_full is not None and not _sg_full.empty:
+            _sg_fd = _sg_full['fecha_venta'].dt.date if hasattr(_sg_full['fecha_venta'], 'dt') \
+                else pd.to_datetime(_sg_full['fecha_venta']).dt.date
+            _sg_raw     = _sg_full[(_sg_fd >= _sg_fi) & (_sg_fd <= _sg_ff)].copy()
+            _sg_raw_4w  = _sg_full[(_sg_fd >= (_sg_fi - _td(weeks=3))) & (_sg_fd <= _sg_ff)].copy()
+            _sg_raw_mes = _sg_full   # el dataframe completo ya es el rango mensual
+        else:
+            _sg_raw = _sg_raw_4w = _sg_raw_mes = pd.DataFrame()
 
         if _sg_raw is None or _sg_raw.empty:
             st.info("Selecciona la semana y el local, luego presiona **Generar**.")
