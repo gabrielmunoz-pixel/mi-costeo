@@ -16342,6 +16342,23 @@ buildTree(data, 1, null);
                         s += df_g[df_g['cat_agr'] == _cat]['monto_venta_real'].sum() / tot * 100
                     return s
 
+                # ── Tema sobrio compartido por gráficos 8, 10 y 11 ──
+                # Fondo transparente (integra al tema oscuro), paleta tenue controlada.
+                _SG_LAYOUT = dict(
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    font=dict(color='#E8E8E8', family='Helvetica, Arial, sans-serif', size=12),
+                    xaxis=dict(showgrid=False, linecolor='#3a3a3a', tickfont=dict(color='#C8C8C8')),
+                    yaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.07)', zeroline=False,
+                               ticksuffix='%', tickfont=dict(color='#C8C8C8')),
+                    legend=dict(orientation='h', yanchor='bottom', y=-0.35,
+                                font=dict(color='#C8C8C8', size=10), bgcolor='rgba(0,0,0,0)'),
+                    margin=dict(t=44, b=70, l=10, r=10),
+                    title=dict(font=dict(color='#D4A853', size=14)),
+                    colorway=['#D4A853', '#5B8DB8', '#8C9BAB', '#C97B6A', '#7BA18C',
+                              '#B0A06A', '#9A8CA8', '#6A8CA0'],  # paleta tenue, 8 tonos
+                )
+
                 if not _SG_HAS_PLOTLY:
                     st.info("Gráficos de evolución no disponibles (plotly no instalado en el servidor).")
                 elif _sg_raw_4w is not None and not _sg_raw_4w.empty:
@@ -16350,22 +16367,23 @@ buildTree(data, 1, null);
                     _w['semana'] = pd.to_datetime(_w['fecha_venta']).dt.isocalendar().week.astype(int)
                     _semanas = sorted(_w['semana'].unique())[-4:]
 
-                    # --- Sección 8: evolución del local seleccionado por garzón ---
+                    # --- Sección 8: evolución del local por garzón (LÍNEAS, top 8) ---
                     _w_loc = _w[_w['local'] == _sg_local]
                     _fig8 = go.Figure()
-                    _gar_list = _w_loc.groupby('garzon')['monto_venta_real'].sum().nlargest(12).index.tolist()
+                    _gar_list = _w_loc.groupby('garzon')['monto_venta_real'].sum().nlargest(8).index.tolist()
+                    _xsem = [f"Sem {s}" for s in _semanas]
                     for _gar in _gar_list:
                         _ys = []
                         for _sem in _semanas:
                             _dfg = _w_loc[(_w_loc['garzon'] == _gar) & (_w_loc['semana'] == _sem)]
                             _ys.append(round(_pct_adic_group(_dfg), 1))
-                        _fig8.add_trace(go.Bar(name=str(_gar), x=[f"Sem {s}" for s in _semanas], y=_ys))
-                    _fig8.update_layout(barmode='group', height=420, title=f"% Adicionales por garzón — {_sg_local}",
-                                        legend=dict(orientation='h', yanchor='bottom', y=-0.4),
-                                        margin=dict(t=40, b=80))
+                        _fig8.add_trace(go.Scatter(name=str(_gar), x=_xsem, y=_ys, mode='lines+markers',
+                                                   line=dict(width=2), marker=dict(size=6)))
+                    _fig8.update_layout(height=420, title=f"% Adicionales por garzón — {_sg_local}", **_SG_LAYOUT)
                     st.plotly_chart(_fig8, use_container_width=True, key="sg_fig8")
+                    st.caption("Top 8 garzones por venta. Evolución del % de categorías adicionales por semana.")
 
-                    # --- Sección 10: evolución por local (red) ---
+                    # --- Sección 10: evolución por local (tu local resaltado, resto contexto) ---
                     st.markdown("#### 10 · Evolución 4 Semanas por Local (red)")
                     _fig10 = go.Figure()
                     for _lc in _LOCALES_ORDEN_SG:
@@ -16373,11 +16391,18 @@ buildTree(data, 1, null);
                         for _sem in _semanas:
                             _dfl = _w[(_w['local'] == _lc) & (_w['semana'] == _sem)]
                             _ys.append(round(_pct_adic_group(_dfl), 1))
-                        _fig10.add_trace(go.Bar(name=_lc, x=[f"Sem {s}" for s in _semanas], y=_ys))
-                    _fig10.update_layout(barmode='group', height=420, title="% Adicionales por local",
-                                         legend=dict(orientation='h', yanchor='bottom', y=-0.4),
-                                         margin=dict(t=40, b=80))
+                        _es_actual = (_lc == _sg_local)
+                        _fig10.add_trace(go.Scatter(
+                            name=_lc, x=_xsem, y=_ys, mode='lines+markers',
+                            line=dict(width=3 if _es_actual else 1.5,
+                                      color='#D4A853' if _es_actual else 'rgba(140,155,171,0.55)'),
+                            marker=dict(size=7 if _es_actual else 4),
+                            opacity=1.0 if _es_actual else 0.7))
+                    _fig10.update_layout(height=440, title="% Adicionales por local — tu local en dorado", **_SG_LAYOUT)
+                    # quitar colorway aquí: los colores se fijan por traza
+                    _fig10.update_layout(showlegend=True)
                     st.plotly_chart(_fig10, use_container_width=True, key="sg_fig10")
+                    st.caption(f"**{_sg_local}** resaltado en dorado; el resto de la red en gris como contexto.")
                 else:
                     st.info("Sin datos suficientes para la evolución de 4 semanas.")
                 st.markdown("---")
@@ -16399,9 +16424,11 @@ buildTree(data, 1, null);
                         _dfm = _m_loc[_m_loc['mes'] == _mm]
                         _ys.append(round(_pct_adic_group(_dfm), 1))
                     _fig11 = go.Figure()
-                    _fig11.add_trace(go.Bar(name=_sg_local, x=_meses, y=_ys, marker_color='#1F3864'))
-                    _fig11.update_layout(height=360, title=f"% Adicionales mensual — {_sg_local}",
-                                         margin=dict(t=40, b=40))
+                    _fig11.add_trace(go.Bar(name=_sg_local, x=_meses, y=_ys,
+                                            marker_color='#D4A853',
+                                            marker_line=dict(width=0)))
+                    _fig11.update_layout(height=360, title=f"% Adicionales mensual — {_sg_local}", **_SG_LAYOUT)
+                    _fig11.update_layout(showlegend=False)
                     st.plotly_chart(_fig11, use_container_width=True, key="sg_fig11")
                 else:
                     st.info("Sin datos suficientes para el comportamiento mensual.")
