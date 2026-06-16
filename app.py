@@ -15699,26 +15699,63 @@ buildTree(data, 1, null);
         if _sg_raw is None or _sg_raw.empty:
             st.info("Selecciona la semana y el local, luego presiona **Generar**.")
         else:
-            # ── PREPARACIÓN EN PANDAS (§6.2) ────────────────────────────────
-            _sg_raw = _sg_raw.copy()
-            _sg_raw['monto_venta_real'] = pd.to_numeric(_sg_raw['monto_venta_real'], errors='coerce').fillna(0)
-            _sg_raw['cantidad_vendida'] = pd.to_numeric(_sg_raw['cantidad_vendida'], errors='coerce').fillna(0)
-            _sg_raw['propina']          = pd.to_numeric(_sg_raw.get('propina', 0), errors='coerce').fillna(0)
             # es_opcion puede venir como bool, 't'/'f' o 0/1: normalizar a bool
             def _to_bool_sg(x):
                 if isinstance(x, bool): return x
                 return str(x).strip().lower() in ('true', 't', '1', 'yes', 'y')
-            _sg_raw['es_opcion'] = _sg_raw['es_opcion'].apply(_to_bool_sg)
 
-            # Productos vendibles (es_opcion = False)
-            _sg_vend = _sg_raw[~_sg_raw['es_opcion']].copy()
-            _sg_vend['cat_agr'] = _sg_vend.apply(
-                lambda r: _categorizar_sg(r['categoria_menu'], r['nombre_producto']), axis=1)
-            _sg_vend['macro'] = _sg_vend['cat_agr'].apply(_macro_familia_sg)
+            # COLACIONES EXCLUIDAS: no son venta de garzón, no entran en este informe.
+            _CATS_COLACION_EXCL = {'COLACIONES', 'PROTEINA ALMUERZO',
+                                   'ENSALADAS ALMUERZO', 'ACOMPANAMIENTO ALMUERZO'}
 
-            # Subsets del local seleccionado
+            def _preparar_vend_sg(df_raw):
+                """Limpia tipos, deja productos vendibles, excluye colaciones y categoriza.
+                Devuelve el DataFrame de productos vendibles listo para agrupar."""
+                if df_raw is None or df_raw.empty:
+                    return pd.DataFrame()
+                d = df_raw.copy()
+                d['monto_venta_real'] = pd.to_numeric(d['monto_venta_real'], errors='coerce').fillna(0)
+                d['cantidad_vendida'] = pd.to_numeric(d['cantidad_vendida'], errors='coerce').fillna(0)
+                d['propina'] = pd.to_numeric(d.get('propina', 0), errors='coerce').fillna(0)
+                d['es_opcion'] = d['es_opcion'].apply(_to_bool_sg)
+                d = d[~d['es_opcion']].copy()
+                d['_cat_up'] = d['categoria_menu'].astype(str).str.strip().str.upper()
+                d = d[~d['_cat_up'].isin(_CATS_COLACION_EXCL)].copy()
+                d['cat_agr'] = d.apply(
+                    lambda r: _categorizar_sg(r['categoria_menu'], r['nombre_producto']), axis=1)
+                d['macro'] = d['cat_agr'].apply(_macro_familia_sg)
+                return d
+
+            # ── EJE A · PERÍODO (v2 §0.5): SEMANAL vs ACUMULADO MENSUAL ──────
+            # SEMANAL = la semana seleccionada (_sg_fi → _sg_ff).
+            # ACUMULADO MENSUAL = día 1 del mes de la semana → fin de la semana.
+            _sg_fi_acum = _sg_ff.replace(day=1)   # primer día del mes del fin de semana
+            _sg_ff_acum = _sg_ff
+
+            # Universo SEMANAL (productos vendibles de la semana)
+            _sg_vend = _preparar_vend_sg(_sg_raw)
+
+            # Universo ACUMULADO: se deriva de _sg_raw_mes (ya cargado, cubre el mes)
+            # filtrando al rango [_sg_fi_acum, _sg_ff_acum]. No requiere query nueva.
+            _sg_vend_mes_full = _preparar_vend_sg(_sg_raw_mes)
+            if not _sg_vend_mes_full.empty:
+                _fv = pd.to_datetime(_sg_vend_mes_full['fecha_venta']).dt.date
+                _sg_vend_acum = _sg_vend_mes_full[
+                    (_fv >= _sg_fi_acum) & (_fv <= _sg_ff_acum)].copy()
+            else:
+                _sg_vend_acum = pd.DataFrame()
+
+            # Subsets del local seleccionado — SEMANAL
             _sg_loc    = _sg_vend[_sg_vend['local'] == _sg_local].copy()
             _sg_loc_gz = _sg_loc[_sg_loc['garzon'].isin(_GARZONES_VALIDOS_SG)].copy()
+
+            # Subsets del local seleccionado — ACUMULADO MENSUAL
+            if not _sg_vend_acum.empty:
+                _sg_loc_acum    = _sg_vend_acum[_sg_vend_acum['local'] == _sg_local].copy()
+                _sg_loc_gz_acum = _sg_loc_acum[_sg_loc_acum['garzon'].isin(_GARZONES_VALIDOS_SG)].copy()
+            else:
+                _sg_loc_acum    = pd.DataFrame(columns=_sg_loc.columns)
+                _sg_loc_gz_acum = pd.DataFrame(columns=_sg_loc_gz.columns)
 
             # ── CABECERA (§6.1) ─────────────────────────────────────────────
             _sg_jef = _JEFATURA_LOCAL_SG.get(_sg_local, {"supervisor": "-", "jefe": "-", "subjefe": "-"})
@@ -15773,6 +15810,7 @@ buildTree(data, 1, null);
 
             # ════════════════════════════════════════════════════════════════
             # SECCIÓN 1 y 2 — Ventas por macro-familia (§6.3)
+            # Doble eje período (v2 §0.5): SEMANAL + ACUMULADO MENSUAL.
             # ════════════════════════════════════════════════════════════════
             def _tabla_macro_sg(df):
                 g = df.groupby('macro').agg(
@@ -15783,42 +15821,63 @@ buildTree(data, 1, null);
                 g['pct'] = (g['monto'] / total * 100) if total > 0 else 0
                 return g, total
 
-            _sec1, _tot1 = _tabla_macro_sg(_sg_loc)      # sección 1: TODO el local
-            _sec2, _tot2 = _tabla_macro_sg(_sg_loc_gz)   # sección 2: garzones whitelist
+            # SEMANAL
+            _sec1, _tot1 = _tabla_macro_sg(_sg_loc)          # sección 1: TODO el local
+            _sec2, _tot2 = _tabla_macro_sg(_sg_loc_gz)       # sección 2: garzones whitelist
+            # ACUMULADO MENSUAL (1 del mes → fin de semana)
+            _sec1_acum, _tot1_acum = _tabla_macro_sg(_sg_loc_acum)
+            _sec2_acum, _tot2_acum = _tabla_macro_sg(_sg_loc_gz_acum)
             # CONFIRMADO (instructivo v2 §1): sección 1 = todo salón del local;
             # sección 2 = solo garzones whitelist. Macro-sumas cuadran exacto contra
             # el PDF (Vitacura: sec1 $72.892.130 > sec2 $59.216.110).
 
-            def _render_macro_html_sg(g, total, titulo):
+            def _render_macro_html_sg(g_sem, total_sem, g_acum, total_acum, titulo):
                 html = f"<div style='font-weight:bold;color:#1F3864;margin:6px 0'>{titulo}</div>"
-                html += "<div style='overflow-x:auto'><table style='width:100%;border-collapse:collapse;font-size:0.85rem'>"
-                html += ("<thead><tr>"
-                         "<th style='text-align:left;padding:8px 10px;background:#1F3864;color:#fff'>Macro-familia</th>"
-                         "<th style='text-align:right;padding:8px 10px;background:#1F3864;color:#fff'>$ Acumulado</th>"
-                         "<th style='text-align:right;padding:8px 10px;background:#1F3864;color:#fff'>Q Productos</th>"
-                         "<th style='text-align:right;padding:8px 10px;background:#1F3864;color:#fff'>%</th>"
+                html += "<div style='overflow-x:auto'><table style='width:100%;border-collapse:collapse;font-size:0.82rem'>"
+                html += ("<thead>"
+                         "<tr>"
+                         "<th rowspan='2' style='text-align:left;padding:6px 8px;background:#1F3864;color:#fff;vertical-align:bottom'>Macro-familia</th>"
+                         "<th colspan='3' style='text-align:center;padding:6px 8px;background:#1F3864;color:#D4A853;border-left:2px solid #0d0d0d'>SEMANAL</th>"
+                         "<th colspan='3' style='text-align:center;padding:6px 8px;background:#16284a;color:#D4A853;border-left:2px solid #0d0d0d'>ACUMULADO MES</th>"
+                         "</tr>"
+                         "<tr>"
+                         "<th style='text-align:right;padding:5px 8px;background:#1F3864;color:#fff;border-left:2px solid #0d0d0d'>$</th>"
+                         "<th style='text-align:right;padding:5px 8px;background:#1F3864;color:#fff'>Q</th>"
+                         "<th style='text-align:right;padding:5px 8px;background:#1F3864;color:#fff'>%</th>"
+                         "<th style='text-align:right;padding:5px 8px;background:#16284a;color:#fff;border-left:2px solid #0d0d0d'>$</th>"
+                         "<th style='text-align:right;padding:5px 8px;background:#16284a;color:#fff'>Q</th>"
+                         "<th style='text-align:right;padding:5px 8px;background:#16284a;color:#fff'>%</th>"
                          "</tr></thead><tbody>")
-                for _ri, (_idx, _row) in enumerate(g.iterrows()):
+                for _ri, _fam in enumerate(['ALIMENTOS', 'BAR', 'CAFETERÍA Y POSTRES']):
                     _bg = '#F5F5F5' if _ri % 2 == 0 else '#FFFFFF'
-                    html += (f"<tr><td style='padding:7px 10px;background:{_bg};color:#222'>{_idx}</td>"
-                             f"<td style='text-align:right;padding:7px 10px;background:{_bg}'>{_fmt_clp_sg(_row['monto'])}</td>"
-                             f"<td style='text-align:right;padding:7px 10px;background:{_bg}'>{_fmt_q_sg(_row['q'])}</td>"
-                             f"<td style='text-align:right;padding:7px 10px;background:{_bg}'>{_fmt_pct_sg(_row['pct'])}</td></tr>")
-                html += (f"<tr><td style='padding:7px 10px;background:#1F3864;color:#fff;font-weight:bold'>TOTAL</td>"
-                         f"<td style='text-align:right;padding:7px 10px;background:#1F3864;color:#fff;font-weight:bold'>{_fmt_clp_sg(total)}</td>"
-                         f"<td style='text-align:right;padding:7px 10px;background:#1F3864;color:#fff;font-weight:bold'>{_fmt_q_sg(g['q'].sum())}</td>"
-                         f"<td style='text-align:right;padding:7px 10px;background:#1F3864;color:#D4A853;font-weight:bold'>100,0%</td></tr>")
+                    _bg2 = '#ECEFF4' if _ri % 2 == 0 else '#F7F8FA'
+                    _rs = g_sem.loc[_fam]; _ra = g_acum.loc[_fam]
+                    html += (f"<tr><td style='padding:6px 8px;background:{_bg};color:#222'>{_fam}</td>"
+                             f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{_fmt_clp_sg(_rs['monto'])}</td>"
+                             f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{_fmt_q_sg(_rs['q'])}</td>"
+                             f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{_fmt_pct_sg(_rs['pct'])}</td>"
+                             f"<td style='text-align:right;padding:6px 8px;background:{_bg2};border-left:2px solid #D4D8E0'>{_fmt_clp_sg(_ra['monto'])}</td>"
+                             f"<td style='text-align:right;padding:6px 8px;background:{_bg2}'>{_fmt_q_sg(_ra['q'])}</td>"
+                             f"<td style='text-align:right;padding:6px 8px;background:{_bg2}'>{_fmt_pct_sg(_ra['pct'])}</td></tr>")
+                html += (f"<tr><td style='padding:6px 8px;background:#1F3864;color:#fff;font-weight:bold'>TOTAL</td>"
+                         f"<td style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff;font-weight:bold'>{_fmt_clp_sg(total_sem)}</td>"
+                         f"<td style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff;font-weight:bold'>{_fmt_q_sg(g_sem['q'].sum())}</td>"
+                         f"<td style='text-align:right;padding:6px 8px;background:#1F3864;color:#D4A853;font-weight:bold'>100,0%</td>"
+                         f"<td style='text-align:right;padding:6px 8px;background:#16284a;color:#fff;font-weight:bold;border-left:2px solid #0d0d0d'>{_fmt_clp_sg(total_acum)}</td>"
+                         f"<td style='text-align:right;padding:6px 8px;background:#16284a;color:#fff;font-weight:bold'>{_fmt_q_sg(g_acum['q'].sum())}</td>"
+                         f"<td style='text-align:right;padding:6px 8px;background:#16284a;color:#D4A853;font-weight:bold'>100,0%</td></tr>")
                 html += "</tbody></table></div>"
                 return html
 
-            _s1col, _s2col = st.columns(2)
-            with _s1col:
-                st.markdown("#### 1 · Ventas Totales Salón")
-                st.markdown(_render_macro_html_sg(_sec1, _tot1, "Todo el local"), unsafe_allow_html=True)
-            with _s2col:
-                st.markdown("#### 2 · Ventas por Categoría")
-                st.markdown(_render_macro_html_sg(_sec2, _tot2, "Garzones evaluados"), unsafe_allow_html=True)
-            st.caption("Sección 1 = toda la venta salón del local. Sección 2 = solo garzones de la whitelist. Confirmado contra PDF (sección 1 > sección 2).")
+            st.markdown("#### 1 · Ventas Totales Salón")
+            st.markdown(_render_macro_html_sg(_sec1, _tot1, _sec1_acum, _tot1_acum, "Todo el local"),
+                        unsafe_allow_html=True)
+            st.markdown("#### 2 · Ventas por Categoría")
+            st.markdown(_render_macro_html_sg(_sec2, _tot2, _sec2_acum, _tot2_acum, "Garzones evaluados"),
+                        unsafe_allow_html=True)
+            st.caption(f"SEMANAL = {_sg_fi.strftime('%d-%m')} al {_sg_ff.strftime('%d-%m')}. "
+                       f"ACUMULADO MES = {_sg_fi_acum.strftime('%d-%m')} al {_sg_ff_acum.strftime('%d-%m')}. "
+                       "Sección 1 = todo salón; Sección 2 = garzones whitelist.")
             st.markdown("---")
 
             # ════════════════════════════════════════════════════════════════
@@ -16165,12 +16224,7 @@ buildTree(data, 1, null);
                 return s
 
             if _sg_raw_4w is not None and not _sg_raw_4w.empty:
-                _w = _sg_raw_4w.copy()
-                _w['monto_venta_real'] = pd.to_numeric(_w['monto_venta_real'], errors='coerce').fillna(0)
-                _w['cantidad_vendida'] = pd.to_numeric(_w['cantidad_vendida'], errors='coerce').fillna(0)
-                _w['es_opcion'] = _w['es_opcion'].apply(_to_bool_sg)
-                _w = _w[~_w['es_opcion']].copy()
-                _w['cat_agr'] = _w.apply(lambda r: _categorizar_sg(r['categoria_menu'], r['nombre_producto']), axis=1)
+                _w = _preparar_vend_sg(_sg_raw_4w)
                 _w = _w[_w['garzon'].isin(_GARZONES_VALIDOS_SG)].copy()
                 _w['semana'] = pd.to_datetime(_w['fecha_venta']).dt.isocalendar().week.astype(int)
                 _semanas = sorted(_w['semana'].unique())[-4:]
@@ -16212,11 +16266,7 @@ buildTree(data, 1, null);
             # ════════════════════════════════════════════════════════════════
             st.markdown("#### 11 · Comportamiento Mensual (% adicionales)")
             if _sg_raw_mes is not None and not _sg_raw_mes.empty:
-                _m = _sg_raw_mes.copy()
-                _m['monto_venta_real'] = pd.to_numeric(_m['monto_venta_real'], errors='coerce').fillna(0)
-                _m['es_opcion'] = _m['es_opcion'].apply(_to_bool_sg)
-                _m = _m[~_m['es_opcion']].copy()
-                _m['cat_agr'] = _m.apply(lambda r: _categorizar_sg(r['categoria_menu'], r['nombre_producto']), axis=1)
+                _m = _preparar_vend_sg(_sg_raw_mes)
                 _m = _m[_m['garzon'].isin(_GARZONES_VALIDOS_SG)].copy()
                 _m['mes'] = pd.to_datetime(_m['fecha_venta']).dt.to_period('M').astype(str)
                 _meses = sorted(_m['mes'].unique())[-4:]
