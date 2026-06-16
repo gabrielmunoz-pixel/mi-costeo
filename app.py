@@ -7369,14 +7369,14 @@ elif modulo.startswith("📊"):
         informe_sel = "CuentasCasa"
     elif "Venta Diaria" in modulo:
         informe_sel = "VentaDiaria"
+    elif "Seguimiento Garzones" in modulo:
+        informe_sel = "SeguimientoGarzones"
     elif "Garzones" in modulo or "Rendimiento" in modulo:
         informe_sel = "Garzones"
     elif "Tendencia de Ventas" in modulo or "Tendencia" in modulo and "Bar" not in modulo:
         informe_sel = "TendenciaVentas"
     elif "Control de Producción" in modulo or "Control de Produccion" in modulo:
         informe_sel = "ControlProduccion"
-    elif "Seguimiento Garzones" in modulo:
-        informe_sel = "SeguimientoGarzones"
     else:
         informe_sel = "Informe 1"  # default
 
