@@ -15780,7 +15780,7 @@ buildTree(data, 1, null);
                 _sg_loc    = _sg_vend[_sg_vend['local'] == _sg_local].copy()
                 _sg_loc_gz = _sg_loc[_sg_loc['garzon'].isin(_GARZONES_VALIDOS_SG)].copy()
 
-                # Subsets de VENTA TOTAL del local (secciones 1 y 2) — incluye opciones
+                # Subsets de VENTA TOTAL del local (incluye opciones)
                 _sg_loc_vt = _sg_venta_total[_sg_venta_total['local'] == _sg_local].copy()
                 if _sg_venta_total_acum_full is not None and not _sg_venta_total_acum_full.empty:
                     _fvt = pd.to_datetime(_sg_venta_total_acum_full['fecha_venta']).dt.date
@@ -15789,6 +15789,15 @@ buildTree(data, 1, null);
                         & (_fvt >= _sg_fi_acum) & (_fvt <= _sg_ff_acum)].copy()
                 else:
                     _sg_loc_vt_acum = pd.DataFrame(columns=_sg_loc_vt.columns)
+
+                # Subsets de VENTA TOTAL filtrados por WHITELIST de garzones (secciones 2-4).
+                # Sección 1 usa todo el local (_sg_loc_vt); de la 2 hacia abajo, whitelist.
+                _sg_loc_vt_wl = _sg_loc_vt[_sg_loc_vt['garzon'].isin(_GARZONES_VALIDOS_SG)].copy()
+                if not _sg_loc_vt_acum.empty:
+                    _sg_loc_vt_wl_acum = _sg_loc_vt_acum[
+                        _sg_loc_vt_acum['garzon'].isin(_GARZONES_VALIDOS_SG)].copy()
+                else:
+                    _sg_loc_vt_wl_acum = pd.DataFrame(columns=_sg_loc_vt.columns)
 
                 # Subsets del local seleccionado — ACUMULADO MENSUAL
                 if not _sg_vend_acum.empty:
@@ -15870,11 +15879,11 @@ buildTree(data, 1, null);
                 _sg_dias_trab = max(int(pd.to_datetime(_sg_loc_vt['fecha_venta']).dt.date.nunique()), 1) \
                     if not _sg_loc_vt.empty else 1
 
-                # SEMANAL y ACUMULADO (secciones 1 y 2 = todo el local, venta total)
+                # SECCIÓN 1 = TODO el local. SECCIÓN 2 = WHITELIST de garzones.
                 _sec1, _tot1 = _tabla_macro_sg(_sg_loc_vt)
-                _sec2, _tot2 = _tabla_macro_sg(_sg_loc_vt)
                 _sec1_acum, _tot1_acum = _tabla_macro_sg(_sg_loc_vt_acum)
-                _sec2_acum, _tot2_acum = _tabla_macro_sg(_sg_loc_vt_acum)
+                _sec2, _tot2 = _tabla_macro_sg(_sg_loc_vt_wl)
+                _sec2_acum, _tot2_acum = _tabla_macro_sg(_sg_loc_vt_wl_acum)
 
                 # ── Render genérico de 3 bloques (ACUMULADO · DIARIO · SEMANAL) ──
                 # filas: lista de dicts con claves: nombre, ac_monto, ac_q, ac_pct,
@@ -15945,27 +15954,35 @@ buildTree(data, 1, null);
                 _filas1 = _filas_macro_sg(_sec1, _sec1_acum)
                 _tot1_d = {'ac_monto': _tot1_acum, 'ac_q': _sec1_acum['q'].sum(),
                            'sem_monto': _tot1, 'sem_q': _sec1['q'].sum()}
+                _filas2 = _filas_macro_sg(_sec2, _sec2_acum)
+                _tot2_d = {'ac_monto': _tot2_acum, 'ac_q': _sec2_acum['q'].sum(),
+                           'sem_monto': _tot2, 'sem_q': _sec2['q'].sum()}
 
                 st.markdown("#### 1 · Ventas Totales Salón")
                 st.markdown(_render_3bloques_sg(_filas1, _tot1_d, primera_col="ITEM",
                                                 dias_trab=_sg_dias_trab), unsafe_allow_html=True)
                 st.markdown("#### 2 · Ventas por Categoría")
-                st.markdown(_render_3bloques_sg(_filas1, _tot1_d, primera_col="ITEM",
+                st.markdown(_render_3bloques_sg(_filas2, _tot2_d, primera_col="ITEM",
                                                 dias_trab=_sg_dias_trab), unsafe_allow_html=True)
                 st.caption(f"ACUMULADO = {_sg_fi_acum.strftime('%d-%m')} al {_sg_ff_acum.strftime('%d-%m')}. "
                            f"SEMANAL = {_sg_fi.strftime('%d-%m')} al {_sg_ff.strftime('%d-%m')}. "
                            f"DIARIO = semanal ÷ {_sg_dias_trab} días trabajados. "
-                           "Secciones 1 y 2 = todo el local.")
+                           "Sección 1 = todo el local · Sección 2 = garzones whitelist.")
                 st.markdown("---")
 
                 # ════════════════════════════════════════════════════════════════
                 # SECCIÓN 3 — Ventas por Categoría detalladas
-                # Mismas columnas que 1/2: ACUMULADO · DIARIO · SEMANAL. Todo el local.
+                # Mismas columnas que 1/2: ACUMULADO · DIARIO · SEMANAL.
+                # Universo: WHITELIST de garzones (del punto 2 hacia abajo).
                 # ════════════════════════════════════════════════════════════════
-                _tot_sem_loc = _sg_loc_vt['monto_venta_real'].sum()
-                _tot_acum_loc = _sg_loc_vt_acum['monto_venta_real'].sum() if not _sg_loc_vt_acum.empty else 0
+                _sg_sec3_sem  = _sg_loc_vt_wl
+                _sg_sec3_acum = _sg_loc_vt_wl_acum
+                _tot_sem_loc = _sg_sec3_sem['monto_venta_real'].sum()
+                _tot_acum_loc = _sg_sec3_acum['monto_venta_real'].sum() if not _sg_sec3_acum.empty else 0
 
                 # Agrupa un universo por subcategoría → dict {subcat: (monto, q)}
+                # Monto = sobre todo (incluye opciones con precio). Q = solo padres
+                # (es_opcion=False), para no inflar unidades con modificadores/opciones.
                 def _agg_subcat_sg(df, col_subcat_func, modo="alim"):
                     if df is None or df.empty:
                         return {}
@@ -15978,9 +15995,13 @@ buildTree(data, 1, null);
                     d = d[d['subcat'].notna()]
                     if d.empty:
                         return {}
-                    g = d.groupby('subcat').agg(monto=('monto_venta_real', 'sum'),
-                                                q=('cantidad_vendida', 'sum'))
-                    return {idx: (row['monto'], row['q']) for idx, row in g.iterrows()}
+                    d['_es_op'] = d['es_opcion'].apply(_to_bool_sg)
+                    g_m = d.groupby('subcat')['monto_venta_real'].sum()          # monto: todo
+                    g_q = d[~d['_es_op']].groupby('subcat')['cantidad_vendida'].sum()  # Q: solo padres
+                    out = {}
+                    for _sc in g_m.index:
+                        out[_sc] = (g_m.get(_sc, 0), g_q.get(_sc, 0))
+                    return out
 
                 # Construye filas {nombre, ac_*, sem_*} uniendo semanal y acumulado
                 def _filas_subcat_sg(df_sem, df_acum, col_func, modo, tot_sem, tot_acum):
@@ -16009,8 +16030,8 @@ buildTree(data, 1, null);
                 st.markdown("#### 3 · Ventas por Categoría (detalle)")
 
                 # --- 3a. ALIMENTOS ---
-                _alim_sem = _sg_loc_vt[_sg_loc_vt['cat_agr'].isin(['Alimentos', 'Agregados', 'Colación'])]
-                _alim_acu = _sg_loc_vt_acum[_sg_loc_vt_acum['cat_agr'].isin(['Alimentos', 'Agregados', 'Colación'])] if not _sg_loc_vt_acum.empty else _sg_loc_vt_acum
+                _alim_sem = _sg_sec3_sem[_sg_sec3_sem['cat_agr'].isin(['Alimentos', 'Agregados', 'Colación'])]
+                _alim_acu = _sg_sec3_acum[_sg_sec3_acum['cat_agr'].isin(['Alimentos', 'Agregados', 'Colación'])] if not _sg_sec3_acum.empty else _sg_sec3_acum
                 _filas_alim = _filas_subcat_sg(_alim_sem, _alim_acu, _subcat_alimentos_sg, "alim", _tot_sem_loc, _tot_acum_loc)
                 if _filas_alim:
                     st.markdown("**VENTAS ALIMENTOS**")
@@ -16020,17 +16041,29 @@ buildTree(data, 1, null);
 
                 # --- 3b. CAFETERÍA Y POSTRES (Q = padres por ab_categoria) ---
                 def _cafe_post_vals(df):
-                    _qc = df[df['ab_categoria'] == _AB_CAFETERIA_SG]['cantidad_vendida'].sum()
+                    # Q (unidades) = solo PADRES (es_opcion=False): las opciones hijas
+                    # (tipo de leche, tamaño, etc.) comparten ab_categoria y triplicarían el conteo.
+                    # Monto = sobre todo el df (incluye opciones con precio), para cuadrar con la venta.
+                    if df is None or df.empty:
+                        return 0, 0, 0, 0
+                    _es_op = df['es_opcion'].apply(_to_bool_sg)
+                    _padres = df[~_es_op]
                     _mc = df[df['ab_categoria'] == _AB_CAFETERIA_SG]['monto_venta_real'].sum()
-                    _qp = df[df['ab_categoria'] == _AB_POSTRES_SG]['cantidad_vendida'].sum()
+                    _qc = _padres[_padres['ab_categoria'] == _AB_CAFETERIA_SG]['cantidad_vendida'].sum()
                     _mp = df[df['ab_categoria'] == _AB_POSTRES_SG]['monto_venta_real'].sum()
+                    _qp = _padres[_padres['ab_categoria'] == _AB_POSTRES_SG]['cantidad_vendida'].sum()
+                    # Fallback por cat_agr si ab_categoria no viene poblado
                     if _qc == 0 and _mc == 0:
-                        _dc = df[df['cat_agr'] == 'Cafetería']; _qc, _mc = _dc['cantidad_vendida'].sum(), _dc['monto_venta_real'].sum()
+                        _dc = df[df['cat_agr'] == 'Cafetería']
+                        _mc = _dc['monto_venta_real'].sum()
+                        _qc = _dc[~_dc['es_opcion'].apply(_to_bool_sg)]['cantidad_vendida'].sum()
                     if _qp == 0 and _mp == 0:
-                        _dp = df[df['cat_agr'] == 'Postres']; _qp, _mp = _dp['cantidad_vendida'].sum(), _dp['monto_venta_real'].sum()
+                        _dp = df[df['cat_agr'] == 'Postres']
+                        _mp = _dp['monto_venta_real'].sum()
+                        _qp = _dp[~_dp['es_opcion'].apply(_to_bool_sg)]['cantidad_vendida'].sum()
                     return _mc, _qc, _mp, _qp
-                _mc_s, _qc_s, _mp_s, _qp_s = _cafe_post_vals(_sg_loc_vt)
-                _mc_a, _qc_a, _mp_a, _qp_a = _cafe_post_vals(_sg_loc_vt_acum) if not _sg_loc_vt_acum.empty else (0, 0, 0, 0)
+                _mc_s, _qc_s, _mp_s, _qp_s = _cafe_post_vals(_sg_sec3_sem)
+                _mc_a, _qc_a, _mp_a, _qp_a = _cafe_post_vals(_sg_sec3_acum) if not _sg_sec3_acum.empty else (0, 0, 0, 0)
                 _q_cafe, _m_cafe, _q_post, _m_post = _qc_s, _mc_s, _qp_s, _mp_s  # para metas/debug
                 _filas_cp = [
                     {'nombre': 'CAFETERÍA', 'ac_monto': _mc_a, 'ac_q': _qc_a,
@@ -16069,8 +16102,8 @@ buildTree(data, 1, null);
                     st.caption(f"Meta = meta diaria × {_dias_sem} días. Cafetería {_mc_dia}/día · Postres {_mp_dia}/día.")
 
                 # --- 3c. LÍQUIDOS C/A ---
-                _ca_sem = _sg_loc_vt[_sg_loc_vt['cat_agr'] == 'Líquidos C/A']
-                _ca_acu = _sg_loc_vt_acum[_sg_loc_vt_acum['cat_agr'] == 'Líquidos C/A'] if not _sg_loc_vt_acum.empty else _sg_loc_vt_acum
+                _ca_sem = _sg_sec3_sem[_sg_sec3_sem['cat_agr'] == 'Líquidos C/A']
+                _ca_acu = _sg_sec3_acum[_sg_sec3_acum['cat_agr'] == 'Líquidos C/A'] if not _sg_sec3_acum.empty else _sg_sec3_acum
                 _filas_ca = _filas_subcat_sg(_ca_sem, _ca_acu, _subcat_liquidos_sg, "liq", _tot_sem_loc, _tot_acum_loc)
                 if _filas_ca:
                     st.markdown("**VENTAS LÍQUIDOS C/A**")
@@ -16079,8 +16112,8 @@ buildTree(data, 1, null);
                                 unsafe_allow_html=True)
 
                 # --- 3d. LÍQUIDOS S/A ---
-                _sa_sem = _sg_loc_vt[_sg_loc_vt['cat_agr'] == 'Líquidos S/A']
-                _sa_acu = _sg_loc_vt_acum[_sg_loc_vt_acum['cat_agr'] == 'Líquidos S/A'] if not _sg_loc_vt_acum.empty else _sg_loc_vt_acum
+                _sa_sem = _sg_sec3_sem[_sg_sec3_sem['cat_agr'] == 'Líquidos S/A']
+                _sa_acu = _sg_sec3_acum[_sg_sec3_acum['cat_agr'] == 'Líquidos S/A'] if not _sg_sec3_acum.empty else _sg_sec3_acum
                 _filas_sa = _filas_subcat_sg(_sa_sem, _sa_acu, _subcat_liquidos_sg, "liq", _tot_sem_loc, _tot_acum_loc)
                 if _filas_sa:
                     st.markdown("**VENTAS LÍQUIDOS S/A**")
@@ -16103,8 +16136,8 @@ buildTree(data, 1, null);
                         _de = d[_mask]
                         out[_et] = (_de['monto_venta_real'].sum(), _de['cantidad_vendida'].sum())
                     return out
-                _es_sem = _estrat_vals(_sg_loc_vt)
-                _es_acu = _estrat_vals(_sg_loc_vt_acum) if not _sg_loc_vt_acum.empty else {}
+                _es_sem = _estrat_vals(_sg_sec3_sem)
+                _es_acu = _estrat_vals(_sg_sec3_acum) if not _sg_sec3_acum.empty else {}
                 _filas_estr = []
                 for _et in _PRODUCTOS_ESTRATEGICOS_SG.keys():
                     _ms, _qs = _es_sem.get(_et, (0, 0))
