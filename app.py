@@ -15692,9 +15692,26 @@ buildTree(data, 1, null);
                 st.session_state["sg_fi_val"]    = str(_sg_fi)
                 st.session_state["sg_ff_val"]    = str(_sg_ff)
                 st.session_state["sg_local_val"] = _sg_local
-                # Limpiar dataframes antiguos de versiones previas (liberar memoria)
-                for _k in ("sg_data", "sg_data_4w", "sg_data_mes"):
+
+                # ── LIBERACIÓN DE MEMORIA ──────────────────────────────────────
+                # Al generar este informe, soltar los dataframes pesados de OTROS
+                # informes que pudieran haber quedado en memoria de una visita previa
+                # (Streamlit Cloud tiene RAM limitada). Solo se tocan llaves de datos
+                # de informes —dataframes grandes—, nunca el estado general de la app
+                # (filtros, login, etc.). Es seguro: cada informe recarga su data al
+                # presionar su botón Generar.
+                _SG_KEYS_DATA_OTROS = [
+                    "gz_data",          # Rendimiento Garzones (viejo)
+                    "sg_data", "sg_data_4w", "sg_data_mes",  # residuos de versiones previas
+                    # añade aquí otras llaves *_data de informes si las hubiera
+                ]
+                for _k in _SG_KEYS_DATA_OTROS:
                     st.session_state.pop(_k, None)
+                try:
+                    import gc as _gc
+                    _gc.collect()
+                except Exception:
+                    pass
 
         _sg_full = st.session_state.get("sg_data_full", pd.DataFrame())
 
@@ -16360,6 +16377,12 @@ buildTree(data, 1, null);
                 # título se pasa aparte en cada gráfico (titlefont va en el layout)
                 _SG_TITLEFONT = dict(color='#D4A853', size=14)
 
+                # Estructuras para llevar los datos de gráficos al PDF (secciones 8/10/11).
+                # Se llenan abajo si hay datos; si no, quedan vacías y el PDF las omite.
+                _pdf_sec8 = {"semanas": [], "garzones": [], "valores": {}}   # garzón -> [%/semana]
+                _pdf_sec10 = {"semanas": [], "series": []}                    # [(local, [%/semana], es_actual)]
+                _pdf_sec11 = {"meses": [], "valores": []}                     # [% por mes]
+
                 if not _SG_HAS_PLOTLY:
                     st.info("Gráficos de evolución no disponibles (plotly no instalado en el servidor).")
                 elif _sg_raw_4w is not None and not _sg_raw_4w.empty:
@@ -16375,11 +16398,16 @@ buildTree(data, 1, null);
                     _gar_list = _w_loc.groupby('garzon')['monto_venta_real'].sum().nlargest(10).index.tolist()
                     # Tono de azul ascendente por semana (más reciente = más claro/dorado)
                     _sem_colors = ['#3a5a82', '#5B8DB8', '#8Fb4d6', '#D4A853']
+                    _pdf_sec8["semanas"] = list(_semanas)
+                    _pdf_sec8["garzones"] = [str(g) for g in _gar_list]
+                    _pdf_sec8["valores"] = {str(g): [] for g in _gar_list}
                     for _i, _sem in enumerate(_semanas):
                         _ys = []
                         for _gar in _gar_list:
                             _dfg = _w_loc[(_w_loc['garzon'] == _gar) & (_w_loc['semana'] == _sem)]
-                            _ys.append(round(_pct_adic_group(_dfg), 1))
+                            _v = round(_pct_adic_group(_dfg), 1)
+                            _ys.append(_v)
+                            _pdf_sec8["valores"][str(_gar)].append(_v)
                         _fig8.add_trace(go.Bar(
                             name=f"Sem {_sem}",
                             x=[str(g) for g in _gar_list], y=_ys,
@@ -16395,12 +16423,14 @@ buildTree(data, 1, null);
                     st.markdown("#### 10 · Evolución 4 Semanas por Local (red)")
                     _fig10 = go.Figure()
                     _xsem = [f"Sem {s}" for s in _semanas]
+                    _pdf_sec10["semanas"] = list(_semanas)
                     for _lc in _LOCALES_ORDEN_SG:
                         _ys = []
                         for _sem in _semanas:
                             _dfl = _w[(_w['local'] == _lc) & (_w['semana'] == _sem)]
                             _ys.append(round(_pct_adic_group(_dfl), 1))
                         _es_actual = (_lc == _sg_local)
+                        _pdf_sec10["series"].append((_lc, list(_ys), _es_actual))
                         _fig10.add_trace(go.Scatter(
                             name=_lc, x=_xsem, y=_ys, mode='lines+markers',
                             line=dict(width=3 if _es_actual else 1.5,
@@ -16432,6 +16462,8 @@ buildTree(data, 1, null);
                     for _mm in _meses:
                         _dfm = _m_loc[_m_loc['mes'] == _mm]
                         _ys.append(round(_pct_adic_group(_dfm), 1))
+                    _pdf_sec11["meses"] = list(_meses)
+                    _pdf_sec11["valores"] = list(_ys)
                     _fig11 = go.Figure()
                     _fig11.add_trace(go.Bar(name=_sg_local, x=_meses, y=_ys,
                                             marker_color='#D4A853',
@@ -16534,7 +16566,12 @@ buildTree(data, 1, null);
                 # SALIDA PDF (§7) — estilo casa: oscuro + dorado + logo
                 # ════════════════════════════════════════════════════════════════
                 def _generar_pdf_sg(local, semana_label, ranking, jefatura, qgar,
-                                    sec1, sec2, gz_seg, loc_df, estr_df):
+                                    filas1, tot1_d, filas2, tot2_d,
+                                    bloques_sec3, filas_estr, tot_estr,
+                                    gz_seg, loc_df, m7_df, dias_trab,
+                                    sec8=None, sec10=None, sec11=None):
+                    """Genera el PDF calcando el diseño del informe de ejemplo:
+                    fondo blanco, tablas con header gris/azul, 3 bloques de columnas."""
                     import os
                     from reportlab.lib.pagesizes import A4, landscape
                     from reportlab.lib import colors as rc
@@ -16545,150 +16582,390 @@ buildTree(data, 1, null);
                     from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
                     from reportlab.platypus import Image as RLImage
 
-                    CB  = rc.HexColor('#0d0d0d'); CP = rc.HexColor('#1a1a1a')
-                    CG  = rc.HexColor('#d4a853'); CT = rc.HexColor('#f0ede8')
-                    CM  = rc.HexColor('#666666'); CM2 = rc.HexColor('#2a2a2a')
-                    CH  = rc.HexColor('#0d0d0d'); CBo = rc.HexColor('#2a2a2a')
+                    # Paleta calcada del PDF (fondo blanco, headers gris/azul)
+                    C_HDR   = rc.HexColor('#404040')   # header gris oscuro
+                    C_HDR2  = rc.HexColor('#1F3864')   # azul AE (títulos sección)
+                    C_GOLD  = rc.HexColor('#D4A853')   # dorado (total / acento)
+                    C_TOT   = rc.HexColor('#1F3864')   # fila total azul
+                    C_ROW1  = rc.HexColor('#FFFFFF')
+                    C_ROW2  = rc.HexColor('#F2F2F2')
+                    C_TXT   = rc.HexColor('#222222')
+                    C_WHITE = rc.HexColor('#FFFFFF')
+                    C_GREY  = rc.HexColor('#666666')
+                    C_LINE  = rc.HexColor('#CCCCCC')
 
                     PAGE = landscape(A4); W, H = PAGE
-                    LM = RM = 12*mm; AVAIL = W - LM - RM
+                    LM = RM = 10 * mm; AVAIL = W - LM - RM
 
                     def sty(sz, col, bold=False, align=TA_LEFT):
                         return ParagraphStyle('_', fontSize=sz, textColor=col,
                             fontName='Helvetica-Bold' if bold else 'Helvetica',
-                            alignment=align, leading=sz*1.25)
+                            alignment=align, leading=sz * 1.2)
 
-                    def P(txt, sz=7, col=None, bold=False, align=TA_RIGHT):
-                        return Paragraph(str(txt), sty(sz, col or CT, bold=bold, align=align))
+                    def P(txt, sz=6.5, col=None, bold=False, align=TA_RIGHT):
+                        return Paragraph(str(txt), sty(sz, col or C_TXT, bold=bold, align=align))
 
                     def _clp(v):
                         try: return f"${int(round(v)):,}".replace(',', '.')
                         except: return '-'
-
+                    def _q(v):
+                        try: return f"{int(round(v)):,}".replace(',', '.')
+                        except: return '-'
                     def _pct(v):
                         try: return f"{v:.1f}%".replace('.', ',')
                         except: return '-'
 
                     buf = io.BytesIO()
                     doc = SimpleDocTemplate(buf, pagesize=PAGE, leftMargin=LM, rightMargin=RM,
-                                            topMargin=8*mm, bottomMargin=7*mm)
+                                            topMargin=8 * mm, bottomMargin=8 * mm)
                     story = []
 
-                    # ── Encabezado ──
-                    logo_cell = Spacer(28*mm, 22*mm)
+                    # ── CABECERA ──
+                    logo_cell = Spacer(34 * mm, 16 * mm)
                     if os.path.exists(LOGO_PATH):
-                        logo_cell = RLImage(LOGO_PATH, width=28*mm, height=28*mm)
-                    hdr = [[logo_cell,
-                            [Paragraph("INFORME DE CONTROL DE VENTAS SALÓN", sty(13, CG, bold=True, align=TA_CENTER)),
-                             Spacer(1, 1*mm),
-                             Paragraph("ALEMAN EXPERTO", sty(7, CM, align=TA_CENTER))],
-                            [Paragraph(local.upper(), sty(10, CT, bold=True, align=TA_RIGHT)),
-                             Spacer(1, 1*mm),
-                             Paragraph(semana_label, sty(7.5, CM, align=TA_RIGHT)),
-                             Spacer(1, 1*mm),
-                             Paragraph(f"RANKING {ranking}/10", sty(9, CG, bold=True, align=TA_RIGHT))]]]
-                    hdr_tbl = Table(hdr, colWidths=[30*mm, 160*mm, 83*mm])
-                    hdr_tbl.setStyle(TableStyle([
-                        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-                        ('LINEBELOW', (0,0), (-1,0), 1.5, CG),
-                        ('TOPPADDING', (0,0), (-1,-1), 0), ('BOTTOMPADDING', (0,0), (-1,-1), 4),
-                        ('LEFTPADDING', (0,0), (-1,-1), 0), ('RIGHTPADDING', (0,0), (-1,-1), 0)]))
-                    story += [hdr_tbl, Spacer(1, 2*mm)]
+                        try:
+                            logo_cell = RLImage(LOGO_PATH, width=34 * mm, height=16 * mm)
+                        except Exception:
+                            pass
+                    _titulo = [
+                        Paragraph("INFORME DE CONTROL DE VENTAS SALÓN", sty(13, C_HDR2, bold=True, align=TA_CENTER)),
+                        Spacer(1, 1 * mm),
+                        Paragraph(f"LOCAL  -  {local.upper()}", sty(10, C_TXT, bold=True, align=TA_CENTER)),
+                        Paragraph(f"SEMANA {semana_label}", sty(8, C_GREY, align=TA_CENTER)),
+                    ]
+                    _ranking_box = Table([[Paragraph("RANKING", sty(11, C_TXT, bold=True, align=TA_CENTER))],
+                                          [Paragraph(f"{ranking}/10", sty(14, C_HDR2, bold=True, align=TA_CENTER))]],
+                                         colWidths=[55 * mm])
+                    _ranking_box.setStyle(TableStyle([
+                        ('BOX', (0, 0), (-1, -1), 1, C_LINE),
+                        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                        ('TOPPADDING', (0, 0), (-1, -1), 4), ('BOTTOMPADDING', (0, 0), (-1, -1), 4)]))
+                    hdr = Table([[logo_cell, _titulo, _ranking_box]],
+                                colWidths=[40 * mm, AVAIL - 40 * mm - 60 * mm, 60 * mm])
+                    hdr.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                                             ('ALIGN', (2, 0), (2, 0), 'RIGHT')]))
+                    story += [hdr, Spacer(1, 3 * mm)]
 
-                    # ── Jefatura ──
-                    jef_txt = (f"Supervisor: {jefatura['supervisor']}   ·   Jefe: {jefatura['jefe']}"
-                               f"   ·   Sub Jefe: {jefatura['subjefe']}   ·   Garzones: {qgar}")
-                    story += [P(jef_txt, 7, CM, align=TA_LEFT), Spacer(1, 3*mm)]
+                    # ── JEFATURA ──
+                    _jef_data = [
+                        [P("SUPERVISOR SERVICIO:", 7.5, C_TXT, bold=True, align=TA_LEFT),
+                         P(jefatura.get('supervisor', '-').upper(), 7.5, C_TXT, bold=True, align=TA_LEFT)],
+                        [P("JEFE SERVICIO:", 7.5, C_TXT, bold=True, align=TA_LEFT),
+                         P(jefatura.get('jefe', '-').upper(), 7.5, C_TXT, bold=True, align=TA_LEFT)],
+                        [P("SUB JEFE SERVICIO:", 7.5, C_TXT, bold=True, align=TA_LEFT),
+                         P(jefatura.get('subjefe', '-').upper(), 7.5, C_TXT, bold=True, align=TA_LEFT)],
+                        [P("CANTIDAD GARZONES:", 7.5, C_TXT, bold=True, align=TA_LEFT),
+                         P(str(qgar), 7.5, C_TXT, bold=True, align=TA_LEFT)],
+                    ]
+                    _jt = Table(_jef_data, colWidths=[45 * mm, 90 * mm])
+                    _jt.setStyle(TableStyle([('TOPPADDING', (0, 0), (-1, -1), 0),
+                                             ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
+                                             ('LEFTPADDING', (0, 0), (-1, -1), 0)]))
+                    story += [_jt, Spacer(1, 4 * mm)]
 
-                    def _tbl_simple(titulo, headers, rows, aligns=None, col_t=CG):
-                        out = [P(titulo, 8, col_t, bold=True), Spacer(1, 1.5*mm)]
-                        aligns = aligns or [TA_LEFT] + [TA_RIGHT]*(len(headers)-1)
-                        data = [[P(h, 6, CM, bold=True, align=aligns[i]) for i, h in enumerate(headers)]]
-                        for r in rows:
-                            data.append([P(c, 6.5, CT if i == 0 else CM, align=aligns[i]) for i, c in enumerate(r)])
-                        t = Table(data, repeatRows=1)
-                        rs = [('BACKGROUND', (0,0), (-1,0), CH), ('LINEBELOW', (0,0), (-1,0), 0.8, col_t),
-                              ('TOPPADDING', (0,0), (-1,-1), 2), ('BOTTOMPADDING', (0,0), (-1,-1), 2),
-                              ('LEFTPADDING', (0,0), (-1,-1), 4), ('RIGHTPADDING', (0,0), (-1,-1), 4)]
-                        for i in range(1, len(data)):
-                            rs += [('BACKGROUND', (0,i), (-1,i), CP if i % 2 else CM2),
-                                   ('LINEBELOW', (0,i), (-1,i), 0.2, CM2)]
-                        t.setStyle(TableStyle(rs))
+                    # ── Helper: tabla de 3 bloques (ACUMULADO · DIARIO · SEMANAL) ──
+                    def _tabla_3b(titulo_seccion, filas, totales, primera_col, total_label, q_label="Q PRODUCTOS"):
+                        out = []
+                        if titulo_seccion:
+                            out.append(Paragraph(titulo_seccion, sty(8.5, C_HDR2, bold=True, align=TA_LEFT)))
+                            out.append(Spacer(1, 1.5 * mm))
+                        # encabezado de dos filas
+                        head1 = [P(primera_col, 6.5, C_WHITE, bold=True, align=TA_CENTER),
+                                 P("ACUMULADO", 6.5, C_GOLD, bold=True, align=TA_CENTER), '', '',
+                                 P("DIARIO", 6.5, C_GOLD, bold=True, align=TA_CENTER), '', '',
+                                 P("SEMANAL", 6.5, C_GOLD, bold=True, align=TA_CENTER), '', '']
+                        head2 = ['', P("$", 6, C_WHITE, bold=True), P(q_label, 6, C_WHITE, bold=True), P("%", 6, C_WHITE, bold=True),
+                                 P("$", 6, C_WHITE, bold=True), P(q_label, 6, C_WHITE, bold=True), P("%", 6, C_WHITE, bold=True),
+                                 P("$", 6, C_WHITE, bold=True), P(q_label, 6, C_WHITE, bold=True), P("%", 6, C_WHITE, bold=True)]
+                        data = [head1, head2]
+                        for f in filas:
+                            di_m = f['sem_monto'] / dias_trab if dias_trab > 0 else 0
+                            di_q = f['sem_q'] / dias_trab if dias_trab > 0 else 0
+                            data.append([
+                                P(f['nombre'], 6.2, C_TXT, bold=True, align=TA_LEFT),
+                                P(_clp(f['ac_monto']), 6.2), P(_q(f['ac_q']), 6.2), P(_pct(f['ac_pct']), 6.2),
+                                P(_clp(di_m), 6.2), P(_q(di_q), 6.2), P(_pct(f['sem_pct']), 6.2),
+                                P(_clp(f['sem_monto']), 6.2), P(_q(f['sem_q']), 6.2), P(_pct(f['sem_pct']), 6.2),
+                            ])
+                        # fila total
+                        td_m = totales['sem_monto'] / dias_trab if dias_trab > 0 else 0
+                        td_q = totales['sem_q'] / dias_trab if dias_trab > 0 else 0
+                        data.append([
+                            P(total_label, 6.2, C_WHITE, bold=True, align=TA_LEFT),
+                            P(_clp(totales['ac_monto']), 6.2, C_WHITE, bold=True), P(_q(totales['ac_q']), 6.2, C_WHITE, bold=True), P("100,0%", 6.2, C_GOLD, bold=True),
+                            P(_clp(td_m), 6.2, C_WHITE, bold=True), P(_q(td_q), 6.2, C_WHITE, bold=True), P("100,0%", 6.2, C_GOLD, bold=True),
+                            P(_clp(totales['sem_monto']), 6.2, C_WHITE, bold=True), P(_q(totales['sem_q']), 6.2, C_WHITE, bold=True), P("100,0%", 6.2, C_GOLD, bold=True),
+                        ])
+                        _cw = [AVAIL * 0.16] + [AVAIL * 0.084] * 10
+                        t = Table(data, colWidths=_cw, repeatRows=2)
+                        ts = [
+                            ('BACKGROUND', (0, 0), (-1, 1), C_HDR),
+                            ('SPAN', (0, 0), (0, 1)),
+                            ('SPAN', (1, 0), (3, 0)), ('SPAN', (4, 0), (6, 0)), ('SPAN', (7, 0), (9, 0)),
+                            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                            ('TOPPADDING', (0, 0), (-1, -1), 2), ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+                            ('LEFTPADDING', (0, 0), (-1, -1), 3), ('RIGHTPADDING', (0, 0), (-1, -1), 3),
+                            ('LINEBELOW', (0, 1), (-1, 1), 0.6, C_GOLD),
+                            # separadores entre bloques
+                            ('LINEBEFORE', (1, 0), (1, -1), 1, C_HDR2),
+                            ('LINEBEFORE', (4, 0), (4, -1), 1, C_HDR2),
+                            ('LINEBEFORE', (7, 0), (7, -1), 1, C_HDR2),
+                            # fila total
+                            ('BACKGROUND', (0, -1), (-1, -1), C_TOT),
+                        ]
+                        for i in range(2, len(data) - 1):
+                            ts.append(('BACKGROUND', (0, i), (-1, i), C_ROW1 if i % 2 == 0 else C_ROW2))
+                            ts.append(('LINEBELOW', (0, i), (-1, i), 0.25, C_LINE))
+                        t.setStyle(TableStyle(ts))
                         out.append(t)
                         return out
 
-                    # ── Sec 1 y 2 lado a lado ──
-                    _r1 = [[idx, _clp(row['monto']), f"{int(round(row['q']))}", _pct(row['pct'])]
-                           for idx, row in sec1.iterrows()]
-                    _r2 = [[idx, _clp(row['monto']), f"{int(round(row['q']))}", _pct(row['pct'])]
-                           for idx, row in sec2.iterrows()]
-                    _b1 = _tbl_simple("1 · VENTAS TOTALES SALÓN", ["Familia", "$ Acum.", "Q", "%"], _r1)
-                    _b2 = _tbl_simple("2 · VENTAS POR CATEGORÍA", ["Familia", "$ Acum.", "Q", "%"], _r2)
-                    _dos = Table([[_b1, [Spacer(4*mm, 1)], _b2]], colWidths=[(AVAIL-4*mm)/2, 4*mm, (AVAIL-4*mm)/2])
-                    _dos.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'TOP')]))
-                    story += [_dos, Spacer(1, 4*mm)]
+                    # ── SECCIÓN 1 ──
+                    story += _tabla_3b("1.- VENTAS TOTALES SALÓN", filas1, tot1_d, "ITEM", "TOTAL VENTA SALÓN")
+                    story += [Spacer(1, 4 * mm)]
+                    # ── SECCIÓN 2 ──
+                    story += _tabla_3b("2.- VENTAS POR CATEGORÍA", filas2, tot2_d, "ITEM", "TOTAL VENTA SALÓN")
+                    story += [Spacer(1, 4 * mm)]
 
-                    # ── Sec 4 estratégicos ──
-                    if estr_df is not None and not estr_df.empty:
-                        _re = [[r['prod'], f"{int(round(r['q']))}", _clp(r['monto']), _pct(r['pct'])]
-                               for _, r in estr_df.iterrows()]
-                        story += _tbl_simple("4 · PRODUCTOS ESTRATÉGICOS",
-                                             ["Producto", "Q", "$ Acum.", "%"], _re)
-                        story += [Spacer(1, 4*mm)]
+                    # ── SECCIÓN 3 (sub-bloques) ──
+                    story.append(Paragraph("3.- VENTAS POR CATEGORÍA", sty(8.5, C_HDR2, bold=True, align=TA_LEFT)))
+                    story.append(Spacer(1, 1.5 * mm))
+                    for _titb, _filb, _totlab in bloques_sec3:
+                        if _filb:
+                            story += _tabla_3b(_titb, _filb,
+                                               {'ac_monto': sum(x['ac_monto'] for x in _filb),
+                                                'ac_q': sum(x['ac_q'] for x in _filb),
+                                                'sem_monto': sum(x['sem_monto'] for x in _filb),
+                                                'sem_q': sum(x['sem_q'] for x in _filb)},
+                                               "ITEM", _totlab)
+                            story += [Spacer(1, 2.5 * mm)]
 
-                    # ── Sec 5 garzones ──
+                    story += [PageBreak()]
+
+                    # ── SECCIÓN 4 ──
+                    story += _tabla_3b("4.- CONTROL DE PRODUCTOS ESTRATÉGICOS", filas_estr, tot_estr,
+                                       "PRODUCTO", "TOTAL", q_label="Q")
+                    story += [Spacer(1, 5 * mm)]
+
+                    # ── SECCIÓN 5 — Ventas por garzón ──
                     if gz_seg is not None and not gz_seg.empty:
-                        story += [PageBreak()]
-                        _rg = []
+                        story.append(Paragraph("5.- COMPARATIVA VENTA ADICIONALES - VENTAS POR GARZÓN",
+                                               sty(8.5, C_HDR2, bold=True, align=TA_LEFT)))
+                        story.append(Spacer(1, 1.5 * mm))
+                        _gh = [[P("GARZÓN", 5.5, C_WHITE, bold=True, align=TA_LEFT),
+                                P("VENTA", 5.5, C_WHITE, bold=True), P("PROPINA", 5.5, C_WHITE, bold=True),
+                                P("V.DIARIA", 5.5, C_WHITE, bold=True), P("DÍAS", 5.5, C_WHITE, bold=True),
+                                P("AGREG %", 5.5, C_WHITE, bold=True), P("CAFÉ Q", 5.5, C_WHITE, bold=True),
+                                P("POSTRE Q", 5.5, C_WHITE, bold=True), P("LÍQ S/A %", 5.5, C_WHITE, bold=True),
+                                P("LÍQ C/A %", 5.5, C_WHITE, bold=True), P("% TOTAL", 5.5, C_WHITE, bold=True)]]
                         for _, r in gz_seg.iterrows():
-                            _rg.append([r['garzon'], _clp(r['venta_total']), str(int(r['dias'])),
-                                        _clp(r['venta_diaria_prom']), _clp(r['aporte_propina']),
-                                        _pct(r.get('Agregados', 0)),
-                                        f"{int(round(r.get('Cafetería', 0)))}",
-                                        f"{int(round(r.get('Postres', 0)))}",
-                                        _pct(r.get('Líquidos S/A', 0)), _pct(r.get('Líquidos C/A', 0)),
-                                        _pct(r['pct_total'])])
-                        story += _tbl_simple("5 · SEGUIMIENTO POR GARZÓN",
-                            ["Garzón", "Venta", "Días", "V.Diaria", "Propina10%", "Agreg%",
-                             "Café Q", "Postre Q", "LíqS/A%", "LíqC/A%", "%TOT"], _rg)
-                        story += [Spacer(1, 4*mm)]
+                            _gh.append([
+                                P(r['garzon'], 5.5, C_TXT, align=TA_LEFT),
+                                P(_clp(r['venta_total']), 5.5), P(_clp(r['aporte_propina']), 5.5),
+                                P(_clp(r['venta_diaria_prom']), 5.5), P(str(int(r['dias'])), 5.5),
+                                P(_pct(r.get('Agregados', 0)), 5.5),
+                                P(_q(r.get('Cafetería', 0)), 5.5), P(_q(r.get('Postres', 0)), 5.5),
+                                P(_pct(r.get('Líquidos S/A', 0)), 5.5), P(_pct(r.get('Líquidos C/A', 0)), 5.5),
+                                P(_pct(r['pct_total']), 5.5, C_HDR2, bold=True)])
+                        _cw5 = [AVAIL * 0.16] + [AVAIL * 0.084] * 10
+                        _t5 = Table(_gh, colWidths=_cw5, repeatRows=1)
+                        _ts5 = [('BACKGROUND', (0, 0), (-1, 0), C_HDR),
+                                ('LINEBELOW', (0, 0), (-1, 0), 0.6, C_GOLD),
+                                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                                ('TOPPADDING', (0, 0), (-1, -1), 2), ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+                                ('LEFTPADDING', (0, 0), (-1, -1), 3), ('RIGHTPADDING', (0, 0), (-1, -1), 3)]
+                        for i in range(1, len(_gh)):
+                            _ts5.append(('BACKGROUND', (0, i), (-1, i), C_ROW1 if i % 2 else C_ROW2))
+                            _ts5.append(('LINEBELOW', (0, i), (-1, i), 0.25, C_LINE))
+                        _t5.setStyle(TableStyle(_ts5))
+                        story += [_t5, Spacer(1, 5 * mm)]
 
-                    # ── Sec 6 locales ──
+                    # ── SECCIÓN 6 — Ventas por local ──
                     if loc_df is not None and not loc_df.empty:
-                        _rl = []
+                        story.append(Paragraph("6.- COMPARATIVA VENTA ADICIONALES - VENTAS POR LOCAL",
+                                               sty(8.5, C_HDR2, bold=True, align=TA_LEFT)))
+                        story.append(Spacer(1, 1.5 * mm))
+                        _lh = [[P("#", 6, C_WHITE, bold=True, align=TA_CENTER), P("LOCAL", 6, C_WHITE, bold=True, align=TA_LEFT),
+                                P("VENTA", 6, C_WHITE, bold=True), P("AGREG %", 6, C_WHITE, bold=True),
+                                P("CAFÉ Q", 6, C_WHITE, bold=True), P("POSTRE Q", 6, C_WHITE, bold=True),
+                                P("LÍQ S/A %", 6, C_WHITE, bold=True), P("LÍQ C/A %", 6, C_WHITE, bold=True),
+                                P("% TOTAL", 6, C_WHITE, bold=True)]]
                         for i, r in loc_df.reset_index(drop=True).iterrows():
-                            _rl.append([str(i+1), r['local'], _clp(r['venta_total']),
-                                        _pct(r.get('Agregados', 0)),
-                                        f"{int(round(r.get('Cafetería', 0)))}",
-                                        f"{int(round(r.get('Postres', 0)))}",
-                                        _pct(r.get('Líquidos S/A', 0)), _pct(r.get('Líquidos C/A', 0)),
-                                        _pct(r['pct_total'])])
-                        story += _tbl_simple("6 · COMPARATIVA POR LOCAL (RED)",
-                            ["#", "Local", "Venta", "Agreg%", "Café Q", "Postre Q",
-                             "LíqS/A%", "LíqC/A%", "%TOT"], _rl,
-                            aligns=[TA_CENTER, TA_LEFT, TA_RIGHT, TA_RIGHT, TA_RIGHT, TA_RIGHT, TA_RIGHT, TA_RIGHT, TA_RIGHT])
+                            _es = (r['local'] == local)
+                            _lh.append([P(str(i + 1), 6, C_TXT, align=TA_CENTER),
+                                P(r['local'], 6, C_HDR2 if _es else C_TXT, bold=_es, align=TA_LEFT),
+                                P(_clp(r['venta_total']), 6), P(_pct(r.get('Agregados', 0)), 6),
+                                P(_q(r.get('Cafetería', 0)), 6), P(_q(r.get('Postres', 0)), 6),
+                                P(_pct(r.get('Líquidos S/A', 0)), 6), P(_pct(r.get('Líquidos C/A', 0)), 6),
+                                P(_pct(r['pct_total']), 6, C_HDR2, bold=True)])
+                        _cw6 = [AVAIL * 0.04, AVAIL * 0.18] + [AVAIL * 0.111] * 7
+                        _t6 = Table(_lh, colWidths=_cw6, repeatRows=1)
+                        _ts6 = [('BACKGROUND', (0, 0), (-1, 0), C_HDR),
+                                ('LINEBELOW', (0, 0), (-1, 0), 0.6, C_GOLD),
+                                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                                ('TOPPADDING', (0, 0), (-1, -1), 2), ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+                                ('LEFTPADDING', (0, 0), (-1, -1), 3), ('RIGHTPADDING', (0, 0), (-1, -1), 3)]
+                        for i in range(1, len(_lh)):
+                            _es = (loc_df.reset_index(drop=True).iloc[i - 1]['local'] == local)
+                            _bg = C_GOLD if _es else (C_ROW1 if i % 2 else C_ROW2)
+                            _ts6.append(('BACKGROUND', (0, i), (-1, i), _bg))
+                            _ts6.append(('LINEBELOW', (0, i), (-1, i), 0.25, C_LINE))
+                        _t6.setStyle(TableStyle(_ts6))
+                        story += [_t6, Spacer(1, 5 * mm)]
 
-                    story += [Spacer(1, 3*mm), HRFlowable(width="100%", thickness=0.4, color=CBo),
-                              Spacer(1, 1*mm),
-                              P(f"Aleman Experto · {local} · {semana_label} · Control de Ventas Salón",
-                                5.5, CM, align=TA_CENTER)]
+                    # ── SECCIÓN 7 — Matriz estratégicos local × producto ──
+                    if m7_df is not None and not m7_df.empty:
+                        story.append(Paragraph("7.- COMPARATIVA PRODUCTOS ESTRATÉGICOS - PROMEDIO DIARIO POR GARZÓN",
+                                               sty(8.5, C_HDR2, bold=True, align=TA_LEFT)))
+                        story.append(Spacer(1, 1.5 * mm))
+                        _cols7 = [c for c in m7_df.columns if c != 'local']
+                        _h7 = [[P("LOCAL", 6, C_WHITE, bold=True, align=TA_LEFT)] +
+                               [P(c, 6, C_WHITE, bold=True, align=TA_CENTER) for c in _cols7]]
+                        for _, r in m7_df.iterrows():
+                            _es = (r['local'] == local)
+                            _h7.append([P(r['local'], 6, C_HDR2 if _es else C_TXT, bold=_es, align=TA_LEFT)] +
+                                       [P(('%.2f' % r[c]).replace('.', ','), 6) for c in _cols7])
+                        _cw7 = [AVAIL * 0.22] + [(AVAIL * 0.78) / len(_cols7)] * len(_cols7)
+                        _t7 = Table(_h7, colWidths=_cw7, repeatRows=1)
+                        _ts7 = [('BACKGROUND', (0, 0), (-1, 0), C_HDR),
+                                ('LINEBELOW', (0, 0), (-1, 0), 0.6, C_GOLD),
+                                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                                ('TOPPADDING', (0, 0), (-1, -1), 2), ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+                                ('LEFTPADDING', (0, 0), (-1, -1), 3), ('RIGHTPADDING', (0, 0), (-1, -1), 3)]
+                        for i in range(1, len(_h7)):
+                            _ts7.append(('BACKGROUND', (0, i), (-1, i), C_ROW1 if i % 2 else C_ROW2))
+                            _ts7.append(('LINEBELOW', (0, i), (-1, i), 0.25, C_LINE))
+                        _t7.setStyle(TableStyle(_ts7))
+                        story += [_t7]
 
-                    def add_bg(c, d):
-                        c.saveState(); c.setFillColor(CB); c.rect(0, 0, W, H, fill=1, stroke=0); c.restoreState()
-                    doc.build(story, onFirstPage=add_bg, onLaterPages=add_bg)
+                    # ════════════════════════════════════════════════════════════
+                    # SECCIONES 8, 10, 11 — Gráficos (estilo ejecutivo sobrio)
+                    # Dibujados con reportlab.graphics (sin dependencias externas).
+                    # ════════════════════════════════════════════════════════════
+                    from reportlab.graphics.shapes import Drawing
+                    from reportlab.graphics.charts.barcharts import VerticalBarChart
+                    from reportlab.graphics.charts.linecharts import HorizontalLineChart
+                    from reportlab.graphics.charts.legends import Legend
+
+                    # Paleta sobria para gráficos (azules apagados + dorado, nada brillante)
+                    _GCOL = [rc.HexColor('#3A5A82'), rc.HexColor('#5B8DB8'),
+                             rc.HexColor('#8FB4D6'), rc.HexColor('#D4A853')]
+                    _GGREY = rc.HexColor('#B8BFC8')
+
+                    def _titulo_sec(txt):
+                        return Paragraph(txt, sty(8.5, C_HDR2, bold=True, align=TA_LEFT))
+
+                    # ── SECCIÓN 8: barras agrupadas, garzón en X, una barra por semana ──
+                    if sec8 and sec8.get("garzones") and sec8.get("semanas"):
+                        story += [PageBreak(), _titulo_sec("8.- EVOLUCIÓN VENTAS POR GARZÓN"), Spacer(1, 2 * mm)]
+                        _gars = sec8["garzones"]; _sems = sec8["semanas"]
+                        _d8 = Drawing(AVAIL, 200)
+                        _bc = VerticalBarChart()
+                        _bc.x = 30; _bc.y = 35; _bc.width = AVAIL - 50; _bc.height = 150
+                        _bc.data = [[sec8["valores"][g][i] if i < len(sec8["valores"][g]) else 0
+                                     for g in _gars] for i in range(len(_sems))]
+                        _bc.categoryAxis.categoryNames = [g.split()[0][:10] for g in _gars]
+                        _bc.categoryAxis.labels.angle = 30
+                        _bc.categoryAxis.labels.boxAnchor = 'ne'
+                        _bc.categoryAxis.labels.fontSize = 5.5
+                        _bc.categoryAxis.labels.fontName = 'Helvetica'
+                        _bc.valueAxis.valueMin = 0
+                        _bc.valueAxis.labels.fontSize = 6
+                        _bc.barSpacing = 0.5
+                        _bc.groupSpacing = 4
+                        for _i in range(len(_sems)):
+                            _bc.bars[_i].fillColor = _GCOL[_i % len(_GCOL)]
+                            _bc.bars[_i].strokeColor = None
+                        _d8.add(_bc)
+                        _leg = Legend()
+                        _leg.x = 30; _leg.y = 198; _leg.deltax = 60; _leg.fontSize = 6
+                        _leg.alignment = 'right'; _leg.boxAnchor = 'nw'
+                        _leg.colorNamePairs = [(_GCOL[i % len(_GCOL)], f"Sem {s}") for i, s in enumerate(_sems)]
+                        _leg.dxTextSpace = 4; _leg.dx = 6; _leg.dy = 6; _leg.deltay = 0
+                        _d8.add(_leg)
+                        story += [_d8, Spacer(1, 2 * mm),
+                                  P("Top 10 garzones. Cada grupo muestra las semanas (más reciente en dorado): permite ver tendencia al alza o a la baja.",
+                                    6, C_GREY, align=TA_LEFT)]
+
+                    # ── SECCIÓN 10: líneas por local, tu local resaltado ──
+                    if sec10 and sec10.get("series") and sec10.get("semanas"):
+                        story += [Spacer(1, 5 * mm), _titulo_sec("10.- COMPARATIVA VENTAS ADICIONALES POR LOCAL"), Spacer(1, 2 * mm)]
+                        _sems = sec10["semanas"]
+                        _d10 = Drawing(AVAIL, 200)
+                        _lc_chart = HorizontalLineChart()
+                        _lc_chart.x = 30; _lc_chart.y = 30; _lc_chart.width = AVAIL - 50; _lc_chart.height = 155
+                        _lc_chart.data = [s[1] for s in sec10["series"]]
+                        _lc_chart.categoryAxis.categoryNames = [f"Sem {s}" for s in _sems]
+                        _lc_chart.categoryAxis.labels.fontSize = 6
+                        _lc_chart.valueAxis.labels.fontSize = 6
+                        _lc_chart.lines.strokeWidth = 1
+                        for _i, _s in enumerate(sec10["series"]):
+                            _es_actual = _s[2]
+                            _lc_chart.lines[_i].strokeColor = C_GOLD if _es_actual else _GGREY
+                            _lc_chart.lines[_i].strokeWidth = 2.5 if _es_actual else 0.8
+                        _d10.add(_lc_chart)
+                        story += [_d10, Spacer(1, 2 * mm),
+                                  P(f"{local} resaltado en dorado; el resto de la red en gris como contexto.",
+                                    6, C_GREY, align=TA_LEFT)]
+
+                    # ── SECCIÓN 11: barras mensuales (dorado sobrio) ──
+                    if sec11 and sec11.get("meses"):
+                        story += [Spacer(1, 5 * mm), _titulo_sec("11.- COMPORTAMIENTO MENSUAL"), Spacer(1, 2 * mm)]
+                        _d11 = Drawing(AVAIL, 180)
+                        _bc11 = VerticalBarChart()
+                        _bc11.x = 30; _bc11.y = 30; _bc11.width = AVAIL - 60; _bc11.height = 135
+                        _bc11.data = [sec11["valores"]]
+                        _bc11.categoryAxis.categoryNames = list(sec11["meses"])
+                        _bc11.categoryAxis.labels.fontSize = 6.5
+                        _bc11.valueAxis.valueMin = 0
+                        _bc11.valueAxis.labels.fontSize = 6
+                        _bc11.bars[0].fillColor = C_GOLD
+                        _bc11.bars[0].strokeColor = None
+                        _bc11.barWidth = 14
+                        _d11.add(_bc11)
+                        story += [_d11, Spacer(1, 2 * mm),
+                                  P(f"Evolución mensual del % de adicionales — {local}.", 6, C_GREY, align=TA_LEFT)]
+
+                    story += [Spacer(1, 4 * mm),
+                              HRFlowable(width="100%", thickness=0.4, color=C_LINE),
+                              Spacer(1, 1 * mm),
+                              P(f"Alemán Experto · {local} · Semana {semana_label} · Control de Ventas Salón",
+                                5.5, C_GREY, align=TA_CENTER)]
+
+                    doc.build(story)
                     buf.seek(0)
                     return buf.getvalue()
 
                 st.markdown("#### 📄 Exportar")
                 try:
                     _sem_label = f"{_sg_fi.strftime('%d-%m')} al {_sg_ff.strftime('%d-%m-%Y')}"
-                    _pdf_bytes = _generar_pdf_sg(_sg_local, _sem_label, _sg_rank_pos, _sg_jef, _sg_qgar,
-                                                 _sec1, _sec2, _gz_seg, _loc_df, _estr_df)
-                    st.download_button("📄 Descargar PDF", _pdf_bytes,
+                    # Bloques de sección 3 (título, filas, etiqueta total). Solo los no vacíos.
+                    _bloques3 = []
+                    if _filas_alim:
+                        _bloques3.append(("VENTAS ALIMENTOS", _filas_alim, "TOTAL ALIMENTOS"))
+                    if _filas_cp:
+                        _bloques3.append(("VENTAS CAFETERÍA Y POSTRES", _filas_cp, "TOTAL CAF. Y POSTRES"))
+                    if _filas_ca:
+                        _bloques3.append(("VENTAS LÍQUIDOS C/A", _filas_ca, "TOTAL LÍQUIDOS C/A"))
+                    if _filas_sa:
+                        _bloques3.append(("VENTAS LÍQUIDOS S/A", _filas_sa, "TOTAL LÍQUIDOS S/A"))
+                    _tot_estr_d = _totales_filas_sg(_filas_estr) if _filas_estr else \
+                        {'ac_monto': 0, 'ac_q': 0, 'sem_monto': 0, 'sem_q': 0}
+                    _m7_df_pdf = _m7_df if '_m7_df' in dir() else None
+                    _pdf_bytes = _generar_pdf_sg(
+                        _sg_local, _sem_label, _sg_rank_pos, _sg_jef, _sg_qgar,
+                        _filas1, _tot1_d, _filas2, _tot2_d,
+                        _bloques3, _filas_estr, _tot_estr_d,
+                        _gz_seg, _loc_df, _m7_df_pdf, _sg_dias_trab,
+                        sec8=_pdf_sec8, sec10=_pdf_sec10, sec11=_pdf_sec11)
+                    st.download_button("📄 Descargar PDF (réplica del informe)", _pdf_bytes,
                         f"Control_Ventas_Salon_{_sg_local}_{_sg_fi}_{_sg_ff}.pdf",
                         mime="application/pdf", key="sg_pdf_dl")
                 except Exception as _e_pdf:
+                    import traceback as _tb_pdf
                     st.warning(f"No se pudo generar el PDF: {_e_pdf}")
+                    with st.expander("Ver detalle técnico del PDF"):
+                        st.code(_tb_pdf.format_exc())
             except Exception as _sg_err:
                 import traceback as _sg_tb
                 st.error(f"Error al generar el informe: {_sg_err}")
