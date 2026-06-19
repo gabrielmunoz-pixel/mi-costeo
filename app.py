@@ -3091,7 +3091,7 @@ with st.sidebar:
     if _is_admin:
         menu_items["📦 Gestión de Datos"] = []
     if _user_puede("📊 Informes"):
-        menu_items["📊 Informes"] = ["Rentabilidad", "Desviación", "Variación Precio Compras", "Informe de Costos", "Auditor Categorías", "Tendencias Bar", "Cuentas Casa", "Venta Diaria", "Rendimiento Garzones", "Tendencia de Ventas", "Control de Producción", "Seguimiento Garzones"]
+        menu_items["📊 Informes"] = ["Rentabilidad", "Desviación", "Variación Precio Compras", "Informe de Costos", "Auditor Categorías", "Tendencias Bar", "Cuentas Casa", "Venta Diaria", "Rendimiento Garzones", "Tendencia de Ventas", "Control de Producción", "Seguimiento Garzones", "Colaciones RRHH"]
     if _is_admin or _user_puede("📋 Notas de Crédito"):
         menu_items["📋 Notas de Crédito"] = []
     if _is_admin:
@@ -7568,6 +7568,8 @@ elif modulo.startswith("📊"):
         informe_sel = "CuentasCasa"
     elif "Venta Diaria" in modulo:
         informe_sel = "VentaDiaria"
+    elif "Colaciones RRHH" in modulo or "Colaciones" in modulo:
+        informe_sel = "ColacionesRRHH"
     elif "Seguimiento Garzones" in modulo:
         informe_sel = "SeguimientoGarzones"
     elif "Garzones" in modulo or "Rendimiento" in modulo:
@@ -10582,6 +10584,241 @@ elif modulo.startswith("📊"):
                                   f"{_cp2_meta.get('mi','')}_{_cp2_meta.get('mf','')}.csv",
                         mime="text/csv", key="cp2_dl_det"
                     )
+
+
+    elif informe_sel == "ColacionesRRHH":
+        import datetime as _cr_dt
+        st.markdown("# 🍽️ Colaciones vs. Dotación (Hora Hombre)")
+        st.markdown(
+            "<div style='background:#15233a;border-left:4px solid #4caf7d;"
+            "padding:12px 16px;border-radius:6px;margin-bottom:8px'>"
+            "Cruza <b>colaciones servidas</b> (ventas categoría Colación, Salón) contra "
+            "<b>turnos trabajados</b> (asistencia RRHH). El ratio <b>colaciones por turno</b> "
+            "alto puede indicar fuga: más comidas que personal que trabajó.</div>",
+            unsafe_allow_html=True
+        )
+
+        # Rango de fechas (default: quincena cargada en asistencia)
+        _cr_cov = run_query("SELECT MIN(fecha) AS fmin, MAX(fecha) AS fmax FROM asistencia_rrhh")
+        _cr_dmin = _cr_cov["fmin"].iloc[0] if (_cr_cov is not None and not _cr_cov.empty and pd.notna(_cr_cov["fmin"].iloc[0])) else _cr_dt.date(2026, 6, 1)
+        _cr_dmax = _cr_cov["fmax"].iloc[0] if (_cr_cov is not None and not _cr_cov.empty and pd.notna(_cr_cov["fmax"].iloc[0])) else _cr_dt.date(2026, 6, 14)
+
+        _cr_c1, _cr_c2, _cr_c3 = st.columns([1, 1, 1])
+        with _cr_c1:
+            _cr_fi = st.date_input("Desde", value=_cr_dmin, key="cr_fi")
+        with _cr_c2:
+            _cr_ff = st.date_input("Hasta", value=_cr_dmax, key="cr_ff")
+        with _cr_c3:
+            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+            _cr_btn = st.button("📊 Generar informe", type="primary",
+                                use_container_width=True, key="cr_btn")
+
+        if _cr_btn:
+            _cr_params = {"fi": str(_cr_fi), "ff": str(_cr_ff)}
+
+            # ── Numerador: colaciones servidas por local (y por día) ──
+            _CR_CATS = (
+                "'ACOMPANAMIENTO ALMUERZO','ENSALADAS ALMUERZO','PROTEINA ALMUERZO',"
+                "'Proteina Almuerzo','Menu Ejecutivo','Menú Ejecutivo','Colacion','Colación'"
+            )
+            _cr_col = run_query(f"""
+                SELECT local, fecha_venta AS fecha,
+                       SUM(cantidad_vendida) AS colaciones
+                FROM ventas
+                WHERE fecha_venta BETWEEN :fi AND :ff
+                  AND es_opcion = false
+                  AND (origen IS NULL OR origen = '')
+                  AND categoria_menu IN ({_CR_CATS})
+                  AND local IS NOT NULL
+                GROUP BY local, fecha_venta
+            """, _cr_params)
+
+            # ── Denominador: turnos trabajados por local (y por día) ──
+            _cr_tur = run_query("""
+                SELECT local, fecha,
+                       COUNT(*) FILTER (WHERE trabajo) AS turnos,
+                       COUNT(DISTINCT rut) FILTER (WHERE trabajo) AS personas
+                FROM asistencia_rrhh
+                WHERE fecha BETWEEN :fi AND :ff
+                GROUP BY local, fecha
+            """, _cr_params)
+
+            if (_cr_tur is None or _cr_tur.empty):
+                st.warning("No hay asistencia cargada para ese rango. Carga el archivo en "
+                           "**Gestión de Datos → Asistencia RRHH** primero.")
+            else:
+                st.session_state["cr_col"] = _cr_col if _cr_col is not None else pd.DataFrame()
+                st.session_state["cr_tur"] = _cr_tur
+                st.session_state["cr_meta"] = {"fi": str(_cr_fi), "ff": str(_cr_ff)}
+
+        # ── Render (persistente) ──
+        if "cr_tur" in st.session_state and not st.session_state["cr_tur"].empty:
+            _cr_col = st.session_state.get("cr_col", pd.DataFrame())
+            _cr_tur = st.session_state["cr_tur"]
+            _cr_meta = st.session_state.get("cr_meta", {})
+
+            for _c in ("colaciones",):
+                if _c in _cr_col.columns:
+                    _cr_col[_c] = pd.to_numeric(_cr_col[_c], errors="coerce").fillna(0)
+            for _c in ("turnos", "personas"):
+                _cr_tur[_c] = pd.to_numeric(_cr_tur[_c], errors="coerce").fillna(0)
+
+            # ════════ 1) RESUMEN POR LOCAL ════════
+            _cr_tur_loc = _cr_tur.groupby("local").agg(
+                turnos=("turnos", "sum"),
+            ).reset_index()
+            # personas distintas reales del período:
+            _cr_pers = run_query("""
+                SELECT local, COUNT(DISTINCT rut) AS personas_periodo
+                FROM asistencia_rrhh
+                WHERE fecha BETWEEN :fi AND :ff AND trabajo = TRUE
+                GROUP BY local
+            """, {"fi": _cr_meta["fi"], "ff": _cr_meta["ff"]})
+            _cr_tur_loc = _cr_tur_loc.merge(_cr_pers, on="local", how="left")
+
+            if not _cr_col.empty:
+                _cr_col_loc = _cr_col.groupby("local")["colaciones"].sum().reset_index()
+            else:
+                _cr_col_loc = pd.DataFrame(columns=["local", "colaciones"])
+
+            _cr_res = _cr_tur_loc.merge(_cr_col_loc, on="local", how="left")
+            _cr_res["colaciones"] = _cr_res["colaciones"].fillna(0)
+            _cr_res["ratio"] = (_cr_res["colaciones"] / _cr_res["turnos"].replace(0, pd.NA)).round(2)
+            _cr_res = _cr_res.sort_values("ratio", ascending=False, na_position="last")
+
+            # Semáforo: ratio > 1 = más colaciones que turnos (alerta);
+            # cercano a 1 = razonable; muy bajo = poca colación registrada.
+            def _cr_sem(r):
+                if pd.isna(r):
+                    return "⚪ s/d"
+                if r > 1.15:
+                    return "🔴 Alto"
+                if r >= 0.85:
+                    return "🟡 Normal"
+                return "🟢 Bajo"
+            _cr_res["alerta"] = _cr_res["ratio"].apply(_cr_sem)
+
+            st.markdown(f"### 📍 Resumen por local · {_cr_meta['fi']} → {_cr_meta['ff']}")
+            _cr_show = _cr_res.rename(columns={
+                "local": "Local", "colaciones": "Colaciones servidas",
+                "turnos": "Turnos trabajados", "personas_periodo": "Personas",
+                "ratio": "Colac./turno", "alerta": "Alerta",
+            })[["Local", "Colaciones servidas", "Turnos trabajados", "Personas",
+                "Colac./turno", "Alerta"]]
+            _cr_show["Colaciones servidas"] = _cr_show["Colaciones servidas"].astype(int)
+            _cr_show["Turnos trabajados"] = _cr_show["Turnos trabajados"].astype(int)
+            _cr_show["Personas"] = _cr_show["Personas"].fillna(0).astype(int)
+            st.dataframe(_cr_show, use_container_width=True, hide_index=True)
+            st.caption(
+                "Ratio = colaciones servidas ÷ turnos trabajados. 🔴 > 1,15 (posible fuga) · "
+                "🟡 0,85–1,15 · 🟢 < 0,85. 'Personas' = distintas que trabajaron en el período."
+            )
+
+            # Alerta de locales rojos
+            _cr_rojos = _cr_res[_cr_res["ratio"] > 1.15]["local"].tolist()
+            if _cr_rojos:
+                st.error("🔴 Ratio alto (revisar): " + ", ".join(_cr_rojos))
+
+            # ════════ 2) GRÁFICO comparativo de ratio por local ════════
+            _cr_chart = _cr_res.dropna(subset=["ratio"]).set_index("local")["ratio"]
+            if not _cr_chart.empty:
+                st.markdown("### 📊 Ratio colaciones/turno por local")
+                st.bar_chart(_cr_chart)
+
+            # ════════ 3) DESGLOSE DIARIO + TENDENCIA ════════
+            st.markdown("### 📅 Desglose diario")
+            _cr_loc_sel = st.selectbox(
+                "Local", ["Todos"] + sorted(_cr_tur["local"].unique().tolist()),
+                key="cr_loc_diario"
+            )
+            _cr_t_d = _cr_tur.copy()
+            _cr_c_d = _cr_col.copy() if not _cr_col.empty else pd.DataFrame(columns=["local","fecha","colaciones"])
+            if _cr_loc_sel != "Todos":
+                _cr_t_d = _cr_t_d[_cr_t_d["local"] == _cr_loc_sel]
+                _cr_c_d = _cr_c_d[_cr_c_d["local"] == _cr_loc_sel]
+
+            _cr_t_dia = _cr_t_d.groupby("fecha")["turnos"].sum().reset_index()
+            _cr_c_dia = (_cr_c_d.groupby("fecha")["colaciones"].sum().reset_index()
+                         if not _cr_c_d.empty else pd.DataFrame(columns=["fecha","colaciones"]))
+            _cr_dia = _cr_t_dia.merge(_cr_c_dia, on="fecha", how="left")
+            _cr_dia["colaciones"] = _cr_dia["colaciones"].fillna(0)
+            _cr_dia["ratio"] = (_cr_dia["colaciones"] / _cr_dia["turnos"].replace(0, pd.NA)).round(2)
+            _cr_dia = _cr_dia.sort_values("fecha")
+
+            if not _cr_dia.empty:
+                _cr_dia_show = _cr_dia.rename(columns={
+                    "fecha": "Fecha", "colaciones": "Colaciones",
+                    "turnos": "Turnos", "ratio": "Colac./turno",
+                })
+                _cr_dia_show["Colaciones"] = _cr_dia_show["Colaciones"].astype(int)
+                _cr_dia_show["Turnos"] = _cr_dia_show["Turnos"].astype(int)
+                st.dataframe(_cr_dia_show, use_container_width=True, hide_index=True)
+
+                st.markdown("#### 📈 Tendencia diaria del ratio")
+                _cr_trend = _cr_dia.dropna(subset=["ratio"]).set_index("fecha")["ratio"]
+                if not _cr_trend.empty:
+                    st.line_chart(_cr_trend)
+
+            # ════════ 4) EXPORT A EXCEL ════════
+            st.markdown("### 📥 Exportar")
+            try:
+                import io as _cr_io
+                from openpyxl import Workbook as _CRWb
+                from openpyxl.styles import Font as _CRFont, PatternFill as _CRFill, Alignment as _CRAlign
+
+                _cr_buf = _cr_io.BytesIO()
+                _wb = _CRWb()
+                _ws1 = _wb.active
+                _ws1.title = "Resumen por local"
+                _hdr_fill = _CRFill("solid", start_color="1F3864")
+                _hdr_font = _CRFont(bold=True, color="FFFFFF", name="Arial")
+
+                _cols1 = ["Local", "Colaciones servidas", "Turnos trabajados", "Personas", "Colac./turno", "Alerta"]
+                _ws1.append(_cols1)
+                for _ci in range(1, len(_cols1) + 1):
+                    _cl = _ws1.cell(row=1, column=_ci)
+                    _cl.fill = _hdr_fill; _cl.font = _hdr_font
+                    _cl.alignment = _CRAlign(horizontal="center")
+                for _, _row in _cr_show.iterrows():
+                    _ws1.append([_row[c] for c in _cols1])
+                for _i, _w in enumerate([20, 18, 18, 12, 14, 12], start=1):
+                    _ws1.column_dimensions[chr(64 + _i)].width = _w
+                _ws1.freeze_panes = "A2"
+
+                # Hoja diaria
+                _ws2 = _wb.create_sheet("Desglose diario")
+                _cols2 = ["Local", "Fecha", "Colaciones", "Turnos", "Colac./turno"]
+                _ws2.append(_cols2)
+                for _ci in range(1, len(_cols2) + 1):
+                    _cl = _ws2.cell(row=1, column=_ci)
+                    _cl.fill = _hdr_fill; _cl.font = _hdr_font
+                    _cl.alignment = _CRAlign(horizontal="center")
+                _cr_full_dia = _cr_tur.groupby(["local", "fecha"])["turnos"].sum().reset_index()
+                _cr_col_full = (_cr_col.groupby(["local", "fecha"])["colaciones"].sum().reset_index()
+                                if not _cr_col.empty else pd.DataFrame(columns=["local","fecha","colaciones"]))
+                _cr_full = _cr_full_dia.merge(_cr_col_full, on=["local", "fecha"], how="left")
+                _cr_full["colaciones"] = _cr_full["colaciones"].fillna(0)
+                _cr_full["ratio"] = (_cr_full["colaciones"] / _cr_full["turnos"].replace(0, pd.NA)).round(2)
+                _cr_full = _cr_full.sort_values(["local", "fecha"])
+                for _, _row in _cr_full.iterrows():
+                    _ws2.append([_row["local"], str(_row["fecha"]),
+                                 int(_row["colaciones"]), int(_row["turnos"]),
+                                 None if pd.isna(_row["ratio"]) else float(_row["ratio"])])
+                for _i, _w in enumerate([20, 14, 14, 12, 14], start=1):
+                    _ws2.column_dimensions[chr(64 + _i)].width = _w
+                _ws2.freeze_panes = "A2"
+
+                _wb.save(_cr_buf)
+                _cr_buf.seek(0)
+                st.download_button(
+                    "📥 Descargar Excel",
+                    _cr_buf.getvalue(),
+                    file_name=f"colaciones_rrhh_{_cr_meta['fi']}_{_cr_meta['ff']}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True, key="cr_dl",
+                )
+            except Exception as _e_cr:
+                st.warning(f"No se pudo generar el Excel: {_e_cr}")
 
 
     elif informe_sel in ("CuentasCasa", "Auditor", "Bar"):
