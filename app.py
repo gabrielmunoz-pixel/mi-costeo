@@ -10420,6 +10420,7 @@ elif modulo.startswith("📊"):
                                 use_container_width=True, hide_index=True
                             )
                     _por_dia = _piv.drop(index="TOTAL")[_cp2_cols].sum(axis=0)
+                    _tot_loc = int(_piv.loc["TOTAL", "Σ semana"])
                     _pico = _por_dia.idxmax() if not _por_dia.empty else "—"
                     _valle = _por_dia.idxmin() if not _por_dia.empty else "—"
                     _cp2_resumen_locales.append({
