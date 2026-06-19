@@ -1873,28 +1873,29 @@ def get_estadisticas_opciones_dia_semana(fecha_i, fecha_f, local="Todos",
 # get_estadisticas_opciones_dia_semana ni con el bloque Garzones.
 # ============================================================
 
-# Fase de pago en Chile: sueldo a inicio de mes, adelanto el 15.
-#   1 = Sueldo (inicio mes)      dd <= 5
+# Fase de pago en Chile. El sueldo se paga el ÚLTIMO día hábil del mes, por lo que
+# el pico arranca a fin de mes y se extiende a los primeros días del mes siguiente:
+# por eso "fin de mes" e "inicio de mes" son el MISMO evento y van fusionados.
+#   1 = Sueldo (fin/inicio mes)  últimos 3 días del mes  Y  días 1..5
 #   2 = Valle 1ª quincena        6..12
 #   3 = Adelanto (~15)           13..18
 #   4 = Valle 2ª quincena        19 .. (fin-3)
-#   5 = Fin de mes (pre-sueldo)  últimos 3 días del mes
 _CP2_FASE_NOM = {
-    1: "Sueldo (inicio mes)",
+    1: "Sueldo (fin/inicio mes)",
     2: "Valle 1ª quincena",
     3: "Adelanto (~15)",
     4: "Valle 2ª quincena",
-    5: "Fin de mes (pre-sueldo)",
 }
 # Clasificador SQL de fase de pago (coherente con opciones_diarias).
-# Último día = primer día del mes siguiente - 1; "últimos 3" => >= último-2.
+# Último día del mes = DATE_TRUNC('month') + 1 mes - 1 día; "últimos 3" => >= último-2.
+# La fase 1 (Sueldo) cubre dos tramos: dd<=5 OR dd>=(último-2).
 _CP2_FASE_SQL = """
     CASE
-        WHEN EXTRACT(DAY FROM {col})::int <= 5  THEN 1
+        WHEN EXTRACT(DAY FROM {col})::int <= 5 THEN 1
+        WHEN {col} >= (DATE_TRUNC('month', {col})
+                       + INTERVAL '1 month' - INTERVAL '3 day')::date THEN 1
         WHEN EXTRACT(DAY FROM {col})::int BETWEEN 6 AND 12 THEN 2
         WHEN EXTRACT(DAY FROM {col})::int BETWEEN 13 AND 18 THEN 3
-        WHEN {col} >= (DATE_TRUNC('month', {col})
-                       + INTERVAL '1 month' - INTERVAL '3 day')::date THEN 5
         ELSE 4
     END
 """
@@ -1905,14 +1906,12 @@ def fase_pago_cp2(d):
     import calendar as _cal
     dim = _cal.monthrange(d.year, d.month)[1]
     dd = d.day
-    if dd <= 5:
+    if dd <= 5 or dd >= dim - 2:   # Sueldo: inicio de mes o últimos 3 días
         return 1
     if 6 <= dd <= 12:
         return 2
     if 13 <= dd <= 18:
         return 3
-    if dd >= dim - 2:
-        return 5
     return 4
 
 
@@ -10310,6 +10309,30 @@ elif modulo.startswith("📊"):
                 # Fallback por (local, etiqueta, dow) ignorando fase, si falta la celda exacta
                 _cp2_look_dow = (_cp2_df.groupby(["local", "etiqueta", "dow"])["_base"]
                                  .mean().to_dict())
+                # Lookup de N° de días observados por celda (nivel de confianza).
+                # Tomamos el máx n_dias entre las opciones que componen la etiqueta:
+                # representa cuántos días reales (dow+fase) sustentan la estimación.
+                _cp2_df["_ndias"] = pd.to_numeric(_cp2_df["n_dias"], errors="coerce").fillna(0)
+                _cp2_look_n = (_cp2_df.groupby(["local", "etiqueta", "dow", "fase"])["_ndias"]
+                               .max().to_dict())
+                _cp2_look_n_dow = (_cp2_df.groupby(["local", "etiqueta", "dow"])["_ndias"]
+                                   .max().to_dict())
+
+                # Umbrales de confianza por nº de días observados
+                def _cp2_conf(n):
+                    if n >= 4:
+                        return ("🟢", "Alta")
+                    if n >= 2:
+                        return ("🟡", "Media")
+                    if n >= 1:
+                        return ("🔴", "Baja")
+                    return ("⚪", "Sin dato")
+
+                def _cp2_ndias_celda(_loc, _etq, _dia):
+                    n = _cp2_look_n.get((_loc, _etq, _dia["dow"], _dia["fase"]))
+                    if n is None:
+                        n = _cp2_look_n_dow.get((_loc, _etq, _dia["dow"]))
+                    return int(n) if n and not (isinstance(n, float) and _cp2_math.isnan(n)) else 0
 
                 _cp2_locales = sorted(_cp2_df["local"].dropna().unique().tolist())
                 _cp2_etqs = (_cp2_df.groupby("etiqueta")["_base"].sum()
@@ -10372,7 +10395,30 @@ elif modulo.startswith("📊"):
                         + "  ·  ".join(f"{c} = {_cp2_fase_row[c]}" for c in _cp2_cols)
                     )
 
-                    _tot_loc = int(_piv.loc["TOTAL", "Σ semana"])
+                    # ── Señalizador de confianza por proteína (nº de días observados) ──
+                    _conf_rows = []
+                    for _etq in _piv.drop(index="TOTAL").index:
+                        _ns = [_cp2_ndias_celda(_loc, _etq, _d) for _d in _cp2_plan_dias]
+                        _nmin = min(_ns) if _ns else 0
+                        _nmax = max(_ns) if _ns else 0
+                        _ico, _niv = _cp2_conf(_nmin)
+                        _conf_rows.append({
+                            "Proteína": _etq,
+                            "Confianza": f"{_ico} {_niv}",
+                            "Días mín": _nmin,
+                            "Días máx": _nmax,
+                        })
+                    if _conf_rows:
+                        with st.expander(f"🔎 Nivel de confianza por proteína — {_loc}"):
+                            st.caption(
+                                "Indica con cuántos días reales (mismo día de semana y fase) "
+                                "se calculó cada proyección. 🟢 Alta ≥4 días · 🟡 Media 2-3 · "
+                                "🔴 Baja 1 día. 'Días mín' es la celda más débil de la fila."
+                            )
+                            st.dataframe(
+                                pd.DataFrame(_conf_rows).sort_values("Días mín"),
+                                use_container_width=True, hide_index=True
+                            )
                     _por_dia = _piv.drop(index="TOTAL")[_cp2_cols].sum(axis=0)
                     _pico = _por_dia.idxmax() if not _por_dia.empty else "—"
                     _valle = _por_dia.idxmin() if not _por_dia.empty else "—"
@@ -10401,6 +10447,23 @@ elif modulo.startswith("📊"):
                         + ". Conviene criterio más alto (P90) o dejar buffer."
                     )
 
+                # Alerta global de confianza: si la mayoría de celdas tienen 1 solo día,
+                # la muestra es corta y conviene ampliar el rango histórico.
+                _n_serie = pd.to_numeric(_cp2_df["n_dias"], errors="coerce").fillna(0)
+                _pct_bajo = (_n_serie <= 1).mean() * 100 if len(_n_serie) else 0
+                if _pct_bajo >= 50:
+                    st.error(
+                        f"🔴 Confianza baja: {_pct_bajo:.0f}% de las combinaciones "
+                        "(día × fase) se calcularon con un solo día. Para estimaciones "
+                        "fiables, amplía la muestra histórica a 2-3 meses en el paso 1 "
+                        "y reconstruye."
+                    )
+                elif _pct_bajo >= 25:
+                    st.warning(
+                        f"🟡 Confianza media: {_pct_bajo:.0f}% de las combinaciones "
+                        "tienen pocos días. Considera ampliar la muestra histórica."
+                    )
+
                 with st.expander("📋 Detalle patrón día-semana × fase (todas las métricas)"):
                     _cp2_vcols = {
                         "local": "Local", "dia_semana": "Día", "fase_nom": "Fase",
@@ -10414,6 +10477,13 @@ elif modulo.startswith("📊"):
                                 ["local", "dow", "fase", "promedio"],
                                 ascending=[True, True, True, False])
                             [_cols_ok].rename(columns=_cp2_vcols))
+                    # Columna de confianza derivada de N° días
+                    if "N° días" in _det.columns:
+                        _det.insert(
+                            _det.columns.get_loc("N° días") + 1, "Confianza",
+                            _det["N° días"].map(
+                                lambda n: "%s %s" % _cp2_conf(int(n) if pd.notna(n) else 0))
+                        )
                     st.dataframe(_det, use_container_width=True, hide_index=True)
                     st.download_button(
                         "📥 Detalle patrón (CSV)",
