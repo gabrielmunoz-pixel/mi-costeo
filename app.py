@@ -9794,9 +9794,16 @@ elif modulo.startswith("📊"):
 
     elif informe_sel == "ControlProduccion":
         import datetime as _cp_dt
-        st.markdown("### 🏭 Control de Producción — Debug AE06")
+        st.markdown("# 🏭 Control de Producción")
+        st.caption(
+            "Determina cuánto producir de cada proteína. Tienes dos vistas: "
+            "**estadística por día de semana** (patrón semanal del mes) y "
+            "**proyección de la semana a producir** (incorpora el efecto pago). "
+            "Si vas directo a producir, baja a la sección 🗓️ **Proyección de la semana**."
+        )
 
-        if st.button("Consultar AE06", type="primary"):
+        with st.expander("🔧 Debug AE06 — verificación puntual (opcional)", expanded=False):
+          if st.button("Consultar AE06", type="secondary", key="cp_debug_ae06"):
             _fi  = _cp_dt.date(2026, 3, 1)
             _ff  = _cp_dt.date(2026, 3, 31)
             _loc = 'Vitacura'
@@ -9860,9 +9867,10 @@ elif modulo.startswith("📊"):
         # ESTADISTICA DE OPCIONES POR DIA DE SEMANA  (capa diaria)
         # ──────────────────────────────────────────────────────────────
         st.markdown("---")
-        st.markdown("### 📅 Estadística de opciones por día de semana")
-        st.caption("Lee de la capa diaria `opciones_diarias`. Si el mes elegido no está cargado, "
-                   "usa primero **Actualizar mes en capa diaria**.")
+        st.markdown("## 📅 Vista A — Estadística por día de semana")
+        st.caption("Patrón semanal sobre el período del **sidebar**. Útil para ver el "
+                   "comportamiento Lun→Dom del mes. Lee de la capa diaria `opciones_diarias`; "
+                   "si el mes no está cargado, usa primero **Actualizar mes en capa diaria**.")
 
         if 'cp_platos_opts' not in st.session_state:
             _dpl = run_query("""
@@ -10133,38 +10141,74 @@ elif modulo.startswith("📊"):
         # Estima cuánto producir cada día de la próxima semana por local,
         # combinando el efecto finde (dow) con el efecto sueldo/adelanto (fase).
         # ══════════════════════════════════════════════════════════════
-        st.markdown("---")
-        st.markdown("## 🗓️ Proyección de la semana a producir — por fase de pago")
-        st.caption(
-            "Cruza **día de semana** con la **fase de pago chilena** (sueldo a inicio "
-            "de mes, adelanto el 15). Asigna a cada día de la semana objetivo su fase "
-            "real y proyecta unidades a producir. Días en que el local estuvo cerrado "
-            "no entran en el patrón. Lee de la capa diaria `opciones_diarias`."
-        )
-
         import datetime as _cp2_dt
 
-        # ── Muestra histórica: rango propio, independiente del sidebar ──
+        st.markdown("---")
+        st.markdown("## 🗓️ Vista B — Proyección de la semana a producir")
+        st.markdown(
+            "<div style='background:#15233a;border-left:4px solid #4caf7d;"
+            "padding:12px 16px;border-radius:6px;margin-bottom:8px'>"
+            "Estima <b>cuántas unidades producir cada día</b> de la semana, por local. "
+            "Combina el <b>efecto fin de semana</b> con el <b>efecto pago</b> en Chile "
+            "(sueldo a inicio de mes, adelanto el 15). Esta vista es autocontenida: "
+            "sigue los 3 pasos.</div>",
+            unsafe_allow_html=True
+        )
+
+        # ───────────────────────── PASO 1 ─────────────────────────
+        st.markdown("### 1️⃣ Elige y construye la muestra histórica")
+        st.caption(
+            "Define el rango de fechas pasadas con que se aprende el patrón "
+            "y constrúyelo en la base. Mientras más meses, más confiable "
+            "(recomendado: 2–3 meses)."
+        )
         _cp2_h1, _cp2_h2 = st.columns(2)
         with _cp2_h1:
             _cp2_mi = st.date_input(
-                "📆 Muestra histórica — Desde",
-                value=_cp2_dt.date(2026, 3, 1), key="cp2_muestra_i"
+                "Desde", value=_cp2_dt.date(2026, 3, 1), key="cp2_muestra_i"
             )
         with _cp2_h2:
             _cp2_mf = st.date_input(
-                "📆 Muestra histórica — Hasta",
-                value=_cp2_dt.date(2026, 3, 31), key="cp2_muestra_f"
+                "Hasta", value=_cp2_dt.date(2026, 3, 31), key="cp2_muestra_f"
             )
 
-        # ── Semana objetivo a producir (cualquier día dentro de ella) ──
-        _cp2_s1, _cp2_s2 = st.columns([1, 1])
-        with _cp2_s1:
+        # Estado de la muestra ya construida (si coincide con el rango elegido)
+        _cp2_built = st.session_state.get("cp2_built_range")
+        _cp2_is_built = (_cp2_built == (str(_cp2_mi), str(_cp2_mf)))
+        if _cp2_is_built:
+            st.success(f"✅ Muestra construida para {_cp2_mi} → {_cp2_mf}. Puedes proyectar (paso 3).")
+        else:
+            st.info("⚙️ Aún no has construido esta muestra. Pulsa el botón para dejar la base lista.")
+
+        if st.button("🏗️ Construir / actualizar muestra en la base",
+                     type=("secondary" if _cp2_is_built else "primary"),
+                     key="cp2_btn_build", use_container_width=True):
+            with st.spinner("Construyendo capa diaria de la muestra… (puede tardar en rangos largos)"):
+                _ok_b = refrescar_opciones_diarias(_cp2_mi, _cp2_mf)
+            if _ok_b:
+                st.session_state["cp2_built_range"] = (str(_cp2_mi), str(_cp2_mf))
+                st.session_state.pop("cp2_df", None)  # invalidar proyección previa
+                st.success("Muestra construida. Ahora configura y proyecta (pasos 2 y 3).")
+                st.rerun()
+            else:
+                st.error("No se pudo construir la muestra. Revisa la conexión a la base.")
+
+        st.markdown("")  # respiro vertical
+
+        # ───────────────────────── PASO 2 ─────────────────────────
+        st.markdown("### 2️⃣ Configura la proyección")
+        _cp2_c1, _cp2_c2 = st.columns(2)
+        with _cp2_c1:
             _cp2_ref = st.date_input(
                 "🎯 Semana a producir (elige cualquier día de esa semana)",
                 value=_cp2_dt.date.today(), key="cp2_semana_ref"
             )
-        with _cp2_s2:
+            _cp2_vista = st.radio(
+                "👁️ Vista",
+                ["📍 Local del sidebar", "🌐 Todos desglosado por local"],
+                key="cp2_vista"
+            )
+        with _cp2_c2:
             _cp2_crit_opts = {
                 "P75 · recomendado": "p75",
                 "P90 · minimiza quiebres": "p90",
@@ -10173,26 +10217,19 @@ elif modulo.startswith("📊"):
                 "Máximo histórico": "maximo",
             }
             _cp2_crit_lbl = st.selectbox(
-                "🎯 Criterio", list(_cp2_crit_opts.keys()), key="cp2_crit"
+                "📊 Criterio de producción", list(_cp2_crit_opts.keys()), key="cp2_crit"
+            )
+            _cp2_grupo = st.selectbox(
+                "🍽️ Grupo de opción",
+                ["Proteína"] + [g for g in BA_GRUPOS.keys() if g != "Proteína"] + ["Todos"],
+                key="cp2_grupo"
             )
         _cp2_crit = _cp2_crit_opts[_cp2_crit_lbl]
-
-        # Vista: local individual vs Todos desglosado
-        _cp2_vista = st.radio(
-            "Vista", ["📍 Local del sidebar", "🌐 Todos desglosado por local"],
-            horizontal=True, key="cp2_vista"
-        )
-        _cp2_grupo = st.selectbox(
-            "Grupo de opción",
-            ["Proteína"] + [g for g in BA_GRUPOS.keys() if g != "Proteína"] + ["Todos"],
-            key="cp2_grupo"
-        )
 
         # Lunes..Domingo de la semana objetivo
         _cp2_lun = _cp2_ref - _cp2_dt.timedelta(days=_cp2_ref.weekday())
         _cp2_dias_obj = [_cp2_lun + _cp2_dt.timedelta(days=k) for k in range(7)]
         _cp2_dow_nom = {1: 'Lun', 2: 'Mar', 3: 'Mié', 4: 'Jue', 5: 'Vie', 6: 'Sáb', 7: 'Dom'}
-        # (dow, fase, etiqueta_columna) para cada día de la semana objetivo
         _cp2_plan_dias = []
         for _d in _cp2_dias_obj:
             _dow = _d.isoweekday()
@@ -10201,15 +10238,20 @@ elif modulo.startswith("📊"):
                 "fecha": _d, "dow": _dow, "fase": _fase,
                 "col": f"{_cp2_dow_nom[_dow]} {_d.day:02d}",
             })
-
         st.caption(
-            "Semana objetivo: **"
+            "📅 Semana objetivo: **"
             + _cp2_dias_obj[0].strftime("%d-%m") + " → "
-            + _cp2_dias_obj[-1].strftime("%d-%m-%Y") + "**  ·  "
-            "cada día usa su propia fase de pago."
+            + _cp2_dias_obj[-1].strftime("%d-%m-%Y")
+            + "** · cada día usa su propia fase de pago."
         )
 
-        if st.button("📊 Proyectar semana", type="primary", key="cp2_btn"):
+        st.markdown("")  # respiro vertical
+
+        # ───────────────────────── PASO 3 ─────────────────────────
+        st.markdown("### 3️⃣ Proyecta")
+        if st.button("📊 Proyectar semana", type="primary",
+                     key="cp2_btn", use_container_width=True,
+                     disabled=not _cp2_is_built):
             _cp2_local_q = f_local if _cp2_vista.startswith("📍") else "Todos"
             with st.spinner("Calculando patrón día-semana × fase de pago…"):
                 _cp2_df = get_estadisticas_cp2(
@@ -10218,8 +10260,8 @@ elif modulo.startswith("📊"):
             if _cp2_df is None or _cp2_df.empty:
                 st.session_state.pop("cp2_df", None)
                 st.warning(
-                    "Sin datos en la capa diaria para esa muestra. Usa primero "
-                    "**🔄 Actualizar mes en capa diaria** (sección de arriba) para el rango."
+                    "Sin datos para esa muestra/local. Vuelve al paso 1 y "
+                    "**construye la muestra** para este rango."
                 )
             else:
                 st.session_state["cp2_df"] = _cp2_df.reset_index(drop=True)
@@ -10227,6 +10269,9 @@ elif modulo.startswith("📊"):
                     "mi": str(_cp2_mi), "mf": str(_cp2_mf),
                     "vista": _cp2_vista, "local": _cp2_local_q,
                 }
+        if not _cp2_is_built:
+            st.caption("🔒 Primero construye la muestra en el paso 1 para habilitar la proyección.")
+
 
         # ── Render proyección (persistente: cambiar criterio no recalcula BD) ──
         if "cp2_df" in st.session_state and not st.session_state["cp2_df"].empty:
