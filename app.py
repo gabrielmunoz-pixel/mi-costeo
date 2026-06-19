@@ -2011,6 +2011,43 @@ def get_estadisticas_cp2(fecha_i, fecha_f, local="Todos",
     return df
 
 
+def get_dias_operativos_cp2(fecha_i, fecha_f, local="Todos"):
+    """
+    Cuenta los DÍAS-CALENDARIO reales por (local, día de semana, fase de pago)
+    en la muestra. Es el denominador de confianza correcto: cuántos 'lunes-Sueldo'
+    (etc.) ocurrieron realmente, INDEPENDIENTE del SKU vendido ese día.
+
+    A diferencia de n_dias de get_estadisticas_cp2 (que cuenta por sku_opcion),
+    aquí se cuentan fechas distintas en que el local operó, que es lo que da
+    soporte estadístico a la proyección.
+
+    Devuelve dict {(local, dow, fase): n_dias_calendario}.
+    """
+    params = {"i": str(fecha_i), "f": str(fecha_f)}
+    f_loc = ""
+    if local and local != "Todos":
+        f_loc = "AND UPPER(local) = UPPER(:l)"
+        params["l"] = local
+    fase_d = _CP2_FASE_SQL.format(col="fecha_venta")
+    q = f"""
+        SELECT local,
+               EXTRACT(ISODOW FROM fecha_venta)::int AS dow,
+               {fase_d} AS fase,
+               COUNT(DISTINCT fecha_venta) AS n_dias
+        FROM opciones_diarias
+        WHERE fecha_venta BETWEEN :i AND :f
+          {f_loc}
+        GROUP BY local, EXTRACT(ISODOW FROM fecha_venta)::int, {fase_d}
+    """
+    df = run_query(q, params)
+    if df is None or df.empty:
+        return {}
+    out = {}
+    for _, r in df.iterrows():
+        out[(r["local"], int(r["dow"]), int(r["fase"]))] = int(r["n_dias"])
+    return out
+
+
 
 
 
@@ -10264,6 +10301,9 @@ elif modulo.startswith("📊"):
                 )
             else:
                 st.session_state["cp2_df"] = _cp2_df.reset_index(drop=True)
+                st.session_state["cp2_dias_op"] = get_dias_operativos_cp2(
+                    _cp2_mi, _cp2_mf, local=_cp2_local_q
+                )
                 st.session_state["cp2_meta"] = {
                     "mi": str(_cp2_mi), "mf": str(_cp2_mf),
                     "vista": _cp2_vista, "local": _cp2_local_q,
@@ -10309,14 +10349,10 @@ elif modulo.startswith("📊"):
                 # Fallback por (local, etiqueta, dow) ignorando fase, si falta la celda exacta
                 _cp2_look_dow = (_cp2_df.groupby(["local", "etiqueta", "dow"])["_base"]
                                  .mean().to_dict())
-                # Lookup de N° de días observados por celda (nivel de confianza).
-                # Tomamos el máx n_dias entre las opciones que componen la etiqueta:
-                # representa cuántos días reales (dow+fase) sustentan la estimación.
-                _cp2_df["_ndias"] = pd.to_numeric(_cp2_df["n_dias"], errors="coerce").fillna(0)
-                _cp2_look_n = (_cp2_df.groupby(["local", "etiqueta", "dow", "fase"])["_ndias"]
-                               .max().to_dict())
-                _cp2_look_n_dow = (_cp2_df.groupby(["local", "etiqueta", "dow"])["_ndias"]
-                                   .max().to_dict())
+                # Nivel de confianza = días-calendario reales por (local, dow, fase).
+                # NO depende del SKU: cuenta cuántos 'lunes-Sueldo' (etc.) hubo en la
+                # muestra, que es lo que da soporte estadístico a la proyección.
+                _cp2_dias_op = st.session_state.get("cp2_dias_op", {})
 
                 # Umbrales de confianza por nº de días observados
                 def _cp2_conf(n):
@@ -10329,10 +10365,10 @@ elif modulo.startswith("📊"):
                     return ("⚪", "Sin dato")
 
                 def _cp2_ndias_celda(_loc, _etq, _dia):
-                    n = _cp2_look_n.get((_loc, _etq, _dia["dow"], _dia["fase"]))
-                    if n is None:
-                        n = _cp2_look_n_dow.get((_loc, _etq, _dia["dow"]))
-                    return int(n) if n and not (isinstance(n, float) and _cp2_math.isnan(n)) else 0
+                    # La confianza depende del local/dow/fase, no de la proteína:
+                    # son los días reales en que el local operó ese dow+fase.
+                    n = _cp2_dias_op.get((_loc, _dia["dow"], _dia["fase"]))
+                    return int(n) if n else 0
 
                 _cp2_locales = sorted(_cp2_df["local"].dropna().unique().tolist())
                 _cp2_etqs = (_cp2_df.groupby("etiqueta")["_base"].sum()
@@ -10448,21 +10484,23 @@ elif modulo.startswith("📊"):
                         + ". Conviene criterio más alto (P90) o dejar buffer."
                     )
 
-                # Alerta global de confianza: si la mayoría de celdas tienen 1 solo día,
-                # la muestra es corta y conviene ampliar el rango histórico.
-                _n_serie = pd.to_numeric(_cp2_df["n_dias"], errors="coerce").fillna(0)
-                _pct_bajo = (_n_serie <= 1).mean() * 100 if len(_n_serie) else 0
+                # Alerta global de confianza: basada en los DÍAS OPERATIVOS reales
+                # por (local, dow, fase), no en n_dias por SKU (que siempre es bajo
+                # porque un SKU puntual no se vende todos los días).
+                _vals_op = list(_cp2_dias_op.values())
+                _pct_bajo = (sum(1 for v in _vals_op if v <= 1) / len(_vals_op) * 100
+                             if _vals_op else 0)
                 if _pct_bajo >= 50:
                     st.error(
                         f"🔴 Confianza baja: {_pct_bajo:.0f}% de las combinaciones "
-                        "(día × fase) se calcularon con un solo día. Para estimaciones "
-                        "fiables, amplía la muestra histórica a 2-3 meses en el paso 1 "
-                        "y reconstruye."
+                        "(día × fase) ocurrieron un solo día en la muestra. Para "
+                        "estimaciones fiables, amplía la muestra a 2-3 meses en el "
+                        "paso 1 y reconstruye."
                     )
                 elif _pct_bajo >= 25:
                     st.warning(
                         f"🟡 Confianza media: {_pct_bajo:.0f}% de las combinaciones "
-                        "tienen pocos días. Considera ampliar la muestra histórica."
+                        "ocurrieron pocos días. Considera ampliar la muestra histórica."
                     )
 
                 with st.expander("📋 Detalle patrón día-semana × fase (todas las métricas)"):
@@ -10478,13 +10516,19 @@ elif modulo.startswith("📊"):
                                 ["local", "dow", "fase", "promedio"],
                                 ascending=[True, True, True, False])
                             [_cols_ok].rename(columns=_cp2_vcols))
-                    # Columna de confianza derivada de N° días
-                    if "N° días" in _det.columns:
-                        _det.insert(
-                            _det.columns.get_loc("N° días") + 1, "Confianza",
-                            _det["N° días"].map(
-                                lambda n: "%s %s" % _cp2_conf(int(n) if pd.notna(n) else 0))
-                        )
+                    # Días operativos reales por (local, dow, fase) y su confianza.
+                    # (Distinto de 'N° días', que es por SKU.)
+                    _det_src = _cp2_df.sort_values(
+                        ["local", "dow", "fase", "promedio"],
+                        ascending=[True, True, True, False])
+                    _dias_op_col = [
+                        _cp2_dias_op.get((r["local"], int(r["dow"]), int(r["fase"])), 0)
+                        for _, r in _det_src.iterrows()
+                    ]
+                    _det["Días op."] = _dias_op_col
+                    _det["Confianza"] = [
+                        "%s %s" % _cp2_conf(n) for n in _dias_op_col
+                    ]
                     st.dataframe(_det, use_container_width=True, hide_index=True)
                     st.download_button(
                         "📥 Detalle patrón (CSV)",
