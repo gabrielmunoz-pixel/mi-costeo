@@ -2048,6 +2048,23 @@ def get_dias_operativos_cp2(fecha_i, fecha_f, local="Todos"):
     return out
 
 
+def get_cobertura_cp2():
+    """
+    Rango real de datos en la capa opciones_diarias: (fecha_min, fecha_max, n_dias).
+    Sirve para proyectar sobre TODO el histórico disponible por defecto.
+    Devuelve (None, None, 0) si la capa está vacía.
+    """
+    df = run_query("""
+        SELECT MIN(fecha_venta) AS fmin,
+               MAX(fecha_venta) AS fmax,
+               COUNT(DISTINCT fecha_venta) AS n
+        FROM opciones_diarias
+    """)
+    if df is None or df.empty or pd.isna(df["fmin"].iloc[0]):
+        return (None, None, 0)
+    return (df["fmin"].iloc[0], df["fmax"].iloc[0], int(df["n"].iloc[0]))
+
+
 
 
 
@@ -10186,48 +10203,72 @@ elif modulo.startswith("📊"):
             "padding:12px 16px;border-radius:6px;margin-bottom:8px'>"
             "Estima <b>cuántas unidades producir cada día</b> de la semana, por local. "
             "Combina el <b>efecto fin de semana</b> con el <b>efecto pago</b> en Chile "
-            "(sueldo a inicio de mes, adelanto el 15). Esta vista es autocontenida: "
-            "sigue los 3 pasos.</div>",
+            "(sueldo a inicio de mes, adelanto el 15). Por defecto usa "
+            "<b>todo el histórico</b> disponible.</div>",
             unsafe_allow_html=True
         )
 
         # ───────────────────────── PASO 1 ─────────────────────────
-        st.markdown("### 1️⃣ Elige y construye la muestra histórica")
-        st.caption(
-            "Define el rango de fechas pasadas con que se aprende el patrón "
-            "y constrúyelo en la base. Mientras más meses, más confiable "
-            "(recomendado: 2–3 meses)."
-        )
-        _cp2_h1, _cp2_h2 = st.columns(2)
-        with _cp2_h1:
-            _cp2_mi = st.date_input(
-                "Desde", value=_cp2_dt.date(2026, 3, 1), key="cp2_muestra_i"
-            )
-        with _cp2_h2:
-            _cp2_mf = st.date_input(
-                "Hasta", value=_cp2_dt.date(2026, 3, 31), key="cp2_muestra_f"
-            )
+        st.markdown("### 1️⃣ Muestra histórica")
 
-        # Estado de la muestra ya construida (si coincide con el rango elegido)
-        _cp2_built = st.session_state.get("cp2_built_range")
-        _cp2_is_built = (_cp2_built == (str(_cp2_mi), str(_cp2_mf)))
-        if _cp2_is_built:
-            st.success(f"✅ Muestra construida para {_cp2_mi} → {_cp2_mf}. Puedes proyectar (paso 3).")
+        # Detectar el rango real de datos en la capa diaria
+        _cob_min, _cob_max, _cob_n = get_cobertura_cp2()
+
+        if _cob_n == 0:
+            st.warning(
+                "⚙️ La capa diaria está vacía. Construye al menos un rango para empezar."
+            )
         else:
-            st.info("⚙️ Aún no has construido esta muestra. Pulsa el botón para dejar la base lista.")
+            st.success(
+                f"✅ Histórico disponible: **{_cob_min} → {_cob_max}** "
+                f"({_cob_n} días cargados). Por defecto se proyecta sobre **todo** esto."
+            )
 
-        if st.button("🏗️ Construir / actualizar muestra en la base",
-                     type=("secondary" if _cp2_is_built else "primary"),
-                     key="cp2_btn_build", use_container_width=True):
-            with st.spinner("Construyendo capa diaria de la muestra… (puede tardar en rangos largos)"):
-                _ok_b = refrescar_opciones_diarias(_cp2_mi, _cp2_mf)
-            if _ok_b:
-                st.session_state["cp2_built_range"] = (str(_cp2_mi), str(_cp2_mf))
-                st.session_state.pop("cp2_df", None)  # invalidar proyección previa
-                st.success("Muestra construida. Ahora configura y proyecta (pasos 2 y 3).")
-                st.rerun()
-            else:
-                st.error("No se pudo construir la muestra. Revisa la conexión a la base.")
+        # Por defecto: todo el histórico. Opcionalmente, acotar.
+        _cp2_acotar = st.checkbox(
+            "🎯 Acotar a un rango específico (por defecto usa todo el histórico)",
+            value=False, key="cp2_acotar"
+        )
+        if _cp2_acotar and _cob_n > 0:
+            _cp2_h1, _cp2_h2 = st.columns(2)
+            with _cp2_h1:
+                _cp2_mi = st.date_input("Desde", value=_cob_min, key="cp2_muestra_i")
+            with _cp2_h2:
+                _cp2_mf = st.date_input("Hasta", value=_cob_max, key="cp2_muestra_f")
+        else:
+            # Todo el histórico disponible
+            _cp2_mi = _cob_min
+            _cp2_mf = _cob_max
+
+        # Construcción/actualización de la capa (incorporar meses nuevos)
+        with st.expander("🏗️ Construir / actualizar datos en la base (incorporar meses nuevos)"):
+            st.caption(
+                "Usa esto solo para cargar meses que aún no estén en la capa. "
+                "Es acumulativo: no borra los meses ya construidos (salvo que se solapen). "
+                "Construir todo el histórico no es necesario para proyectar."
+            )
+            _bc1, _bc2 = st.columns(2)
+            with _bc1:
+                _cp2_build_i = st.date_input(
+                    "Construir desde", value=_cp2_dt.date(_cp2_dt.date.today().year, 1, 1),
+                    key="cp2_build_i"
+                )
+            with _bc2:
+                _cp2_build_f = st.date_input(
+                    "Construir hasta", value=_cp2_dt.date.today(), key="cp2_build_f"
+                )
+            if st.button("🏗️ Construir / actualizar", key="cp2_btn_build",
+                         use_container_width=True):
+                with st.spinner("Construyendo capa diaria… (puede tardar en rangos largos)"):
+                    _ok_b = refrescar_opciones_diarias(_cp2_build_i, _cp2_build_f)
+                if _ok_b:
+                    st.session_state.pop("cp2_df", None)  # invalidar proyección previa
+                    st.success("Capa actualizada. Vuelve arriba y proyecta.")
+                    st.rerun()
+                else:
+                    st.error("No se pudo construir. Revisa la conexión a la base.")
+
+        _cp2_has_data = (_cob_n > 0 and _cp2_mi is not None and _cp2_mf is not None)
 
         st.markdown("")  # respiro vertical
 
@@ -10285,9 +10326,14 @@ elif modulo.startswith("📊"):
 
         # ───────────────────────── PASO 3 ─────────────────────────
         st.markdown("### 3️⃣ Proyecta")
+        if _cp2_acotar:
+            st.caption(f"Proyectando sobre rango acotado: **{_cp2_mi} → {_cp2_mf}**")
+        else:
+            st.caption(f"Proyectando sobre **todo el histórico**: {_cp2_mi} → {_cp2_mf}")
+
         if st.button("📊 Proyectar semana", type="primary",
                      key="cp2_btn", use_container_width=True,
-                     disabled=not _cp2_is_built):
+                     disabled=not _cp2_has_data):
             _cp2_local_q = f_local if _cp2_vista.startswith("📍") else "Todos"
             with st.spinner("Calculando patrón día-semana × fase de pago…"):
                 _cp2_df = get_estadisticas_cp2(
@@ -10296,8 +10342,7 @@ elif modulo.startswith("📊"):
             if _cp2_df is None or _cp2_df.empty:
                 st.session_state.pop("cp2_df", None)
                 st.warning(
-                    "Sin datos para esa muestra/local. Vuelve al paso 1 y "
-                    "**construye la muestra** para este rango."
+                    "Sin datos para esa muestra/local. Construye datos en el paso 1."
                 )
             else:
                 st.session_state["cp2_df"] = _cp2_df.reset_index(drop=True)
@@ -10308,8 +10353,8 @@ elif modulo.startswith("📊"):
                     "mi": str(_cp2_mi), "mf": str(_cp2_mf),
                     "vista": _cp2_vista, "local": _cp2_local_q,
                 }
-        if not _cp2_is_built:
-            st.caption("🔒 Primero construye la muestra en el paso 1 para habilitar la proyección.")
+        if not _cp2_has_data:
+            st.caption("🔒 No hay datos en la capa. Construye un rango en el paso 1.")
 
 
         # ── Render proyección (persistente: cambiar criterio no recalcula BD) ──
