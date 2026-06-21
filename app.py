@@ -10857,9 +10857,10 @@ elif modulo.startswith("📊"):
         st.markdown(
             "<div style='background:#15233a;border-left:4px solid #4caf7d;"
             "padding:12px 16px;border-radius:6px;margin-bottom:8px'>"
-            "Cruza <b>colaciones servidas</b> (ventas categoría Colación, Salón) contra "
-            "<b>turnos trabajados</b> (asistencia RRHH). El ratio <b>colaciones por turno</b> "
-            "alto puede indicar fuga: más comidas que personal que trabajó.</div>",
+            "Cruza <b>colaciones servidas</b> (platos CP: completas CPC + proteínas CPP) "
+            "contra <b>turnos trabajados</b> (asistencia RRHH). El ratio "
+            "<b>colaciones por turno</b> alto puede indicar fuga: más comidas que "
+            "personal que trabajó.</div>",
             unsafe_allow_html=True
         )
 
@@ -10882,18 +10883,19 @@ elif modulo.startswith("📊"):
             _cr_params = {"fi": str(_cr_fi), "ff": str(_cr_ff)}
 
             # ── Numerador: colaciones servidas por local (y por día) ──
-            _CR_CATS = (
-                "'ACOMPANAMIENTO ALMUERZO','ENSALADAS ALMUERZO','PROTEINA ALMUERZO',"
-                "'Proteina Almuerzo','Menu Ejecutivo','Menú Ejecutivo','Colacion','Colación'"
-            )
-            _cr_col = run_query(f"""
+            # Una colación = un plato principal. Dos formas de pedirla:
+            #   CPC% = colación completa (plato ya armado) → 1 c/u
+            #   CPP% = proteína, plato principal de la colación "armada" → 1 c/u
+            # CPA% (acompañamiento) y CPE% (ensalada) son guarniciones de la
+            # colación armada y NO se cuentan (evita doble conteo). Validado:
+            # no existen órdenes con CPA/CPE sin CPP (armada_sin_proteina = 0).
+            _cr_col = run_query("""
                 SELECT local, fecha_venta AS fecha,
                        SUM(cantidad_vendida) AS colaciones
                 FROM ventas
                 WHERE fecha_venta BETWEEN :fi AND :ff
-                  AND es_opcion = false
-                  AND (origen IS NULL OR origen = '')
-                  AND categoria_menu IN ({_CR_CATS})
+                  AND (UPPER(sku_producto) LIKE 'CPC%'
+                       OR UPPER(sku_producto) LIKE 'CPP%')
                   AND local IS NOT NULL
                 GROUP BY local, fecha_venta
             """, _cr_params)
