@@ -3639,10 +3639,14 @@ _ALIVA_RUT_LOCAL = {
 
 # ============================================================
 # PDF COLACIONES RRHH — informe por local y resumen empresa
-# Comparación adaptativa: si el rango abarca ≥2 meses calendario
-# compara mes a mes; si no, compara semana a semana (ISO).
-# Métricas: colaciones/turno y colaciones/persona.
+# Comparación adaptativa: ≥2 meses → mes a mes; si no → semana a semana.
+# Análisis real: cada local clasificado por cruce de métricas (caso A/B/C/D),
+# umbral de alerta col/turno = 2.0, gráficos incrustados, conclusiones que
+# varían según magnitud. Métricas: colaciones/turno y colaciones/persona.
 # ============================================================
+_CR_UMBRAL_CT = 2.0   # col/turno sobre el cual un local entra en alerta
+
+
 def _cr_detectar_modo(fi, ff):
     """Devuelve 'mes' si el rango cubre ≥2 meses calendario; si no 'semana'."""
     import datetime as _dt
@@ -3664,31 +3668,17 @@ def _cr_periodo_label(d, modo):
 
 
 def _cr_armar_comparativo(df_col, df_tur, df_pers_dia, modo):
-    """
-    Agrupa colaciones, turnos y personas por (local, período) según el modo.
-    df_col: local, fecha, colaciones
-    df_tur: local, fecha, turnos
-    df_pers_dia: local, fecha, rut  (para contar personas distintas por período)
-    Devuelve DataFrame: local, periodo, colaciones, turnos, personas,
-                        col_x_turno, col_x_persona
-    """
+    """Agrupa por (local, período): colaciones, turnos, personas + ambas métricas."""
     import pandas as _pd
     def _per(d):
         return _cr_periodo_label(d, modo)
-
-    _c = df_col.copy()
-    _c["periodo"] = _c["fecha"].apply(_per)
+    _c = df_col.copy(); _c["periodo"] = _c["fecha"].apply(_per)
     _c = _c.groupby(["local", "periodo"])["colaciones"].sum().reset_index()
-
-    _t = df_tur.copy()
-    _t["periodo"] = _t["fecha"].apply(_per)
+    _t = df_tur.copy(); _t["periodo"] = _t["fecha"].apply(_per)
     _t = _t.groupby(["local", "periodo"])["turnos"].sum().reset_index()
-
-    _p = df_pers_dia.copy()
-    _p["periodo"] = _p["fecha"].apply(_per)
+    _p = df_pers_dia.copy(); _p["periodo"] = _p["fecha"].apply(_per)
     _p = _p.groupby(["local", "periodo"])["rut"].nunique().reset_index()
     _p.columns = ["local", "periodo", "personas"]
-
     _m = _t.merge(_c, on=["local", "periodo"], how="left").merge(
         _p, on=["local", "periodo"], how="left")
     _m["colaciones"] = _m["colaciones"].fillna(0)
@@ -3696,6 +3686,107 @@ def _cr_armar_comparativo(df_col, df_tur, df_pers_dia, modo):
     _m["col_x_turno"] = (_m["colaciones"] / _m["turnos"].replace(0, _pd.NA)).round(2)
     _m["col_x_persona"] = (_m["colaciones"] / _m["personas"].replace(0, _pd.NA)).round(2)
     return _m
+
+
+def _cr_clasificar(ct, cp, cp_red):
+    """Cruza col/turno (vs umbral 2.0) con col/persona (vs red) → caso A/B/C/D."""
+    import pandas as _pd
+    if _pd.isna(ct):
+        return ("—", "Sin datos suficientes.")
+    ct_alto = ct > _CR_UMBRAL_CT
+    cp_alto = (not _pd.isna(cp)) and cp_red and cp > cp_red * 1.2
+    if ct_alto and cp_alto:
+        return ("A", "Consumo elevado y generalizado: tanto las colaciones por jornada "
+                "como por persona superan lo esperado. Apunta a una política de doble "
+                "comida o a sobreconsumo extendido en toda la dotación.")
+    if (not ct_alto) and cp_alto:
+        return ("B", "Concentración: el consumo por jornada es normal, pero pocas "
+                "personas acumulan muchas colaciones. Revisar si un grupo reducido "
+                "carga colaciones por sobre el resto.")
+    if ct_alto and (not cp_alto):
+        return ("C", "Desbalance turnos/colaciones: hay muchas colaciones por jornada "
+                "pero repartidas entre la dotación. Más probable un sub-registro de "
+                "turnos de asistencia que un sobreconsumo real.")
+    return ("D", "Dentro de lo esperado: consumo por jornada y por persona en rango "
+            "normal respecto a la red.")
+
+
+def _cr_chart_barras(comp, periodo, pal_hex):
+    """Gráfico de barras: ranking de locales por col/turno en un período. Devuelve PNG bytes."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import io as _io, pandas as _pd
+    sub = comp[comp["periodo"] == periodo].dropna(subset=["col_x_turno"]).sort_values("col_x_turno")
+    if sub.empty:
+        return None
+    fig, ax = plt.subplots(figsize=(7.2, max(2.2, 0.42 * len(sub))), dpi=130)
+    colores = ["#e84545" if v > _CR_UMBRAL_CT else "#4caf7d" for v in sub["col_x_turno"]]
+    ax.barh(sub["local"], sub["col_x_turno"], color=colores)
+    ax.axvline(_CR_UMBRAL_CT, color="#d4a853", ls="--", lw=1.2, label=f"Umbral {_CR_UMBRAL_CT}")
+    for i, v in enumerate(sub["col_x_turno"]):
+        ax.text(v + 0.03, i, f"{v:.2f}", va="center", fontsize=8, color="#222")
+    ax.set_xlabel("Colaciones por turno", fontsize=9)
+    ax.set_title(f"Ranking por local — {periodo}", fontsize=10, color="#1a1a1a")
+    ax.legend(fontsize=8, loc="lower right")
+    ax.spines[["top", "right"]].set_visible(False)
+    plt.tight_layout()
+    b = _io.BytesIO(); fig.savefig(b, format="png", bbox_inches="tight"); plt.close(fig)
+    b.seek(0); return b.getvalue()
+
+
+def _cr_chart_lineas(comp, periodos):
+    """Gráfico de líneas: evolución de col/turno por local entre períodos. PNG bytes."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import io as _io
+    if len(periodos) < 2:
+        return None
+    fig, ax = plt.subplots(figsize=(7.2, 3.4), dpi=130)
+    for loc in sorted(comp["local"].unique()):
+        sub = comp[comp["local"] == loc].set_index("periodo").reindex(periodos)
+        ax.plot(periodos, sub["col_x_turno"], marker="o", lw=1.4, label=loc, markersize=4)
+    ax.axhline(_CR_UMBRAL_CT, color="#d4a853", ls="--", lw=1.2)
+    ax.set_ylabel("Colaciones por turno", fontsize=9)
+    ax.set_title("Evolución por local entre períodos", fontsize=10, color="#1a1a1a")
+    ax.legend(fontsize=7, ncol=2, loc="best")
+    ax.spines[["top", "right"]].set_visible(False)
+    plt.tight_layout()
+    b = _io.BytesIO(); fig.savefig(b, format="png", bbox_inches="tight"); plt.close(fig)
+    b.seek(0); return b.getvalue()
+
+
+def _cr_chart_dispersion(comp, periodo, cp_red):
+    """Dispersión col/turno (x) vs col/persona (y), cuadrantes A/B/C/D. PNG bytes."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import io as _io, pandas as _pd
+    sub = comp[comp["periodo"] == periodo].dropna(subset=["col_x_turno", "col_x_persona"])
+    if sub.empty:
+        return None
+    fig, ax = plt.subplots(figsize=(7.2, 4.6), dpi=130)
+    ax.scatter(sub["col_x_turno"], sub["col_x_persona"], s=60, color="#1a1a1a", zorder=3)
+    for _, r in sub.iterrows():
+        ax.annotate(r["local"], (r["col_x_turno"], r["col_x_persona"]),
+                    fontsize=7, xytext=(4, 4), textcoords="offset points")
+    ax.axvline(_CR_UMBRAL_CT, color="#d4a853", ls="--", lw=1.1)
+    cp_lim = cp_red * 1.2 if cp_red else sub["col_x_persona"].median()
+    ax.axhline(cp_lim, color="#d4a853", ls="--", lw=1.1)
+    # etiquetas de cuadrante
+    xr = ax.get_xlim(); yr = ax.get_ylim()
+    ax.text(xr[1], yr[1], "A", fontsize=13, color="#e84545", ha="right", va="top", weight="bold")
+    ax.text(xr[0], yr[1], "B", fontsize=13, color="#d4a853", ha="left", va="top", weight="bold")
+    ax.text(xr[1], yr[0], "C", fontsize=13, color="#d4a853", ha="right", va="bottom", weight="bold")
+    ax.text(xr[0], yr[0], "D", fontsize=13, color="#4caf7d", ha="left", va="bottom", weight="bold")
+    ax.set_xlabel("Colaciones por turno", fontsize=9)
+    ax.set_ylabel("Colaciones por persona", fontsize=9)
+    ax.set_title(f"Cruce de métricas — {periodo}", fontsize=10, color="#1a1a1a")
+    ax.spines[["top", "right"]].set_visible(False)
+    plt.tight_layout()
+    b = _io.BytesIO(); fig.savefig(b, format="png", bbox_inches="tight"); plt.close(fig)
+    b.seek(0); return b.getvalue()
 
 
 def _cr_pdf_base():
@@ -3708,316 +3799,401 @@ def _cr_pdf_base():
                                     Spacer, HRFlowable, PageBreak)
     from reportlab.platypus import Image as RLImage
     from reportlab.lib.styles import ParagraphStyle
-    from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
+    from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT, TA_JUSTIFY
     pal = dict(
-        CB=rc.HexColor('#0d0d0d'), CG=rc.HexColor('#d4a853'), CT=rc.HexColor('#f0ede8'),
-        CM=rc.HexColor('#666666'), CR=rc.HexColor('#e84545'), CGr=rc.HexColor('#4caf7d'),
-        CY=rc.HexColor('#d4a853'), CBo=rc.HexColor('#2a2a2a'), CP=rc.HexColor('#1a1a1a'),
+        CB=rc.HexColor('#1a1a1a'), CG=rc.HexColor('#b8860b'), CT=rc.HexColor('#1a1a1a'),
+        CM=rc.HexColor('#444444'), CR=rc.HexColor('#c0392b'), CGr=rc.HexColor('#2e7d52'),
+        CY=rc.HexColor('#9a6a00'), CBo=rc.HexColor('#cccccc'), CHd=rc.HexColor('#1a1a1a'),
+        CHdT=rc.HexColor('#d4a853'), CRowAlt=rc.HexColor('#f5f2ec'),
     )
     return dict(os=os, A4=A4, rc=rc, mm=mm, SimpleDocTemplate=SimpleDocTemplate,
                 Table=Table, TableStyle=TableStyle, Paragraph=Paragraph, Spacer=Spacer,
                 HRFlowable=HRFlowable, PageBreak=PageBreak, RLImage=RLImage,
                 ParagraphStyle=ParagraphStyle, TA_LEFT=TA_LEFT, TA_CENTER=TA_CENTER,
-                TA_RIGHT=TA_RIGHT, pal=pal)
+                TA_RIGHT=TA_RIGHT, TA_JUSTIFY=TA_JUSTIFY, pal=pal)
+
+
+def _cr_img_flow(png_bytes, R, ancho_mm=170):
+    """Convierte PNG bytes en un flowable Image escalado al ancho dado."""
+    import io as _io
+    if not png_bytes:
+        return R["Spacer"](1, 1)
+    from reportlab.lib.utils import ImageReader
+    ir = ImageReader(_io.BytesIO(png_bytes))
+    iw, ih = ir.getSize()
+    w = ancho_mm * R["mm"]
+    h = w * ih / iw
+    return R["RLImage"](_io.BytesIO(png_bytes), width=w, height=h)
 
 
 def _cr_metodologia_flow(R, modo, fi, ff):
-    """Bloque de metodología compartido (qué se cuenta y cómo)."""
     mm = R["mm"]; pal = R["pal"]; Paragraph = R["Paragraph"]; Spacer = R["Spacer"]
-    PS = R["ParagraphStyle"]; TA_LEFT = R["TA_LEFT"]
-    def s(sz, col, bold=False, align=TA_LEFT):
+    PS = R["ParagraphStyle"]; TA_LEFT = R["TA_LEFT"]; TA_JUSTIFY = R["TA_JUSTIFY"]
+    def s(sz, col, bold=False, align=TA_JUSTIFY):
         return PS('_', fontSize=sz, textColor=col,
                   fontName='Helvetica-Bold' if bold else 'Helvetica',
-                  alignment=align, leading=sz*1.35)
-    cmp_txt = ("mes a mes" if modo == "mes" else "semana a semana")
-    flow = [
-        Paragraph("METODOLOGÍA", s(11, pal["CG"], bold=True)),
+                  alignment=align, leading=sz*1.4)
+    cmp_txt = "mes a mes" if modo == "mes" else "semana a semana"
+    return [
+        Paragraph("METODOLOGÍA", s(11, pal["CG"], bold=True, align=TA_LEFT)),
         Spacer(1, 2*mm),
         Paragraph(
             f"<b>Período analizado:</b> {fi} al {ff}. Como el rango "
             f"{'abarca dos o más meses' if modo=='mes' else 'es menor a dos meses'}, "
-            f"la comparación se realiza <b>{cmp_txt}</b>.", s(8.5, pal["CT"])),
-        Spacer(1, 2*mm),
-        Paragraph("<b>Qué se contabiliza como colación:</b>", s(8.5, pal["CT"])),
+            f"la comparación se realiza <b>{cmp_txt}</b>.", s(9, pal["CT"])),
+        Spacer(1, 1.5*mm),
         Paragraph(
-            "Se cuentan los platos principales de colación del personal, identificados "
-            "por código de venta: <b>CPC</b> (colación completa, plato ya armado) y "
-            "<b>CPP</b> (proteína, plato principal de la colación armada). Los "
-            "acompañamientos (CPA) y ensaladas (CPE) son guarniciones de la colación "
-            "armada y no se cuentan, para evitar el doble conteo. Cada unidad vendida "
-            "de CPC o CPP equivale a una colación servida.", s(8, pal["CM"])),
-        Spacer(1, 2*mm),
-        Paragraph("<b>Cómo se calculan los indicadores:</b>", s(8.5, pal["CT"])),
+            "<b>Qué se cuenta como colación:</b> platos principales del personal por "
+            "código de venta CPC (colación completa) y CPP (proteína de la colación "
+            "armada). Acompañamientos (CPA) y ensaladas (CPE) se excluyen por ser "
+            "guarnición, evitando el doble conteo. Cada unidad de CPC o CPP = una colación.",
+            s(8.5, pal["CM"])),
+        Spacer(1, 1.5*mm),
         Paragraph(
-            "• <b>Turnos trabajados:</b> registros de asistencia con horas &gt; 0 "
-            "(un turno = una persona que trabajó un día).<br/>"
-            "• <b>Personas:</b> trabajadores distintos (RUT) que trabajaron en el período.<br/>"
-            "• <b>Colaciones por turno</b> = colaciones servidas ÷ turnos trabajados.<br/>"
-            "• <b>Colaciones por persona</b> = colaciones servidas ÷ personas distintas.",
-            s(8, pal["CM"])),
-        Spacer(1, 2*mm),
+            f"<b>Indicadores:</b> <b>Colaciones por turno</b> = colaciones ÷ turnos "
+            f"trabajados (jornadas con horas&gt;0). <b>Colaciones por persona</b> = "
+            f"colaciones ÷ trabajadores distintos. Un local entra en <b>alerta</b> cuando "
+            f"supera <b>{_CR_UMBRAL_CT:.1f} colaciones por turno</b> (equivalente a más de "
+            f"almuerzo y cena por jornada).", s(8.5, pal["CM"])),
+        Spacer(1, 1.5*mm),
         Paragraph(
-            "<b>Interpretación:</b> un ratio de colaciones por turno cercano a 1 indica "
-            "aproximadamente una colación por turno trabajado. Valores altos pueden "
-            "reflejar más de una comida por turno (almuerzo y cena) o, si son anómalos "
-            "respecto al resto, posibles colaciones registradas que no corresponden a "
-            "personal efectivamente presente (fuga).", s(8, pal["CM"])),
+            "<b>Cruce de métricas:</b> combinar ambas distingue el tipo de situación — "
+            "<b>A</b> consumo elevado generalizado, <b>B</b> pocas personas concentran el "
+            "consumo, <b>C</b> desbalance que sugiere sub-registro de turnos, <b>D</b> "
+            "normal. Esto evita tratar igual a locales con causas distintas.", s(8.5, pal["CM"])),
     ]
-    return flow
+
+
+def _cr_tabla_periodos(R, sub, periodos):
+    """Tabla comparativa de períodos para un local."""
+    mm = R["mm"]; pal = R["pal"]; Table = R["Table"]; TableStyle = R["TableStyle"]
+    import pandas as _pd
+    head = ["Período", "Colac.", "Turnos", "Personas", "Col/Turno", "Col/Persona"]
+    rows = [head]
+    for per in periodos:
+        r = sub.loc[per]
+        if _pd.isna(r["turnos"]):
+            rows.append([per, "—", "—", "—", "—", "—"])
+        else:
+            rows.append([per, f"{int(r['colaciones'])}", f"{int(r['turnos'])}",
+                         f"{int(r['personas'])}",
+                         "—" if _pd.isna(r["col_x_turno"]) else f"{r['col_x_turno']:.2f}",
+                         "—" if _pd.isna(r["col_x_persona"]) else f"{r['col_x_persona']:.2f}"])
+    t = Table(rows, colWidths=[32*mm, 24*mm, 24*mm, 26*mm, 28*mm, 30*mm])
+    style = [
+        ('BACKGROUND',(0,0),(-1,0),pal["CHd"]),
+        ('TEXTCOLOR',(0,0),(-1,0),pal["CHdT"]),
+        ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
+        ('FONTSIZE',(0,0),(-1,-1),8.5),
+        ('ALIGN',(1,0),(-1,-1),'CENTER'),
+        ('GRID',(0,0),(-1,-1),0.4,pal["CBo"]),
+        ('ROWBACKGROUNDS',(0,1),(-1,-1),[R["rc"].white, pal["CRowAlt"]]),
+        ('TOPPADDING',(0,0),(-1,-1),3.5),('BOTTOMPADDING',(0,0),(-1,-1),3.5),
+        ('TEXTCOLOR',(0,1),(-1,-1),pal["CT"]),
+    ]
+    # Resaltar celdas col/turno en alerta
+    for i, per in enumerate(periodos, start=1):
+        r = sub.loc[per]
+        if not _pd.isna(r["col_x_turno"]) and r["col_x_turno"] > _CR_UMBRAL_CT:
+            style.append(('TEXTCOLOR',(4,i),(4,i),pal["CR"]))
+            style.append(('FONTNAME',(4,i),(4,i),'Helvetica-Bold'))
+    t.setStyle(TableStyle(style))
+    return t
 
 
 def generar_pdf_colaciones_local(comp, modo, fi, ff):
-    """PDF por local: tabla comparativa de períodos + conclusiones por local."""
     R = _cr_pdf_base()
     mm = R["mm"]; pal = R["pal"]; PS = R["ParagraphStyle"]
-    TA_LEFT, TA_CENTER, TA_RIGHT = R["TA_LEFT"], R["TA_CENTER"], R["TA_RIGHT"]
+    TA_LEFT, TA_CENTER, TA_JUSTIFY = R["TA_LEFT"], R["TA_CENTER"], R["TA_JUSTIFY"]
     Paragraph, Spacer, Table, TableStyle = R["Paragraph"], R["Spacer"], R["Table"], R["TableStyle"]
     HRFlowable, PageBreak, RLImage = R["HRFlowable"], R["PageBreak"], R["RLImage"]
-    import io as _io
+    import io as _io, pandas as _pd
 
     def s(sz, col, bold=False, align=TA_LEFT):
         return PS('_', fontSize=sz, textColor=col,
                   fontName='Helvetica-Bold' if bold else 'Helvetica',
-                  alignment=align, leading=sz*1.3)
+                  alignment=align, leading=sz*1.35)
 
     buf = _io.BytesIO()
     doc = R["SimpleDocTemplate"](buf, pagesize=R["A4"],
-        leftMargin=14*mm, rightMargin=14*mm, topMargin=10*mm, bottomMargin=10*mm)
+        leftMargin=15*mm, rightMargin=15*mm, topMargin=12*mm, bottomMargin=12*mm)
     story = []
 
-    # Encabezado
-    logo = Spacer(26*mm, 20*mm)
+    logo = Spacer(24*mm, 20*mm)
     if R["os"].path.exists(LOGO_PATH):
-        logo = RLImage(LOGO_PATH, width=24*mm, height=24*mm)
+        logo = RLImage(LOGO_PATH, width=22*mm, height=22*mm)
     hdr = Table([[logo,
-        [Paragraph("INFORME DE COLACIONES RRHH", s(14, pal["CG"], bold=True, align=TA_CENTER)),
-         Paragraph("Análisis por local · Alemán Experto", s(8, pal["CM"], align=TA_CENTER))]]],
-        colWidths=[28*mm, 154*mm])
+        [Paragraph("INFORME DE COLACIONES RRHH", s(15, pal["CG"], bold=True, align=TA_CENTER)),
+         Paragraph("Análisis por local · Alemán Experto", s(8.5, pal["CM"], align=TA_CENTER))]]],
+        colWidths=[26*mm, 154*mm])
     hdr.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),
         ('LINEBELOW',(0,0),(-1,0),1.5,pal["CG"]), ('BOTTOMPADDING',(0,0),(-1,-1),5)]))
     story += [hdr, Spacer(1, 4*mm)]
-
-    # Metodología
     story += _cr_metodologia_flow(R, modo, fi, ff)
-    story += [Spacer(1, 4*mm), HRFlowable(width="100%", color=pal["CBo"], thickness=0.5),
-              Spacer(1, 4*mm)]
+    story += [Spacer(1, 3*mm), HRFlowable(width="100%", color=pal["CBo"], thickness=0.5),
+              Spacer(1, 3*mm)]
 
     periodos = sorted(comp["periodo"].unique())
     locales = sorted(comp["local"].unique())
+    ult = periodos[-1]
+    cp_red = comp[comp["periodo"] == ult]["col_x_persona"].mean()
 
-    story += [Paragraph("RESULTADOS POR LOCAL", s(11, pal["CG"], bold=True)), Spacer(1, 3*mm)]
+    # Gráfico dispersión (cruce) del último período, una vez al inicio
+    disp = _cr_chart_dispersion(comp, ult, cp_red)
+    if disp:
+        story += [Paragraph(f"CRUCE DE MÉTRICAS — {ult}", s(11, pal["CG"], bold=True)),
+                  Spacer(1, 2*mm), _cr_img_flow(disp, R, 165), Spacer(1, 4*mm)]
 
-    for loc in locales:
+    story += [Paragraph("DETALLE POR LOCAL", s(11, pal["CG"], bold=True)), Spacer(1, 3*mm)]
+
+    for idx, loc in enumerate(locales):
         sub = comp[comp["local"] == loc].set_index("periodo").reindex(periodos)
-        # Tabla de períodos
-        head = ["Período", "Colaciones", "Turnos", "Personas", "Col/Turno", "Col/Persona"]
-        rows = [head]
-        for per in periodos:
-            r = sub.loc[per]
-            if pd.isna(r["turnos"]):
-                rows.append([per, "—", "—", "—", "—", "—"])
-            else:
-                rows.append([per, f"{int(r['colaciones'])}", f"{int(r['turnos'])}",
-                             f"{int(r['personas'])}",
-                             "—" if pd.isna(r["col_x_turno"]) else f"{r['col_x_turno']:.2f}",
-                             "—" if pd.isna(r["col_x_persona"]) else f"{r['col_x_persona']:.2f}"])
-        t = Table(rows, colWidths=[34*mm, 28*mm, 24*mm, 24*mm, 28*mm, 30*mm])
-        t.setStyle(TableStyle([
-            ('BACKGROUND',(0,0),(-1,0),pal["CB"]),
-            ('TEXTCOLOR',(0,0),(-1,0),pal["CG"]),
-            ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
-            ('FONTSIZE',(0,0),(-1,-1),8),
-            ('ALIGN',(1,0),(-1,-1),'CENTER'),
-            ('GRID',(0,0),(-1,-1),0.4,pal["CBo"]),
-            ('ROWBACKGROUNDS',(0,1),(-1,-1),[R["rc"].white, R["rc"].HexColor('#f5f2ec')]),
-            ('TOPPADDING',(0,0),(-1,-1),3),('BOTTOMPADDING',(0,0),(-1,-1),3),
+        r_ult = sub.loc[ult]
+        caso, _desc = _cr_clasificar(r_ult["col_x_turno"], r_ult["col_x_persona"], cp_red)
+        concl = _cr_conclusion_local(sub, periodos, modo, cp_red, caso)
+        # color del badge de caso
+        badge_col = {"A": pal["CR"], "B": pal["CY"], "C": pal["CY"],
+                     "D": pal["CGr"], "—": pal["CM"]}[caso]
+        titulo = Table([[
+            Paragraph(loc.upper(), s(11, pal["CB"], bold=True)),
+            Paragraph(f"CASO {caso}", s(9, R["rc"].white, bold=True, align=TA_CENTER)),
+        ]], colWidths=[140*mm, 25*mm])
+        titulo.setStyle(TableStyle([
+            ('BACKGROUND',(1,0),(1,0),badge_col), ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+            ('TOPPADDING',(1,0),(1,0),3),('BOTTOMPADDING',(1,0),(1,0),3),
         ]))
-        # Conclusión por local
-        concl = _cr_conclusion_local(sub, periodos, modo)
-        story += [Paragraph(loc.upper(), s(10, pal["CB"], bold=True)), Spacer(1, 1.5*mm),
-                  t, Spacer(1, 2*mm),
-                  Paragraph(concl, s(8, pal["CM"])), Spacer(1, 5*mm)]
+        story += [titulo, Spacer(1, 1.5*mm),
+                  _cr_tabla_periodos(R, sub, periodos), Spacer(1, 2*mm),
+                  Paragraph(concl, s(8.5, pal["CM"], align=TA_JUSTIFY)), Spacer(1, 5*mm)]
+        if idx < len(locales) - 1 and (idx + 1) % 3 == 0:
+            story += [PageBreak()]
 
     doc.build(story)
     buf.seek(0)
     return buf.getvalue()
 
 
-def _cr_conclusion_local(sub, periodos, modo):
-    """Genera texto de conclusión + recomendación para un local."""
+def _cr_conclusion_local(sub, periodos, modo, cp_red, caso):
+    """Conclusión específica: tendencia real + diagnóstico de caso + recomendación graduada."""
+    import pandas as _pd
     vals = [(p, sub.loc[p, "col_x_turno"]) for p in periodos
-            if not pd.isna(sub.loc[p, "col_x_turno"])]
+            if not _pd.isna(sub.loc[p, "col_x_turno"])]
     if not vals:
-        return "Sin datos suficientes para concluir en este local."
+        return "Sin datos suficientes para analizar este local en el período."
     ult_p, ult_v = vals[-1]
+    cp_ult = sub.loc[ult_p, "col_x_persona"]
     partes = []
+
+    # 1) Tendencia (solo si hay 2+ períodos con dato)
     if len(vals) >= 2:
         prev_p, prev_v = vals[-2]
         if prev_v and prev_v > 0:
             chg = (ult_v - prev_v) / prev_v * 100
-            tend = "subió" if chg > 5 else ("bajó" if chg < -5 else "se mantuvo estable")
-            partes.append(
-                f"<b>Tendencia:</b> el ratio colaciones/turno {tend} de {prev_v:.2f} "
-                f"({prev_p}) a {ult_v:.2f} ({ult_p}), una variación de {chg:+.0f}%.")
-    # Evaluación del nivel
-    if ult_v > 1.15:
+            if abs(chg) < 5:
+                partes.append(f"El ratio se mantuvo estable ({prev_v:.2f}→{ult_v:.2f}) "
+                              f"entre {prev_p} y {ult_p}.")
+            else:
+                verbo = "aumentó" if chg > 0 else "disminuyó"
+                intens = "fuertemente" if abs(chg) >= 25 else "moderadamente"
+                partes.append(f"El ratio {verbo} {intens} {abs(chg):.0f}% "
+                              f"({prev_v:.2f}→{ult_v:.2f}) entre {prev_p} y {ult_p}.")
+
+    # 2) Diagnóstico según caso + magnitud
+    exceso = ult_v - _CR_UMBRAL_CT
+    if caso == "A":
         partes.append(
-            f"<b>Alerta:</b> con {ult_v:.2f} colaciones por turno, el último período "
-            "supera el umbral esperado. <b>Recomendación:</b> auditar el registro de "
-            "colaciones contra la asistencia real del período y verificar que no se "
-            "carguen colaciones de personal ausente.")
-    elif ult_v < 0.85:
+            f"Con {ult_v:.2f} colaciones por turno ({exceso:+.2f} sobre el umbral de "
+            f"{_CR_UMBRAL_CT:.1f}) y {cp_ult:.0f} por persona, el consumo es alto en ambas "
+            "dimensiones. <b>Recomendación:</b> revisar la política de colaciones del local "
+            "y auditar una muestra de jornadas; es el patrón con mayor exposición.")
+    elif caso == "B":
         partes.append(
-            f"<b>Observación:</b> con {ult_v:.2f} colaciones por turno, el registro es "
-            "bajo. <b>Recomendación:</b> confirmar que todas las colaciones del personal "
-            "se estén registrando como venta CP; un sub-registro distorsiona el control.")
-    else:
+            f"El consumo por jornada ({ult_v:.2f}) está en rango, pero las {cp_ult:.0f} "
+            "colaciones por persona están por sobre la red: el consumo se concentra en "
+            "pocos trabajadores. <b>Recomendación:</b> identificar a quiénes acumulan "
+            "colaciones y validar que correspondan a turnos reales.")
+    elif caso == "C":
         partes.append(
-            f"<b>Estado:</b> con {ult_v:.2f} colaciones por turno, el nivel está dentro "
-            "del rango razonable. <b>Recomendación:</b> mantener el monitoreo periódico.")
+            f"Las {ult_v:.2f} colaciones por turno superan el umbral, pero repartidas "
+            f"entre la dotación ({cp_ult:.0f} por persona, en rango). Esto suele indicar "
+            "que faltan turnos por registrar en asistencia más que un sobreconsumo. "
+            "<b>Recomendación:</b> verificar la carga de asistencia del período antes de "
+            "concluir que hay exceso de colaciones.")
+    else:  # D
+        partes.append(
+            f"Con {ult_v:.2f} colaciones por turno y {cp_ult:.0f} por persona, el local "
+            "opera dentro de lo esperado. <b>Recomendación:</b> sin acción; mantener el "
+            "monitoreo en los próximos períodos.")
     return " ".join(partes)
 
 
 def generar_pdf_colaciones_empresa(comp, modo, fi, ff):
-    """PDF resumen empresa: consolidado de la red + ranking + conclusiones globales."""
     R = _cr_pdf_base()
     mm = R["mm"]; pal = R["pal"]; PS = R["ParagraphStyle"]
-    TA_LEFT, TA_CENTER, TA_RIGHT = R["TA_LEFT"], R["TA_CENTER"], R["TA_RIGHT"]
+    TA_LEFT, TA_CENTER, TA_JUSTIFY = R["TA_LEFT"], R["TA_CENTER"], R["TA_JUSTIFY"]
     Paragraph, Spacer, Table, TableStyle = R["Paragraph"], R["Spacer"], R["Table"], R["TableStyle"]
-    HRFlowable, RLImage = R["HRFlowable"], R["RLImage"]
-    import io as _io
+    HRFlowable, RLImage, PageBreak = R["HRFlowable"], R["RLImage"], R["PageBreak"]
+    import io as _io, pandas as _pd
 
     def s(sz, col, bold=False, align=TA_LEFT):
         return PS('_', fontSize=sz, textColor=col,
                   fontName='Helvetica-Bold' if bold else 'Helvetica',
-                  alignment=align, leading=sz*1.3)
+                  alignment=align, leading=sz*1.35)
 
     buf = _io.BytesIO()
     doc = R["SimpleDocTemplate"](buf, pagesize=R["A4"],
-        leftMargin=14*mm, rightMargin=14*mm, topMargin=10*mm, bottomMargin=10*mm)
+        leftMargin=15*mm, rightMargin=15*mm, topMargin=12*mm, bottomMargin=12*mm)
     story = []
 
-    logo = Spacer(26*mm, 20*mm)
+    logo = Spacer(24*mm, 20*mm)
     if R["os"].path.exists(LOGO_PATH):
-        logo = RLImage(LOGO_PATH, width=24*mm, height=24*mm)
+        logo = RLImage(LOGO_PATH, width=22*mm, height=22*mm)
     hdr = Table([[logo,
-        [Paragraph("COLACIONES RRHH — RESUMEN EMPRESA", s(14, pal["CG"], bold=True, align=TA_CENTER)),
-         Paragraph("Consolidado de la red · Alemán Experto", s(8, pal["CM"], align=TA_CENTER))]]],
-        colWidths=[28*mm, 154*mm])
+        [Paragraph("COLACIONES RRHH — RESUMEN EMPRESA", s(15, pal["CG"], bold=True, align=TA_CENTER)),
+         Paragraph("Consolidado de la red · Alemán Experto", s(8.5, pal["CM"], align=TA_CENTER))]]],
+        colWidths=[26*mm, 154*mm])
     hdr.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),
         ('LINEBELOW',(0,0),(-1,0),1.5,pal["CG"]), ('BOTTOMPADDING',(0,0),(-1,-1),5)]))
     story += [hdr, Spacer(1, 4*mm)]
-
     story += _cr_metodologia_flow(R, modo, fi, ff)
-    story += [Spacer(1, 4*mm), HRFlowable(width="100%", color=pal["CBo"], thickness=0.5),
-              Spacer(1, 4*mm)]
+    story += [Spacer(1, 3*mm), HRFlowable(width="100%", color=pal["CBo"], thickness=0.5),
+              Spacer(1, 3*mm)]
 
     periodos = sorted(comp["periodo"].unique())
+    ult = periodos[-1]
+    cp_red = comp[comp["periodo"] == ult]["col_x_persona"].mean()
 
-    # Consolidado de la red por período
+    # Consolidado red
     red = comp.groupby("periodo").agg(
-        colaciones=("colaciones", "sum"),
-        turnos=("turnos", "sum"),
-        personas=("personas", "sum"),
-    ).reindex(periodos)
-    red["col_x_turno"] = (red["colaciones"] / red["turnos"].replace(0, pd.NA)).round(2)
-    red["col_x_persona"] = (red["colaciones"] / red["personas"].replace(0, pd.NA)).round(2)
+        colaciones=("colaciones", "sum"), turnos=("turnos", "sum"),
+        personas=("personas", "sum")).reindex(periodos)
+    red["col_x_turno"] = (red["colaciones"] / red["turnos"].replace(0, _pd.NA)).round(2)
+    red["col_x_persona"] = (red["colaciones"] / red["personas"].replace(0, _pd.NA)).round(2)
 
-    story += [Paragraph("CONSOLIDADO DE LA RED POR PERÍODO", s(11, pal["CG"], bold=True)),
-              Spacer(1, 3*mm)]
-    head = ["Período", "Colaciones", "Turnos", "Personas", "Col/Turno", "Col/Persona"]
+    # Resumen ejecutivo (texto, arriba)
+    story += [Paragraph("RESUMEN EJECUTIVO", s(11, pal["CG"], bold=True)), Spacer(1, 2*mm)]
+    for txt in _cr_resumen_ejecutivo(comp, red, periodos, modo, cp_red):
+        story += [Paragraph(txt, s(9, pal["CM"], align=TA_JUSTIFY)), Spacer(1, 1.5*mm)]
+    story += [Spacer(1, 3*mm)]
+
+    # Gráfico barras ranking último período
+    bar = _cr_chart_barras(comp, ult, pal)
+    if bar:
+        story += [Paragraph(f"RANKING DE LOCALES — {ult}", s(11, pal["CG"], bold=True)),
+                  Spacer(1, 2*mm), _cr_img_flow(bar, R, 165), Spacer(1, 4*mm)]
+
+    # Gráfico líneas evolución (solo si 2+ períodos)
+    lin = _cr_chart_lineas(comp, periodos)
+    if lin:
+        story += [Paragraph("EVOLUCIÓN ENTRE PERÍODOS", s(11, pal["CG"], bold=True)),
+                  Spacer(1, 2*mm), _cr_img_flow(lin, R, 165), Spacer(1, 4*mm)]
+
+    # Tabla consolidado red
+    story += [Paragraph("CONSOLIDADO DE LA RED", s(11, pal["CG"], bold=True)), Spacer(1, 2*mm)]
+    head = ["Período", "Colac.", "Turnos", "Personas", "Col/Turno", "Col/Persona"]
     rows = [head]
     for per in periodos:
         r = red.loc[per]
         rows.append([per, f"{int(r['colaciones'])}", f"{int(r['turnos'])}",
                      f"{int(r['personas'])}",
-                     "—" if pd.isna(r["col_x_turno"]) else f"{r['col_x_turno']:.2f}",
-                     "—" if pd.isna(r["col_x_persona"]) else f"{r['col_x_persona']:.2f}"])
-    t = Table(rows, colWidths=[34*mm, 28*mm, 24*mm, 24*mm, 28*mm, 30*mm])
+                     "—" if _pd.isna(r["col_x_turno"]) else f"{r['col_x_turno']:.2f}",
+                     "—" if _pd.isna(r["col_x_persona"]) else f"{r['col_x_persona']:.2f}"])
+    t = Table(rows, colWidths=[32*mm, 24*mm, 24*mm, 26*mm, 28*mm, 30*mm])
     t.setStyle(TableStyle([
-        ('BACKGROUND',(0,0),(-1,0),pal["CB"]), ('TEXTCOLOR',(0,0),(-1,0),pal["CG"]),
-        ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'), ('FONTSIZE',(0,0),(-1,-1),8),
+        ('BACKGROUND',(0,0),(-1,0),pal["CHd"]), ('TEXTCOLOR',(0,0),(-1,0),pal["CHdT"]),
+        ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'), ('FONTSIZE',(0,0),(-1,-1),8.5),
         ('ALIGN',(1,0),(-1,-1),'CENTER'), ('GRID',(0,0),(-1,-1),0.4,pal["CBo"]),
-        ('ROWBACKGROUNDS',(0,1),(-1,-1),[R["rc"].white, R["rc"].HexColor('#f5f2ec')]),
-        ('TOPPADDING',(0,0),(-1,-1),3),('BOTTOMPADDING',(0,0),(-1,-1),3),
+        ('ROWBACKGROUNDS',(0,1),(-1,-1),[R["rc"].white, pal["CRowAlt"]]),
+        ('TEXTCOLOR',(0,1),(-1,-1),pal["CT"]),
+        ('TOPPADDING',(0,0),(-1,-1),3.5),('BOTTOMPADDING',(0,0),(-1,-1),3.5),
     ]))
     story += [t, Spacer(1, 5*mm)]
 
-    # Ranking por local (último período)
-    ult = periodos[-1]
-    rank = comp[comp["periodo"] == ult].sort_values("col_x_turno", ascending=False)
-    story += [Paragraph(f"RANKING POR LOCAL — {ult}", s(11, pal["CG"], bold=True)),
-              Spacer(1, 3*mm)]
-    rhead = ["Local", "Colaciones", "Turnos", "Col/Turno", "Estado"]
-    rrows = [rhead]
-    for _, r in rank.iterrows():
-        v = r["col_x_turno"]
-        est = "—" if pd.isna(v) else ("ALTO" if v > 1.15 else ("BAJO" if v < 0.85 else "Normal"))
-        rrows.append([r["local"], f"{int(r['colaciones'])}", f"{int(r['turnos'])}",
-                      "—" if pd.isna(v) else f"{v:.2f}", est])
-    rt = Table(rrows, colWidths=[44*mm, 30*mm, 28*mm, 30*mm, 30*mm])
-    rt.setStyle(TableStyle([
-        ('BACKGROUND',(0,0),(-1,0),pal["CB"]), ('TEXTCOLOR',(0,0),(-1,0),pal["CG"]),
-        ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'), ('FONTSIZE',(0,0),(-1,-1),8),
-        ('ALIGN',(1,0),(-1,-1),'CENTER'), ('GRID',(0,0),(-1,-1),0.4,pal["CBo"]),
-        ('ROWBACKGROUNDS',(0,1),(-1,-1),[R["rc"].white, R["rc"].HexColor('#f5f2ec')]),
-        ('TOPPADDING',(0,0),(-1,-1),3),('BOTTOMPADDING',(0,0),(-1,-1),3),
-    ]))
-    story += [rt, Spacer(1, 5*mm)]
-
-    # Conclusiones globales
+    # Conclusiones y recomendaciones priorizadas
     story += [Paragraph("CONCLUSIONES Y RECOMENDACIONES", s(11, pal["CG"], bold=True)),
-              Spacer(1, 3*mm)]
-    for txt in _cr_conclusiones_empresa(comp, red, periodos, modo):
-        story += [Paragraph(txt, s(8.5, pal["CM"])), Spacer(1, 2*mm)]
+              Spacer(1, 2*mm)]
+    for txt in _cr_conclusiones_empresa(comp, red, periodos, modo, cp_red):
+        story += [Paragraph(txt, s(8.5, pal["CM"], align=TA_JUSTIFY)), Spacer(1, 2*mm)]
 
     doc.build(story)
     buf.seek(0)
     return buf.getvalue()
 
 
-def _cr_conclusiones_empresa(comp, red, periodos, modo):
-    """Lista de conclusiones globales para el PDF empresa."""
+def _cr_resumen_ejecutivo(comp, red, periodos, modo, cp_red):
+    """2-3 frases que sintetizan la situación de la red."""
+    import pandas as _pd
+    ult = periodos[-1]
+    rank = comp[comp["periodo"] == ult].dropna(subset=["col_x_turno"])
+    out = []
+    red_ct = red.loc[ult, "col_x_turno"]
+    n_alerta = int((rank["col_x_turno"] > _CR_UMBRAL_CT).sum())
+    n_total = len(rank)
+    if not _pd.isna(red_ct):
+        estado = ("por sobre" if red_ct > _CR_UMBRAL_CT else "por debajo de")
+        out.append(
+            f"En {ult}, la red registró <b>{int(red.loc[ult,'colaciones'])} colaciones</b> "
+            f"sobre {int(red.loc[ult,'turnos'])} turnos, un promedio de <b>{red_ct:.2f} "
+            f"colaciones por turno</b> ({estado} el umbral de {_CR_UMBRAL_CT:.1f}).")
+    if n_total:
+        if n_alerta == 0:
+            out.append(f"Ninguno de los {n_total} locales superó el umbral de alerta.")
+        else:
+            peor = rank.sort_values("col_x_turno", ascending=False).iloc[0]
+            out.append(
+                f"<b>{n_alerta} de {n_total} locales</b> superaron el umbral. El más "
+                f"alto es <b>{peor['local']}</b> con {peor['col_x_turno']:.2f} "
+                f"colaciones por turno.")
+    return out
+
+
+def _cr_conclusiones_empresa(comp, red, periodos, modo, cp_red):
+    """Conclusiones priorizadas: cada local en alerta con su diagnóstico de caso."""
+    import pandas as _pd
     out = []
     ult = periodos[-1]
+    rank = comp[comp["periodo"] == ult].dropna(subset=["col_x_turno"]).sort_values(
+        "col_x_turno", ascending=False)
+
     # Tendencia de red
     rv = [(p, red.loc[p, "col_x_turno"]) for p in periodos
-          if not pd.isna(red.loc[p, "col_x_turno"])]
-    if len(rv) >= 2 and rv[-2][1] and rv[-2][1] > 0:
+          if not _pd.isna(red.loc[p, "col_x_turno"])]
+    if len(rv) >= 2 and rv[-2][1]:
         chg = (rv[-1][1] - rv[-2][1]) / rv[-2][1] * 100
-        tend = "al alza" if chg > 5 else ("a la baja" if chg < -5 else "estable")
-        out.append(
-            f"• <b>Tendencia de la red:</b> el ratio colaciones/turno pasó de "
-            f"{rv[-2][1]:.2f} a {rv[-1][1]:.2f} entre los dos últimos períodos "
-            f"({chg:+.0f}%), una tendencia {tend}.")
-    # Locales en alerta
-    rank = comp[comp["periodo"] == ult]
-    altos = rank[rank["col_x_turno"] > 1.15].sort_values("col_x_turno", ascending=False)
-    bajos = rank[rank["col_x_turno"] < 0.85]
-    if not altos.empty:
-        nombres = ", ".join(f"{r['local']} ({r['col_x_turno']:.2f})"
-                            for _, r in altos.iterrows())
-        out.append(
-            f"• <b>Locales sobre el umbral ({ult}):</b> {nombres}. "
-            "<b>Recomendación:</b> auditar el cruce entre colaciones registradas y "
-            "asistencia efectiva; priorizar el de ratio más alto.")
+        if abs(chg) >= 5:
+            verbo = "subió" if chg > 0 else "bajó"
+            out.append(f"• <b>Red:</b> el ratio promedio {verbo} {abs(chg):.0f}% "
+                       f"({rv[-2][1]:.2f}→{rv[-1][1]:.2f}) respecto al período anterior.")
+        else:
+            out.append(f"• <b>Red:</b> el ratio promedio se mantuvo estable "
+                       f"(~{rv[-1][1]:.2f} colaciones por turno).")
+
+    # Cada local en alerta, ordenado por severidad, con su caso
+    en_alerta = rank[rank["col_x_turno"] > _CR_UMBRAL_CT]
+    if en_alerta.empty:
+        out.append("• <b>Sin locales en alerta:</b> todos operan bajo el umbral de "
+                   f"{_CR_UMBRAL_CT:.1f} colaciones por turno. Mantener monitoreo.")
+    else:
+        for rank_i, (_, r) in enumerate(en_alerta.iterrows(), start=1):
+            caso, desc = _cr_clasificar(r["col_x_turno"], r["col_x_persona"], cp_red)
+            prio = "Prioridad alta" if rank_i == 1 else ("Prioridad media" if rank_i <= 3 else "Seguimiento")
+            out.append(
+                f"• <b>{r['local']}</b> ({prio}) — {r['col_x_turno']:.2f} col/turno, "
+                f"{r['col_x_persona']:.0f} col/persona. <b>Caso {caso}:</b> {desc}")
+
+    # Locales con sub-registro posible (ratio muy bajo)
+    bajos = rank[rank["col_x_turno"] < _CR_UMBRAL_CT * 0.4]
     if not bajos.empty:
-        nombres = ", ".join(f"{r['local']} ({r['col_x_turno']:.2f})"
-                            for _, r in bajos.iterrows())
+        nombres = ", ".join(f"{r['local']} ({r['col_x_turno']:.2f})" for _, r in bajos.iterrows())
         out.append(
-            f"• <b>Locales con registro bajo ({ult}):</b> {nombres}. "
-            "<b>Recomendación:</b> verificar que las colaciones se carguen como venta CP; "
-            "un sub-registro oculta el consumo real.")
-    if altos.empty and bajos.empty:
-        out.append(
-            f"• <b>Estado general ({ult}):</b> todos los locales se encuentran dentro del "
-            "rango razonable de colaciones por turno. Mantener el monitoreo periódico.")
-    # Cierre metodológico
+            f"• <b>Registro bajo:</b> {nombres} están muy por debajo del resto. Verificar "
+            "que las colaciones se carguen como venta CP; un ratio así suele ser "
+            "sub-registro, no ausencia de consumo.")
+
     out.append(
-        "• <b>Nota de control:</b> este indicador depende de que las colaciones se "
-        "registren íntegramente como venta CP. Antes de accionar sobre un local, "
-        "confirmar la calidad del registro para descartar que un ratio extremo se deba "
-        "a un problema de captura y no a consumo real.")
+        "• <b>Control de calidad:</b> este indicador depende de que colaciones (venta CP) "
+        "y asistencia se registren íntegramente. Validar la captura antes de accionar "
+        "sobre un local con ratio extremo.")
     return out
 
 
