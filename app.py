@@ -7705,8 +7705,22 @@ if modulo.startswith("📦"):
                                 horas_totales=EXCLUDED.horas_totales, trabajo=EXCLUDED.trabajo,
                                 cargo=EXCLUDED.cargo, permiso=EXCLUDED.permiso, fecha_carga=NOW()
                         """)
-                        with _engine_as.begin() as _conn_as:
-                            _conn_as.execute(_UPSERT_AS, _registros)
+                        # Insertar por lotes con commit por lote: una sentencia masiva
+                        # con ON CONFLICT sobre miles de filas excede el statement_timeout
+                        # de la base. Cada lote en su propia transacción mantiene las
+                        # sentencias rápidas y evita el timeout.
+                        _CHUNK_AS = 500
+                        _total_as = len(_registros)
+                        _prog_as = st.progress(0.0, text="Cargando asistencia…")
+                        for _ini in range(0, _total_as, _CHUNK_AS):
+                            _lote = _registros[_ini:_ini + _CHUNK_AS]
+                            with _engine_as.begin() as _conn_as:
+                                _conn_as.execute(_UPSERT_AS, _lote)
+                            _prog_as.progress(
+                                min((_ini + _CHUNK_AS) / _total_as, 1.0),
+                                text=f"Cargando asistencia… {min(_ini + _CHUNK_AS, _total_as)}/{_total_as}"
+                            )
+                        _prog_as.empty()
 
                         _fmin = min(r["fecha"] for r in _registros)
                         _fmax = max(r["fecha"] for r in _registros)
