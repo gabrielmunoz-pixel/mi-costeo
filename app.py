@@ -4027,7 +4027,7 @@ def _cr_conclusion_local(sub, periodos, modo, cp_red, caso):
     return " ".join(partes)
 
 
-def generar_pdf_colaciones_empresa(comp, modo, fi, ff):
+def generar_pdf_colaciones_empresa(comp, modo, fi, ff, df_pers_dia=None):
     R = _cr_pdf_base()
     mm = R["mm"]; pal = R["pal"]; PS = R["ParagraphStyle"]
     TA_LEFT, TA_CENTER, TA_JUSTIFY = R["TA_LEFT"], R["TA_CENTER"], R["TA_JUSTIFY"]
@@ -4063,10 +4063,20 @@ def generar_pdf_colaciones_empresa(comp, modo, fi, ff):
     ult = periodos[-1]
     cp_red = comp[comp["periodo"] == ult]["col_x_persona"].mean()
 
-    # Consolidado red
+    # Consolidado red: turnos y colaciones SÍ se suman entre locales.
+    # PERSONAS NO se suman: una persona es una sola persona aunque trabaje
+    # en varios días. Se cuentan los RUT DISTINTOS de toda la red por período.
     red = comp.groupby("periodo").agg(
-        colaciones=("colaciones", "sum"), turnos=("turnos", "sum"),
-        personas=("personas", "sum")).reindex(periodos)
+        colaciones=("colaciones", "sum"), turnos=("turnos", "sum")).reindex(periodos)
+    # Personas distintas de la red por período (recontadas, no sumadas)
+    if df_pers_dia is not None and not df_pers_dia.empty:
+        _pr = df_pers_dia.copy()
+        _pr["periodo"] = _pr["fecha"].apply(lambda d: _cr_periodo_label(d, modo))
+        _pers_red = _pr.groupby("periodo")["rut"].nunique()
+        red["personas"] = red.index.map(lambda p: _pers_red.get(p, 0))
+    else:
+        # Fallback conservador: máximo de personas entre locales (nunca la suma)
+        red["personas"] = comp.groupby("periodo")["personas"].max().reindex(periodos)
     red["col_x_turno"] = (red["colaciones"] / red["turnos"].replace(0, _pd.NA)).round(2)
     red["col_x_persona"] = (red["colaciones"] / red["personas"].replace(0, _pd.NA)).round(2)
 
@@ -10682,6 +10692,77 @@ elif modulo.startswith("📊"):
             "Si vas directo a producir, baja a la sección 🗓️ **Proyección de la semana**."
         )
 
+        with st.expander("🐞 Debug — promedio consumido (rango del sidebar)", expanded=False):
+            st.caption(
+                f"Rango sidebar: **{f_inicio} → {f_fin}** · Local: **{f_local}**. "
+                "Promedio de unidades consumidas por día operativo, leído de la capa "
+                "diaria `opciones_diarias`."
+            )
+            _dbg_params = {"i": str(f_inicio), "f": str(f_fin)}
+            _dbg_loc_filter = ""
+            if f_local and f_local != "Todos":
+                _dbg_loc_filter = "AND UPPER(local) = UPPER(:l)"
+                _dbg_params["l"] = f_local
+
+            # Promedio por día operativo = total unidades ÷ días con registro
+            _dbg_resumen = run_query(f"""
+                SELECT
+                    local,
+                    COUNT(DISTINCT fecha_venta)                          AS dias_operativos,
+                    ROUND(SUM(cant)::numeric, 1)                         AS total_unidades,
+                    ROUND((SUM(cant) / NULLIF(COUNT(DISTINCT fecha_venta),0))::numeric, 2)
+                                                                        AS prom_unid_x_dia
+                FROM opciones_diarias
+                WHERE fecha_venta BETWEEN :i AND :f
+                  {_dbg_loc_filter}
+                GROUP BY local
+                ORDER BY local
+            """, _dbg_params)
+
+            if _dbg_resumen is None or _dbg_resumen.empty:
+                st.warning(
+                    "Sin datos en la capa diaria para ese rango/local. Si el mes no está "
+                    "cargado, usa **Actualizar mes en capa diaria** (Vista A)."
+                )
+            else:
+                # Fila TOTAL agregada
+                _tot_u = pd.to_numeric(_dbg_resumen["total_unidades"], errors="coerce").sum()
+                _tot_d = run_query(f"""
+                    SELECT COUNT(DISTINCT fecha_venta) AS d
+                    FROM opciones_diarias
+                    WHERE fecha_venta BETWEEN :i AND :f {_dbg_loc_filter}
+                """, _dbg_params)
+                _dias_glob = int(_tot_d["d"].iloc[0]) if (_tot_d is not None and not _tot_d.empty) else 0
+                _prom_glob = round(_tot_u / _dias_glob, 2) if _dias_glob else 0
+
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Días operativos", _dias_glob)
+                c2.metric("Total unidades", f"{_tot_u:,.0f}")
+                c3.metric("Promedio / día", f"{_prom_glob:,.2f}")
+
+                st.markdown("**Desglose por local:**")
+                st.dataframe(_dbg_resumen, use_container_width=True, hide_index=True)
+
+                # Promedio por proteína (grupo BA) por día operativo
+                _dbg_prot = run_query(f"""
+                    SELECT
+                        ba_opcion,
+                        ROUND(SUM(cant)::numeric, 1)                       AS total_unidades,
+                        ROUND((SUM(cant) / NULLIF(COUNT(DISTINCT fecha_venta),0))::numeric, 2)
+                                                                          AS prom_x_dia
+                    FROM opciones_diarias
+                    WHERE fecha_venta BETWEEN :i AND :f {_dbg_loc_filter}
+                    GROUP BY ba_opcion
+                    ORDER BY total_unidades DESC
+                """, _dbg_params)
+                if _dbg_prot is not None and not _dbg_prot.empty:
+                    _dbg_prot["grupo"] = _dbg_prot["ba_opcion"].apply(
+                        lambda x: BA_A_GRUPO.get(str(x or "").strip(), "Otros"))
+                    st.markdown("**Promedio por opción (BA) por día operativo:**")
+                    st.dataframe(
+                        _dbg_prot[["grupo", "ba_opcion", "total_unidades", "prom_x_dia"]],
+                        use_container_width=True, hide_index=True)
+
         with st.expander("🔧 Debug AE06 — verificación puntual (opcional)", expanded=False):
           if st.button("Consultar AE06", type="secondary", key="cp_debug_ae06"):
             _fi  = _cp_dt.date(2026, 3, 1)
@@ -11630,7 +11711,7 @@ elif modulo.startswith("📊"):
             with _cr_pb2:
                 try:
                     _pdf_emp = generar_pdf_colaciones_empresa(
-                        _cr_comp, _cr_modo, _cr_meta["fi"], _cr_meta["ff"])
+                        _cr_comp, _cr_modo, _cr_meta["fi"], _cr_meta["ff"], _cr_pdia)
                     st.download_button(
                         "🏢 PDF resumen empresa",
                         _pdf_emp,
