@@ -10692,6 +10692,106 @@ elif modulo.startswith("📊"):
             "Si vas directo a producir, baja a la sección 🗓️ **Proyección de la semana**."
         )
 
+        # ══════════════════════════════════════════════════════════════
+        # 🐞 DEBUG FIJO — máximos de MAYO 2026 por local (ignora el sidebar)
+        # ══════════════════════════════════════════════════════════════
+        st.markdown("### 🐞 DEBUG — Máximos de MAYO 2026 por local")
+        st.caption("Fijo a mayo 2026, independiente del rango del sidebar. "
+                   "Lee de la capa diaria `opciones_diarias`.")
+        _dbgmax_params = {"i": "2026-05-01", "f": "2026-05-31"}
+
+        # Máximo diario de unidades totales por local (el día pico del mes)
+        _dbgmax_local = run_query("""
+            WITH por_dia AS (
+                SELECT local, fecha_venta, SUM(cant) AS cant_dia
+                FROM opciones_diarias
+                WHERE fecha_venta BETWEEN :i AND :f
+                GROUP BY local, fecha_venta
+            )
+            SELECT
+                local,
+                COUNT(*)                          AS dias_operativos,
+                ROUND(MAX(cant_dia)::numeric, 1)  AS max_dia,
+                ROUND(AVG(cant_dia)::numeric, 1)  AS prom_dia,
+                ROUND(MIN(cant_dia)::numeric, 1)  AS min_dia,
+                (ARRAY_AGG(fecha_venta ORDER BY cant_dia DESC))[1] AS fecha_pico
+            FROM por_dia
+            GROUP BY local
+            ORDER BY max_dia DESC
+        """, _dbgmax_params)
+
+        if _dbgmax_local is None or _dbgmax_local.empty:
+            st.error("⚠️ No hay datos de MAYO 2026 en `opciones_diarias`. "
+                     "Carga mayo con **Actualizar mes en capa diaria** (Vista A) o "
+                     "**Construir muestra** (Vista B).")
+        else:
+            st.markdown("**Máximo, promedio y mínimo diario por local (mayo):**")
+            st.dataframe(_dbgmax_local, use_container_width=True, hide_index=True)
+
+            # Máximo por local × proteína (BA): el día pico de cada opción
+            _dbgmax_prot = run_query("""
+                WITH por_dia AS (
+                    SELECT local, ba_opcion, fecha_venta, SUM(cant) AS cant_dia
+                    FROM opciones_diarias
+                    WHERE fecha_venta BETWEEN :i AND :f
+                    GROUP BY local, ba_opcion, fecha_venta
+                )
+                SELECT
+                    local, ba_opcion,
+                    ROUND(MAX(cant_dia)::numeric, 1)  AS max_dia,
+                    ROUND(AVG(cant_dia)::numeric, 1)  AS prom_dia
+                FROM por_dia
+                GROUP BY local, ba_opcion
+                ORDER BY local, max_dia DESC
+            """, _dbgmax_params)
+            if _dbgmax_prot is not None and not _dbgmax_prot.empty:
+                _dbgmax_prot["grupo"] = _dbgmax_prot["ba_opcion"].apply(
+                    lambda x: BA_A_GRUPO.get(str(x or "").strip(), "Otros"))
+                # Filtro opcional por local para no saturar
+                _dbg_loc_sel = st.selectbox(
+                    "Ver máximos por proteína de:",
+                    ["Todos"] + sorted(_dbgmax_prot["local"].unique().tolist()),
+                    key="dbgmax_loc")
+                _show = _dbgmax_prot if _dbg_loc_sel == "Todos" else \
+                    _dbgmax_prot[_dbgmax_prot["local"] == _dbg_loc_sel]
+                st.markdown("**Máximo diario por proteína (BA) y local (mayo):**")
+                st.dataframe(
+                    _show[["local", "grupo", "ba_opcion", "max_dia", "prom_dia"]],
+                    use_container_width=True, hide_index=True)
+
+            # Máximo por CATEGORÍA/NOMBRE ORIGINAL (sin agrupar a BA).
+            # Aquí se ven los nombres iniciales como "Churrasco Niño", etc.
+            _dbg_loc_sel = locals().get("_dbg_loc_sel", "Todos")
+            _dbgmax_cat = run_query("""
+                WITH por_dia AS (
+                    SELECT local, ab_categoria, sku_opcion, nombre_producto,
+                           fecha_venta, SUM(cant) AS cant_dia
+                    FROM opciones_diarias
+                    WHERE fecha_venta BETWEEN :i AND :f
+                    GROUP BY local, ab_categoria, sku_opcion, nombre_producto, fecha_venta
+                )
+                SELECT
+                    local, ab_categoria, sku_opcion, nombre_producto,
+                    ROUND(MAX(cant_dia)::numeric, 1)  AS max_dia,
+                    ROUND(AVG(cant_dia)::numeric, 1)  AS prom_dia,
+                    ROUND(SUM(cant_dia)::numeric, 1)  AS total_mes
+                FROM por_dia
+                GROUP BY local, ab_categoria, sku_opcion, nombre_producto
+                ORDER BY local, max_dia DESC
+            """, _dbgmax_params)
+            if _dbgmax_cat is not None and not _dbgmax_cat.empty:
+                _show_cat = _dbgmax_cat if _dbg_loc_sel == "Todos" else \
+                    _dbgmax_cat[_dbgmax_cat["local"] == _dbg_loc_sel]
+                st.markdown("**Máximo diario por categoría/nombre ORIGINAL y local (mayo):**")
+                st.caption("Sin agrupar a proteína; muestra los nombres iniciales "
+                           "(p. ej. *Churrasco Niño*).")
+                st.dataframe(
+                    _show_cat[["local", "ab_categoria", "sku_opcion",
+                               "nombre_producto", "max_dia", "prom_dia", "total_mes"]],
+                    use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+
         with st.expander("🐞 Debug — promedio consumido (rango del sidebar)", expanded=False):
             st.caption(
                 f"Rango sidebar: **{f_inicio} → {f_fin}** · Local: **{f_local}**. "
