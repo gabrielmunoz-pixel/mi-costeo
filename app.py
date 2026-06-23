@@ -4209,8 +4209,15 @@ def _cr_conclusiones_empresa(comp, red, periodos, modo, cp_red):
 
 
 def _sg_construir_ctx_b(local, ini, fin, ng, jef, ranking,
-                        s1, s2, s3, s4, rows5, rows5_sem, s6_raw, s7, rows9, g10):
-    """Mapea los datos calculados al esquema 'ctx' que espera generar_pdf_garzones_b."""
+                        s1, s2, s3, s4, rows5, rows5_sem, s6_raw, s7, rows9, g10,
+                        s9_raw=None, s11s=None, s11m=None):
+    """Mapea los datos calculados al esquema 'ctx' que espera generar_pdf_garzones_b.
+
+    Parámetros nuevos (opcionales, no rompen llamadas previas):
+      s9_raw : DataFrame crudo sección 9  (cols: garzon, iso_week, venta, adic)
+      s11s   : DataFrame crudo comportamiento semanal (cols: local, iso_week, venta, adic)
+      s11m   : DataFrame crudo comportamiento mensual (cols: local, mes 'YYYY-MM', venta, adic)
+    """
     import pandas as _pd
 
     def _money_to_int(x):
@@ -4394,6 +4401,103 @@ def _sg_construir_ctx_b(local, ini, fin, ng, jef, ranking,
             d["total"]=tot; filas.append(d)
         return {"filas":filas,"total":{}}
 
+    # ---- Helpers de nombre / periodo (replican la lógica on-screen) ----
+    import re as _re
+    def _limpia_nombre(n):
+        """'12345_Juan Perez' -> 'Juan Perez' (igual que _sg_limpia_nombre on-screen)."""
+        return _re.sub(r'^\S+_', '', str(n or '')).strip()
+
+    _MESES_ABBR = {1:"ene",2:"feb",3:"mar",4:"abr",5:"may",6:"jun",
+                   7:"jul",8:"ago",9:"sep",10:"oct",11:"nov",12:"dic"}
+    def _lab_mes(praw):
+        """'2026-03' -> 'mar-2026'. Si no parsea, devuelve el valor crudo."""
+        try:
+            y, m = str(praw).split("-")[:2]
+            return f"{_MESES_ABBR[int(m)]}-{y}"
+        except Exception:
+            return str(praw)
+
+    # ---- Sección 9: adicionales_por_garzon_anual (desde s9_raw crudo) ----
+    def _sec9_anual_block(df):
+        """Cols esperadas: garzon, iso_week, venta, adic. pct = adic/venta (fracción)."""
+        empty = {"series": [], "filas": [], "total": {}}
+        if df is None or getattr(df, "empty", True):
+            return empty
+        d = df.copy()
+        d["iso_week"] = _pd.to_numeric(d["iso_week"], errors="coerce")
+        d["venta"]    = _pd.to_numeric(d["venta"],    errors="coerce").fillna(0.0)
+        d["adic"]     = _pd.to_numeric(d["adic"],     errors="coerce").fillna(0.0)
+        d = d.dropna(subset=["iso_week"])
+        if d.empty:
+            return empty
+        semanas = sorted(int(w) for w in d["iso_week"].unique())
+        series  = [str(w) for w in semanas]
+        filas = []
+        for g in sorted(d["garzon"].dropna().unique()):
+            sub = d[d["garzon"] == g]
+            anios = []; tv = ta = 0.0
+            for w in semanas:
+                wk = sub[sub["iso_week"] == w]
+                v = float(wk["venta"].sum()) if not wk.empty else 0.0
+                a = float(wk["adic"].sum())  if not wk.empty else 0.0
+                tv += v; ta += a
+                anios.append({"venta": int(round(v)), "pct": a / v} if v else None)
+            filas.append({"nombre": _limpia_nombre(g), "anios": anios,
+                          "total_venta": int(round(tv)),
+                          "total_pct": (ta / tv) if tv else 0.0})
+        # TOTAL GENERAL (anios siempre como dict; el generador no tolera None aquí)
+        anios_t = []; gtv = gta = 0.0
+        for w in semanas:
+            wk = d[d["iso_week"] == w]
+            v = float(wk["venta"].sum()); a = float(wk["adic"].sum())
+            gtv += v; gta += a
+            anios_t.append({"venta": int(round(v)), "pct": (a / v) if v else 0.0})
+        total = {"nombre": "TOTAL GENERAL", "anios": anios_t,
+                 "total_venta": int(round(gtv)),
+                 "total_pct": (gta / gtv) if gtv else 0.0}
+        return {"series": series, "filas": filas, "total": total}
+
+    # ---- Sección 11: comportamiento por local (desde s11s / s11m crudos) ----
+    def _comportamiento_block(df, period_col, sort_key, label_fn):
+        """Cols esperadas: local, <period_col>, venta, adic.
+        Devuelve {columnas, filas:[{local,valores,total}], total:{valores,total}}.
+        % por celda = adic/venta; total por fila = Σadic/Σventa (no promedio de %)."""
+        empty = {"columnas": [], "filas": [], "total": {}}
+        if df is None or getattr(df, "empty", True):
+            return empty
+        d = df.copy()
+        d["venta"] = _pd.to_numeric(d["venta"], errors="coerce").fillna(0.0)
+        d["adic"]  = _pd.to_numeric(d["adic"],  errors="coerce").fillna(0.0)
+        d[period_col] = d[period_col].astype(str)
+        d["local"] = d["local"].apply(lambda x: "Pedro de Valdivia" if x == "Providencia" else x)
+        periodos_raw = sorted(d[period_col].dropna().unique(), key=sort_key)
+        if not periodos_raw:
+            return empty
+        columnas = [label_fn(p) for p in periodos_raw]
+        raw2lab  = dict(zip(periodos_raw, columnas))
+        filas = []
+        for loc in d["local"].dropna().unique():
+            sub = d[d["local"] == loc]
+            valores = {}; sv = sa = 0.0
+            for praw in periodos_raw:
+                cell = sub[sub[period_col] == praw]
+                v = float(cell["venta"].sum()); a = float(cell["adic"].sum())
+                sv += v; sa += a
+                valores[raw2lab[praw]] = (a / v) if v else None
+            filas.append({"local": loc, "valores": valores,
+                          "total": (sa / sv) if sv else None})
+        # orden por % total descendente (None al fondo)
+        filas.sort(key=lambda r: (r["total"] is not None, r["total"] or 0.0), reverse=True)
+        # TOTAL GENERAL por columna (Σ sobre locales)
+        valores_t = {}
+        for praw in periodos_raw:
+            cell = d[d[period_col] == praw]
+            v = float(cell["venta"].sum()); a = float(cell["adic"].sum())
+            valores_t[raw2lab[praw]] = (a / v) if v else None
+        gv = float(d["venta"].sum()); ga = float(d["adic"].sum())
+        total = {"valores": valores_t, "total": (ga / gv) if gv else None}
+        return {"columnas": columnas, "filas": filas, "total": total}
+
     ctx = {
         "local": local.upper(),
         "semana": f"{ini.strftime('%d-%m')} AL {fin.strftime('%d-%m')}",
@@ -4411,10 +4515,12 @@ def _sg_construir_ctx_b(local, ini, fin, ng, jef, ranking,
         "adicionales_por_local": _adic_local_block(s6_raw),
         "estrategicos_por_local": _estrat_local_block(s7),
         "evolucion_por_garzon": {"series": [], "filas": []},
-        "adicionales_por_garzon_anual": {"series": [], "filas": [], "total": {}},
+        "adicionales_por_garzon_anual": _sec9_anual_block(s9_raw),
         "comparativa_por_local": {"series": [], "filas": []},
-        "comportamiento_semanal": {"columnas": [], "filas": [], "total": {}},
-        "comportamiento_mensual": {"columnas": [], "filas": [], "total": {}},
+        "comportamiento_semanal": _comportamiento_block(
+            s11s, "iso_week", sort_key=lambda p: int(p), label_fn=lambda p: str(int(p))),
+        "comportamiento_mensual": _comportamiento_block(
+            s11m, "mes", sort_key=lambda p: str(p), label_fn=_lab_mes),
     }
     return ctx
 
@@ -18366,6 +18472,9 @@ buildTree(data, 1, null);
                             locals().get("_rows5", []), locals().get("_rows5_sem", []),
                             locals().get("_s6"), _sg_s7,
                             locals().get("_rows9", []), _g10,
+                            s9_raw=locals().get("_sg_s9"),
+                            s11s=locals().get("_sg_s11s"),
+                            s11m=locals().get("_sg_s11m"),
                         )
                         _pdf_b = generar_pdf_garzones_b(_ctx_b, logo_path=LOGO_PATH)
                         st.download_button("📄 Descargar informe B (réplica fiel)", _pdf_b,
