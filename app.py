@@ -4674,7 +4674,7 @@ def _igb__estilos():
         "pg_titulo": ParagraphStyle("pg_titulo", fontName=FUENTE_BOLD, fontSize=10.5,
                                     alignment=TA_CENTER, leading=12, spaceAfter=3),
         "barra":   ParagraphStyle("barra", fontName=FUENTE_BOLD, fontSize=FS_HEADER,
-                                  alignment=TA_LEFT, leading=FS_HEADER + 1.5, textColor=BLANCO),
+                                  alignment=TA_CENTER, leading=FS_HEADER + 1.5, textColor=BLANCO),
         # encabezados de columna
         "th":      ParagraphStyle("th", fontName=FUENTE_BOLD, fontSize=FS_HEADER,
                                   alignment=TA_CENTER, leading=FS_HEADER + 1),
@@ -4684,9 +4684,9 @@ def _igb__estilos():
         "item":    ParagraphStyle("item", fontName=FUENTE_BOLD, fontSize=FS_CELDA,
                                   alignment=TA_CENTER, leading=FS_CELDA + 0.6),
         "item_l":  ParagraphStyle("item_l", fontName=FUENTE, fontSize=FS_CELDA,
-                                  alignment=TA_LEFT, leading=FS_CELDA + 0.6),
+                                  alignment=TA_CENTER, leading=FS_CELDA + 0.6),
         "item_xs": ParagraphStyle("item_xs", fontName=FUENTE, fontSize=FS_CELDA_XS,
-                                  alignment=TA_LEFT, leading=FS_CELDA_XS + 0.6),
+                                  alignment=TA_CENTER, leading=FS_CELDA_XS + 0.6),
     }
 
 
@@ -4768,7 +4768,7 @@ def _igb__fila_ventas(f, total=False):
     est_item = "item"
     return [
         _igb_P(f["item"], est_item),
-        "$", _igb_fmt_miles(f.get("acum")),
+        "", _igb_fmt_monto(f.get("acum")),
         _igb_fmt_miles(f.get("acum_q")),
         _igb_fmt_pct(f.get("acum_pct")),
         _igb_fmt_monto(f.get("diario")),
@@ -4813,17 +4813,8 @@ def _igb__tabla_ventas(seccion, header_q="Q PRODUCTOS"):
         ("FONTNAME", (0, 1), (-1, -1), FUENTE),
         ("FONTSIZE", (0, 1), (-1, -1), FS_CELDA),
         ("LEADING", (0, 0), (-1, -1), FS_CELDA + 0.6),
-        # alineaciones por columna
-        ("ALIGN", (1, 1), (1, -1), "LEFT"),             # "$"
-        ("ALIGN", (2, 1), (2, -1), "RIGHT"),            # acumulado
-        ("ALIGN", (3, 1), (3, -1), "CENTER"),
-        ("ALIGN", (4, 1), (4, -1), "CENTER"),
-        ("ALIGN", (5, 1), (5, -1), "RIGHT"),
-        ("ALIGN", (6, 1), (6, -1), "CENTER"),
-        ("ALIGN", (7, 1), (7, -1), "CENTER"),
-        ("ALIGN", (8, 1), (8, -1), "RIGHT"),
-        ("ALIGN", (9, 1), (9, -1), "CENTER"),
-        ("ALIGN", (10, 1), (10, -1), "CENTER"),
+        # todo el contenido centrado (H + V)
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
         # columnas % en negrita (diario y semanal)
         ("FONTNAME", (7, 1), (7, -1), FUENTE_BOLD),
         ("FONTNAME", (10, 1), (10, -1), FUENTE_BOLD),
@@ -4831,7 +4822,6 @@ def _igb__tabla_ventas(seccion, header_q="Q PRODUCTOS"):
         ("BOTTOMPADDING", (0, 0), (-1, -1), PAD_CELDA),
         ("LEFTPADDING", (0, 0), (-1, -1), 2),
         ("RIGHTPADDING", (0, 0), (-1, -1), 2),
-        ("LEFTPADDING", (1, 0), (1, -1), 3),            # "$" pegado a la izquierda
     ]
     if n_total is not None:
         estilo += [
@@ -4848,7 +4838,8 @@ def _igb__barra_subseccion(titulo, ancho=104):
     b.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), GRIS_BARRA),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("LEFTPADDING", (0, 0), (-1, -1), 2),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 2),
         ("TOPPADDING", (0, 0), (-1, -1), 0.5),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 0.5),
     ]))
@@ -4935,7 +4926,7 @@ _SEC5_CAMPOS = [
     "p_total",
 ]
 # anchos (suman ~532). Nombre ancho, resto comprimido.
-_SEC5_W = [70, 30, 27, 30, 16,
+_SEC5_W = [87, 30, 27, 30, 16,
            28, 18, 18, 28, 18, 18, 28, 18, 18, 28, 18, 18, 28, 18, 18, 22]
 
 _SEC5_HEADERS = [
@@ -4982,7 +4973,7 @@ def _igb__tabla_sec5(seccion, titulo_banda):
         total_idx = len(data)
         data.append(_igb__fila_sec5(total))
 
-    aligns = ["LEFT"] + ["RIGHT" if t in ("mil",) else "CENTER" for t in _SEC5_TIPO[1:]]
+    aligns = ["CENTER"] * len(_SEC5_W)
 
     t = Table(data, colWidths=_SEC5_W)
     estilo = [
@@ -5269,7 +5260,7 @@ def _igb__pagina_3(ctx):
             fila += [_igb_fmt_miles(par.get("venta")), _igb_fmt_pct(par.get("pct"))]
         fila += [_igb_fmt_miles(t.get("total_venta")), _igb_fmt_pct(t.get("total_pct"))]
         filas9.append(fila)
-    aligns9 = ["LEFT"] + ["RIGHT", "CENTER"] * len(aniarr) + ["RIGHT", "CENTER"]
+    aligns9 = ["CENTER"] * ncol9
     el.append(_igb__tabla_generica([h_top, h_bot], filas9, w9, aligns=aligns9,
                               total_idx=total_idx9, spans=spans9, header_rows=2))
     el.append(Spacer(1, 2))
@@ -5300,10 +5291,10 @@ def _igb__pagina_3(ctx):
 def _igb__tabla_comportamiento(seccion, banda):
     cols = seccion.get("columnas", ["20", "21", "22", "23"])
     w_local = 120
-    n = len(cols)
-    w_resto = 60
-    w = [w_local] + [w_resto] * n + [64]
-    ancho_total = sum(w)
+    n = max(len(cols), 1)
+    w_total = 64
+    w_resto = (ANCHO_UTIL - w_local - w_total) / n   # llena todo el ancho útil
+    w = [w_local] + [w_resto] * n + [w_total]
     # centrar la tabla
     headers = [[_igb_P(banda, "th")] + [""] * (n + 1),
                [_igb_P("LOCAL", "th")] + [_igb_P(c, "th") for c in cols] + [_igb_P("TOTAL GENERAL", "th")]]
@@ -5326,8 +5317,8 @@ def _igb__tabla_comportamiento(seccion, banda):
     spans = [(0, 0, n + 1, 0)]
     t = _igb__tabla_generica(headers, filas, w, aligns=["CENTER"] * (n + 2),
                         total_idx=total_idx, spans=spans, header_rows=2)
-    # centrar horizontalmente sin envolver en otra tabla (evita medir mal el alto)
-    t.hAlign = "CENTER"
+    # ancho completo (532): cae dentro de la misma línea exterior que el resto
+    t.hAlign = "LEFT"
     return t
 
 
