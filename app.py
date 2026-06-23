@@ -16515,7 +16515,7 @@ buildTree(data, 1, null);
 
         # ── Whitelist nominal de garzones evaluados (red completa) ──
         _SG_WHITELIST = [
-            'Francisco Navarro','Jeshaylin Molina','Natalia Araya',
+            'Francisco Navarro','Jeshaylin Molina',
             'Yuscarlenaidu Martinezsulbaran','Yirfrey Alexander Valero Ramirez','Yurubi',
             'Genesis Penafiel','Raul Figueroa','David Ramirez','Miguel Menacho Oliveira',
             'Maria Campos','Alejandro Vergara','Sofia Andarcia','Jesus Rodriguez Molina',
