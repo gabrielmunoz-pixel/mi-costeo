@@ -4207,6 +4207,168 @@ def _cr_conclusiones_empresa(comp, red, periodos, modo, cp_red):
     return out
 
 
+# ===========================================================================
+#  RESUMEN DE COLORES (réplica de la foto) — 1 página horizontal
+#  Ranking triple (DAX): (rankVdp + rankPctTotal - venta/1e10)/2, ascendente.
+#  Colores por posición de ranking: verde (mejores) / amarillo (medio) / rojo.
+# ===========================================================================
+def _sg_color_bands(n):
+    """Cantidad de verdes/amarillos/rojos según nº de garzones (regla confirmada)."""
+    if n <= 0:
+        return 0, 0, 0
+    if n >= 10:   nv, na = 3, 2
+    elif n >= 8:  nv, na = 3, 1
+    elif n >= 5:  nv, na = 2, 1     # 5 garzones -> 2/1/2
+    elif n >= 3:  nv, na = 1, 1
+    else:         nv, na = 1, 0
+    nv = min(nv, n)
+    na = min(na, max(n - nv, 0))
+    nr = max(n - nv - na, 0)
+    return nv, na, nr
+
+
+def _sg_rank_dense_desc(valores):
+    """Rank denso descendente (igual que RANKX(...; DESC; DENSE))."""
+    uniq = sorted(set(valores), reverse=True)
+    pos = {v: i + 1 for i, v in enumerate(uniq)}
+    return [pos[v] for v in valores]
+
+
+def _sg_orden_colores(df_acum, dias_periodo):
+    """Ordena garzones por el ranking triple y asigna color por posición.
+
+    df_acum: DataFrame crudo de la sección 5 acumulado
+             (cols: garzon, dias, venta_total, v_agr, v_caf, v_pos, v_lsa, v_lca).
+    Devuelve (filas_ordenadas, total).  Cada fila trae los mismos valores que
+    muestra la sección 5 (venta, propina=venta*0.10, vdp=venta/dias, %s) + rank + color.
+    """
+    import re as _re
+    def _limpia(n):
+        return _re.sub(r'^\S+_', '', str(n or '')).strip()
+    g = []
+    for _, r in df_acum.iterrows():
+        vt = float(r["venta_total"]) or 0.0
+        if vt <= 0:
+            continue
+        dias = int(r["dias"]) or 1
+        va, vc, vp = float(r["v_agr"]), float(r["v_caf"]), float(r["v_pos"])
+        vsa, vca = float(r["v_lsa"]), float(r["v_lca"])
+        adic = va + vc + vp + vsa + vca
+        g.append({
+            "nombre": _limpia(r["garzon"]),
+            "venta": vt, "propina": vt * 0.10, "vdp": vt / dias, "dias": dias,
+            "v_agr": va, "p_agr": va / vt, "v_caf": vc, "p_caf": vc / vt,
+            "v_pos": vp, "p_pos": vp / vt, "v_lsa": vsa, "p_sa": vsa / vt,
+            "v_lca": vca, "p_ca": vca / vt, "p_total": adic / vt,
+        })
+    if not g:
+        return [], None
+    rvp = _sg_rank_dense_desc([x["vdp"] for x in g])
+    r2 = _sg_rank_dense_desc([x["p_total"] for x in g])
+    comp = [(rvp[i] + r2[i] - g[i]["venta"] / 1e10) / 2 for i in range(len(g))]
+    orden = sorted(range(len(g)), key=lambda i: comp[i])
+    filas = [g[i] for i in orden]
+    nv, na, nr = _sg_color_bands(len(filas))
+    colores = ["verde"] * nv + ["amar"] * na + ["rojo"] * nr
+    for i, f in enumerate(filas):
+        f["rank"] = i + 1
+        f["color"] = colores[i] if i < len(colores) else "rojo"
+    sv = sum(f["venta"] for f in filas)
+    tot = {"nombre": "TOTAL GENERAL", "venta": sv, "propina": sv * 0.10,
+           "vdp": (sv / dias_periodo) if dias_periodo else 0, "dias": dias_periodo,
+           "v_agr": sum(f["v_agr"] for f in filas), "v_caf": sum(f["v_caf"] for f in filas),
+           "v_pos": sum(f["v_pos"] for f in filas), "v_lsa": sum(f["v_lsa"] for f in filas),
+           "v_lca": sum(f["v_lca"] for f in filas)}
+    for kv, kp in [("v_agr", "p_agr"), ("v_caf", "p_caf"), ("v_pos", "p_pos"),
+                   ("v_lsa", "p_sa"), ("v_lca", "p_ca")]:
+        tot[kp] = (tot[kv] / sv) if sv else 0
+    tot["p_total"] = (sum(tot[k] for k in ("v_agr", "v_caf", "v_pos", "v_lsa", "v_lca")) / sv) if sv else 0
+    return filas, tot
+
+
+def _sg_resumen_colores_pdf(df_acum, local, dias_periodo, logo_path=None):
+    """Genera el cuadro resumen con colores (1 página horizontal) y devuelve bytes PDF."""
+    import io as _io
+    from reportlab.lib.pagesizes import letter as _letter, landscape as _landscape
+    from reportlab.lib import colors as _colors
+    from reportlab.lib.styles import ParagraphStyle as _PS
+    from reportlab.lib.enums import TA_CENTER as _TAC
+    from reportlab.platypus import (SimpleDocTemplate as _Doc, Table as _Table,
+                                    TableStyle as _TS, Paragraph as _Par, Spacer as _Sp)
+
+    def _fm(v):
+        try: return f"${int(round(float(v))):,}".replace(",", ".")
+        except: return "$0"
+    def _fp(v):
+        try: return f"{float(v)*100:.1f}%".replace(".", ",")
+        except: return "0,0%"
+
+    filas, tot = _sg_orden_colores(df_acum, dias_periodo)
+
+    VERDE = _colors.HexColor("#63BE7B"); AMAR = _colors.HexColor("#FFEB84")
+    ROJO = _colors.HexColor("#F8696B"); GRIS = _colors.HexColor("#D9D9D9")
+    BORDE = _colors.HexColor("#808080")
+    _cmap = {"verde": VERDE, "amar": AMAR, "rojo": ROJO}
+
+    st_h = _PS("h", fontName="Helvetica-Bold", fontSize=6.2, alignment=_TAC, leading=7)
+    st_c = _PS("c", fontName="Helvetica", fontSize=6.4, alignment=_TAC, leading=7.6)
+    st_b = _PS("b", fontName="Helvetica-Bold", fontSize=6.4, alignment=_TAC, leading=7.6)
+    st_t = _PS("t", fontName="Helvetica-Bold", fontSize=11, alignment=_TAC, leading=13)
+    P = lambda s, e=st_c: _Par(str(s), e)
+
+    headers = ["Rank", "NOMBRE GARZON", "VENTA", "APORTE<br/>PROPINA",
+               "VENTA DIARIA<br/>PROMEDIO", "DIAS<br/>TRAB", "VENTA<br/>AGREGADOS",
+               "%<br/>AGREGADO", "VENTA<br/>CAFETERIA", "%<br/>CAFETERIA",
+               "VENTA<br/>POSTRES", "%<br/>POSTRES", "VENTA LIQ<br/>S/A", "% LIQ<br/>S/A",
+               "VENTA LIQ<br/>C/A", "% LIQ<br/>C/A", "% TOTAL"]
+    head = [P(h, st_h) for h in headers]
+
+    def fila_de(f, bold=False):
+        e = st_b if bold else st_c
+        return [P(f.get("rank", ""), e), P(f["nombre"], e), P(_fm(f["venta"]), e),
+                P(_fm(f["propina"]), e), P(_fm(f["vdp"]), e), P(f["dias"], e),
+                P(_fm(f["v_agr"]), e), P(_fp(f["p_agr"]), e), P(_fm(f["v_caf"]), e),
+                P(_fp(f["p_caf"]), e), P(_fm(f["v_pos"]), e), P(_fp(f["p_pos"]), e),
+                P(_fm(f["v_lsa"]), e), P(_fp(f["p_sa"]), e), P(_fm(f["v_lca"]), e),
+                P(_fp(f["p_ca"]), e), P(_fp(f["p_total"]), e)]
+
+    data = [head]
+    for f in filas:
+        data.append(fila_de(f))
+    if tot:
+        data.append(fila_de(tot, bold=True))
+
+    PAG_W = _landscape(_letter)[0]
+    MX = 22
+    util = PAG_W - 2 * MX
+    pesos = [3.2, 12, 7.2, 6.6, 7.2, 3.6, 6.6, 5, 6.6, 5, 6.6, 5, 6.6, 5, 6.6, 5, 5.6]
+    sp = sum(pesos)
+    wcols = [util * p / sp for p in pesos]
+
+    t = _Table(data, colWidths=wcols, repeatRows=1)
+    estilo = [
+        ("GRID", (0, 0), (-1, -1), 0.5, BORDE),
+        ("BACKGROUND", (0, 0), (-1, 0), GRIS),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("TOPPADDING", (0, 0), (-1, -1), 2.5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
+        ("LEFTPADDING", (0, 0), (-1, -1), 2),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+    ]
+    for i, f in enumerate(filas):
+        estilo.append(("BACKGROUND", (0, i + 1), (-1, i + 1), _cmap.get(f["color"], ROJO)))
+    if tot:
+        estilo.append(("BACKGROUND", (0, len(filas) + 1), (-1, len(filas) + 1), GRIS))
+    t.setStyle(_TS(estilo))
+
+    buf = _io.BytesIO()
+    doc = _Doc(buf, pagesize=_landscape(_letter),
+               leftMargin=MX, rightMargin=MX, topMargin=18, bottomMargin=18)
+    doc.build([_Par(str(local).upper(), st_t), _Sp(1, 6), t])
+    buf.seek(0)
+    return buf.getvalue()
+
 
 def _sg_construir_ctx_b(local, ini, fin, ng, jef, ranking,
                         s1, s2, s3, s4, rows5, rows5_sem, s6_raw, s7, rows9, g10,
