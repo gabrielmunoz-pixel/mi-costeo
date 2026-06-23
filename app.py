@@ -4208,88 +4208,117 @@ def _cr_conclusiones_empresa(comp, red, periodos, modo, cp_red):
 
 
 def generar_pdf_garzones(ctx):
-    """PDF Informe de Control de Ventas Salón, replica visual del PDF Vitacura."""
+    """PDF Informe de Control de Ventas Salón, replica la visual del PDF original."""
     import io as _io, os as _os
     from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib import colors as rc
     from reportlab.lib.units import mm
     from reportlab.platypus import (SimpleDocTemplate, Table, TableStyle, Paragraph,
-                                    Spacer, HRFlowable)
+                                    Spacer, HRFlowable, KeepTogether)
     from reportlab.platypus import Image as RLImage
     from reportlab.lib.styles import ParagraphStyle
-    from reportlab.lib.enums import TA_LEFT, TA_CENTER
+    from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
 
-    CB = rc.HexColor('#1a1a1a'); CG = rc.HexColor('#b8860b'); CM = rc.HexColor('#444444')
-    CHd = rc.HexColor('#1a1a1a'); CHdT = rc.HexColor('#d4a853'); CBo = rc.HexColor('#cccccc')
-    CRow = rc.HexColor('#f5f2ec')
+    CB = rc.HexColor('#1a1a1a'); CG = rc.HexColor('#b8860b'); CM = rc.HexColor('#555555')
+    CHd = rc.HexColor('#404040'); CHdT = rc.white; CBo = rc.HexColor('#bfbfbf')
+    CRow = rc.HexColor('#f2efe9'); CTotal = rc.HexColor('#e8e0cf')
 
-    def s(sz, col, bold=False, align=TA_LEFT):
-        return ParagraphStyle('_', fontSize=sz, textColor=col,
-            fontName='Helvetica-Bold' if bold else 'Helvetica', alignment=align, leading=sz*1.3)
+    PAGE = landscape(A4)
+    AW = PAGE[0] - 24*mm  # ancho útil (márgenes 12mm)
+
+    def P(txt, sz=7, col=CB, bold=False, align=TA_LEFT):
+        return Paragraph(str(txt), ParagraphStyle('_', fontSize=sz, textColor=col,
+            fontName='Helvetica-Bold' if bold else 'Helvetica', alignment=align, leading=sz*1.25))
 
     buf = _io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=landscape(A4),
+    doc = SimpleDocTemplate(buf, pagesize=PAGE,
         leftMargin=12*mm, rightMargin=12*mm, topMargin=10*mm, bottomMargin=10*mm)
     story = []
 
-    # Encabezado: logo + título + ranking
-    logo = Spacer(24*mm, 20*mm)
+    # ════════ ENCABEZADO ════════
+    logo = Spacer(26*mm, 22*mm)
     if _os.path.exists(LOGO_PATH):
-        logo = RLImage(LOGO_PATH, width=22*mm, height=22*mm)
-    local = ctx.get("local","")
-    rank = ctx.get("ranking","—")
-    titulo_cell = [
-        Paragraph("INFORME DE CONTROL DE VENTAS SALÓN", s(15, CG, bold=True, align=TA_CENTER)),
-        Paragraph(f"LOCAL — {local.upper()}", s(10, CM, align=TA_CENTER)),
-        Paragraph(f"Semana {ctx['ini'].strftime('%d-%m')} al {ctx['fin'].strftime('%d-%m-%Y')}",
-                  s(8, CM, align=TA_CENTER)),
+        logo = RLImage(LOGO_PATH, width=26*mm, height=22*mm)
+    titulo = [
+        P("INFORME DE CONTROL DE VENTAS SALÓN", 15, CG, bold=True, align=TA_CENTER),
+        Spacer(1, 1*mm),
+        P(f"LOCAL — {ctx.get('local','').upper()}", 11, CB, bold=True, align=TA_CENTER),
+        P(f"Semana {ctx['ini'].strftime('%d-%m')} al {ctx['fin'].strftime('%d-%m-%Y')}",
+          8.5, CM, align=TA_CENTER),
     ]
-    rank_cell = [
-        Paragraph("RANKING", s(11, CB, bold=True, align=TA_CENTER)),
-        Paragraph(rank, s(20, CG, bold=True, align=TA_CENTER)),
-    ]
-    hdr = Table([[logo, titulo_cell, rank_cell]], colWidths=[28*mm, 180*mm, 60*mm])
-    hdr.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),
-        ('BOX',(2,0),(2,0),1,CBo), ('LINEBELOW',(0,0),(1,0),1.5,CG)]))
-    story += [hdr, Spacer(1, 2*mm),
-              Paragraph(f"Cantidad garzones evaluados: {ctx.get('ng','')}", s(9, CM)),
-              Spacer(1, 4*mm)]
+    rank_box = Table([[P("RANKING", 11, CB, bold=True, align=TA_CENTER)],
+                      [P(ctx.get('ranking','—'), 22, CG, bold=True, align=TA_CENTER)]],
+                     colWidths=[42*mm], rowHeights=[8*mm, 14*mm])
+    rank_box.setStyle(TableStyle([('BOX',(0,0),(-1,-1),1,CBo),
+        ('VALIGN',(0,0),(-1,-1),'MIDDLE'), ('BACKGROUND',(0,0),(-1,-1),rc.white)]))
+    hdr = Table([[logo, titulo, rank_box]], colWidths=[30*mm, AW-30*mm-46*mm, 46*mm])
+    hdr.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE')]))
+    story += [hdr, Spacer(1, 2*mm)]
 
-    def tabla(titulo, rows):
-        if not rows: return
+    # Tabla de jefaturas
+    jef = Table([[
+        P("SUPERVISOR SERVICIO:", 8, CB, bold=True), P(ctx.get('supervisor',''), 8, CM),
+        P("JEFE SERVICIO:", 8, CB, bold=True), P(ctx.get('jefe',''), 8, CM),
+    ],[
+        P("SUB JEFE SERVICIO:", 8, CB, bold=True), P(ctx.get('subjefe',''), 8, CM),
+        P("CANTIDAD GARZONES:", 8, CB, bold=True), P(str(ctx.get('ng','')), 8, CM),
+    ]], colWidths=[42*mm, (AW-42*mm-32*mm)/2, 32*mm, (AW-42*mm-32*mm)/2])
+    jef.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+        ('TOPPADDING',(0,0),(-1,-1),1.5),('BOTTOMPADDING',(0,0),(-1,-1),1.5)]))
+    story += [jef, Spacer(1, 1.5*mm),
+              HRFlowable(width="100%", color=CG, thickness=1.2), Spacer(1, 3*mm)]
+
+    # ════════ helper de tabla ════════
+    def tabla(titulo_sec, rows, num_cols_left=1, font=6.5):
+        """rows: lista de dicts. num_cols_left = nº columnas alineadas a la izquierda (texto)."""
+        if not rows:
+            return
         cols = list(rows[0].keys())
-        data = [cols] + [[str(r.get(c,"")) for c in cols] for r in rows]
-        # ancho proporcional
-        w = (273*mm) / len(cols)
-        t = Table(data, colWidths=[w]*len(cols), repeatRows=1)
-        st_ = [
-            ('BACKGROUND',(0,0),(-1,0),CHd), ('TEXTCOLOR',(0,0),(-1,0),CHdT),
-            ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'), ('FONTSIZE',(0,0),(-1,-1),6.5),
+        # anchos: primera(s) columna(s) más anchas (texto), resto iguales
+        n = len(cols)
+        w_left = 34*mm  # ancho de la columna de texto principal
+        w_rest = (AW - w_left*num_cols_left) / (n - num_cols_left) if n > num_cols_left else AW/n
+        widths = [w_left]*num_cols_left + [w_rest]*(n-num_cols_left)
+        header = [P(c, font, CHdT, bold=True, align=(TA_LEFT if i < num_cols_left else TA_CENTER))
+                  for i, c in enumerate(cols)]
+        data = [header]
+        for r in rows:
+            vals = list(r.values())
+            row = [P(vals[i], font, CB, align=(TA_LEFT if i < num_cols_left else TA_CENTER))
+                   for i in range(n)]
+            data.append(row)
+        t = Table(data, colWidths=widths, repeatRows=1)
+        stl = [
+            ('BACKGROUND',(0,0),(-1,0),CHd),
             ('GRID',(0,0),(-1,-1),0.3,CBo),
             ('ROWBACKGROUNDS',(0,1),(-1,-1),[rc.white, CRow]),
-            ('TEXTCOLOR',(0,1),(-1,-1),CB), ('ALIGN',(1,0),(-1,-1),'CENTER'),
-            ('TOPPADDING',(0,0),(-1,-1),2.5),('BOTTOMPADDING',(0,0),(-1,-1),2.5),
+            ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+            ('TOPPADDING',(0,0),(-1,-1),2),('BOTTOMPADDING',(0,0),(-1,-1),2),
+            ('LEFTPADDING',(0,0),(-1,-1),3),('RIGHTPADDING',(0,0),(-1,-1),3),
         ]
-        # resaltar fila TOTAL
         for i, r in enumerate(rows, start=1):
             if str(list(r.values())[0]).upper().startswith("TOTAL"):
-                st_.append(('FONTNAME',(0,i),(-1,i),'Helvetica-Bold'))
-                st_.append(('BACKGROUND',(0,i),(-1,i),rc.HexColor('#ece5d3')))
-        t.setStyle(TableStyle(st_))
-        story.append(Paragraph(titulo, s(10, CG, bold=True)))
+                stl.append(('BACKGROUND',(0,i),(-1,i),CTotal))
+                stl.append(('FONTNAME',(0,i),(-1,i),'Helvetica-Bold'))
+        t.setStyle(TableStyle(stl))
+        story.append(P(titulo_sec, 10, CG, bold=True))
         story.append(Spacer(1, 1.5*mm))
         story.append(t)
         story.append(Spacer(1, 4*mm))
 
-    tabla("1 · VENTAS TOTALES SALÓN", ctx.get("rows1"))
-    tabla("2 · VENTAS POR CATEGORÍA", ctx.get("rows2"))
-    tabla("4 · CONTROL DE PRODUCTOS ESTRATÉGICOS", ctx.get("rows4"))
-    tabla("5 · ADICIONALES POR GARZÓN", ctx.get("rows5"))
-    tabla("9 · EVOLUCIÓN POR GARZÓN", ctx.get("rows9"))
+    tabla("1 · VENTAS TOTALES SALÓN", ctx.get("rows1"), num_cols_left=1)
+    tabla("2 · VENTAS POR CATEGORÍA", ctx.get("rows2"), num_cols_left=1)
+    tabla("4 · CONTROL DE PRODUCTOS ESTRATÉGICOS", ctx.get("rows4"), num_cols_left=1)
+    tabla("5 · ADICIONALES POR GARZÓN (acumulado mensual)", ctx.get("rows5"), num_cols_left=1, font=5.8)
+    if ctx.get("rows5_sem"):
+        tabla("5 · ADICIONALES POR GARZÓN (semanal)", ctx.get("rows5_sem"), num_cols_left=1, font=5.8)
+    tabla("9 · EVOLUCIÓN POR GARZÓN", ctx.get("rows9"), num_cols_left=1)
 
     doc.build(story)
     buf.seek(0)
     return buf.getvalue()
+
+
 
 
 def _normalizar_rut_aliva(rut_raw):
@@ -16627,6 +16656,20 @@ buildTree(data, 1, null);
         ]
 
         # ── Categorías macro (sección 1 y 2) ──
+        # ── Jefaturas por local (supervisor / jefe salón / sub jefe salón) ──
+        _SG_JEFATURAS = {
+            'La Reina': ('Cristian Ramirez','Jose Mendoza Escalante','Gerardo Delgado Villalobos'),
+            'Quilin': ('Cristian Ramirez','Jose Gil Romero','Giovanni Rojas'),
+            'La Dehesa': ('Cristian Ramirez','Miguel Quintero Rodriguez','Oscar Barrera Valdebenito'),
+            'Macul': ('Cristian Ramirez','Alexander Marin Torrealba','Nathaly Papa Colmenares'),
+            'Los Trapenses': ('Cristian Ramirez','Elicmer Uzcategui Rondon','Rodrigo Montt Creixell'),
+            'Providencia': ('Luis Mendoza','Jose Mora Carrero','Oscar Loyola Sepulveda'),
+            'Nueva Providencia': ('Luis Mendoza','Rodrigo Calderon Villaseca','Angel Seidel Caldero'),
+            'Chicureo': ('Luis Mendoza','Angel Molina Contreras','Maria Espina Cairasco'),
+            'Vitacura': ('Luis Mendoza','Sergio Salas Cazorla','Michelle Maleville Muñoz'),
+            'Las Condes': ('Luis Mendoza','Yuleidi Zambrano Hernandez','Johelvi Pineda Salas'),
+        }
+
         _SG_BAR_CATS = ('Bajativos','Cervezas','Cocteles','Espumantes','Piscos','Ron',
                         'Tequila','Vinos','Vodka','Whisky',
                         'Bebidas','Jugos Naturales','Limonadas','Tragos Sin Alcohol')
@@ -17229,14 +17272,17 @@ buildTree(data, 1, null);
             # ═══════════ BOTÓN PDF ═══════════
             st.markdown("---")
             try:
+                _sg_jef = _SG_JEFATURAS.get(_sg_local, ("","",""))
                 _sg_ctx = {
                     "local": _sg_local,
                     "ranking": locals().get("_ranking_txt", "—"),
                     "ng": _sg_ngarz, "ini": _sg_ini, "fin": _sg_fin,
+                    "supervisor": _sg_jef[0], "jefe": _sg_jef[1], "subjefe": _sg_jef[2],
                     "rows1": locals().get("_rows1", []),
                     "rows2": locals().get("_rows2", []),
                     "rows4": locals().get("_rows4", []),
                     "rows5": locals().get("_rows5", []),
+                    "rows5_sem": locals().get("_rows5_sem", []),
                     "rows9": locals().get("_rows9", []),
                 }
                 _sg_pdf = generar_pdf_garzones(_sg_ctx)
