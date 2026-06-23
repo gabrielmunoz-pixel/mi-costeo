@@ -16750,46 +16750,54 @@ buildTree(data, 1, null);
             # ── Render Sección 1 ──
             st.markdown("### 1 · Ventas Totales Salón")
             if _sg_s1 is not None and not _sg_s1.empty:
-                _tot1 = _sg_s1[_sg_s1["macro"] == "TOTAL"]["venta_sem"]
-                _tot1v = float(_tot1.iloc[0]) if not _tot1.empty else 0
+                _tot1_acum = float(_sg_s1[_sg_s1["macro"]=="TOTAL"]["venta_acum"].iloc[0]) if not _sg_s1[_sg_s1["macro"]=="TOTAL"].empty else 0
+                _tot1_sem = float(_sg_s1[_sg_s1["macro"]=="TOTAL"]["venta_sem"].iloc[0]) if not _sg_s1[_sg_s1["macro"]=="TOTAL"].empty else 0
                 _rows1 = []
                 _order = ["ALIMENTOS","BAR","CAFETERÍA Y POSTRES","TOTAL"]
                 _s1i = _sg_s1.set_index("macro")
                 for m in _order:
                     if m not in _s1i.index: continue
                     r = _s1i.loc[m]
-                    vsem = float(r["venta_sem"]); vacum = float(r["venta_acum"])
-                    pct = (vsem / _tot1v * 100) if _tot1v else 0
+                    vacum = float(r["venta_acum"]); vsem = float(r["venta_sem"])
+                    qacum = float(r["q_acum"]); qsem = float(r["q_sem"])
+                    pct_a = (vacum/_tot1_acum*100) if _tot1_acum else 0
+                    pct_s = (vsem/_tot1_sem*100) if _tot1_sem else 0
                     _rows1.append({
                         "Ítem": m,
                         "$ Acumulado": _sg_fmt_money(vacum),
-                        "Q Acum": int(r["q_acum"]),
-                        "$ Diario": _sg_fmt_money(vacum / _sg_dias_acum),
+                        "Q Acum": int(qacum), "% Ac": f"{pct_a:.1f}%",
+                        "$ Diario": _sg_fmt_money(vacum/_sg_dias_acum),
+                        "Q Diario": int(round(qacum/_sg_dias_acum)),
                         "$ Semanal": _sg_fmt_money(vsem),
-                        "%": f"{pct:.1f}%",
+                        "Q Sem": int(qsem), "% Sem": f"{pct_s:.1f}%",
                     })
+                _tot1v = _tot1_sem
                 st.dataframe(pd.DataFrame(_rows1), use_container_width=True, hide_index=True)
 
             # ── Render Sección 2 ──
             st.markdown(f"### 2 · Ventas por Categoría — garzones evaluados ({_sg_ngarz})")
             if _sg_s2 is not None and not _sg_s2.empty:
-                _tot2 = _sg_s2[_sg_s2["macro"] == "TOTAL"]["venta_sem"]
-                _tot2v = float(_tot2.iloc[0]) if not _tot2.empty else 0
+                _tot2_acum = float(_sg_s2[_sg_s2["macro"]=="TOTAL"]["venta_acum"].iloc[0]) if not _sg_s2[_sg_s2["macro"]=="TOTAL"].empty else 0
+                _tot2_sem = float(_sg_s2[_sg_s2["macro"]=="TOTAL"]["venta_sem"].iloc[0]) if not _sg_s2[_sg_s2["macro"]=="TOTAL"].empty else 0
                 _rows2 = []
                 _s2i = _sg_s2.set_index("macro")
                 for m in ["ALIMENTOS","BAR","CAFETERÍA Y POSTRES","TOTAL"]:
                     if m not in _s2i.index: continue
                     r = _s2i.loc[m]
-                    vsem = float(r["venta_sem"]); vacum = float(r["venta_acum"])
-                    pct = (vsem / _tot2v * 100) if _tot2v else 0
+                    vacum = float(r["venta_acum"]); vsem = float(r["venta_sem"])
+                    qacum = float(r["q_acum"]); qsem = float(r["q_sem"])
+                    pct_a = (vacum/_tot2_acum*100) if _tot2_acum else 0
+                    pct_s = (vsem/_tot2_sem*100) if _tot2_sem else 0
                     _rows2.append({
                         "Ítem": m,
                         "$ Acumulado": _sg_fmt_money(vacum),
-                        "Q Acum": int(r["q_acum"]),
-                        "$ Diario": _sg_fmt_money(vacum / _sg_dias_acum),
+                        "Q Acum": int(qacum), "% Ac": f"{pct_a:.1f}%",
+                        "$ Diario": _sg_fmt_money(vacum/_sg_dias_acum),
+                        "Q Diario": int(round(qacum/_sg_dias_acum)),
                         "$ Semanal": _sg_fmt_money(vsem),
-                        "%": f"{pct:.1f}%",
+                        "Q Sem": int(qsem), "% Sem": f"{pct_s:.1f}%",
                     })
+                _tot2v = _tot2_sem
                 st.dataframe(pd.DataFrame(_rows2), use_container_width=True, hide_index=True)
                 st.caption(f"Total venta salón evaluada: {_sg_fmt_money(_tot2v)} "
                            f"(esperado Vitacura sem 01-07: $59.216.110)")
@@ -16800,12 +16808,14 @@ buildTree(data, 1, null);
             _sg_ng = _sg_ngarz if _sg_ngarz else 1
 
             def _sg_bloque3(titulo, casos, df_data, total_titulo="TOTAL"):
-                """casos: lista de (etiqueta, [categorias_menu]). Renderiza tabla sección 3."""
+                """casos: lista de (etiqueta, [categorias_menu]). Tabla sección 3 con
+                bloques Acumulado / Diario / Semanal, cada uno con Q prom×garzón y %."""
                 if df_data is None or df_data.empty:
                     return
                 _di = df_data.set_index("categoria_menu")
                 filas = []
                 tot_sem = tot_acum = tot_q_acum = tot_q_sem = 0
+                def _qpg(q): return round(q / _sg_ng, 0)
                 for etiqueta, cats in casos:
                     vsem = vacum = qacum = qsem = 0
                     for c in cats:
@@ -16813,26 +16823,28 @@ buildTree(data, 1, null);
                             r = _di.loc[c]
                             vsem += float(r["venta_sem"]); vacum += float(r["venta_acum"])
                             qacum += float(r["q_acum"]); qsem += float(r["q_sem"])
-                    pct = (vsem / _sg_tot_eval * 100) if _sg_tot_eval else 0
+                    pct_a = (vacum / _sg_tot_eval * 100) if _sg_tot_eval else 0
+                    pct_s = (vsem / _sg_tot_eval * 100) if _sg_tot_eval else 0
                     filas.append({
                         "Ítem": etiqueta,
                         "$ Acumulado": _sg_fmt_money(vacum),
-                        "Q": int(qacum),
-                        "Q prom × garzón": round(qacum / _sg_ng, 0),
+                        "Q prom×gz Ac": _qpg(qacum), "% Ac": f"{pct_a:.1f}%",
                         "$ Diario": _sg_fmt_money(vacum / _sg_dias_acum),
+                        "Q prom×gz Diario": _qpg(qacum / _sg_dias_acum),
                         "$ Semanal": _sg_fmt_money(vsem),
-                        "%": f"{pct:.1f}%",
+                        "Q prom×gz Sem": _qpg(qsem), "% Sem": f"{pct_s:.1f}%",
                     })
                     tot_sem += vsem; tot_acum += vacum; tot_q_acum += qacum; tot_q_sem += qsem
-                pct_t = (tot_sem / _sg_tot_eval * 100) if _sg_tot_eval else 0
+                pct_ta = (tot_acum / _sg_tot_eval * 100) if _sg_tot_eval else 0
+                pct_ts = (tot_sem / _sg_tot_eval * 100) if _sg_tot_eval else 0
                 filas.append({
                     "Ítem": total_titulo,
                     "$ Acumulado": _sg_fmt_money(tot_acum),
-                    "Q": int(tot_q_acum),
-                    "Q prom × garzón": round(tot_q_acum / _sg_ng, 0),
+                    "Q prom×gz Ac": _qpg(tot_q_acum), "% Ac": f"{pct_ta:.1f}%",
                     "$ Diario": _sg_fmt_money(tot_acum / _sg_dias_acum),
+                    "Q prom×gz Diario": _qpg(tot_q_acum / _sg_dias_acum),
                     "$ Semanal": _sg_fmt_money(tot_sem),
-                    "%": f"{pct_t:.1f}%",
+                    "Q prom×gz Sem": _qpg(tot_q_sem), "% Sem": f"{pct_ts:.1f}%",
                 })
                 st.markdown(f"**{titulo}**")
                 st.dataframe(pd.DataFrame(filas), use_container_width=True, hide_index=True)
@@ -16972,65 +16984,59 @@ buildTree(data, 1, null);
             """
 
             # ═══════════ SECCIÓN 5 — ADICIONALES POR GARZÓN ═══════════
-            _sg_s5 = run_query(f"""
-                with d as (
-                  select
-                    v.garzon,
-                    v.fecha_venta,
-                    v.monto_venta_real + coalesce(v.descuento,0) as venta,
-                    v.cantidad_vendida as q,
-                    {_SG_GRP_CASE} as grp_cat,
-                    {_SG_BUCKET} as liq_bucket
-                  from ventas v
-                  {_SG_LIQ_JOIN}
-                  where v.local = :loc and v.origen is null
-                    and v.garzon = any(:wl)
-                    and v.categoria_menu not in ('{_sg_excl_sql}')
-                    and v.fecha_venta between :ai and :af
-                )
-                select
-                  garzon,
-                  count(distinct fecha_venta) as dias,
-                  sum(venta) as venta_total,
-                  sum(case when grp_cat='AGREGADOS' then venta else 0 end) as v_agr,
-                  sum(case when grp_cat='AGREGADOS' then q else 0 end) as q_agr,
-                  sum(case when grp_cat='CAFETERIA' then venta else 0 end) as v_caf,
-                  sum(case when grp_cat='CAFETERIA' then q else 0 end) as q_caf,
-                  sum(case when grp_cat='POSTRES' then venta else 0 end) as v_pos,
-                  sum(case when grp_cat='POSTRES' then q else 0 end) as q_pos,
-                  sum(case when liq_bucket='LIQ_SA' then venta else 0 end) as v_lsa,
-                  sum(case when liq_bucket='LIQ_SA' then q else 0 end) as q_lsa,
-                  sum(case when liq_bucket='LIQ_CA' then venta else 0 end) as v_lca,
-                  sum(case when liq_bucket='LIQ_CA' then q else 0 end) as q_lca
-                from d
-                group by garzon
-                having sum(venta) > 0
-                order by venta_total desc
-            """, _sg_p)
+            def _sg_seccion5(rango_i, rango_f, etiqueta):
+                _p5 = dict(_sg_p); _p5["r_i"] = str(rango_i); _p5["r_f"] = str(rango_f)
+                _df = run_query(f"""
+                    with d as (
+                      select v.garzon, v.fecha_venta,
+                        v.monto_venta_real + coalesce(v.descuento,0) as venta,
+                        v.cantidad_vendida as q,
+                        {_SG_GRP_CASE} as grp_cat, {_SG_BUCKET} as liq_bucket
+                      from ventas v {_SG_LIQ_JOIN}
+                      where v.local = :loc and v.origen is null and v.garzon = any(:wl)
+                        and v.categoria_menu not in ('{_sg_excl_sql}')
+                        and v.fecha_venta between :r_i and :r_f
+                    )
+                    select garzon, count(distinct fecha_venta) as dias, sum(venta) as venta_total,
+                      sum(case when grp_cat='AGREGADOS' then venta else 0 end) as v_agr,
+                      sum(case when grp_cat='AGREGADOS' then q else 0 end) as q_agr,
+                      sum(case when grp_cat='CAFETERIA' then venta else 0 end) as v_caf,
+                      sum(case when grp_cat='CAFETERIA' then q else 0 end) as q_caf,
+                      sum(case when grp_cat='POSTRES' then venta else 0 end) as v_pos,
+                      sum(case when grp_cat='POSTRES' then q else 0 end) as q_pos,
+                      sum(case when liq_bucket='LIQ_SA' then venta else 0 end) as v_lsa,
+                      sum(case when liq_bucket='LIQ_SA' then q else 0 end) as q_lsa,
+                      sum(case when liq_bucket='LIQ_CA' then venta else 0 end) as v_lca,
+                      sum(case when liq_bucket='LIQ_CA' then q else 0 end) as q_lca
+                    from d group by garzon having sum(venta) > 0 order by venta_total desc
+                """, _p5)
+                st.markdown(f"### 5 · Adicionales por Garzón ({etiqueta})")
+                _rows = []
+                if _df is not None and not _df.empty:
+                    for _, r in _df.iterrows():
+                        vt = float(r["venta_total"]) or 1
+                        dias = int(r["dias"]) or 1
+                        def _pg(v): return f"{v/vt*100:.1f}%"
+                        pct_total = (float(r["v_agr"])+float(r["v_caf"])+float(r["v_pos"])
+                                     +float(r["v_lsa"])+float(r["v_lca"])) / vt * 100
+                        _rows.append({
+                            "Garzón": _sg_limpia_nombre(r["garzon"]),
+                            "Venta": _sg_fmt_money(r["venta_total"]),
+                            "Aporte Propina": _sg_fmt_money(float(r["venta_total"])*0.10),
+                            "Vta Diaria Prom": _sg_fmt_money(float(r["venta_total"])/dias),
+                            "Días": dias,
+                            "Agreg.": _sg_fmt_money(r["v_agr"]), "Q Ag": int(r["q_agr"]), "%Ag": _pg(float(r["v_agr"])),
+                            "Café": _sg_fmt_money(r["v_caf"]), "Q Cf": int(r["q_caf"]), "%Cf": _pg(float(r["v_caf"])),
+                            "Postres": _sg_fmt_money(r["v_pos"]), "Q Po": int(r["q_pos"]), "%Po": _pg(float(r["v_pos"])),
+                            "Líq S/A": _sg_fmt_money(r["v_lsa"]), "Q SA": int(r["q_lsa"]), "%SA": _pg(float(r["v_lsa"])),
+                            "Líq C/A": _sg_fmt_money(r["v_lca"]), "Q CA": int(r["q_lca"]), "%CA": _pg(float(r["v_lca"])),
+                            "%Total": f"{pct_total:.1f}%",
+                        })
+                    st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True)
+                return _rows
 
-            st.markdown("### 5 · Adicionales por Garzón (acumulado mensual)")
-            if _sg_s5 is not None and not _sg_s5.empty:
-                _rows5 = []
-                for _, r in _sg_s5.iterrows():
-                    vt = float(r["venta_total"]) or 1
-                    dias = int(r["dias"]) or 1
-                    def _pg(v): return f"{v/vt*100:.1f}%"
-                    pct_total = (float(r["v_agr"])+float(r["v_caf"])+float(r["v_pos"])
-                                 +float(r["v_lsa"])+float(r["v_lca"])) / vt * 100
-                    _rows5.append({
-                        "Garzón": _sg_limpia_nombre(r["garzon"]),
-                        "Venta": _sg_fmt_money(r["venta_total"]),
-                        "Aporte Propina": _sg_fmt_money(float(r["venta_total"])*0.10),
-                        "Vta Diaria Prom": _sg_fmt_money(float(r["venta_total"])/dias),
-                        "Días": dias,
-                        "Agreg.": _sg_fmt_money(r["v_agr"]), "%Ag": _pg(float(r["v_agr"])),
-                        "Café": _sg_fmt_money(r["v_caf"]), "%Cf": _pg(float(r["v_caf"])),
-                        "Postres": _sg_fmt_money(r["v_pos"]), "%Po": _pg(float(r["v_pos"])),
-                        "Líq S/A": _sg_fmt_money(r["v_lsa"]), "%SA": _pg(float(r["v_lsa"])),
-                        "Líq C/A": _sg_fmt_money(r["v_lca"]), "%CA": _pg(float(r["v_lca"])),
-                        "%Total": f"{pct_total:.1f}%",
-                    })
-                st.dataframe(pd.DataFrame(_rows5), use_container_width=True, hide_index=True)
+            _rows5 = _sg_seccion5(_sg_mes_ini, _sg_fin, "acumulado mensual")
+            _rows5_sem = _sg_seccion5(_sg_ini, _sg_fin, "semanal")
 
             # ═══════════ SECCIÓN 6 — ADICIONALES POR LOCAL (red, acum mensual) ═══════════
             _sg_s6 = run_query(f"""
