@@ -4207,6 +4207,91 @@ def _cr_conclusiones_empresa(comp, red, periodos, modo, cp_red):
     return out
 
 
+def generar_pdf_garzones(ctx):
+    """PDF Informe de Control de Ventas Salón, replica visual del PDF Vitacura."""
+    import io as _io, os as _os
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib import colors as rc
+    from reportlab.lib.units import mm
+    from reportlab.platypus import (SimpleDocTemplate, Table, TableStyle, Paragraph,
+                                    Spacer, HRFlowable)
+    from reportlab.platypus import Image as RLImage
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.enums import TA_LEFT, TA_CENTER
+
+    CB = rc.HexColor('#1a1a1a'); CG = rc.HexColor('#b8860b'); CM = rc.HexColor('#444444')
+    CHd = rc.HexColor('#1a1a1a'); CHdT = rc.HexColor('#d4a853'); CBo = rc.HexColor('#cccccc')
+    CRow = rc.HexColor('#f5f2ec')
+
+    def s(sz, col, bold=False, align=TA_LEFT):
+        return ParagraphStyle('_', fontSize=sz, textColor=col,
+            fontName='Helvetica-Bold' if bold else 'Helvetica', alignment=align, leading=sz*1.3)
+
+    buf = _io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=landscape(A4),
+        leftMargin=12*mm, rightMargin=12*mm, topMargin=10*mm, bottomMargin=10*mm)
+    story = []
+
+    # Encabezado: logo + título + ranking
+    logo = Spacer(24*mm, 20*mm)
+    if _os.path.exists(LOGO_PATH):
+        logo = RLImage(LOGO_PATH, width=22*mm, height=22*mm)
+    local = ctx.get("local","")
+    rank = ctx.get("ranking","—")
+    titulo_cell = [
+        Paragraph("INFORME DE CONTROL DE VENTAS SALÓN", s(15, CG, bold=True, align=TA_CENTER)),
+        Paragraph(f"LOCAL — {local.upper()}", s(10, CM, align=TA_CENTER)),
+        Paragraph(f"Semana {ctx['ini'].strftime('%d-%m')} al {ctx['fin'].strftime('%d-%m-%Y')}",
+                  s(8, CM, align=TA_CENTER)),
+    ]
+    rank_cell = [
+        Paragraph("RANKING", s(11, CB, bold=True, align=TA_CENTER)),
+        Paragraph(rank, s(20, CG, bold=True, align=TA_CENTER)),
+    ]
+    hdr = Table([[logo, titulo_cell, rank_cell]], colWidths=[28*mm, 180*mm, 60*mm])
+    hdr.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+        ('BOX',(2,0),(2,0),1,CBo), ('LINEBELOW',(0,0),(1,0),1.5,CG)]))
+    story += [hdr, Spacer(1, 2*mm),
+              Paragraph(f"Cantidad garzones evaluados: {ctx.get('ng','')}", s(9, CM)),
+              Spacer(1, 4*mm)]
+
+    def tabla(titulo, rows):
+        if not rows: return
+        cols = list(rows[0].keys())
+        data = [cols] + [[str(r.get(c,"")) for c in cols] for r in rows]
+        # ancho proporcional
+        w = (273*mm) / len(cols)
+        t = Table(data, colWidths=[w]*len(cols), repeatRows=1)
+        st_ = [
+            ('BACKGROUND',(0,0),(-1,0),CHd), ('TEXTCOLOR',(0,0),(-1,0),CHdT),
+            ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'), ('FONTSIZE',(0,0),(-1,-1),6.5),
+            ('GRID',(0,0),(-1,-1),0.3,CBo),
+            ('ROWBACKGROUNDS',(0,1),(-1,-1),[rc.white, CRow]),
+            ('TEXTCOLOR',(0,1),(-1,-1),CB), ('ALIGN',(1,0),(-1,-1),'CENTER'),
+            ('TOPPADDING',(0,0),(-1,-1),2.5),('BOTTOMPADDING',(0,0),(-1,-1),2.5),
+        ]
+        # resaltar fila TOTAL
+        for i, r in enumerate(rows, start=1):
+            if str(list(r.values())[0]).upper().startswith("TOTAL"):
+                st_.append(('FONTNAME',(0,i),(-1,i),'Helvetica-Bold'))
+                st_.append(('BACKGROUND',(0,i),(-1,i),rc.HexColor('#ece5d3')))
+        t.setStyle(TableStyle(st_))
+        story.append(Paragraph(titulo, s(10, CG, bold=True)))
+        story.append(Spacer(1, 1.5*mm))
+        story.append(t)
+        story.append(Spacer(1, 4*mm))
+
+    tabla("1 · VENTAS TOTALES SALÓN", ctx.get("rows1"))
+    tabla("2 · VENTAS POR CATEGORÍA", ctx.get("rows2"))
+    tabla("4 · CONTROL DE PRODUCTOS ESTRATÉGICOS", ctx.get("rows4"))
+    tabla("5 · ADICIONALES POR GARZÓN", ctx.get("rows5"))
+    tabla("9 · EVOLUCIÓN POR GARZÓN", ctx.get("rows9"))
+
+    doc.build(story)
+    buf.seek(0)
+    return buf.getvalue()
+
+
 def _normalizar_rut_aliva(rut_raw):
     """Convierte C763760987 → 76376098-7"""
     r = str(rut_raw).strip().upper()
@@ -16802,10 +16887,358 @@ buildTree(data, 1, null);
                 ("JUGOS, LIMONADAS Y TRAGOS S/A", ["Jugos Naturales","Limonadas","Tragos Sin Alcohol"]),
             ], _sg_s3)
 
-            st.info("✅ Bloques 1–3 listos (totales, por categoría, detalle por subcategoría). "
-                    "Faltan: estratégicos (4), adicionales por garzón/local (5-7), "
-                    "evolución (9, 11), encabezado visual, gráficos y PDF.")
+            # ═══════════ SECCIÓN 4 — CONTROL DE PRODUCTOS ESTRATÉGICOS ═══════════
+            # Por nombre_producto EXACTO (no like). Whitelist + salón. Q prom = Q ÷ nº garzones.
+            _SG_ESTRAT = [
+                ("ALCAPARRAS", "Alcaparra"),
+                ("AJI VERDE", "Aji Verde"),
+                ("MAYONESA TRUFADA", "Mayonesa Trufada"),
+                ("SALSA A LA PIMIENTA", "Salsa a la pimienta"),
+                ("SALSA DE QUESO AZUL", "Salsa Queso Azul"),
+            ]
+            _sg_estrat_nombres = [n for _, n in _SG_ESTRAT]
+            _sg_pe = dict(_sg_p); _sg_pe["nombres"] = _sg_estrat_nombres
+            _sg_s4 = run_query("""
+                select nombre_producto,
+                  sum(case when fecha_venta between :ai and :af
+                           then monto_venta_real + coalesce(descuento,0) else 0 end) as venta_acum,
+                  sum(case when fecha_venta between :ai and :af then cantidad_vendida else 0 end) as q_acum,
+                  sum(case when fecha_venta between :si and :sf
+                           then monto_venta_real + coalesce(descuento,0) else 0 end) as venta_sem,
+                  sum(case when fecha_venta between :si and :sf then cantidad_vendida else 0 end) as q_sem
+                from ventas
+                where local = :loc and origen is null
+                  and garzon = any(:wl)
+                  and nombre_producto = any(:nombres)
+                group by nombre_producto
+            """, _sg_pe)
 
+            st.markdown("### 4 · Control de Productos Estratégicos")
+            _s4i = _sg_s4.set_index("nombre_producto") if (_sg_s4 is not None and not _sg_s4.empty) else None
+            _rows4 = []
+            _t4_sem = _t4_acum = _t4_qacum = 0
+            for etiqueta, nombre in _SG_ESTRAT:
+                if _s4i is not None and nombre in _s4i.index:
+                    r = _s4i.loc[nombre]
+                    vsem = float(r["venta_sem"]); vacum = float(r["venta_acum"]); qacum = float(r["q_acum"])
+                else:
+                    vsem = vacum = qacum = 0
+                pct = (vsem / _sg_tot_eval * 100) if _sg_tot_eval else 0
+                _rows4.append({
+                    "Ítem": etiqueta,
+                    "$ Acumulado": _sg_fmt_money(vacum),
+                    "Q": int(qacum),
+                    "Q prom × garzón": round(qacum / _sg_ng, 0),
+                    "$ Diario": _sg_fmt_money(vacum / _sg_dias_acum),
+                    "$ Semanal": _sg_fmt_money(vsem),
+                    "%": f"{pct:.1f}%",
+                })
+                _t4_sem += vsem; _t4_acum += vacum; _t4_qacum += qacum
+            _rows4.append({
+                "Ítem": "TOTAL",
+                "$ Acumulado": _sg_fmt_money(_t4_acum),
+                "Q": int(_t4_qacum),
+                "Q prom × garzón": round(_t4_qacum / _sg_ng, 0),
+                "$ Diario": _sg_fmt_money(_t4_acum / _sg_dias_acum),
+                "$ Semanal": _sg_fmt_money(_t4_sem),
+                "%": f"{(_t4_sem / _sg_tot_eval * 100) if _sg_tot_eval else 0:.1f}%",
+            })
+            st.dataframe(pd.DataFrame(_rows4), use_container_width=True, hide_index=True)
+            st.caption(f"Total estratégicos: {_sg_fmt_money(_t4_sem)} "
+                       "(esperado Vitacura sem 01-07: $213.700)")
+
+
+            # ════════════════════════════════════════════════════════════════
+            #  ADICIONALES — clasificación de líquidos por nombre (prio) + SKU
+            #  Grupos adicionales: Agregados, Cafetería, Postres (por categoria_menu)
+            #  + Líq C/A y Líq S/A (por clasif_liquidos).
+            # ════════════════════════════════════════════════════════════════
+            # Expresión de bucket de líquido reutilizable
+            _SG_LIQ_JOIN = """
+                left join clasif_liquidos cn
+                       on cn.match_tipo='nombre' and cn.match_valor = lower(trim(v.nombre_producto))
+                left join clasif_liquidos cs
+                       on cs.match_tipo='sku' and cs.match_valor = v.sku_producto
+            """
+            _SG_BUCKET = "coalesce(cn.bucket, cs.bucket)"  # LIQ_CA / LIQ_SA / null
+            # Grupos por categoria_menu (adicionales no-líquido)
+            _SG_GRP_CASE = """
+                case
+                  when categoria_menu in ('Agregados','Acompanamientos') then 'AGREGADOS'
+                  when categoria_menu = 'Cafeteria' then 'CAFETERIA'
+                  when categoria_menu = 'Postres' then 'POSTRES'
+                  else null
+                end
+            """
+
+            # ═══════════ SECCIÓN 5 — ADICIONALES POR GARZÓN ═══════════
+            _sg_s5 = run_query(f"""
+                with d as (
+                  select
+                    v.garzon,
+                    v.fecha_venta,
+                    v.monto_venta_real + coalesce(v.descuento,0) as venta,
+                    v.cantidad_vendida as q,
+                    {_SG_GRP_CASE} as grp_cat,
+                    {_SG_BUCKET} as liq_bucket
+                  from ventas v
+                  {_SG_LIQ_JOIN}
+                  where v.local = :loc and v.origen is null
+                    and v.garzon = any(:wl)
+                    and v.categoria_menu not in ('{_sg_excl_sql}')
+                    and v.fecha_venta between :ai and :af
+                )
+                select
+                  garzon,
+                  count(distinct fecha_venta) as dias,
+                  sum(venta) as venta_total,
+                  sum(case when grp_cat='AGREGADOS' then venta else 0 end) as v_agr,
+                  sum(case when grp_cat='AGREGADOS' then q else 0 end) as q_agr,
+                  sum(case when grp_cat='CAFETERIA' then venta else 0 end) as v_caf,
+                  sum(case when grp_cat='CAFETERIA' then q else 0 end) as q_caf,
+                  sum(case when grp_cat='POSTRES' then venta else 0 end) as v_pos,
+                  sum(case when grp_cat='POSTRES' then q else 0 end) as q_pos,
+                  sum(case when liq_bucket='LIQ_SA' then venta else 0 end) as v_lsa,
+                  sum(case when liq_bucket='LIQ_SA' then q else 0 end) as q_lsa,
+                  sum(case when liq_bucket='LIQ_CA' then venta else 0 end) as v_lca,
+                  sum(case when liq_bucket='LIQ_CA' then q else 0 end) as q_lca
+                from d
+                group by garzon
+                having sum(venta) > 0
+                order by venta_total desc
+            """, _sg_p)
+
+            st.markdown("### 5 · Adicionales por Garzón (acumulado mensual)")
+            if _sg_s5 is not None and not _sg_s5.empty:
+                _rows5 = []
+                for _, r in _sg_s5.iterrows():
+                    vt = float(r["venta_total"]) or 1
+                    dias = int(r["dias"]) or 1
+                    def _pg(v): return f"{v/vt*100:.1f}%"
+                    pct_total = (float(r["v_agr"])+float(r["v_caf"])+float(r["v_pos"])
+                                 +float(r["v_lsa"])+float(r["v_lca"])) / vt * 100
+                    _rows5.append({
+                        "Garzón": _sg_limpia_nombre(r["garzon"]),
+                        "Venta": _sg_fmt_money(r["venta_total"]),
+                        "Aporte Propina": _sg_fmt_money(float(r["venta_total"])*0.10),
+                        "Vta Diaria Prom": _sg_fmt_money(float(r["venta_total"])/dias),
+                        "Días": dias,
+                        "Agreg.": _sg_fmt_money(r["v_agr"]), "%Ag": _pg(float(r["v_agr"])),
+                        "Café": _sg_fmt_money(r["v_caf"]), "%Cf": _pg(float(r["v_caf"])),
+                        "Postres": _sg_fmt_money(r["v_pos"]), "%Po": _pg(float(r["v_pos"])),
+                        "Líq S/A": _sg_fmt_money(r["v_lsa"]), "%SA": _pg(float(r["v_lsa"])),
+                        "Líq C/A": _sg_fmt_money(r["v_lca"]), "%CA": _pg(float(r["v_lca"])),
+                        "%Total": f"{pct_total:.1f}%",
+                    })
+                st.dataframe(pd.DataFrame(_rows5), use_container_width=True, hide_index=True)
+
+            # ═══════════ SECCIÓN 6 — ADICIONALES POR LOCAL (red, acum mensual) ═══════════
+            _sg_s6 = run_query(f"""
+                with d as (
+                  select
+                    v.local,
+                    v.monto_venta_real + coalesce(v.descuento,0) as venta,
+                    {_SG_GRP_CASE} as grp_cat,
+                    {_SG_BUCKET} as liq_bucket
+                  from ventas v
+                  {_SG_LIQ_JOIN}
+                  where v.origen is null and v.garzon = any(:wl)
+                    and v.categoria_menu not in ('{_sg_excl_sql}')
+                    and v.fecha_venta between :ai and :af
+                )
+                select local,
+                  sum(venta) as venta_total,
+                  sum(case when grp_cat='AGREGADOS' then venta else 0 end) as v_agr,
+                  sum(case when grp_cat='CAFETERIA' then venta else 0 end) as v_caf,
+                  sum(case when grp_cat='POSTRES' then venta else 0 end) as v_pos,
+                  sum(case when liq_bucket='LIQ_SA' then venta else 0 end) as v_lsa,
+                  sum(case when liq_bucket='LIQ_CA' then venta else 0 end) as v_lca
+                from d group by local having sum(venta) > 0
+            """, _sg_p)
+
+            st.markdown("### 6 · Adicionales por Local (acumulado mensual)")
+            _sg_rank = None
+            if _sg_s6 is not None and not _sg_s6.empty:
+                _s6 = _sg_s6.copy()
+                for c in ["venta_total","v_agr","v_caf","v_pos","v_lsa","v_lca"]:
+                    _s6[c] = pd.to_numeric(_s6[c], errors="coerce").fillna(0)
+                _s6["pct_ag"] = _s6["v_agr"]/_s6["venta_total"]*100
+                _s6["pct_cf"] = _s6["v_caf"]/_s6["venta_total"]*100
+                _s6["pct_po"] = _s6["v_pos"]/_s6["venta_total"]*100
+                _s6["pct_sa"] = _s6["v_lsa"]/_s6["venta_total"]*100
+                _s6["pct_ca"] = _s6["v_lca"]/_s6["venta_total"]*100
+                _s6["pct_total"] = _s6[["v_agr","v_caf","v_pos","v_lsa","v_lca"]].sum(axis=1)/_s6["venta_total"]*100
+                _s6 = _s6.sort_values("pct_total", ascending=False).reset_index(drop=True)
+                _s6["Local"] = _s6["local"].apply(lambda x: "Pedro de Valdivia" if x=="Providencia" else x)
+                _sg_rank = _s6[["local","pct_total"]].copy()
+                _show6 = pd.DataFrame({
+                    "Local": _s6["Local"],
+                    "% Agregados": _s6["pct_ag"].map("{:.1f}%".format),
+                    "% Cafetería": _s6["pct_cf"].map("{:.1f}%".format),
+                    "% Postres": _s6["pct_po"].map("{:.1f}%".format),
+                    "% Líq S/A": _s6["pct_sa"].map("{:.1f}%".format),
+                    "% Líq C/A": _s6["pct_ca"].map("{:.1f}%".format),
+                    "% Total": _s6["pct_total"].map("{:.1f}%".format),
+                })
+                st.dataframe(_show6, use_container_width=True, hide_index=True)
+
+            # ── Encabezado RANKING x/10 (basado en sección 6) ──
+            if _sg_rank is not None and not _sg_rank.empty:
+                _sg_rank = _sg_rank.sort_values("pct_total", ascending=False).reset_index(drop=True)
+                _pos = _sg_rank.index[_sg_rank["local"] == _sg_local].tolist()
+                _ranking_txt = f"{_pos[0]+1}/{len(_sg_rank)}" if _pos else "—"
+                st.metric(f"🏆 Ranking de {_sg_local}", _ranking_txt,
+                          help="Posición por % Total adicionales (acum. mensual), de mayor a menor.")
+
+            # ═══════════ SECCIÓN 7 — ESTRATÉGICOS POR LOCAL (Q ÷ nº garzones) ═══════════
+            _sg_s7 = run_query("""
+                with vt as (
+                  select v.local, v.nombre_producto, sum(v.cantidad_vendida) as q
+                  from ventas v
+                  where v.origen is null and v.garzon = any(:wl)
+                    and v.nombre_producto = any(:nombres)
+                    and v.fecha_venta between :ai and :af
+                  group by v.local, v.nombre_producto
+                ),
+                ng as (
+                  select local, count(distinct garzon) as n
+                  from ventas where origen is null and garzon = any(:wl)
+                    and fecha_venta between :ai and :af
+                  group by local
+                )
+                select vt.local, vt.nombre_producto,
+                       vt.q / nullif(ng.n,0)::numeric as q_x_garzon
+                from vt join ng on ng.local = vt.local
+            """, _sg_pe)
+
+            st.markdown("### 7 · Estratégicos por Local (Q ÷ nº garzones)")
+            if _sg_s7 is not None and not _sg_s7.empty:
+                _piv7 = _sg_s7.pivot_table(index="local", columns="nombre_producto",
+                                           values="q_x_garzon", aggfunc="sum", fill_value=0)
+                _piv7 = _piv7.round(0).astype(int)
+                _piv7.index = [("Pedro de Valdivia" if x=="Providencia" else x) for x in _piv7.index]
+                st.dataframe(_piv7, use_container_width=True)
+
+            # ═══════════ SECCIÓN 9 — EVOLUCIÓN POR GARZÓN (semanas ISO 20-23) ═══════════
+            _sg_s9 = run_query(f"""
+                with d as (
+                  select
+                    v.garzon,
+                    extract(week from v.fecha_venta)::int as iso_week,
+                    v.monto_venta_real + coalesce(v.descuento,0) as venta,
+                    {_SG_GRP_CASE} as grp_cat,
+                    {_SG_BUCKET} as liq_bucket
+                  from ventas v
+                  {_SG_LIQ_JOIN}
+                  where v.local = :loc and v.origen is null
+                    and v.garzon = any(:wl)
+                    and v.categoria_menu not in ('{_sg_excl_sql}')
+                    and extract(week from v.fecha_venta)::int between 20 and 23
+                    and extract(year from v.fecha_venta)::int = 2026
+                )
+                select garzon, iso_week,
+                  sum(venta) as venta,
+                  sum(case when grp_cat is not null or liq_bucket is not null then venta else 0 end) as adic
+                from d group by garzon, iso_week
+            """, _sg_p)
+
+            st.markdown("### 9 · Evolución por Garzón (semanas 20–23)")
+            if _sg_s9 is not None and not _sg_s9.empty:
+                _s9 = _sg_s9.copy()
+                _s9["venta"] = pd.to_numeric(_s9["venta"], errors="coerce").fillna(0)
+                _s9["adic"] = pd.to_numeric(_s9["adic"], errors="coerce").fillna(0)
+                _gar = sorted(_s9["garzon"].unique())
+                _rows9 = []
+                for g in _gar:
+                    sub = _s9[_s9["garzon"] == g]
+                    fila = {"Garzón": _sg_limpia_nombre(g)}
+                    tot_v = tot_a = 0
+                    for wk in [20,21,22,23]:
+                        w = sub[sub["iso_week"] == wk]
+                        v = float(w["venta"].iloc[0]) if not w.empty else 0
+                        a = float(w["adic"].iloc[0]) if not w.empty else 0
+                        fila[f"S{wk} Venta"] = _sg_fmt_money(v) if v else "—"
+                        fila[f"S{wk} %"] = f"{a/v*100:.1f}%" if v else "—"
+                        tot_v += v; tot_a += a
+                    fila["Total Venta"] = _sg_fmt_money(tot_v)
+                    fila["% Total"] = f"{tot_a/tot_v*100:.1f}%" if tot_v else "—"
+                    _rows9.append(fila)
+                st.dataframe(pd.DataFrame(_rows9), use_container_width=True, hide_index=True)
+
+            # ═══════════ SECCIÓN 11 — COMPORTAMIENTO SEMANAL Y MENSUAL POR LOCAL ═══════════
+            st.markdown("### 11 · Comportamiento por Local")
+            # Semanal (ISO 20-23)
+            _sg_s11s = run_query(f"""
+                with d as (
+                  select v.local,
+                    extract(week from v.fecha_venta)::int as iso_week,
+                    v.monto_venta_real + coalesce(v.descuento,0) as venta,
+                    {_SG_GRP_CASE} as grp_cat, {_SG_BUCKET} as liq_bucket
+                  from ventas v {_SG_LIQ_JOIN}
+                  where v.origen is null and v.garzon = any(:wl)
+                    and v.categoria_menu not in ('{_sg_excl_sql}')
+                    and extract(week from v.fecha_venta)::int between 20 and 23
+                    and extract(year from v.fecha_venta)::int = 2026
+                )
+                select local, iso_week, sum(venta) as venta,
+                  sum(case when grp_cat is not null or liq_bucket is not null then venta else 0 end) as adic
+                from d group by local, iso_week
+            """, _sg_p)
+            if _sg_s11s is not None and not _sg_s11s.empty:
+                _s = _sg_s11s.copy()
+                _s["pct"] = pd.to_numeric(_s["adic"],errors="coerce")/pd.to_numeric(_s["venta"],errors="coerce")*100
+                _piv = _s.pivot_table(index="local", columns="iso_week", values="pct", aggfunc="sum")
+                _piv.columns = [f"S{c}" for c in _piv.columns]
+                _piv.index = [("Pedro de Valdivia" if x=="Providencia" else x) for x in _piv.index]
+                _piv = _piv.sort_values(_piv.columns[-1], ascending=False)
+                st.markdown("**Comportamiento semanal (% Total adicionales)**")
+                st.dataframe(_piv.round(1).astype(str)+"%", use_container_width=True)
+
+            # Mensual (mar-jun, jun hasta el 07)
+            _sg_s11m = run_query(f"""
+                with d as (
+                  select v.local,
+                    to_char(v.fecha_venta,'YYYY-MM') as mes,
+                    v.monto_venta_real + coalesce(v.descuento,0) as venta,
+                    {_SG_GRP_CASE} as grp_cat, {_SG_BUCKET} as liq_bucket
+                  from ventas v {_SG_LIQ_JOIN}
+                  where v.origen is null and v.garzon = any(:wl)
+                    and v.categoria_menu not in ('{_sg_excl_sql}')
+                    and v.fecha_venta >= date '2026-03-01'
+                    and v.fecha_venta <= :af
+                )
+                select local, mes, sum(venta) as venta,
+                  sum(case when grp_cat is not null or liq_bucket is not null then venta else 0 end) as adic
+                from d group by local, mes
+            """, _sg_p)
+            if _sg_s11m is not None and not _sg_s11m.empty:
+                _m = _sg_s11m.copy()
+                _m["pct"] = pd.to_numeric(_m["adic"],errors="coerce")/pd.to_numeric(_m["venta"],errors="coerce")*100
+                _pm = _m.pivot_table(index="local", columns="mes", values="pct", aggfunc="sum")
+                _pm.index = [("Pedro de Valdivia" if x=="Providencia" else x) for x in _pm.index]
+                _pm = _pm.sort_values(_pm.columns[-1], ascending=False)
+                st.markdown("**Comportamiento mensual (% Total adicionales)**")
+                st.dataframe(_pm.round(1).astype(str)+"%", use_container_width=True)
+
+            # ═══════════ BOTÓN PDF ═══════════
+            st.markdown("---")
+            try:
+                _sg_ctx = {
+                    "local": _sg_local,
+                    "ranking": locals().get("_ranking_txt", "—"),
+                    "ng": _sg_ngarz, "ini": _sg_ini, "fin": _sg_fin,
+                    "rows1": locals().get("_rows1", []),
+                    "rows2": locals().get("_rows2", []),
+                    "rows4": locals().get("_rows4", []),
+                    "rows5": locals().get("_rows5", []),
+                    "rows9": locals().get("_rows9", []),
+                }
+                _sg_pdf = generar_pdf_garzones(_sg_ctx)
+                st.download_button("📄 Descargar informe PDF", _sg_pdf,
+                    file_name=f"control_ventas_salon_{_sg_local}_{_sg_ini}.pdf",
+                    mime="application/pdf", use_container_width=True, key="sg_pdf")
+            except Exception as _e_sg:
+                st.warning(f"PDF pendiente de ajuste: {_e_sg}")
 
 elif informe_sel == "Auditor":
     from datetime import date as _date2
