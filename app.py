@@ -4261,6 +4261,63 @@ def _sg_construir_ctx_b(local, ini, fin, ng, jef, ranking,
                  "semanal_pct":None}
         return {"filas": filas, "total": total}
 
+    # ---- Sección 3 subcategorías (desde DataFrame por categoria_menu) ----
+    def _subcats_block(df):
+        if df is None or df.empty:
+            return []
+        di = df.set_index("categoria_menu")
+        dias_acum = max((fin - ini.replace(day=1)).days + 1, 1)
+        ng_div = max(ng, 1)
+        # total evaluado para %
+        tot_eval = float(di["venta_acum"].sum()) if "venta_acum" in di.columns else 0
+        bloques_def = [
+            ("VENTAS ALIMENTOS", [
+                ("PARA COMPARTIR", ["Para Compartir"]),
+                ("SANDWICH Y HAMBURGUESAS", ["Sandwich Clasicos","Churrasco Clasico","Pernil Clasico",
+                    "Hamburguesa De La Casa","Hamburguesa De Quinoa","Hamburguesa Clasica","Mechada Clasica",
+                    "Filete Clasico","Lomito Clasico","Ave Clasica"]),
+                ("ENSALADAS Y OTROS", ["Ensaladas Y Otros"]),
+                ("PLATOS", ["Platos Clasicos","Platos Alemanes"]),
+                ("AGREGADOS Y ACOMPAÑAMIENTOS", ["Agregados","Acompanamientos"]),
+                ("NIÑOS", ["Ninos"]),
+            ]),
+            ("VENTAS CAFETERÍA Y POSTRES", [
+                ("CAFETERÍA", ["Cafeteria"]), ("POSTRES", ["Postres"]),
+            ]),
+            ("VENTAS LÍQUIDOS C/A", [
+                ("CERVEZAS", ["Cervezas"]),
+                ("TRAGOS Y COCTAILS", ["Cocteles","Piscos","Ron","Tequila","Vodka","Whisky","Bajativos"]),
+                ("VINOS Y ESPUMANTES", ["Vinos","Espumantes"]),
+            ]),
+            ("VENTAS LÍQUIDOS S/A", [
+                ("BEBIDAS Y AGUAS", ["Bebidas"]),
+                ("JUGOS, LIMONADAS Y TRAGOS S/A", ["Jugos Naturales","Limonadas","Tragos Sin Alcohol"]),
+            ]),
+        ]
+        out = []
+        for titulo, casos in bloques_def:
+            filas = []; t_a=t_s=t_qa=t_qs=0
+            for etiqueta, cats in casos:
+                va=vs=qa=qs=0
+                for c in cats:
+                    if c in di.index:
+                        r=di.loc[c]
+                        va+=float(r["venta_acum"]); vs+=float(r["venta_sem"])
+                        qa+=float(r["q_acum"]); qs+=float(r["q_sem"])
+                filas.append({"item":etiqueta,"acum":int(va),"acum_q":round(qa/ng_div,0),
+                    "acum_pct":va/tot_eval if tot_eval else 0,
+                    "diario":int(va/dias_acum),"diario_q":round(qa/dias_acum/ng_div,0),
+                    "diario_pct":(va/dias_acum)/tot_eval if tot_eval else 0,
+                    "semanal":int(vs),"semanal_q":round(qs/ng_div,0),
+                    "semanal_pct":vs/tot_eval if tot_eval else 0})
+                t_a+=va; t_s+=vs; t_qa+=qa; t_qs+=qs
+            total={"item":"TOTAL","acum":int(t_a),"acum_q":round(t_qa/ng_div,0),
+                "acum_pct":t_a/tot_eval if tot_eval else 0,"diario":int(t_a/dias_acum),
+                "diario_q":round(t_qa/dias_acum/ng_div,0),"diario_pct":(t_a/dias_acum)/tot_eval if tot_eval else 0,
+                "semanal":int(t_s),"semanal_q":round(t_qs/ng_div,0),"semanal_pct":t_s/tot_eval if tot_eval else 0}
+            out.append({"titulo":titulo,"filas":filas,"total":total})
+        return out
+
     # ---- Sección 5 (desde rows ya formateadas) ----
     def _sec5_block(rows):
         if not rows:
@@ -4287,11 +4344,55 @@ def _sg_construir_ctx_b(local, ini, fin, ng, jef, ranking,
             })
         return {"filas": filas, "total": {}}
 
-    # ---- Sección 4 estratégicos ----
-    def _estrat_block(df):
+    # ---- Sección 4 estratégicos (desde rows4 formateadas) ----
+    def _estrat_block(rows):
+        if not rows:
+            return {"filas": [], "total": {}}
+        filas=[]; total={}
+        for r in rows:
+            d={"item":_igb_safe(r.get("Ítem","")),
+               "acum":_money_to_int(r.get("$ Acumulado",0)),
+               "acum_q":int(r.get("Q",0) or 0),
+               "acum_pct":_pct_to_frac(r.get("%",0)),
+               "diario":_money_to_int(r.get("$ Diario",0)),"diario_q":0,"diario_pct":0,
+               "semanal":_money_to_int(r.get("$ Semanal",0)),
+               "semanal_q":int(r.get("Q",0) or 0),"semanal_pct":_pct_to_frac(r.get("%",0))}
+            if str(d["item"]).upper().startswith("TOTAL"): total=d
+            else: filas.append(d)
+        return {"filas":filas,"total":total}
+
+    # ---- Sección 6 adicionales por local (desde DataFrame _s6 con pct_*) ----
+    def _adic_local_block(df):
         if df is None or df.empty:
             return {"filas": [], "total": {}}
-        return {"filas": [], "total": {}}  # se llena abajo con rows4 si está
+        filas=[]
+        for _,r in df.iterrows():
+            loc = r.get("Local", r.get("local",""))
+            filas.append({"local":str(loc).upper(),
+                "p_agreg":float(r.get("pct_ag",0))/100,"p_cafe":float(r.get("pct_cf",0))/100,
+                "p_post":float(r.get("pct_po",0))/100,"p_liqsa":float(r.get("pct_sa",0))/100,
+                "p_liqca":float(r.get("pct_ca",0))/100,"p_total":float(r.get("pct_total",0))/100})
+        return {"filas":filas,"total":{}}
+
+    # ---- Sección 7 estratégicos por local (desde DataFrame s7 long) ----
+    def _estrat_local_block(df):
+        if df is None or df.empty:
+            return {"filas": [], "total": {}}
+        try:
+            piv = df.pivot_table(index="local", columns="nombre_producto",
+                                 values="q_x_garzon", aggfunc="sum", fill_value=0)
+        except Exception:
+            return {"filas": [], "total": {}}
+        mp = {"Aji Verde":"aji","Alcaparra":"alcaparra","Mayonesa Trufada":"mayonesa",
+              "Salsa a la pimienta":"salsa_pimienta","Salsa Queso Azul":"salsa_azul"}
+        filas=[]
+        for loc, row in piv.iterrows():
+            d={"local":str(loc).upper()}; tot=0
+            for col,key in mp.items():
+                v=int(round(row[col])) if col in piv.columns else 0
+                d[key]=v; tot+=v
+            d["total"]=tot; filas.append(d)
+        return {"filas":filas,"total":{}}
 
     ctx = {
         "local": local.upper(),
@@ -4303,12 +4404,12 @@ def _sg_construir_ctx_b(local, ini, fin, ng, jef, ranking,
         "cantidad_garzones": ng,
         "ventas_totales_salon": _ventas_block(s1),
         "ventas_por_categoria": _ventas_block(s2),
-        "ventas_subcategorias": [],     # opcional; el generador tolera vacío
-        "productos_estrategicos": {"filas": [], "total": {}},
+        "ventas_subcategorias": _subcats_block(s3),
+        "productos_estrategicos": _estrat_block(s4),
         "adicionales_por_garzon_semanal": _sec5_block(rows5_sem),
         "adicionales_por_garzon_mensual": _sec5_block(rows5),
-        "adicionales_por_local": {"filas": [], "total": {}},
-        "estrategicos_por_local": {"filas": [], "total": {}},
+        "adicionales_por_local": _adic_local_block(s6_raw),
+        "estrategicos_por_local": _estrat_local_block(s7),
         "evolucion_por_garzon": {"series": [], "filas": []},
         "adicionales_por_garzon_anual": {"series": [], "filas": [], "total": {}},
         "comparativa_por_local": {"series": [], "filas": []},
@@ -4325,42 +4426,6 @@ def _igb_safe(s):
 
 # ===== GENERADOR PDF 'INFORME B' (template Claude Code, replica visual fiel) =====
 # -*- coding: utf-8 -*-
-"""
-============================================================================
- INFORME DE CONTROL DE VENTAS SALON  -  ALEMAN EXPERTO
- Generador de PDF (replica del informe Excel) con ReportLab + matplotlib.
-============================================================================
-
-Uso basico
-----------
-    from informe_garzones import generar_pdf_garzones
-    pdf_bytes = generar_pdf_garzones(ctx)          # ctx = diccionario de datos
-
-    # En Streamlit (para imprimir / descargar, NO mostrar):
-    st.download_button("Descargar informe PDF", data=pdf_bytes,
-                       file_name="informe_vitacura.pdf", mime="application/pdf")
-
-    # O guardar a disco:
-    with open("informe.pdf", "wb") as f:
-        f.write(pdf_bytes)
-
-El diccionario `ctx`
---------------------
-Datos y presentacion estan separados: este modulo SOLO dibuja a partir de
-`ctx`. El esquema completo (con datos reales de ejemplo) esta en
-`datos_ejemplo.py` -> CONTEXTO_EJEMPLO. Lee el README.md para el detalle de
-cada clave.
-
-Formato de valores
-------------------
-Los formateadores aceptan numeros (los formatean a estilo chileno:
-miles con ".", decimales con ",") o strings (se usan tal cual, por si
-necesitas un caso puntual exacto). Es decir:
-    monto  -> 48931250      => "$48.931.250"      (o pasa "  $48.931.250 ")
-    pct    -> 0.826         => "82,6%"            (fraccion 0..1)
-    entero -> 9407          => "9.407"
-============================================================================
-"""
 
 import io
 
@@ -18297,9 +18362,9 @@ buildTree(data, 1, null);
                             _sg_local, _sg_ini, _sg_fin, _sg_ngarz,
                             _SG_JEFATURAS.get(_sg_local, ("","","")),
                             locals().get("_ranking_txt","—"),
-                            _sg_s1, _sg_s2, _sg_s3, _sg_s4,
+                            _sg_s1, _sg_s2, _sg_s3, locals().get("_rows4", []),
                             locals().get("_rows5", []), locals().get("_rows5_sem", []),
-                            locals().get("_sg_s6_raw"), locals().get("_sg_s7"),
+                            locals().get("_s6"), _sg_s7,
                             locals().get("_rows9", []), _g10,
                         )
                         _pdf_b = generar_pdf_garzones_b(_ctx_b, logo_path=LOGO_PATH)
