@@ -10684,912 +10684,157 @@ elif modulo.startswith("📊"):
 
     elif informe_sel == "ControlProduccion":
         import datetime as _cp_dt
+        import calendar as _cp_cal
         st.markdown("# 🏭 Control de Producción")
         st.caption(
-            "Determina cuánto producir de cada proteína. Tienes dos vistas: "
-            "**estadística por día de semana** (patrón semanal del mes) y "
-            "**proyección de la semana a producir** (incorpora el efecto pago). "
-            "Si vas directo a producir, baja a la sección 🗓️ **Proyección de la semana**."
+            "Máximo registrado (en unidades) de cada producto durante las semanas "
+            "cerradas del mes. Sirve para dimensionar cuánto producir como tope. "
+            "El desglose por semana muestra el origen del dato."
         )
 
-        # ══════════════════════════════════════════════════════════════
-        # 🐞 DEBUG FIJO — máximos de MAYO 2026 por local (ignora el sidebar)
-        # ══════════════════════════════════════════════════════════════
-        st.markdown("### 🐞 DEBUG — Máximos de MAYO 2026 por local")
-        st.caption("Fijo a mayo 2026, independiente del rango del sidebar. "
-                   "Lee de la capa diaria `opciones_diarias`.")
-        _dbgmax_params = {"i": "2026-05-01", "f": "2026-05-31"}
-
-        # Máximo diario de unidades totales por local (el día pico del mes)
-        _dbgmax_local = run_query("""
-            WITH por_dia AS (
-                SELECT local, fecha_venta, SUM(cant) AS cant_dia
-                FROM opciones_diarias
-                WHERE fecha_venta BETWEEN :i AND :f
-                GROUP BY local, fecha_venta
-            )
-            SELECT
-                local,
-                COUNT(*)                          AS dias_operativos,
-                ROUND(MAX(cant_dia)::numeric, 1)  AS max_dia,
-                ROUND(AVG(cant_dia)::numeric, 1)  AS prom_dia,
-                ROUND(MIN(cant_dia)::numeric, 1)  AS min_dia,
-                (ARRAY_AGG(fecha_venta ORDER BY cant_dia DESC))[1] AS fecha_pico
-            FROM por_dia
-            GROUP BY local
-            ORDER BY max_dia DESC
-        """, _dbgmax_params)
-
-        if _dbgmax_local is None or _dbgmax_local.empty:
-            st.error("⚠️ No hay datos de MAYO 2026 en `opciones_diarias`. "
-                     "Carga mayo con **Actualizar mes en capa diaria** (Vista A) o "
-                     "**Construir muestra** (Vista B).")
+        # ── Meses disponibles en la capa diaria ──
+        _cp_meses = run_query("""
+            SELECT DISTINCT TO_CHAR(fecha_venta, 'YYYY-MM') AS mes
+            FROM opciones_diarias
+            ORDER BY mes DESC
+        """)
+        if _cp_meses is None or _cp_meses.empty:
+            st.warning("No hay datos en la capa diaria `opciones_diarias`. "
+                       "Carga un mes con **Gestión de Datos** o el proceso de actualización.")
         else:
-            st.markdown("**Máximo, promedio y mínimo diario por local (mayo):**")
-            st.dataframe(_dbgmax_local, use_container_width=True, hide_index=True)
+            _MN = {"01":"Enero","02":"Febrero","03":"Marzo","04":"Abril","05":"Mayo",
+                   "06":"Junio","07":"Julio","08":"Agosto","09":"Septiembre",
+                   "10":"Octubre","11":"Noviembre","12":"Diciembre"}
+            _meses_list = _cp_meses["mes"].tolist()
+            def _cp_mes_lbl(m):
+                y, mo = m.split("-")
+                return f"{_MN.get(mo, mo)} {y}"
 
-            # Máximo por local × proteína (BA): el día pico de cada opción
-            _dbgmax_prot = run_query("""
-                WITH por_dia AS (
-                    SELECT local, ba_opcion, fecha_venta, SUM(cant) AS cant_dia
-                    FROM opciones_diarias
-                    WHERE fecha_venta BETWEEN :i AND :f
-                    GROUP BY local, ba_opcion, fecha_venta
-                )
-                SELECT
-                    local, ba_opcion,
-                    ROUND(MAX(cant_dia)::numeric, 1)  AS max_dia,
-                    ROUND(AVG(cant_dia)::numeric, 1)  AS prom_dia
-                FROM por_dia
-                GROUP BY local, ba_opcion
-                ORDER BY local, max_dia DESC
-            """, _dbgmax_params)
-            if _dbgmax_prot is not None and not _dbgmax_prot.empty:
-                _dbgmax_prot["grupo"] = _dbgmax_prot["ba_opcion"].apply(
-                    lambda x: BA_A_GRUPO.get(str(x or "").strip(), "Otros"))
-                # Filtro opcional por local para no saturar
-                _dbg_loc_sel = st.selectbox(
-                    "Ver máximos por proteína de:",
-                    ["Todos"] + sorted(_dbgmax_prot["local"].unique().tolist()),
-                    key="dbgmax_loc")
-                _show = _dbgmax_prot if _dbg_loc_sel == "Todos" else \
-                    _dbgmax_prot[_dbgmax_prot["local"] == _dbg_loc_sel]
-                st.markdown("**Máximo diario por proteína (BA) y local (mayo):**")
-                st.dataframe(
-                    _show[["local", "grupo", "ba_opcion", "max_dia", "prom_dia"]],
-                    use_container_width=True, hide_index=True)
+            _cp_c1, _cp_c2, _cp_c3 = st.columns([1.2, 1.2, 1])
+            with _cp_c1:
+                _cp_mes = st.selectbox("📆 Mes", _meses_list,
+                                       format_func=_cp_mes_lbl, key="cp_mes")
+            with _cp_c2:
+                _cp_locales = ["Todos"] + sorted(
+                    run_query("SELECT DISTINCT local FROM opciones_diarias ORDER BY local")["local"].tolist())
+                _cp_local = st.selectbox("📍 Local", _cp_locales, key="cp_local")
+            with _cp_c3:
+                _cp_desglosar = st.checkbox("Desglosar por local", value=False, key="cp_desg")
 
-            # Máximo por CATEGORÍA/NOMBRE ORIGINAL (sin agrupar a BA).
-            # Aquí se ven los nombres iniciales como "Churrasco Niño", etc.
-            _dbg_loc_sel = locals().get("_dbg_loc_sel", "Todos")
-            _dbgmax_cat = run_query("""
-                WITH por_dia AS (
-                    SELECT local, ab_categoria, sku_opcion, nombre_producto,
-                           fecha_venta, SUM(cant) AS cant_dia
-                    FROM opciones_diarias
-                    WHERE fecha_venta BETWEEN :i AND :f
-                    GROUP BY local, ab_categoria, sku_opcion, nombre_producto, fecha_venta
-                )
-                SELECT
-                    local, ab_categoria, sku_opcion, nombre_producto,
-                    ROUND(MAX(cant_dia)::numeric, 1)  AS max_dia,
-                    ROUND(AVG(cant_dia)::numeric, 1)  AS prom_dia,
-                    ROUND(SUM(cant_dia)::numeric, 1)  AS total_mes
-                FROM por_dia
-                GROUP BY local, ab_categoria, sku_opcion, nombre_producto
-                ORDER BY local, max_dia DESC
-            """, _dbgmax_params)
-            if _dbgmax_cat is not None and not _dbgmax_cat.empty:
-                _show_cat = _dbgmax_cat if _dbg_loc_sel == "Todos" else \
-                    _dbgmax_cat[_dbgmax_cat["local"] == _dbg_loc_sel]
-                st.markdown("**Máximo diario por categoría/nombre ORIGINAL y local (mayo):**")
-                st.caption("Sin agrupar a proteína; muestra los nombres iniciales "
-                           "(p. ej. *Churrasco Niño*).")
-                st.dataframe(
-                    _show_cat[["local", "ab_categoria", "sku_opcion",
-                               "nombre_producto", "max_dia", "prom_dia", "total_mes"]],
-                    use_container_width=True, hide_index=True)
+            # ── Calcular semanas cerradas (Lun-Dom completas) del mes ──
+            _cp_y, _cp_mo = map(int, _cp_mes.split("-"))
+            _dim = _cp_cal.monthrange(_cp_y, _cp_mo)[1]
+            _ini_mes = _cp_dt.date(_cp_y, _cp_mo, 1)
+            _fin_mes = _cp_dt.date(_cp_y, _cp_mo, _dim)
+            # Hoy: una semana es "cerrada" si su domingo ya pasó
+            _hoy = _cp_dt.date.today()
+            # primer lunes en o después del inicio del mes
+            _primer_lun = _ini_mes + _cp_dt.timedelta(days=(7 - _ini_mes.weekday()) % 7)
+            _semanas = []
+            _l = _primer_lun
+            while _l <= _fin_mes:
+                _d = _l + _cp_dt.timedelta(days=6)  # domingo
+                # semana cerrada: domingo dentro o tocando el mes Y ya transcurrido
+                if _d <= _fin_mes and _d < _hoy:
+                    _semanas.append((_l, _d))
+                _l += _cp_dt.timedelta(days=7)
 
-        st.markdown("---")
-
-        with st.expander("🐞 Debug — promedio consumido (rango del sidebar)", expanded=False):
-            st.caption(
-                f"Rango sidebar: **{f_inicio} → {f_fin}** · Local: **{f_local}**. "
-                "Promedio de unidades consumidas por día operativo, leído de la capa "
-                "diaria `opciones_diarias`."
-            )
-            _dbg_params = {"i": str(f_inicio), "f": str(f_fin)}
-            _dbg_loc_filter = ""
-            if f_local and f_local != "Todos":
-                _dbg_loc_filter = "AND UPPER(local) = UPPER(:l)"
-                _dbg_params["l"] = f_local
-
-            # Promedio por día operativo = total unidades ÷ días con registro
-            _dbg_resumen = run_query(f"""
-                SELECT
-                    local,
-                    COUNT(DISTINCT fecha_venta)                          AS dias_operativos,
-                    ROUND(SUM(cant)::numeric, 1)                         AS total_unidades,
-                    ROUND((SUM(cant) / NULLIF(COUNT(DISTINCT fecha_venta),0))::numeric, 2)
-                                                                        AS prom_unid_x_dia
-                FROM opciones_diarias
-                WHERE fecha_venta BETWEEN :i AND :f
-                  {_dbg_loc_filter}
-                GROUP BY local
-                ORDER BY local
-            """, _dbg_params)
-
-            if _dbg_resumen is None or _dbg_resumen.empty:
-                st.warning(
-                    "Sin datos en la capa diaria para ese rango/local. Si el mes no está "
-                    "cargado, usa **Actualizar mes en capa diaria** (Vista A)."
-                )
+            if not _semanas:
+                st.info(f"{_cp_mes_lbl(_cp_mes)} no tiene semanas cerradas (Lun–Dom completas "
+                        "y ya transcurridas). Elige otro mes.")
             else:
-                # Fila TOTAL agregada
-                _tot_u = pd.to_numeric(_dbg_resumen["total_unidades"], errors="coerce").sum()
-                _tot_d = run_query(f"""
-                    SELECT COUNT(DISTINCT fecha_venta) AS d
-                    FROM opciones_diarias
-                    WHERE fecha_venta BETWEEN :i AND :f {_dbg_loc_filter}
-                """, _dbg_params)
-                _dias_glob = int(_tot_d["d"].iloc[0]) if (_tot_d is not None and not _tot_d.empty) else 0
-                _prom_glob = round(_tot_u / _dias_glob, 2) if _dias_glob else 0
-
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Días operativos", _dias_glob)
-                c2.metric("Total unidades", f"{_tot_u:,.0f}")
-                c3.metric("Promedio / día", f"{_prom_glob:,.2f}")
-
-                st.markdown("**Desglose por local:**")
-                st.dataframe(_dbg_resumen, use_container_width=True, hide_index=True)
-
-                # Promedio por proteína (grupo BA) por día operativo
-                _dbg_prot = run_query(f"""
-                    SELECT
-                        ba_opcion,
-                        ROUND(SUM(cant)::numeric, 1)                       AS total_unidades,
-                        ROUND((SUM(cant) / NULLIF(COUNT(DISTINCT fecha_venta),0))::numeric, 2)
-                                                                          AS prom_x_dia
-                    FROM opciones_diarias
-                    WHERE fecha_venta BETWEEN :i AND :f {_dbg_loc_filter}
-                    GROUP BY ba_opcion
-                    ORDER BY total_unidades DESC
-                """, _dbg_params)
-                if _dbg_prot is not None and not _dbg_prot.empty:
-                    _dbg_prot["grupo"] = _dbg_prot["ba_opcion"].apply(
-                        lambda x: BA_A_GRUPO.get(str(x or "").strip(), "Otros"))
-                    st.markdown("**Promedio por opción (BA) por día operativo:**")
-                    st.dataframe(
-                        _dbg_prot[["grupo", "ba_opcion", "total_unidades", "prom_x_dia"]],
-                        use_container_width=True, hide_index=True)
-
-        with st.expander("🔧 Debug AE06 — verificación puntual (opcional)", expanded=False):
-          if st.button("Consultar AE06", type="secondary", key="cp_debug_ae06"):
-            _fi  = _cp_dt.date(2026, 3, 1)
-            _ff  = _cp_dt.date(2026, 3, 31)
-            _loc = 'Vitacura'
-            _ab  = 'AB.010140'  # ab_categoria de AE06
-
-            # Usar EXACTAMENTE la misma función que rentabilidad
-            grupos = get_opciones_producto(_fi, _ff, _loc, _ab, sku_padre='AE06')
-
-            _PREFIX_CAT = {
-                'CHUX':'CH POSTA','CHUSIT':'CH POSTA',
-                'FILX':'CH FILETE','FILSIT':'CH FILETE',
-                'LOMX':'LOMITO','LOMSIT':'LOMITO',
-                'AVEX':'AVE/POLLO','AVESIT':'AVE/POLLO',
-                'HAMX':'HAMBURGUESA','HAMSIT':'HAMBURGUESA',
-                'HAQX':'HAMB QUINOA','PERX':'PERNIL','PERSIT':'PERNIL',
-                'MECX':'MECHADA','PANX':'Pan',
-            }
-            def _get_cat(sku):
-                for p, c in _PREFIX_CAT.items():
-                    if str(sku).startswith(p): return c
-                return sku
-
-            if grupos:
-                # Tabla 1: resumen por categoría de proteína
-                _rows = []
-                for grp_nombre, df_g in grupos.items():
-                    for _, op in df_g.iterrows():
-                        _rows.append({
-                            'grupo_ba': grp_nombre,
-                            'sku': op['sku_producto'],
-                            'nombre': op['nombre_producto'],
-                            'categoria': _get_cat(op['sku_producto']),
-                            'cant': float(op['cant'])
-                        })
-                _df_all = pd.DataFrame(_rows)
-
-                st.markdown("**① Resumen por categoría de proteína**")
-                _res = _df_all.groupby('categoria')['cant'].sum().reset_index()
-                _res.columns = ['Categoría','Unidades']
-                _res['Unidades'] = _res['Unidades'].round(1)
-                st.dataframe(_res.sort_values('Unidades',ascending=False), use_container_width=True, hide_index=True)
-
-                st.markdown("**② Detalle por grupo BA y SKU**")
-                st.dataframe(_df_all[['grupo_ba','sku','nombre','categoria','cant']].sort_values('cant',ascending=False), use_container_width=True, hide_index=True)
-
-                st.markdown("**③ Padre vs proteínas**")
-                _prot = _df_all[(_df_all['categoria']!='Pan') & (_df_all['grupo_ba']=='Proteína')]['cant'].sum()
-                _pan  = _df_all[_df_all['grupo_ba']=='Pan']['cant'].sum()
-                _padre_q = run_query("SELECT SUM(cantidad_vendida) AS n FROM ventas WHERE fecha_venta BETWEEN :i AND :f AND es_opcion=false AND sku_producto='AE06' AND UPPER(local)=UPPER(:l)",
-                    {'i':str(_fi),'f':str(_ff),'l':_loc})
-                _n_padre = float(_padre_q['n'].iloc[0]) if not _padre_q.empty else 0
-                st.dataframe(pd.DataFrame({
-                    'Métrica':['Ventas padre','Proteínas','Pan','Sin proteína'],
-                    'Unidades':[round(_n_padre,0),round(_prot,1),round(_pan,1),round(_n_padre-_prot,1)]
-                }), use_container_width=True, hide_index=True)
-
-            else:
-                st.warning("Sin datos de opciones")
-
-        # ──────────────────────────────────────────────────────────────
-        # ESTADISTICA DE OPCIONES POR DIA DE SEMANA  (capa diaria)
-        # ──────────────────────────────────────────────────────────────
-        st.markdown("---")
-        st.markdown("## 📅 Vista A — Estadística por día de semana")
-        st.caption("Patrón semanal sobre el período del **sidebar**. Útil para ver el "
-                   "comportamiento Lun→Dom del mes. Lee de la capa diaria `opciones_diarias`; "
-                   "si el mes no está cargado, usa primero **Actualizar mes en capa diaria**.")
-
-        if 'cp_platos_opts' not in st.session_state:
-            _dpl = run_query("""
-                SELECT DISTINCT sku_producto, MAX(nombre_producto) AS nombre_producto
-                FROM ventas WHERE es_opcion = false
-                GROUP BY sku_producto ORDER BY sku_producto
-            """)
-            st.session_state['cp_platos_opts'] = (
-                _dpl.apply(lambda r: f"{r['sku_producto']} — {r['nombre_producto']}", axis=1).tolist()
-                if not _dpl.empty else []
-            )
-        _cp_opts = st.session_state['cp_platos_opts']
-
-        _cpc1, _cpc2 = st.columns([2, 1])
-        with _cpc1:
-            _cp_platos_sel = st.multiselect(
-                "🍽️ Platos a analizar (vacío = todos)",
-                _cp_opts, key='cp_platos_sel',
-                placeholder="Busca por SKU o nombre…"
-            )
-        with _cpc2:
-            _cp_grupo = st.selectbox(
-                "Grupo de opción",
-                ["Proteína"] + [g for g in BA_GRUPOS.keys() if g != "Proteína"] + ["Todos"],
-                key='cp_grupo_sel'
-            )
-        _cp_skus = [p.split(' — ')[0].strip() for p in _cp_platos_sel] if _cp_platos_sel else []
-
-        st.caption(f"Período: **{f_inicio} → {f_fin}**  ·  Local: **{f_local}**  (filtros globales del sidebar)")
-
-        _cpb1, _cpb2 = st.columns(2)
-        with _cpb1:
-            _cp_btn_upd = st.button("🔄 Actualizar mes en capa diaria", key='cp_btn_upd')
-        with _cpb2:
-            _cp_btn_ver = st.button("📊 Ver estadística", type="primary", key='cp_btn_ver')
-
-        if _cp_btn_upd:
-            _abs = None
-            if _cp_skus:
-                _q_ab = run_query(
-                    "SELECT DISTINCT ab_categoria FROM ventas "
-                    "WHERE es_opcion = false AND sku_producto = ANY(:s)",
-                    {'s': _cp_skus}
-                )
-                _abs = _q_ab['ab_categoria'].dropna().tolist() if not _q_ab.empty else None
-            with st.spinner("Recalculando capa diaria del período…"):
-                _ok = refrescar_opciones_diarias(
-                    f_inicio, f_fin,
-                    platos=(_cp_skus or None),
-                    ab_categorias=_abs
-                )
-            if _ok:
-                st.success("Capa diaria actualizada para el período seleccionado.")
-            else:
-                st.error("No se pudo actualizar la capa diaria. Revisa la conexión.")
-
-        if _cp_btn_ver:
-            with st.spinner("Calculando estadística por día de semana…"):
-                _df_est = get_estadisticas_opciones_dia_semana(
-                    f_inicio, f_fin,
-                    local=f_local,
-                    sku_padre=(_cp_skus[0] if len(_cp_skus) == 1 else None)
-                )
-            if _df_est is None or _df_est.empty:
-                st.session_state.pop('cp_est_df', None)
-                st.warning("Sin datos en la capa diaria para ese período/local. "
-                           "Usa primero **Actualizar mes en capa diaria**.")
-            else:
-                if len(_cp_skus) > 1:
-                    _df_est = _df_est[_df_est['sku_padre'].isin(_cp_skus)]
-                if _cp_grupo != "Todos":
-                    _df_est = _df_est[_df_est['grupo_ba'] == _cp_grupo]
-                st.session_state['cp_est_df'] = _df_est.reset_index(drop=True)
-                st.session_state['cp_est_meta'] = {
-                    'grupo': _cp_grupo, 'local': f_local,
-                    'fi': str(f_inicio), 'ff': str(f_fin)
-                }
-
-        # ── Informe ejecutivo (persistente: cambiar criterio no pierde los datos) ──
-        if 'cp_est_df' in st.session_state and not st.session_state['cp_est_df'].empty:
-            import math as _math
-            _df_est = st.session_state['cp_est_df']
-            _meta   = st.session_state.get('cp_est_meta', {})
-            _dow_nom = {1: 'Lun', 2: 'Mar', 3: 'Mié', 4: 'Jue', 5: 'Vie', 6: 'Sáb', 7: 'Dom'}
-            _dow_ord = [1, 2, 3, 4, 5, 6, 7]
-
-            st.markdown("---")
-            st.markdown(f"## 🏭 Plan de producción — {_meta.get('grupo','')}  ·  {_meta.get('local','')}")
-            st.caption(f"Período analizado: {_meta.get('fi','')} → {_meta.get('ff','')}  ·  "
-                       "una fila por proteína; las cantidades son unidades a producir por día.")
-
-            _crit_opts = {
-                "P75 · recomendado (cubre 3 de cada 4 días)": "p75",
-                "P90 · alta cobertura (minimiza quiebres)":   "p90",
-                "Promedio":                                   "promedio",
-                "Mediana · robusta a días atípicos":          "mediana",
-                "Máximo histórico":                           "maximo",
-            }
-            _crit_lbl = st.selectbox("🎯 Criterio de producción", list(_crit_opts.keys()),
-                                     key="cp_crit_sel")
-            _crit = _crit_opts[_crit_lbl]
-
-            # Normaliza el nombre para agrupar variantes (espacios/puntuacion/mayusculas)
-            import re as _re
-            def _canon(s):
-                s = str(s or '').strip()
-                s = _re.sub(r'\s+', ' ', s)
-                return s.strip(' .,;:-')
-            _raw_all   = _df_est['nombre_producto'].fillna(_df_est['sku_opcion'])
-            _key_all   = _raw_all.map(lambda x: _canon(x).casefold())
-            _clean_all = _raw_all.map(_canon)
-            _lbl_map   = (pd.DataFrame({'_k': _key_all, '_c': _clean_all})
-                          .groupby('_k')['_c']
-                          .agg(lambda s: s.mode().iloc[0] if not s.mode().empty else s.iloc[0])
-                          .to_dict())
-            def _etq(_d):
-                _r = _d['nombre_producto'].fillna(_d['sku_opcion'])
-                return _r.map(lambda x: _lbl_map.get(_canon(x).casefold(), _canon(x)))
-
-            _plan = _df_est.copy()
-            _plan['etiqueta'] = _etq(_plan)
-            _plan['_base'] = pd.to_numeric(_plan[_crit], errors='coerce').fillna(0)
-            _plan['producir'] = _plan['_base'].apply(lambda v: int(_math.ceil(v)) if v > 0 else 0)
-
-            _piv = (_plan.pivot_table(index='etiqueta', columns='dow',
-                                      values='producir', aggfunc='sum', fill_value=0)
-                         .reindex(columns=_dow_ord, fill_value=0)
-                         .rename(columns=_dow_nom))
-            _piv['Σ semana'] = _piv.sum(axis=1)
-            _piv = _piv.sort_values('Σ semana', ascending=False)
-
-            _tot_sem  = int(_piv['Σ semana'].sum())
-            _n_prot   = int(_piv.shape[0])
-            _por_dia  = _piv[list(_dow_nom.values())].sum(axis=0)
-            _peak_lbl = _por_dia.idxmax() if not _por_dia.empty else '—'
-            _k1, _k2, _k3 = st.columns(3)
-            _k1.metric("Producción semanal total", f"{_tot_sem:,} u")
-            _k2.metric("Proteínas en plan", f"{_n_prot}")
-            _k3.metric("Día de mayor demanda", str(_peak_lbl))
-
-            _piv_show = _piv.copy()
-            _piv_show.loc['TOTAL'] = _piv_show.sum(axis=0)
-            _piv_show = _piv_show.astype(int)
-            st.dataframe(_piv_show, use_container_width=True)
-            st.caption(f"Unidades por día según criterio **{_crit_lbl.split(' · ')[0]}** "
-                       "(redondeo hacia arriba). Días operativos sin venta = 0.")
-
-            st.markdown("#### 📊 Demanda por día de semana")
-            _chart = _piv[list(_dow_nom.values())].T
-            st.bar_chart(_chart)
-
-            _var = _df_est.copy()
-            _var['etiqueta'] = _etq(_var)
-            _cvm = _var.groupby('etiqueta')['cv'].apply(
-                lambda s: pd.to_numeric(s, errors='coerce').mean())
-            _err = [e for e, v in _cvm.items() if pd.notna(v) and v >= 0.5]
-            if _err:
-                st.warning("⚠️ Demanda irregular (CV alto) en: " + ", ".join(map(str, _err)) +
-                           ". Para estas conviene un criterio más alto (P90) o dejar buffer.")
-
-            with st.expander("📋 Ver detalle estadístico completo (todas las métricas)"):
-                _cols = {
-                    'dia_semana': 'Día', 'sku_padre': 'Plato', 'sku_opcion': 'SKU',
-                    'nombre_producto': 'Opción', 'n_dias': 'N° días',
-                    'minimo': 'Mín', 'maximo': 'Máx', 'promedio': 'Promedio',
-                    'mediana': 'Mediana', 'moda': 'Moda', 'p75': 'P75', 'p90': 'P90',
-                    'desv': 'Desv', 'cv': 'CV'
-                }
-                _vista = (_df_est
-                          .sort_values(['dow', 'sku_padre', 'promedio'],
-                                       ascending=[True, True, False])
-                          [list(_cols.keys())].rename(columns=_cols))
-                st.dataframe(_vista, use_container_width=True, hide_index=True)
-
-            _dl1, _dl2 = st.columns(2)
-            with _dl1:
-                st.download_button("📥 Plan de producción (CSV)",
-                    _piv_show.to_csv().encode('utf-8'),
-                    file_name=f"plan_produccion_{_meta.get('local','')}_{_meta.get('fi','')}_{_meta.get('ff','')}.csv",
-                    mime="text/csv", key='cp_dl_plan')
-            with _dl2:
-                st.download_button("📥 Detalle estadístico (CSV)",
-                    _vista.to_csv(index=False).encode('utf-8'),
-                    file_name=f"detalle_dia_semana_{_meta.get('local','')}_{_meta.get('fi','')}_{_meta.get('ff','')}.csv",
-                    mime="text/csv", key='cp_dl_csv')
-
-        # ──────────────────────────────────────────────────────────────
-        # 🔎 CUADRE / DEBUG  — verificar montos contra numeros a mano
-        # ──────────────────────────────────────────────────────────────
-        with st.expander("🔎 Cuadre / Debug — verificar montos"):
-            st.caption("Para el período y local del sidebar compara: lo que suma la **capa diaria** "
-                       "vs la **función validada de período**, y te deja una columna **Esperado** "
-                       "para escribir tus números a mano. Verde = cuadra (dif < 0.5).")
-
-            _dc1, _dc2 = st.columns(2)
-            with _dc1:
-                _dbg_sku = st.text_input("Plato (sku_padre) a cuadrar", value="AE06", key="cp_dbg_sku")
-            with _dc2:
-                _dbg_ab = st.text_input("ab_categoria del plato", value="AB.010140", key="cp_dbg_ab")
-
-            if st.button("🔍 Cuadrar", key="cp_dbg_btn"):
-                _lf = "AND UPPER(local)=UPPER(:l)" if f_local != "Todos" else ""
-                _pp = {"i": str(f_inicio), "f": str(f_fin), "sku": _dbg_sku}
-                if f_local != "Todos":
-                    _pp["l"] = f_local
-
-                _df_capa = run_query(f"""
-                    SELECT sku_opcion, MAX(nombre_producto) AS nombre,
-                           MAX(ba_opcion) AS ba_opcion, SUM(cant) AS cant_capa
-                    FROM opciones_diarias
-                    WHERE fecha_venta BETWEEN :i AND :f
-                      AND sku_padre = :sku
-                      {_lf}
-                    GROUP BY sku_opcion
-                """, _pp)
-
-                _grupos = get_opciones_producto(f_inicio, f_fin, f_local, _dbg_ab, sku_padre=_dbg_sku)
-                _rows_per = []
-                for _g, _dfg in (_grupos or {}).items():
-                    for _, _r in _dfg.iterrows():
-                        _rows_per.append({"sku_opcion": _r["sku_producto"],
-                                          "cant_periodo": float(_r["cant"])})
-                _df_per = (pd.DataFrame(_rows_per) if _rows_per
-                           else pd.DataFrame(columns=["sku_opcion", "cant_periodo"]))
-
-                if _df_capa.empty and _df_per.empty:
-                    st.warning("Sin datos. ¿Cargaste la capa diaria de ese mes? (botón Actualizar mes)")
-                else:
-                    _m = _df_capa.merge(_df_per, on="sku_opcion", how="outer")
-                    _m["cant_capa"]    = pd.to_numeric(_m["cant_capa"], errors="coerce").fillna(0).round(2)
-                    _m["cant_periodo"] = pd.to_numeric(_m["cant_periodo"], errors="coerce").fillna(0).round(2)
-                    _m["dif_cp"]       = (_m["cant_capa"] - _m["cant_periodo"]).round(2)
-                    _m["Esperado"]     = 0.0
-                    _m = _m.sort_values("cant_periodo", ascending=False).reset_index(drop=True)
-
-                    st.markdown("**Escribe tus números a mano en la columna `Esperado`:**")
-                    _ed = st.data_editor(
-                        _m[["sku_opcion", "nombre", "cant_capa", "cant_periodo", "dif_cp", "Esperado"]]
-                          .rename(columns={"sku_opcion": "SKU", "nombre": "Opción",
-                                           "cant_capa": "Capa diaria",
-                                           "cant_periodo": "Período (validado)",
-                                           "dif_cp": "Dif capa-período"}),
-                        use_container_width=True, hide_index=True, key="cp_dbg_editor",
-                        disabled=["SKU", "Opción", "Capa diaria", "Período (validado)", "Dif capa-período"]
-                    )
-
-                    _cap = pd.to_numeric(_ed["Capa diaria"], errors="coerce").fillna(0)
-                    _esp = pd.to_numeric(_ed["Esperado"], errors="coerce").fillna(0)
-                    _ed["Dif esperado"] = (_cap - _esp).round(2)
-                    _ed["Cuadra"] = _ed["Dif esperado"].abs().lt(0.5).map({True: "✅", False: "❌"})
-                    st.dataframe(_ed, use_container_width=True, hide_index=True)
-
-                    _t1 = float(_ed["Capa diaria"].sum())
-                    _t2 = float(_ed["Período (validado)"].sum())
-                    _t3 = float(_esp.sum())
-                    st.markdown(
-                        f"**Totales** — Capa diaria: `{_t1:,.1f}`  ·  "
-                        f"Período validado: `{_t2:,.1f}`  ·  Esperado: `{_t3:,.1f}`"
-                    )
-                    if abs(_t1 - _t2) < 0.5:
-                        st.success("La capa diaria y la función validada CUADRAN. ✅")
-                    else:
-                        st.error(f"Capa diaria vs período difieren en {abs(_t1 - _t2):,.1f}. Revisar.")
-
-        # ══════════════════════════════════════════════════════════════
-        # 🗓️ PROYECCIÓN "SEMANA PRESENTE"  (día de semana × fase de pago)
-        # Sección CP2 — independiente del plan por día de semana de arriba.
-        # Estima cuánto producir cada día de la próxima semana por local,
-        # combinando el efecto finde (dow) con el efecto sueldo/adelanto (fase).
-        # ══════════════════════════════════════════════════════════════
-        import datetime as _cp2_dt
-
-        st.markdown("---")
-        st.markdown("## 🗓️ Vista B — Proyección de la semana a producir")
-        st.markdown(
-            "<div style='background:#15233a;border-left:4px solid #4caf7d;"
-            "padding:12px 16px;border-radius:6px;margin-bottom:8px'>"
-            "Estima <b>cuántas unidades producir cada día</b> de la semana, por local. "
-            "Combina el <b>efecto fin de semana</b> con el <b>efecto pago</b> en Chile "
-            "(sueldo a inicio de mes, adelanto el 15). Por defecto usa "
-            "<b>todo el histórico</b> disponible.</div>",
-            unsafe_allow_html=True
-        )
-
-        # ───────────────────────── PASO 1 ─────────────────────────
-        st.markdown("### 1️⃣ Muestra histórica")
-
-        # Detectar el rango real de datos en la capa diaria
-        _cob_min, _cob_max, _cob_n = get_cobertura_cp2()
-
-        if _cob_n == 0:
-            st.warning(
-                "⚙️ La capa diaria está vacía. Construye al menos un rango para empezar."
-            )
-        else:
-            st.success(
-                f"✅ Histórico disponible: **{_cob_min} → {_cob_max}** "
-                f"({_cob_n} días cargados). Por defecto se proyecta sobre **todo** esto."
-            )
-
-        # Por defecto: todo el histórico. Opcionalmente, acotar.
-        _cp2_acotar = st.checkbox(
-            "🎯 Acotar a un rango específico (por defecto usa todo el histórico)",
-            value=False, key="cp2_acotar"
-        )
-        if _cp2_acotar and _cob_n > 0:
-            _cp2_h1, _cp2_h2 = st.columns(2)
-            with _cp2_h1:
-                _cp2_mi = st.date_input("Desde", value=_cob_min, key="cp2_muestra_i")
-            with _cp2_h2:
-                _cp2_mf = st.date_input("Hasta", value=_cob_max, key="cp2_muestra_f")
-        else:
-            # Todo el histórico disponible
-            _cp2_mi = _cob_min
-            _cp2_mf = _cob_max
-
-        # Construcción/actualización de la capa (incorporar meses nuevos)
-        with st.expander("🏗️ Construir / actualizar datos en la base (incorporar meses nuevos)"):
-            st.caption(
-                "Usa esto solo para cargar meses que aún no estén en la capa. "
-                "Es acumulativo: no borra los meses ya construidos (salvo que se solapen). "
-                "Construir todo el histórico no es necesario para proyectar."
-            )
-            _bc1, _bc2 = st.columns(2)
-            with _bc1:
-                _cp2_build_i = st.date_input(
-                    "Construir desde", value=_cp2_dt.date(_cp2_dt.date.today().year, 1, 1),
-                    key="cp2_build_i"
-                )
-            with _bc2:
-                _cp2_build_f = st.date_input(
-                    "Construir hasta", value=_cp2_dt.date.today(), key="cp2_build_f"
-                )
-            if st.button("🏗️ Construir / actualizar", key="cp2_btn_build",
-                         use_container_width=True):
-                with st.spinner("Construyendo capa diaria… (puede tardar en rangos largos)"):
-                    _ok_b = refrescar_opciones_diarias(_cp2_build_i, _cp2_build_f)
-                if _ok_b:
-                    st.session_state.pop("cp2_df", None)  # invalidar proyección previa
-                    st.success("Capa actualizada. Vuelve arriba y proyecta.")
-                    st.rerun()
-                else:
-                    st.error("No se pudo construir. Revisa la conexión a la base.")
-
-        _cp2_has_data = (_cob_n > 0 and _cp2_mi is not None and _cp2_mf is not None)
-
-        st.markdown("")  # respiro vertical
-
-        # ───────────────────────── PASO 2 ─────────────────────────
-        st.markdown("### 2️⃣ Configura la proyección")
-        _cp2_c1, _cp2_c2 = st.columns(2)
-        with _cp2_c1:
-            _cp2_ref = st.date_input(
-                "🎯 Semana a producir (elige cualquier día de esa semana)",
-                value=_cp2_dt.date.today(), key="cp2_semana_ref"
-            )
-            _cp2_vista = st.radio(
-                "👁️ Vista",
-                ["📍 Local del sidebar", "🌐 Todos desglosado por local"],
-                key="cp2_vista"
-            )
-        with _cp2_c2:
-            _cp2_crit_opts = {
-                "P75 · recomendado": "p75",
-                "P90 · minimiza quiebres": "p90",
-                "Promedio": "promedio",
-                "Mediana · robusta": "mediana",
-                "Máximo histórico": "maximo",
-            }
-            _cp2_crit_lbl = st.selectbox(
-                "📊 Criterio de producción", list(_cp2_crit_opts.keys()), key="cp2_crit"
-            )
-            _cp2_grupo = st.selectbox(
-                "🍽️ Grupo de opción",
-                ["Proteína"] + [g for g in BA_GRUPOS.keys() if g != "Proteína"] + ["Todos"],
-                key="cp2_grupo"
-            )
-        _cp2_crit = _cp2_crit_opts[_cp2_crit_lbl]
-
-        # Lunes..Domingo de la semana objetivo
-        _cp2_lun = _cp2_ref - _cp2_dt.timedelta(days=_cp2_ref.weekday())
-        _cp2_dias_obj = [_cp2_lun + _cp2_dt.timedelta(days=k) for k in range(7)]
-        _cp2_dow_nom = {1: 'Lun', 2: 'Mar', 3: 'Mié', 4: 'Jue', 5: 'Vie', 6: 'Sáb', 7: 'Dom'}
-        _cp2_plan_dias = []
-        for _d in _cp2_dias_obj:
-            _dow = _d.isoweekday()
-            _fase = fase_pago_cp2(_d)
-            _cp2_plan_dias.append({
-                "fecha": _d, "dow": _dow, "fase": _fase,
-                "col": f"{_cp2_dow_nom[_dow]} {_d.day:02d}",
-            })
-        st.caption(
-            "📅 Semana objetivo: **"
-            + _cp2_dias_obj[0].strftime("%d-%m") + " → "
-            + _cp2_dias_obj[-1].strftime("%d-%m-%Y")
-            + "** · cada día usa su propia fase de pago."
-        )
-
-        st.markdown("")  # respiro vertical
-
-        # ───────────────────────── PASO 3 ─────────────────────────
-        st.markdown("### 3️⃣ Proyecta")
-        if _cp2_acotar:
-            st.caption(f"Proyectando sobre rango acotado: **{_cp2_mi} → {_cp2_mf}**")
-        else:
-            st.caption(f"Proyectando sobre **todo el histórico**: {_cp2_mi} → {_cp2_mf}")
-
-        if st.button("📊 Proyectar semana", type="primary",
-                     key="cp2_btn", use_container_width=True,
-                     disabled=not _cp2_has_data):
-            _cp2_local_q = f_local if _cp2_vista.startswith("📍") else "Todos"
-            with st.spinner("Calculando patrón día-semana × fase de pago…"):
-                _cp2_df = get_estadisticas_cp2(
-                    _cp2_mi, _cp2_mf, local=_cp2_local_q
-                )
-            if _cp2_df is None or _cp2_df.empty:
-                st.session_state.pop("cp2_df", None)
-                st.warning(
-                    "Sin datos para esa muestra/local. Construye datos en el paso 1."
-                )
-            else:
-                st.session_state["cp2_df"] = _cp2_df.reset_index(drop=True)
-                st.session_state["cp2_dias_op"] = get_dias_operativos_cp2(
-                    _cp2_mi, _cp2_mf, local=_cp2_local_q
-                )
-                st.session_state["cp2_meta"] = {
-                    "mi": str(_cp2_mi), "mf": str(_cp2_mf),
-                    "vista": _cp2_vista, "local": _cp2_local_q,
-                }
-        if not _cp2_has_data:
-            st.caption("🔒 No hay datos en la capa. Construye un rango en el paso 1.")
-
-
-        # ── Render proyección (persistente: cambiar criterio no recalcula BD) ──
-        if "cp2_df" in st.session_state and not st.session_state["cp2_df"].empty:
-            import math as _cp2_math
-            import re as _cp2_re
-            _cp2_df = st.session_state["cp2_df"]
-            _cp2_meta = st.session_state.get("cp2_meta", {})
-
-            # Filtro de grupo BA
-            if _cp2_grupo != "Todos":
-                _cp2_df = _cp2_df[_cp2_df["grupo_ba"] == _cp2_grupo]
-
-            if _cp2_df.empty:
-                st.info("Sin opciones para el grupo seleccionado en esta muestra.")
-            else:
-                # Etiqueta canónica de la proteína (agrupa variantes)
-                def _cp2_canon(s):
-                    s = str(s or "").strip()
-                    s = _cp2_re.sub(r"\s+", " ", s)
-                    return s.strip(" .,;:-")
-                _cp2_raw = _cp2_df["nombre_producto"].fillna(_cp2_df["sku_opcion"])
-                _cp2_key = _cp2_raw.map(lambda x: _cp2_canon(x).casefold())
-                _cp2_cln = _cp2_raw.map(_cp2_canon)
-                _cp2_lblmap = (pd.DataFrame({"_k": _cp2_key, "_c": _cp2_cln})
-                               .groupby("_k")["_c"]
-                               .agg(lambda s: s.mode().iloc[0] if not s.mode().empty else s.iloc[0])
-                               .to_dict())
-                _cp2_df = _cp2_df.copy()
-                _cp2_df["etiqueta"] = _cp2_raw.map(
-                    lambda x: _cp2_lblmap.get(_cp2_canon(x).casefold(), _cp2_canon(x)))
-                _cp2_df["_base"] = pd.to_numeric(_cp2_df[_cp2_crit], errors="coerce").fillna(0)
-
-                # Lookup: (local, etiqueta, dow, fase) -> valor según criterio
-                _cp2_look = (_cp2_df.groupby(["local", "etiqueta", "dow", "fase"])["_base"]
-                             .sum().to_dict())
-                # Fallback por (local, etiqueta, dow) ignorando fase, si falta la celda exacta
-                _cp2_look_dow = (_cp2_df.groupby(["local", "etiqueta", "dow"])["_base"]
-                                 .mean().to_dict())
-                # Nivel de confianza = días-calendario reales por (local, dow, fase).
-                # NO depende del SKU: cuenta cuántos 'lunes-Sueldo' (etc.) hubo en la
-                # muestra, que es lo que da soporte estadístico a la proyección.
-                _cp2_dias_op = st.session_state.get("cp2_dias_op", {})
-
-                # Umbrales de confianza por nº de días observados
-                def _cp2_conf(n):
-                    if n >= 4:
-                        return ("🟢", "Alta")
-                    if n >= 2:
-                        return ("🟡", "Media")
-                    if n >= 1:
-                        return ("🔴", "Baja")
-                    return ("⚪", "Sin dato")
-
-                def _cp2_ndias_celda(_loc, _etq, _dia):
-                    # La confianza depende del local/dow/fase, no de la proteína:
-                    # son los días reales en que el local operó ese dow+fase.
-                    n = _cp2_dias_op.get((_loc, _dia["dow"], _dia["fase"]))
-                    return int(n) if n else 0
-
-                _cp2_locales = sorted(_cp2_df["local"].dropna().unique().tolist())
-                _cp2_etqs = (_cp2_df.groupby("etiqueta")["_base"].sum()
-                             .sort_values(ascending=False).index.tolist())
-                _cp2_cols = [d["col"] for d in _cp2_plan_dias]
-
-                def _cp2_celda(_loc, _etq, _dia):
-                    v = _cp2_look.get((_loc, _etq, _dia["dow"], _dia["fase"]))
-                    if v is None:
-                        v = _cp2_look_dow.get((_loc, _etq, _dia["dow"]))
-                    if v is None or (isinstance(v, float) and _cp2_math.isnan(v)):
-                        return 0
-                    return int(_cp2_math.ceil(v)) if v > 0 else 0
-
-                st.markdown(
-                    f"### 🏭 Plan semanal — {_cp2_meta.get('vista','')}  ·  "
-                    f"criterio {_cp2_crit_lbl.split(' · ')[0]}"
-                )
+                _rango_i = _semanas[0][0]
+                _rango_f = _semanas[-1][1]
                 st.caption(
-                    f"Muestra: {_cp2_meta.get('mi','')} → {_cp2_meta.get('mf','')}  ·  "
-                    "unidades a producir por día (redondeo hacia arriba)."
+                    f"**{len(_semanas)} semana(s) cerrada(s)** en {_cp_mes_lbl(_cp_mes)}: "
+                    + " · ".join(f"{a.strftime('%d-%m')}→{b.strftime('%d-%m')}" for a, b in _semanas)
                 )
 
-                # Mapa de fase por columna para mostrar bajo cada día
-                _cp2_fase_row = {d["col"]: _CP2_FASE_NOM[d["fase"]].split(" (")[0]
-                                 for d in _cp2_plan_dias}
+                _cp_params = {"i": str(_rango_i), "f": str(_rango_f)}
+                _cp_loc_filter = ""
+                if _cp_local != "Todos":
+                    _cp_loc_filter = "AND UPPER(local) = UPPER(:l)"
+                    _cp_params["l"] = _cp_local
 
-                # Una tabla por local (en vista "Todos" itera; en local único, 1 sola)
-                _cp2_resumen_locales = []
-                for _loc in _cp2_locales:
-                    _filas = []
-                    for _etq in _cp2_etqs:
-                        # Solo etiquetas presentes en este local
-                        if not ((_cp2_df["local"] == _loc) & (_cp2_df["etiqueta"] == _etq)).any():
-                            continue
-                        _fila = {"Proteína": _etq}
-                        for _dia in _cp2_plan_dias:
-                            _fila[_dia["col"]] = _cp2_celda(_loc, _etq, _dia)
-                        _fila["Σ semana"] = sum(_fila[c] for c in _cp2_cols)
-                        _filas.append(_fila)
-                    if not _filas:
-                        continue
-                    _piv = pd.DataFrame(_filas).set_index("Proteína")
-                    _piv = _piv[_piv["Σ semana"] > 0].sort_values("Σ semana", ascending=False)
-                    if _piv.empty:
-                        continue
-                    _piv.loc["TOTAL"] = _piv.sum(axis=0)
-                    _piv = _piv.astype(int)
+                # ── Datos diarios por producto (nombre original, sin agrupar) ──
+                # Agregamos por (producto, local, fecha) sumando cant del día.
+                _grp_loc = "local," if _cp_desglosar else ""
+                _cp_dia = run_query(f"""
+                    SELECT
+                        {_grp_loc}
+                        sku_opcion,
+                        nombre_producto,
+                        ab_categoria,
+                        fecha_venta,
+                        SUM(cant) AS cant_dia
+                    FROM opciones_diarias
+                    WHERE fecha_venta BETWEEN :i AND :f
+                      {_cp_loc_filter}
+                    GROUP BY {_grp_loc} sku_opcion, nombre_producto, ab_categoria, fecha_venta
+                """, _cp_params)
 
-                    if len(_cp2_locales) > 1:
-                        st.markdown(f"#### 📍 {_loc}")
-                    # Fila guía de fase de pago
-                    _fase_guia = pd.DataFrame(
-                        [{**{c: _cp2_fase_row[c] for c in _cp2_cols}, "Σ semana": ""}],
-                        index=["fase pago"]
-                    )
-                    st.dataframe(_piv, use_container_width=True)
-                    st.caption(
-                        "Fase de pago por día: "
-                        + "  ·  ".join(f"{c} = {_cp2_fase_row[c]}" for c in _cp2_cols)
-                    )
+                if _cp_dia is None or _cp_dia.empty:
+                    st.warning("Sin datos para ese mes/local en las semanas cerradas.")
+                else:
+                    import math as _cp_math
+                    _cp_dia["cant_dia"] = pd.to_numeric(_cp_dia["cant_dia"], errors="coerce").fillna(0)
+                    # Etiqueta de producto: nombre original (cae a SKU si falta nombre)
+                    _cp_dia["producto"] = _cp_dia["nombre_producto"].fillna("").replace("", pd.NA)
+                    _cp_dia["producto"] = _cp_dia["producto"].fillna(_cp_dia["sku_opcion"])
 
-                    # ── Señalizador de confianza por proteína (nº de días observados) ──
-                    _conf_rows = []
-                    for _etq in _piv.drop(index="TOTAL").index:
-                        _ns = [_cp2_ndias_celda(_loc, _etq, _d) for _d in _cp2_plan_dias]
-                        _nmin = min(_ns) if _ns else 0
-                        _nmax = max(_ns) if _ns else 0
-                        _ico, _niv = _cp2_conf(_nmin)
-                        _conf_rows.append({
-                            "Proteína": _etq,
-                            "Confianza": f"{_ico} {_niv}",
-                            "Días mín": _nmin,
-                            "Días máx": _nmax,
-                        })
-                    if _conf_rows:
-                        with st.expander(f"🔎 Nivel de confianza por proteína — {_loc}"):
-                            st.caption(
-                                "Indica con cuántos días reales (mismo día de semana y fase) "
-                                "se calculó cada proyección. 🟢 Alta ≥4 días · 🟡 Media 2-3 · "
-                                "🔴 Baja 1 día. 'Días mín' es la celda más débil de la fila."
-                            )
-                            st.dataframe(
-                                pd.DataFrame(_conf_rows).sort_values("Días mín"),
-                                use_container_width=True, hide_index=True
-                            )
-                    _por_dia = _piv.drop(index="TOTAL")[_cp2_cols].sum(axis=0)
-                    _tot_loc = int(_piv.loc["TOTAL", "Σ semana"])
-                    _pico = _por_dia.idxmax() if not _por_dia.empty else "—"
-                    _valle = _por_dia.idxmin() if not _por_dia.empty else "—"
-                    _cp2_resumen_locales.append({
-                        "Local": _loc, "Total semana": _tot_loc,
-                        "Día pico": _pico, "Día valle": _valle,
-                    })
+                    # ═══════ TABLA RESUMEN: máximo en Q por producto ═══════
+                    st.markdown("### 📊 Resumen — máximo por producto en el período")
+                    _key_cols = (["local"] if _cp_desglosar else []) + ["producto", "ab_categoria", "sku_opcion"]
+                    _resumen = (_cp_dia.groupby(_key_cols)["cant_dia"]
+                                .agg(max_dia="max", prom_dia="mean", total="sum")
+                                .reset_index())
+                    _resumen["max_dia"] = _resumen["max_dia"].apply(
+                        lambda v: int(_cp_math.ceil(v)) if v > 0 else 0)
+                    _resumen["prom_dia"] = _resumen["prom_dia"].round(1)
+                    _resumen["total"] = _resumen["total"].round(0).astype(int)
+                    _resumen = _resumen.sort_values(
+                        (["local"] if _cp_desglosar else []) + ["max_dia"],
+                        ascending=([True] if _cp_desglosar else []) + [False])
+                    _ren = {"local": "Local", "producto": "Producto",
+                            "ab_categoria": "Categoría", "sku_opcion": "SKU",
+                            "max_dia": "Máx (Q)", "prom_dia": "Prom/día", "total": "Total período"}
+                    st.dataframe(
+                        _resumen.rename(columns=_ren)[[_ren[c] for c in
+                            (["local"] if _cp_desglosar else []) +
+                            ["producto", "ab_categoria", "sku_opcion", "max_dia", "prom_dia", "total"]]],
+                        use_container_width=True, hide_index=True)
+                    st.caption("**Máx (Q)** = mayor cantidad registrada en un solo día dentro "
+                               "de las semanas cerradas. Es el tope de producción sugerido.")
 
-                # Resumen comparativo entre locales (vista Todos)
-                if len(_cp2_resumen_locales) > 1:
-                    st.markdown("#### 📊 Resumen por local")
-                    _df_res = pd.DataFrame(_cp2_resumen_locales).sort_values(
-                        "Total semana", ascending=False)
-                    st.dataframe(_df_res, use_container_width=True, hide_index=True)
-                    st.bar_chart(_df_res.set_index("Local")["Total semana"])
-
-                # Alerta de demanda irregular (CV alto promedio por proteína)
-                _cp2_cvm = (_cp2_df.assign(
-                                _cv=pd.to_numeric(_cp2_df["cv"], errors="coerce"))
-                            .groupby("etiqueta")["_cv"].mean())
-                _cp2_err = [e for e, v in _cp2_cvm.items() if pd.notna(v) and v >= 0.5]
-                if _cp2_err:
-                    st.warning(
-                        "⚠️ Demanda irregular (CV alto) en: "
-                        + ", ".join(map(str, _cp2_err))
-                        + ". Conviene criterio más alto (P90) o dejar buffer."
-                    )
-
-                # Alerta global de confianza: basada en los DÍAS OPERATIVOS reales
-                # por (local, dow, fase), no en n_dias por SKU (que siempre es bajo
-                # porque un SKU puntual no se vende todos los días).
-                _vals_op = list(_cp2_dias_op.values())
-                _pct_bajo = (sum(1 for v in _vals_op if v <= 1) / len(_vals_op) * 100
-                             if _vals_op else 0)
-                if _pct_bajo >= 50:
-                    st.error(
-                        f"🔴 Confianza baja: {_pct_bajo:.0f}% de las combinaciones "
-                        "(día × fase) ocurrieron un solo día en la muestra. Para "
-                        "estimaciones fiables, amplía la muestra a 2-3 meses en el "
-                        "paso 1 y reconstruye."
-                    )
-                elif _pct_bajo >= 25:
-                    st.warning(
-                        f"🟡 Confianza media: {_pct_bajo:.0f}% de las combinaciones "
-                        "ocurrieron pocos días. Considera ampliar la muestra histórica."
-                    )
-
-                with st.expander("📋 Detalle patrón día-semana × fase (todas las métricas)"):
-                    _cp2_vcols = {
-                        "local": "Local", "dia_semana": "Día", "fase_nom": "Fase",
-                        "sku_padre": "Plato", "sku_opcion": "SKU", "etiqueta": "Proteína",
-                        "n_dias": "N° días", "minimo": "Mín", "maximo": "Máx",
-                        "promedio": "Promedio", "mediana": "Mediana", "moda": "Moda",
-                        "p75": "P75", "p90": "P90", "desv": "Desv", "cv": "CV",
-                    }
-                    _cols_ok = [c for c in _cp2_vcols if c in _cp2_df.columns]
-                    _det = (_cp2_df.sort_values(
-                                ["local", "dow", "fase", "promedio"],
-                                ascending=[True, True, True, False])
-                            [_cols_ok].rename(columns=_cp2_vcols))
-                    # Días operativos reales por (local, dow, fase) y su confianza.
-                    # (Distinto de 'N° días', que es por SKU.)
-                    _det_src = _cp2_df.sort_values(
-                        ["local", "dow", "fase", "promedio"],
-                        ascending=[True, True, True, False])
-                    _dias_op_col = [
-                        _cp2_dias_op.get((r["local"], int(r["dow"]), int(r["fase"])), 0)
-                        for _, r in _det_src.iterrows()
-                    ]
-                    _det["Días op."] = _dias_op_col
-                    _det["Confianza"] = [
-                        "%s %s" % _cp2_conf(n) for n in _dias_op_col
-                    ]
-                    st.dataframe(_det, use_container_width=True, hide_index=True)
+                    # Descargar resumen
                     st.download_button(
-                        "📥 Detalle patrón (CSV)",
-                        _det.to_csv(index=False).encode("utf-8"),
-                        file_name=f"cp2_patron_{_cp2_meta.get('local','')}_"
-                                  f"{_cp2_meta.get('mi','')}_{_cp2_meta.get('mf','')}.csv",
-                        mime="text/csv", key="cp2_dl_det"
-                    )
+                        "📥 Descargar resumen (CSV)",
+                        _resumen.rename(columns=_ren).to_csv(index=False).encode("utf-8"),
+                        file_name=f"control_produccion_{_cp_mes}_{_cp_local}.csv",
+                        mime="text/csv", key="cp_dl_resumen")
+
+                    # ═══════ DESGLOSE POR SEMANA (origen del dato) ═══════
+                    with st.expander("🔍 Ver desglose por semana cerrada (origen del dato)"):
+                        _DOW = {0:"Lun",1:"Mar",2:"Mié",3:"Jue",4:"Vie",5:"Sáb",6:"Dom"}
+                        for _si, (_sa, _sb) in enumerate(_semanas, start=1):
+                            st.markdown(f"**Semana {_si}: {_sa.strftime('%d-%m')} → {_sb.strftime('%d-%m-%Y')}**")
+                            _wk = _cp_dia[(_cp_dia["fecha_venta"] >= _sa) &
+                                          (_cp_dia["fecha_venta"] <= _sb)].copy()
+                            if _wk.empty:
+                                st.caption("Sin registros esta semana.")
+                                continue
+                            _wk["dia"] = _wk["fecha_venta"].apply(
+                                lambda d: f"{_DOW[pd.Timestamp(d).weekday()]} {pd.Timestamp(d).day:02d}")
+                            # Pivot producto × día (suma del día); columnas en orden de fecha
+                            _orden_dias = (_wk[["fecha_venta", "dia"]].drop_duplicates()
+                                           .sort_values("fecha_venta")["dia"].tolist())
+                            _idx_cols = (["local"] if _cp_desglosar else []) + ["producto"]
+                            _piv = _wk.pivot_table(index=_idx_cols, columns="dia",
+                                                   values="cant_dia", aggfunc="sum", fill_value=0)
+                            _piv = _piv.reindex(columns=_orden_dias, fill_value=0)
+                            _piv["Máx"] = _piv.max(axis=1)
+                            _piv = _piv.round(0).astype(int).sort_values("Máx", ascending=False)
+                            st.dataframe(_piv, use_container_width=True)
 
 
     elif informe_sel == "ColacionesRRHH":
