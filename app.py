@@ -16709,8 +16709,102 @@ buildTree(data, 1, null);
                 st.caption(f"Total venta salón evaluada: {_sg_fmt_money(_tot2v)} "
                            f"(esperado Vitacura sem 01-07: $59.216.110)")
 
-            st.info("✅ Bloque 1 (encabezado + secciones 1 y 2) listo. "
-                    "Las secciones 3–11, gráficos y PDF se agregan en los próximos pasos.")
+            # ═══════════ SECCIÓN 3 — DETALLE POR SUBCATEGORÍA (whitelist) ═══════════
+            # % = sobre el total venta salón evaluado (sección 2). Q prom × garzón = Q ÷ nº garzones.
+            _sg_tot_eval = _tot2v if (_sg_s2 is not None and not _sg_s2.empty) else 0
+            _sg_ng = _sg_ngarz if _sg_ngarz else 1
+
+            def _sg_bloque3(titulo, casos, df_data, total_titulo="TOTAL"):
+                """casos: lista de (etiqueta, [categorias_menu]). Renderiza tabla sección 3."""
+                if df_data is None or df_data.empty:
+                    return
+                _di = df_data.set_index("categoria_menu")
+                filas = []
+                tot_sem = tot_acum = tot_q_acum = tot_q_sem = 0
+                for etiqueta, cats in casos:
+                    vsem = vacum = qacum = qsem = 0
+                    for c in cats:
+                        if c in _di.index:
+                            r = _di.loc[c]
+                            vsem += float(r["venta_sem"]); vacum += float(r["venta_acum"])
+                            qacum += float(r["q_acum"]); qsem += float(r["q_sem"])
+                    pct = (vsem / _sg_tot_eval * 100) if _sg_tot_eval else 0
+                    filas.append({
+                        "Ítem": etiqueta,
+                        "$ Acumulado": _sg_fmt_money(vacum),
+                        "Q": int(qacum),
+                        "Q prom × garzón": round(qacum / _sg_ng, 0),
+                        "$ Diario": _sg_fmt_money(vacum / _sg_dias_acum),
+                        "$ Semanal": _sg_fmt_money(vsem),
+                        "%": f"{pct:.1f}%",
+                    })
+                    tot_sem += vsem; tot_acum += vacum; tot_q_acum += qacum; tot_q_sem += qsem
+                pct_t = (tot_sem / _sg_tot_eval * 100) if _sg_tot_eval else 0
+                filas.append({
+                    "Ítem": total_titulo,
+                    "$ Acumulado": _sg_fmt_money(tot_acum),
+                    "Q": int(tot_q_acum),
+                    "Q prom × garzón": round(tot_q_acum / _sg_ng, 0),
+                    "$ Diario": _sg_fmt_money(tot_acum / _sg_dias_acum),
+                    "$ Semanal": _sg_fmt_money(tot_sem),
+                    "%": f"{pct_t:.1f}%",
+                })
+                st.markdown(f"**{titulo}**")
+                st.dataframe(pd.DataFrame(filas), use_container_width=True, hide_index=True)
+
+            st.markdown("### 3 · Ventas por Categoría (detalle)")
+
+            # Query base: venta por categoria_menu (whitelist, salón), acum + semanal
+            _sg_s3 = run_query(f"""
+                select categoria_menu,
+                  sum(case when fecha_venta between :ai and :af
+                           then monto_venta_real + coalesce(descuento,0) else 0 end) as venta_acum,
+                  sum(case when fecha_venta between :ai and :af then cantidad_vendida else 0 end) as q_acum,
+                  sum(case when fecha_venta between :si and :sf
+                           then monto_venta_real + coalesce(descuento,0) else 0 end) as venta_sem,
+                  sum(case when fecha_venta between :si and :sf then cantidad_vendida else 0 end) as q_sem
+                from ventas
+                where local = :loc and origen is null
+                  and categoria_menu not in ('{_sg_excl_sql}')
+                  and garzon = any(:wl)
+                group by categoria_menu
+            """, _sg_p)
+
+            # 3.1 Alimentos (rollup grueso del MD, sección 5.2)
+            _sg_bloque3("VENTAS ALIMENTOS", [
+                ("PARA COMPARTIR", ["Para Compartir"]),
+                ("SANDWICH Y HAMBURGUESAS", [
+                    "Sandwich Clasicos","Churrasco Clasico","Pernil Clasico",
+                    "Hamburguesa De La Casa","Hamburguesa De Quinoa","Hamburguesa Clasica",
+                    "Mechada Clasica","Filete Clasico","Lomito Clasico","Ave Clasica"]),
+                ("PLATOS", ["Platos Clasicos","Platos Alemanes"]),
+                ("AGREGADOS Y ACOMPAÑAMIENTOS", ["Agregados","Acompanamientos"]),
+                ("ENSALADAS Y OTROS", ["Ensaladas Y Otros"]),
+                ("NIÑOS", ["Ninos"]),
+            ], _sg_s3)
+
+            # 3.2 Cafetería y Postres
+            _sg_bloque3("VENTAS CAFETERÍA Y POSTRES", [
+                ("CAFETERÍA", ["Cafeteria"]),
+                ("POSTRES", ["Postres"]),
+            ], _sg_s3)
+
+            # 3.3 Líquidos C/A (por categoria_menu, MD 5.6)
+            _sg_bloque3("VENTAS LÍQUIDOS C/A", [
+                ("CERVEZAS", ["Cervezas"]),
+                ("TRAGOS Y COCTAILS", ["Cocteles","Piscos","Ron","Tequila","Vodka","Whisky","Bajativos"]),
+                ("VINOS Y ESPUMANTES", ["Vinos","Espumantes"]),
+            ], _sg_s3)
+
+            # 3.4 Líquidos S/A (por categoria_menu, MD 5.7)
+            _sg_bloque3("VENTAS LÍQUIDOS S/A", [
+                ("BEBIDAS Y AGUAS", ["Bebidas"]),
+                ("JUGOS, LIMONADAS Y TRAGOS S/A", ["Jugos Naturales","Limonadas","Tragos Sin Alcohol"]),
+            ], _sg_s3)
+
+            st.info("✅ Bloques 1–3 listos (totales, por categoría, detalle por subcategoría). "
+                    "Faltan: estratégicos (4), adicionales por garzón/local (5-7), "
+                    "evolución (9, 11), encabezado visual, gráficos y PDF.")
 
 
 elif informe_sel == "Auditor":
