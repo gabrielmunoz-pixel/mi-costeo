@@ -4207,6 +4207,944 @@ def _cr_conclusiones_empresa(comp, red, periodos, modo, cp_red):
     return out
 
 
+
+def _sg_construir_ctx_b(local, ini, fin, ng, jef, ranking,
+                        s1, s2, s3, s4, rows5, rows5_sem, s6_raw, s7, rows9, g10):
+    """Mapea los datos calculados al esquema 'ctx' que espera generar_pdf_garzones_b."""
+    import pandas as _pd
+
+    def _money_to_int(x):
+        """'$9.448.490' -> 9448490 ; números pasan directo."""
+        if isinstance(x, (int, float)):
+            return int(x)
+        s = str(x).replace("$", "").replace(".", "").replace(",", "").strip()
+        try: return int(s)
+        except: return 0
+
+    def _pct_to_frac(x):
+        """'82.6%' -> 0.826 ; floats que ya son fracción pasan."""
+        if isinstance(x, (int, float)):
+            return float(x)
+        s = str(x).replace("%", "").replace(",", ".").strip()
+        try: return float(s) / 100.0
+        except: return 0.0
+
+    # ---- Sección 1 y 2 (desde DataFrame con rollup) ----
+    def _ventas_block(df):
+        if df is None or df.empty:
+            return {"filas": [], "total": {}}
+        order = ["ALIMENTOS","BAR","CAFETERÍA Y POSTRES"]
+        di = df.set_index("macro")
+        tot_acum = float(di.loc["TOTAL","venta_acum"]) if "TOTAL" in di.index else 0
+        tot_sem = float(di.loc["TOTAL","venta_sem"]) if "TOTAL" in di.index else 0
+        dias_acum = max((fin - ini.replace(day=1)).days + 1, 1)
+        filas = []
+        for m in order:
+            if m not in di.index: continue
+            r = di.loc[m]
+            va, vs = float(r["venta_acum"]), float(r["venta_sem"])
+            qa, qs = int(r["q_acum"]), int(r["q_sem"])
+            filas.append({
+                "item": m, "acum": int(va), "acum_q": qa,
+                "acum_pct": va/tot_acum if tot_acum else 0,
+                "diario": int(va/dias_acum), "diario_q": int(round(qa/dias_acum)),
+                "diario_pct": (va/dias_acum)/tot_acum if tot_acum else 0,
+                "semanal": int(vs), "semanal_q": qs,
+                "semanal_pct": vs/tot_sem if tot_sem else 0,
+            })
+        total = {"item":"TOTAL VENTA SALÓN","acum":int(tot_acum),
+                 "acum_q":int(di.loc["TOTAL","q_acum"]) if "TOTAL" in di.index else 0,
+                 "acum_pct":1.0,"diario":int(tot_acum/dias_acum),
+                 "diario_q":int(round((di.loc["TOTAL","q_acum"] if "TOTAL" in di.index else 0)/dias_acum)),
+                 "diario_pct":0.0,"semanal":int(tot_sem),
+                 "semanal_q":int(di.loc["TOTAL","q_sem"]) if "TOTAL" in di.index else 0,
+                 "semanal_pct":None}
+        return {"filas": filas, "total": total}
+
+    # ---- Sección 5 (desde rows ya formateadas) ----
+    def _sec5_block(rows):
+        if not rows:
+            return {"filas": [], "total": {}}
+        filas = []
+        for r in rows:
+            filas.append({
+                "nombre": _igb_safe(r.get("Garzón","")),
+                "venta": _money_to_int(r.get("Venta",0)),
+                "propina": _money_to_int(r.get("Aporte Propina",0)),
+                "venta_diaria_prom": _money_to_int(r.get("Vta Diaria Prom",0)),
+                "dias": int(r.get("Días",0) or 0),
+                "v_agreg": _money_to_int(r.get("Agreg.",0)), "q_agreg": int(r.get("Q Ag",0) or 0),
+                "p_agreg": _pct_to_frac(r.get("%Ag",0)),
+                "v_cafe": _money_to_int(r.get("Café",0)), "q_cafe": int(r.get("Q Cf",0) or 0),
+                "p_cafe": _pct_to_frac(r.get("%Cf",0)),
+                "v_post": _money_to_int(r.get("Postres",0)), "q_post": int(r.get("Q Po",0) or 0),
+                "p_post": _pct_to_frac(r.get("%Po",0)),
+                "v_liqsa": _money_to_int(r.get("Líq S/A",0)), "q_liqsa": int(r.get("Q SA",0) or 0),
+                "p_liqsa": _pct_to_frac(r.get("%SA",0)),
+                "v_liqca": _money_to_int(r.get("Líq C/A",0)), "q_liqca": int(r.get("Q CA",0) or 0),
+                "p_liqca": _pct_to_frac(r.get("%CA",0)),
+                "p_total": _pct_to_frac(r.get("%Total",0)),
+            })
+        return {"filas": filas, "total": {}}
+
+    # ---- Sección 4 estratégicos ----
+    def _estrat_block(df):
+        if df is None or df.empty:
+            return {"filas": [], "total": {}}
+        return {"filas": [], "total": {}}  # se llena abajo con rows4 si está
+
+    ctx = {
+        "local": local.upper(),
+        "semana": f"{ini.strftime('%d-%m')} AL {fin.strftime('%d-%m')}",
+        "ranking": ranking,
+        "supervisor": (jef[0] or "").upper(),
+        "jefe": (jef[1] or "").upper(),
+        "subjefe": (jef[2] or "").upper(),
+        "cantidad_garzones": ng,
+        "ventas_totales_salon": _ventas_block(s1),
+        "ventas_por_categoria": _ventas_block(s2),
+        "ventas_subcategorias": [],     # opcional; el generador tolera vacío
+        "productos_estrategicos": {"filas": [], "total": {}},
+        "adicionales_por_garzon_semanal": _sec5_block(rows5_sem),
+        "adicionales_por_garzon_mensual": _sec5_block(rows5),
+        "adicionales_por_local": {"filas": [], "total": {}},
+        "estrategicos_por_local": {"filas": [], "total": {}},
+        "evolucion_por_garzon": {"series": [], "filas": []},
+        "adicionales_por_garzon_anual": {"series": [], "filas": [], "total": {}},
+        "comparativa_por_local": {"series": [], "filas": []},
+        "comportamiento_semanal": {"columnas": [], "filas": [], "total": {}},
+        "comportamiento_mensual": {"columnas": [], "filas": [], "total": {}},
+    }
+    return ctx
+
+
+def _igb_safe(s):
+    return str(s or "")
+
+
+
+# ===== GENERADOR PDF 'INFORME B' (template Claude Code, replica visual fiel) =====
+# -*- coding: utf-8 -*-
+"""
+============================================================================
+ INFORME DE CONTROL DE VENTAS SALON  -  ALEMAN EXPERTO
+ Generador de PDF (replica del informe Excel) con ReportLab + matplotlib.
+============================================================================
+
+Uso basico
+----------
+    from informe_garzones import generar_pdf_garzones
+    pdf_bytes = generar_pdf_garzones(ctx)          # ctx = diccionario de datos
+
+    # En Streamlit (para imprimir / descargar, NO mostrar):
+    st.download_button("Descargar informe PDF", data=pdf_bytes,
+                       file_name="informe_vitacura.pdf", mime="application/pdf")
+
+    # O guardar a disco:
+    with open("informe.pdf", "wb") as f:
+        f.write(pdf_bytes)
+
+El diccionario `ctx`
+--------------------
+Datos y presentacion estan separados: este modulo SOLO dibuja a partir de
+`ctx`. El esquema completo (con datos reales de ejemplo) esta en
+`datos_ejemplo.py` -> CONTEXTO_EJEMPLO. Lee el README.md para el detalle de
+cada clave.
+
+Formato de valores
+------------------
+Los formateadores aceptan numeros (los formatean a estilo chileno:
+miles con ".", decimales con ",") o strings (se usan tal cual, por si
+necesitas un caso puntual exacto). Es decir:
+    monto  -> 48931250      => "$48.931.250"      (o pasa "  $48.931.250 ")
+    pct    -> 0.826         => "82,6%"            (fraccion 0..1)
+    entero -> 9407          => "9.407"
+============================================================================
+"""
+
+import io
+
+from reportlab.lib.pagesizes import letter
+from reportlab.lib import colors
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+from reportlab.platypus import (
+    SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image,
+    PageBreak, KeepTogether,
+)
+
+# ---------------------------------------------------------------------------
+#  PALETA Y CONSTANTES VISUALES  (ajusta aqui si quieres afinar la replica)
+# ---------------------------------------------------------------------------
+GRIS_HEADER   = colors.HexColor("#D0CECE")   # fila de titulos de columna / fila TOTAL
+GRIS_BARRA    = colors.HexColor("#757171")   # barra oscura de sub-seccion (sec 3)
+GRIS_BORDE    = colors.HexColor("#595959")   # lineas de la grilla
+ROJO          = colors.HexColor("#FF0000")   # formato condicional (bajo rendimiento)
+BLANCO        = colors.white
+NEGRO         = colors.black
+
+# Colores de las 4 series de los graficos (paleta Office por defecto)
+SERIE_COLORES = ["#5B9BD5", "#ED7D31", "#A5A5A5", "#FFC000"]
+
+FUENTE      = "Helvetica"
+FUENTE_BOLD = "Helvetica-Bold"
+
+# Tamanos de fuente por contexto
+FS_TITULO   = 10
+FS_SUBTIT   = 9
+FS_SEMANA   = 6.5
+FS_SECCION  = 7.5
+FS_INFO     = 8
+FS_CELDA    = 5.3    # tablas secciones 1-4, 6, 7, 9, 11
+FS_HEADER   = 5      # titulos de columna
+FS_CELDA_XS = 4.4    # tabla ancha seccion 5 (21 columnas)
+FS_HEADER_XS = 4.1
+
+GROSOR_BORDE = 0.4   # grosor de las lineas de grilla (pt)
+PAD_CELDA    = 0.7   # padding vertical de las celdas de tabla
+
+# Pagina
+ANCHO_PAG, ALTO_PAG = letter            # 612 x 792 pt (Carta vertical)
+MARGEN_X = 40
+MARGEN_SUP = 26
+MARGEN_INF = 20
+ANCHO_UTIL = ANCHO_PAG - 2 * MARGEN_X   # 532 pt
+
+
+# ---------------------------------------------------------------------------
+#  FORMATEADORES (estilo chileno)
+# ---------------------------------------------------------------------------
+def _igb_fmt_miles(v):
+    """9407 -> '9.407'. Si v es str, se devuelve tal cual."""
+    if isinstance(v, str):
+        return v
+    if v is None:
+        return ""
+    return f"{int(round(v)):,}".replace(",", ".")
+
+
+def _igb_fmt_monto(v, signo=True):
+    """48931250 -> '$48.931.250'."""
+    if isinstance(v, str):
+        return v
+    if v is None:
+        return ""
+    s = _igb_fmt_miles(v)
+    return ("$" + s) if signo else s
+
+
+def _igb_fmt_pct(v, dec=1):
+    """0.826 -> '82,6%'.  Acepta fraccion (0..1) o string literal."""
+    if isinstance(v, str):
+        return v
+    if v is None:
+        return ""
+    return f"{v * 100:.{dec}f}".replace(".", ",") + "%"
+
+
+# ---------------------------------------------------------------------------
+#  ESTILOS DE PARRAFO
+# ---------------------------------------------------------------------------
+def _igb__estilos():
+    return {
+        "titulo":  ParagraphStyle("titulo", fontName=FUENTE_BOLD, fontSize=FS_TITULO,
+                                  alignment=TA_CENTER, leading=FS_TITULO + 2),
+        "subtit":  ParagraphStyle("subtit", fontName=FUENTE_BOLD, fontSize=FS_SUBTIT,
+                                  alignment=TA_CENTER, leading=FS_SUBTIT + 2),
+        "semana":  ParagraphStyle("semana", fontName=FUENTE_BOLD, fontSize=FS_SEMANA,
+                                  alignment=TA_CENTER, leading=FS_SEMANA + 2),
+        "seccion": ParagraphStyle("seccion", fontName=FUENTE_BOLD, fontSize=FS_SECCION,
+                                  alignment=TA_LEFT, leading=FS_SECCION + 1.5,
+                                  spaceBefore=4, spaceAfter=1.5, textColor=colors.HexColor("#262626")),
+        "rank_lbl": ParagraphStyle("rank_lbl", fontName=FUENTE_BOLD, fontSize=12,
+                                   alignment=TA_CENTER, leading=14),
+        "rank_val": ParagraphStyle("rank_val", fontName=FUENTE_BOLD, fontSize=13,
+                                   alignment=TA_CENTER, leading=15),
+        "info_lbl": ParagraphStyle("info_lbl", fontName=FUENTE_BOLD, fontSize=FS_INFO,
+                                   alignment=TA_RIGHT, leading=FS_INFO + 2),
+        "info_val": ParagraphStyle("info_val", fontName=FUENTE_BOLD, fontSize=FS_INFO,
+                                   alignment=TA_LEFT, leading=FS_INFO + 2),
+        "pg_titulo": ParagraphStyle("pg_titulo", fontName=FUENTE_BOLD, fontSize=10.5,
+                                    alignment=TA_CENTER, leading=12, spaceAfter=3),
+        "barra":   ParagraphStyle("barra", fontName=FUENTE_BOLD, fontSize=FS_HEADER,
+                                  alignment=TA_LEFT, leading=FS_HEADER + 1.5, textColor=BLANCO),
+        # encabezados de columna
+        "th":      ParagraphStyle("th", fontName=FUENTE_BOLD, fontSize=FS_HEADER,
+                                  alignment=TA_CENTER, leading=FS_HEADER + 1),
+        "th_xs":   ParagraphStyle("th_xs", fontName=FUENTE_BOLD, fontSize=FS_HEADER_XS,
+                                  alignment=TA_CENTER, leading=FS_HEADER_XS + 1),
+        # nombre de item (col izquierda de cada tabla)
+        "item":    ParagraphStyle("item", fontName=FUENTE_BOLD, fontSize=FS_CELDA,
+                                  alignment=TA_CENTER, leading=FS_CELDA + 0.6),
+        "item_l":  ParagraphStyle("item_l", fontName=FUENTE, fontSize=FS_CELDA,
+                                  alignment=TA_LEFT, leading=FS_CELDA + 0.6),
+        "item_xs": ParagraphStyle("item_xs", fontName=FUENTE, fontSize=FS_CELDA_XS,
+                                  alignment=TA_LEFT, leading=FS_CELDA_XS + 0.6),
+    }
+
+
+S = _igb__estilos()
+
+
+def _igb_P(texto, estilo):
+    return Paragraph(str(texto), S[estilo])
+
+
+# ===========================================================================
+#  PAGINA 1  ----------------------------------------------------------------
+# ===========================================================================
+def _igb__cabecera(ctx, logo_path):
+    """Logo (izq) + bloque de titulo (centro) + caja RANKING (der)."""
+    # --- caja ranking ---
+    ranking = Table(
+        [[_igb_P("RANKING", "rank_lbl")], [_igb_P(ctx.get("ranking", ""), "rank_val")]],
+        colWidths=[110], rowHeights=[26, 26],
+    )
+    ranking.setStyle(TableStyle([
+        ("BOX", (0, 0), (-1, -1), 0.8, NEGRO),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+    ]))
+
+    # --- bloque central de titulo ---
+    centro = [
+        _igb_P("INFORME DE CONTROL DE VENTAS SALÓN", "titulo"),
+        _igb_P("LOCAL&nbsp;&nbsp;-&nbsp;&nbsp;" + str(ctx.get("local", "")), "subtit"),
+        _igb_P("SEMANA " + str(ctx.get("semana", "")), "semana"),
+    ]
+
+    # --- logo ---
+    try:
+        logo = Image(logo_path, width=58, height=58)
+    except Exception:
+        logo = Spacer(58, 58)
+
+    cab = Table([[logo, centro, ranking]],
+                colWidths=[120, ANCHO_UTIL - 120 - 120, 120])
+    cab.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (0, 0), "MIDDLE"),
+        ("VALIGN", (1, 0), (1, 0), "MIDDLE"),
+        ("VALIGN", (2, 0), (2, 0), "MIDDLE"),
+        ("ALIGN", (0, 0), (0, 0), "LEFT"),
+        ("ALIGN", (2, 0), (2, 0), "RIGHT"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    return cab
+
+
+def _igb__bloque_info(ctx):
+    filas = [
+        [_igb_P("SUPERVISOR SERVICIO:", "info_lbl"), _igb_P(ctx.get("supervisor", ""), "info_val")],
+        [_igb_P("JEFE SERVICIO:", "info_lbl"), _igb_P(ctx.get("jefe", ""), "info_val")],
+        [_igb_P("SUB JEFE SERVICIO:", "info_lbl"), _igb_P(ctx.get("subjefe", ""), "info_val")],
+        [_igb_P("CANTIDAD GARZONES:", "info_lbl"), _igb_P(str(ctx.get("cantidad_garzones", "")), "info_val")],
+    ]
+    t = Table(filas, colWidths=[160, ANCHO_UTIL - 160])
+    t.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (0, -1), 40),   # indenta las etiquetas hacia la derecha
+        ("LEFTPADDING", (1, 0), (1, -1), 14),
+        ("TOPPADDING", (0, 0), (-1, -1), 0.5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0.5),
+    ]))
+    return t
+
+
+# ---- Secciones 1 y 2 : ventas (10 columnas logicas, $ ACUMULADO en formato contable) ----
+# Columnas fisicas (11):
+#   0 ITEM | 1 "$" | 2 acum | 3 q | 4 % | 5 diario | 6 q | 7 % | 8 semanal | 9 q | 10 %
+_W_VENTAS = [104, 9, 63, 42, 33, 67, 42, 31, 67, 42, 32]   # suma = 532
+
+def _igb__fila_ventas(f, total=False):
+    est_item = "item"
+    return [
+        _igb_P(f["item"], est_item),
+        "$", _igb_fmt_miles(f.get("acum")),
+        _igb_fmt_miles(f.get("acum_q")),
+        _igb_fmt_pct(f.get("acum_pct")),
+        _igb_fmt_monto(f.get("diario")),
+        _igb_fmt_miles(f.get("diario_q")),
+        _igb_fmt_pct(f.get("diario_pct")),
+        _igb_fmt_monto(f.get("semanal")),
+        _igb_fmt_miles(f.get("semanal_q")),
+        _igb_fmt_pct(f.get("semanal_pct")),
+    ]
+
+
+def _igb__tabla_ventas(seccion, header_q="Q PRODUCTOS"):
+    filas = seccion["filas"]
+    total = seccion.get("total")
+
+    head = [
+        _igb_P("ITEM", "th"),
+        _igb_P("$ ACUMULADO", "th"), "",
+        _igb_P(header_q, "th"),
+        _igb_P("%", "th"),
+        _igb_P("$ DIARIO", "th"),
+        _igb_P(header_q, "th"),
+        _igb_P("%", "th"),
+        _igb_P("$ SEMANAL", "th"),
+        _igb_P(header_q, "th"),
+        _igb_P("%", "th"),
+    ]
+    data = [head]
+    for f in filas:
+        data.append(_igb__fila_ventas(f))
+    n_total = None
+    if total:
+        n_total = len(data)
+        data.append(_igb__fila_ventas(total, total=True))
+
+    t = Table(data, colWidths=_W_VENTAS)
+    estilo = [
+        ("GRID", (0, 0), (-1, -1), GROSOR_BORDE, GRIS_BORDE),
+        ("SPAN", (1, 0), (2, 0)),                       # "$ ACUMULADO" sobre $ + numero
+        ("BACKGROUND", (0, 0), (-1, 0), GRIS_HEADER),   # fila de titulos
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("FONTNAME", (0, 1), (-1, -1), FUENTE),
+        ("FONTSIZE", (0, 1), (-1, -1), FS_CELDA),
+        ("LEADING", (0, 0), (-1, -1), FS_CELDA + 0.6),
+        # alineaciones por columna
+        ("ALIGN", (1, 1), (1, -1), "LEFT"),             # "$"
+        ("ALIGN", (2, 1), (2, -1), "RIGHT"),            # acumulado
+        ("ALIGN", (3, 1), (3, -1), "CENTER"),
+        ("ALIGN", (4, 1), (4, -1), "CENTER"),
+        ("ALIGN", (5, 1), (5, -1), "RIGHT"),
+        ("ALIGN", (6, 1), (6, -1), "CENTER"),
+        ("ALIGN", (7, 1), (7, -1), "CENTER"),
+        ("ALIGN", (8, 1), (8, -1), "RIGHT"),
+        ("ALIGN", (9, 1), (9, -1), "CENTER"),
+        ("ALIGN", (10, 1), (10, -1), "CENTER"),
+        # columnas % en negrita (diario y semanal)
+        ("FONTNAME", (7, 1), (7, -1), FUENTE_BOLD),
+        ("FONTNAME", (10, 1), (10, -1), FUENTE_BOLD),
+        ("TOPPADDING", (0, 0), (-1, -1), PAD_CELDA),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), PAD_CELDA),
+        ("LEFTPADDING", (0, 0), (-1, -1), 2),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+        ("LEFTPADDING", (1, 0), (1, -1), 3),            # "$" pegado a la izquierda
+    ]
+    if n_total is not None:
+        estilo += [
+            ("BACKGROUND", (0, n_total), (-1, n_total), GRIS_HEADER),
+            ("FONTNAME", (0, n_total), (-1, n_total), FUENTE_BOLD),
+        ]
+    t.setStyle(TableStyle(estilo))
+    return t
+
+
+# ---- Seccion 3 : sub-tablas con barra oscura (Q PROMEDIO X GARZON) ----
+def _igb__barra_subseccion(titulo, ancho=104):
+    b = Table([[_igb_P(titulo, "barra")]], colWidths=[ancho], rowHeights=[8.5])
+    b.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), GRIS_BARRA),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 0.5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0.5),
+    ]))
+    return b
+
+
+def _igb__subtabla_categoria(sub):
+    """Una sub-tabla de la seccion 3 (barra + tabla con 'Q PROMEDIO X GARZON')."""
+    barra = _igb__barra_subseccion(sub["titulo"], ancho=_W_VENTAS[0])
+    tabla = _igb__tabla_ventas(sub, header_q="Q PROMEDIO X GARZON")
+    return KeepTogether([barra, tabla, Spacer(1, 3)])
+
+
+# ===========================================================================
+#  TABLA GENERICA  (secciones 6, 7, 9, 11)
+# ===========================================================================
+def _igb__tabla_generica(headers, filas, col_widths, aligns=None, fs=FS_CELDA,
+                    th_estilo="th", total_idx=None, item_estilo="item",
+                    rojos=None, rojo_cols=None, extra_estilo=None,
+                    spans=None, header_rows=1):
+    """
+    headers     : lista de filas-de-encabezado (cada una lista de textos/Paragraph)
+    filas       : lista de listas (celdas ya formateadas como str)
+    col_widths  : lista de anchos
+    aligns      : lista de alineaciones por columna ('LEFT'/'CENTER'/'RIGHT')
+    total_idx   : indice (en `data`) de la fila TOTAL para resaltarla en gris
+    rojos       : lista de (row_data_idx, col) a pintar de rojo  -> formato condicional
+    """
+    ncols = len(col_widths)
+    data = []
+    for h in headers:
+        data.append(h)
+    base = header_rows
+    for f in filas:
+        data.append(list(f))
+
+    t = Table(data, colWidths=col_widths)
+    estilo = [
+        ("GRID", (0, 0), (-1, -1), GROSOR_BORDE, GRIS_BORDE),
+        ("BACKGROUND", (0, 0), (-1, header_rows - 1), GRIS_HEADER),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("FONTNAME", (0, base), (-1, -1), FUENTE),
+        ("FONTSIZE", (0, base), (-1, -1), fs),
+        ("LEADING", (0, 0), (-1, -1), fs + 0.6),
+        ("TOPPADDING", (0, 0), (-1, -1), PAD_CELDA),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), PAD_CELDA),
+        ("LEFTPADDING", (0, 0), (-1, -1), 2),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+    ]
+    if aligns:
+        for c, a in enumerate(aligns):
+            estilo.append(("ALIGN", (c, base), (c, -1), a))
+    if total_idx is not None:
+        estilo += [
+            ("BACKGROUND", (0, total_idx), (-1, total_idx), GRIS_HEADER),
+            ("FONTNAME", (0, total_idx), (-1, total_idx), FUENTE_BOLD),
+        ]
+    if spans:
+        for (c0, r0, c1, r1) in spans:
+            estilo.append(("SPAN", (c0, r0), (c1, r1)))
+    if rojos:
+        for (r, c) in rojos:
+            estilo += [
+                ("BACKGROUND", (c, base + r), (c, base + r), ROJO),
+                ("TEXTCOLOR", (c, base + r), (c, base + r), BLANCO),
+                ("FONTNAME", (c, base + r), (c, base + r), FUENTE_BOLD),
+            ]
+    if extra_estilo:
+        estilo += extra_estilo
+    t.setStyle(TableStyle(estilo))
+    return t
+
+
+# ===========================================================================
+#  SECCION 5  (tabla ancha: 21 columnas)  ----------------------------------
+# ===========================================================================
+_SEC5_CAMPOS = [
+    "nombre", "venta", "propina", "venta_diaria_prom", "dias",
+    "v_agreg", "q_agreg", "p_agreg",
+    "v_cafe", "q_cafe", "p_cafe",
+    "v_post", "q_post", "p_post",
+    "v_liqsa", "q_liqsa", "p_liqsa",
+    "v_liqca", "q_liqca", "p_liqca",
+    "p_total",
+]
+# anchos (suman ~532). Nombre ancho, resto comprimido.
+_SEC5_W = [70, 30, 27, 30, 16,
+           28, 18, 18, 28, 18, 18, 28, 18, 18, 28, 18, 18, 28, 18, 18, 22]
+
+_SEC5_HEADERS = [
+    "NOMBRE GARZON", "VENTA", "APORTE PROPINA", "VENTA DIARIA PROMEDIO",
+    "DIAS TRABAJADOS",
+    "VENTA AGREGADOS", "Q AGREGADO", "% AGREGADO",
+    "VENTA CAFETERIA", "Q CAFETERIA", "% CAFETERIA",
+    "VENTA POSTRES", "Q POSTRES", "% POSTRES",
+    "VENTA LIQ S/A", "Q LIQ S/A", "% LIQ S/A",
+    "VENTA LIQ C/A", "Q LIQ C/A", "% LIQ C/A",
+    "% TOTAL",
+]
+# tipo de formato por columna
+_SEC5_TIPO = ["txt", "mil", "mil", "mil", "int",
+              "mil", "int", "pct", "mil", "int", "pct", "mil", "int", "pct",
+              "mil", "int", "pct", "mil", "int", "pct", "pct"]
+
+
+def _igb__fila_sec5(f):
+    out = []
+    for campo, tipo in zip(_SEC5_CAMPOS, _SEC5_TIPO):
+        v = f.get(campo)
+        if tipo == "txt":
+            out.append(_igb_P(v, "item_xs"))
+        elif tipo == "pct":
+            out.append(_igb_fmt_pct(v))
+        else:
+            out.append(_igb_fmt_miles(v))
+    return out
+
+
+def _igb__tabla_sec5(seccion, titulo_banda):
+    filas = seccion["filas"]
+    total = seccion.get("total")
+
+    # banda de titulo que cruza toda la tabla (ej: "SEMANAL POR GARZON")
+    banda = [_igb_P(titulo_banda, "th")] + [""] * (len(_SEC5_W) - 1)
+    head = [_igb_P(h, "th_xs") for h in _SEC5_HEADERS]
+    data = [banda, head]
+    for f in filas:
+        data.append(_igb__fila_sec5(f))
+    total_idx = None
+    if total:
+        total_idx = len(data)
+        data.append(_igb__fila_sec5(total))
+
+    aligns = ["LEFT"] + ["RIGHT" if t in ("mil",) else "CENTER" for t in _SEC5_TIPO[1:]]
+
+    t = Table(data, colWidths=_SEC5_W)
+    estilo = [
+        ("GRID", (0, 0), (-1, -1), GROSOR_BORDE, GRIS_BORDE),
+        ("SPAN", (0, 0), (-1, 0)),
+        ("BACKGROUND", (0, 0), (-1, 1), GRIS_HEADER),
+        ("ALIGN", (0, 0), (-1, 0), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("FONTNAME", (0, 2), (-1, -1), FUENTE),
+        ("FONTSIZE", (0, 2), (-1, -1), FS_CELDA_XS),
+        ("LEADING", (0, 0), (-1, -1), FS_CELDA_XS + 0.6),
+        ("TOPPADDING", (0, 0), (-1, -1), 0.5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0.5),
+        ("LEFTPADDING", (0, 0), (-1, -1), 1.5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 1.5),
+    ]
+    for c, a in enumerate(aligns):
+        estilo.append(("ALIGN", (c, 2), (c, -1), a))
+    if total_idx is not None:
+        estilo += [
+            ("BACKGROUND", (0, total_idx), (-1, total_idx), GRIS_HEADER),
+            ("FONTNAME", (0, total_idx), (-1, total_idx), FUENTE_BOLD),
+        ]
+    t.setStyle(TableStyle(estilo))
+    return t
+
+
+# ===========================================================================
+#  GRAFICOS (matplotlib -> PNG en memoria)  ---------------------------------
+# ===========================================================================
+def _igb__grafico_barras(categorias, series_nombres, valores, ymin, ymax, ystep,
+                    ancho_pt, alto_pt, etiquetas=True):
+    """
+    categorias     : lista de etiquetas eje X (garzones / locales)
+    series_nombres : ['20','21','22','23']
+    valores        : lista paralela a series_nombres; cada item es lista de
+                     fracciones (0..1) por categoria. None -> sin barra.
+    Devuelve un platypus.Image dimensionado a ancho_pt x alto_pt.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from matplotlib.ticker import FuncFormatter
+
+    n_cat = len(categorias)
+    n_ser = len(series_nombres)
+    if n_cat == 0 or n_ser == 0:
+        from reportlab.platypus import Spacer as _Sp
+        return _Sp(1, 1)
+    x = np.arange(n_cat)
+    ancho_barra = 0.8 / n_ser
+
+    dpi = 200
+    fig, ax = plt.subplots(figsize=(ancho_pt / 72.0, alto_pt / 72.0), dpi=dpi)
+
+    for i, (nombre, serie) in enumerate(zip(series_nombres, valores)):
+        offs = (i - (n_ser - 1) / 2.0) * ancho_barra
+        xs, ys = [], []
+        for j, v in enumerate(serie):
+            if v is None:
+                continue
+            xs.append(x[j] + offs)
+            ys.append(v * 100.0)
+        barras = ax.bar(xs, ys, width=ancho_barra, color=SERIE_COLORES[i % len(SERIE_COLORES)],
+                        label=nombre, zorder=3)
+        if etiquetas:
+            for rect, val in zip(barras, ys):
+                ax.annotate(f"{val:.1f}".replace(".", ",") + "%",
+                            (rect.get_x() + rect.get_width() / 2.0, val),
+                            xytext=(0, 1.2), textcoords="offset points",
+                            ha="center", va="bottom", fontsize=3.1, color="#404040")
+
+    ax.set_ylim(ymin * 100.0, ymax * 100.0)
+    import numpy as _np
+    ax.set_yticks(_np.arange(ymin * 100.0, ymax * 100.0 + 0.001, ystep * 100.0))
+    ax.yaxis.set_major_formatter(FuncFormatter(
+        lambda v, _p: f"{v:.1f}".replace(".", ",") + "%"))
+    ax.set_xticks(x)
+    ax.set_xticklabels(categorias, fontsize=4.2, rotation=0)
+    ax.tick_params(axis="y", labelsize=4.6, length=0)
+    ax.tick_params(axis="x", length=0, pad=2)
+
+    ax.grid(axis="y", color="#D9D9D9", linewidth=0.5, zorder=0)
+    ax.set_axisbelow(True)
+    for s in ("top", "right", "left"):
+        ax.spines[s].set_visible(False)
+    ax.spines["bottom"].set_color("#BFBFBF")
+    ax.spines["bottom"].set_linewidth(0.6)
+
+    ax.legend(loc="center left", bbox_to_anchor=(1.005, 0.5), fontsize=4.6,
+              frameon=False, handlelength=0.9, handleheight=0.9, labelspacing=0.4)
+
+    fig.subplots_adjust(left=0.05, right=0.93, top=0.97, bottom=0.10)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=dpi)
+    plt.close(fig)
+    buf.seek(0)
+    return Image(buf, width=ancho_pt, height=alto_pt)
+
+
+# ===========================================================================
+#  ENSAMBLADO DE LAS 3 PAGINAS  ---------------------------------------------
+# ===========================================================================
+def _igb__pagina_1(ctx, logo_path):
+    el = []
+    el.append(_igb__cabecera(ctx, logo_path))
+    el.append(Spacer(1, 4))
+    el.append(_igb__bloque_info(ctx))
+    el.append(Spacer(1, 5))
+
+    # 1.- VENTAS TOTALES SALON
+    el.append(_igb_P("1.- VENTAS TOTALES SALON", "seccion"))
+    el.append(_igb__tabla_ventas(ctx["ventas_totales_salon"]))
+
+    # 2.- VENTAS POR CATEGORIA
+    el.append(_igb_P("2.- VENTAS POR CATEGORÍA", "seccion"))
+    el.append(_igb__tabla_ventas(ctx["ventas_por_categoria"]))
+
+    # 3.- VENTAS POR CATEGORIA (sub-tablas)
+    el.append(_igb_P("3.- VENTAS POR CATEGORÍA", "seccion"))
+    el.append(Spacer(1, 2))
+    for sub in ctx["ventas_subcategorias"]:
+        el.append(_igb__subtabla_categoria(sub))
+
+    # 4.- CONTROL DE PRODUCTOS ESTRATEGICOS
+    el.append(_igb_P("4.- CONTROL DE PRODUCTOS ESTRATEGICOS", "seccion"))
+    el.append(_igb__tabla_ventas(ctx["productos_estrategicos"],
+                            header_q="Q PROMEDIO X GARZON"))
+    return el
+
+
+def _igb__pagina_2(ctx):
+    el = []
+    # 5.- COMPARATIVA VENTA ADICIONALES - VENTAS POR GARZON
+    el.append(_igb_P("5.- COMPARATIVA VENTA ADICIONALES  -  VENTAS POR GARZON", "seccion"))
+    el.append(_igb__tabla_sec5(ctx["adicionales_por_garzon_semanal"], "SEMANAL POR GARZON"))
+    el.append(Spacer(1, 8))
+    el.append(_igb__tabla_sec5(ctx["adicionales_por_garzon_mensual"], "ACUMULADO MENSUAL POR GARZON"))
+    el.append(Spacer(1, 8))
+
+    # 6.- COMPARATIVA VENTA ADICIONALES - VENTAS POR LOCAL
+    el.append(_igb_P("6.- COMPARATIVA VENTA ADICIONALES  -  VENTAS POR LOCAL", "seccion"))
+    sec6 = ctx["adicionales_por_local"]
+    headers6 = [[_igb_P(h, "th") for h in
+                 ["LOCAL", "% AGREGADOS", "% CAFETERÍA", "% POSTRES",
+                  "% LIQ S/A", "% LIQ C/A", "%TOTAL"]]]
+    w6 = [150, 64, 64, 64, 64, 64, 62]
+    filas6, rojos6 = [], []
+    for i, r in enumerate(sec6["filas"]):
+        filas6.append([_igb_P(r["local"], "item"), _igb_fmt_pct(r.get("p_agreg")),
+                       _igb_fmt_pct(r.get("p_cafe")), _igb_fmt_pct(r.get("p_post")),
+                       _igb_fmt_pct(r.get("p_liqsa")), _igb_fmt_pct(r.get("p_liqca")),
+                       _igb_fmt_pct(r.get("p_total"))])
+        if r.get("rojo"):
+            rojos6.append((i, 6))
+    total_idx6 = None
+    if sec6.get("total"):
+        t = sec6["total"]
+        total_idx6 = len(filas6) + 1
+        filas6.append([_igb_P("TOTAL", "item"), _igb_fmt_pct(t.get("p_agreg")),
+                       _igb_fmt_pct(t.get("p_cafe")), _igb_fmt_pct(t.get("p_post")),
+                       _igb_fmt_pct(t.get("p_liqsa")), _igb_fmt_pct(t.get("p_liqca")),
+                       _igb_fmt_pct(t.get("p_total"))])
+    el.append(_igb__tabla_generica(headers6, filas6, w6,
+                              aligns=["CENTER"] * 7, total_idx=total_idx6, rojos=rojos6))
+    el.append(Spacer(1, 8))
+
+    # 7.- COMPARATIVA VENTA DE PRODUCTOS ESTRATEGICOS
+    el.append(_igb_P("7.- COMPARATIVA VENTA DE PRODUCTOS ESTRATEGICOS  -  "
+                "PROMEDIO DIARIO DE VENTAS POR GARZON", "seccion"))
+    sec7 = ctx["estrategicos_por_local"]
+    headers7 = [[_igb_P(h, "th") for h in
+                 ["LOCAL", "AJI VERDE", "ALCAPARRA", "MAYONESA TRUFADA",
+                  "SALSA A LA PIMIENTA", "SALSA QUESO AZUL", "TOTAL GENERAL"]]]
+    w7 = [120, 66, 66, 78, 80, 78, 44]
+    filas7, rojos7 = [], []
+    for i, r in enumerate(sec7["filas"]):
+        filas7.append([_igb_P(r["local"], "item"), _igb_fmt_miles(r.get("aji")),
+                       _igb_fmt_miles(r.get("alcaparra")), _igb_fmt_miles(r.get("mayonesa")),
+                       _igb_fmt_miles(r.get("salsa_pimienta")), _igb_fmt_miles(r.get("salsa_azul")),
+                       _igb_fmt_miles(r.get("total"))])
+        if r.get("rojo"):
+            rojos7.append((i, 6))
+    total_idx7 = None
+    if sec7.get("total"):
+        t = sec7["total"]
+        total_idx7 = len(filas7) + 1
+        filas7.append([_igb_P("TOTAL", "item"), _igb_fmt_miles(t.get("aji")),
+                       _igb_fmt_miles(t.get("alcaparra")), _igb_fmt_miles(t.get("mayonesa")),
+                       _igb_fmt_miles(t.get("salsa_pimienta")), _igb_fmt_miles(t.get("salsa_azul")),
+                       _igb_fmt_miles(t.get("total"))])
+    el.append(_igb__tabla_generica(headers7, filas7, w7,
+                              aligns=["CENTER"] * 7, total_idx=total_idx7, rojos=rojos7))
+    return el
+
+
+def _igb__pagina_3(ctx):
+    el = []
+    el.append(_igb_P("SEGUIMIENTO VENTA POR GARZON", "pg_titulo"))
+
+    # 8.- EVOLUCION VENTAS POR GARZON  (grafico)
+    el.append(_igb_P("8.- EVOLUCIÓN VENTAS POR GARZÓN", "seccion"))
+    g8 = ctx["evolucion_por_garzon"]
+    cats8 = [f["nombre"] for f in g8["filas"]]
+    series8 = g8.get("series", ["20", "21", "22", "23"])
+    vals8 = [[f["valores"][i] if i < len(f["valores"]) else None
+              for f in g8["filas"]] for i in range(len(series8))]
+    el.append(_igb__grafico_barras(cats8, series8, vals8,
+                              ymin=0.27, ymax=0.41, ystep=0.02,
+                              ancho_pt=ANCHO_UTIL, alto_pt=140))
+    el.append(Spacer(1, 4))
+
+    # 9.- VENTAS ADICIONALES POR GARZON (tabla)
+    el.append(_igb_P("9.- VENTAS ADICIONALES POR GARZÓN", "seccion"))
+    sec9 = ctx["adicionales_por_garzon_anual"]
+    aniarr = sec9.get("series", ["20", "21", "22", "23"])
+    # encabezado de dos filas
+    h_top = [_igb_P("NOMBRE GARZON", "th")]
+    for a in aniarr:
+        h_top += [_igb_P(a, "th"), ""]
+    h_top += [_igb_P("Total VENTA", "th"), _igb_P("Total % TOTAL", "th")]
+    h_bot = [""]
+    for a in aniarr:
+        h_bot += [_igb_P("VENTA", "th"), _igb_P("% TOTAL", "th")]
+    h_bot += ["", ""]
+    ncol9 = 1 + 2 * len(aniarr) + 2
+    w_nombre = 120
+    w_pair = (ANCHO_UTIL - w_nombre - 56 - 40) / (2 * max(len(aniarr),1))
+    w9 = [w_nombre] + [w_pair] * (2 * len(aniarr)) + [56, 40]
+    spans9 = [(0, 0, 0, 1)]   # NOMBRE GARZON ocupa 2 filas
+    for k in range(len(aniarr)):
+        c0 = 1 + 2 * k
+        spans9.append((c0, 0, c0 + 1, 0))     # cada año sobre VENTA+%
+    spans9.append((ncol9 - 2, 0, ncol9 - 2, 1))
+    spans9.append((ncol9 - 1, 0, ncol9 - 1, 1))
+    filas9 = []
+    for f in sec9["filas"]:
+        fila = [_igb_P(f["nombre"], "item_l")]
+        for k in range(len(aniarr)):
+            par = f["anios"][k] if k < len(f["anios"]) else None
+            if par is None:
+                fila += ["", ""]
+            else:
+                fila += [_igb_fmt_miles(par.get("venta")), _igb_fmt_pct(par.get("pct"))]
+        fila += [_igb_fmt_miles(f.get("total_venta")), _igb_fmt_pct(f.get("total_pct"))]
+        filas9.append(fila)
+    total_idx9 = None
+    if sec9.get("total"):
+        t = sec9["total"]
+        total_idx9 = len(filas9) + 2
+        fila = [_igb_P("TOTAL GENERAL", "item_l")]
+        for k in range(len(aniarr)):
+            par = t["anios"][k]
+            fila += [_igb_fmt_miles(par.get("venta")), _igb_fmt_pct(par.get("pct"))]
+        fila += [_igb_fmt_miles(t.get("total_venta")), _igb_fmt_pct(t.get("total_pct"))]
+        filas9.append(fila)
+    aligns9 = ["LEFT"] + ["RIGHT", "CENTER"] * len(aniarr) + ["RIGHT", "CENTER"]
+    el.append(_igb__tabla_generica([h_top, h_bot], filas9, w9, aligns=aligns9,
+                              total_idx=total_idx9, spans=spans9, header_rows=2))
+    el.append(Spacer(1, 2))
+
+    # 10.- COMPARATIVA VENTAS ADICIONALES POR LOCAL (grafico)
+    el.append(_igb_P("10.- COMPARATIVA VENTAS ADICIONALES POR LOCAL", "seccion"))
+    g10 = ctx["comparativa_por_local"]
+    cats10 = [f["local"] for f in g10["filas"]]
+    series10 = g10.get("series", ["20", "21", "22", "23"])
+    vals10 = [[f["valores"][i] if i < len(f["valores"]) else None
+               for f in g10["filas"]] for i in range(len(series10))]
+    el.append(_igb__grafico_barras(cats10, series10, vals10,
+                              ymin=0.32, ymax=0.39, ystep=0.01,
+                              ancho_pt=ANCHO_UTIL, alto_pt=140))
+    el.append(Spacer(1, 4))
+
+    # 11.- VENTAS ADICIONALES POR LOCAL (dos tablas)
+    el.append(_igb_P("11.- VENTAS ADICIONALES POR LOCAL", "seccion"))
+    el.append(_igb__tabla_comportamiento(ctx["comportamiento_semanal"],
+                                    "COMPORTAMIENTO SEMANAL"))
+    el.append(Spacer(1, 3))
+    el.append(_igb__tabla_comportamiento(ctx["comportamiento_mensual"],
+                                    "COMPORTAMIENTO MENSUAL"))
+    return el
+
+
+def _igb__tabla_comportamiento(seccion, banda):
+    cols = seccion.get("columnas", ["20", "21", "22", "23"])
+    w_local = 120
+    n = len(cols)
+    w_resto = 60
+    w = [w_local] + [w_resto] * n + [64]
+    ancho_total = sum(w)
+    # centrar la tabla
+    headers = [[_igb_P(banda, "th")] + [""] * (n + 1),
+               [_igb_P("LOCAL", "th")] + [_igb_P(c, "th") for c in cols] + [_igb_P("TOTAL GENERAL", "th")]]
+    filas = []
+    for r in seccion["filas"]:
+        fila = [_igb_P(r["local"], "item")]
+        for c in cols:
+            fila.append(_igb_fmt_pct(r["valores"].get(c)))
+        fila.append(_igb_fmt_pct(r.get("total")))
+        filas.append(fila)
+    total_idx = None
+    if seccion.get("total"):
+        t = seccion["total"]
+        total_idx = len(filas) + 2
+        fila = [_igb_P("TOTAL GENERAL", "item")]
+        for c in cols:
+            fila.append(_igb_fmt_pct(t["valores"].get(c)))
+        fila.append(_igb_fmt_pct(t.get("total")))
+        filas.append(fila)
+    spans = [(0, 0, n + 1, 0)]
+    t = _igb__tabla_generica(headers, filas, w, aligns=["CENTER"] * (n + 2),
+                        total_idx=total_idx, spans=spans, header_rows=2)
+    # centrar horizontalmente sin envolver en otra tabla (evita medir mal el alto)
+    t.hAlign = "CENTER"
+    return t
+
+
+# ===========================================================================
+#  FUNCION PRINCIPAL  -------------------------------------------------------
+# ===========================================================================
+import os
+try:
+    _DIR = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    _DIR = os.getcwd()
+LOGO_DEFECTO = os.path.join(_DIR, "assets", "logo_aleman_experto.png")
+
+
+def generar_pdf_garzones_b(ctx, logo_path=None):
+    """
+    Construye el informe completo (3 paginas) y devuelve los bytes del PDF.
+
+    ctx        : diccionario de datos (ver datos_ejemplo.py / README.md)
+    logo_path  : ruta al logo. Por defecto usa assets/logo_aleman_experto.png
+    """
+    if logo_path is None:
+        logo_path = LOGO_DEFECTO
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=letter,
+        leftMargin=MARGEN_X, rightMargin=MARGEN_X,
+        topMargin=MARGEN_SUP, bottomMargin=MARGEN_INF,
+        title="Informe de Control de Ventas Salón",
+    )
+
+    flow = []
+    flow += _igb__pagina_1(ctx, logo_path)
+    flow.append(PageBreak())
+    flow += _igb__pagina_2(ctx)
+    flow.append(PageBreak())
+    flow += _igb__pagina_3(ctx)
+
+    doc.build(flow)
+    pdf = buffer.getvalue()
+    buffer.close()
+    return pdf
+
+
+if __name__ == "__main__":
+    from datos_ejemplo import CONTEXTO_EJEMPLO
+    pdf = generar_pdf_garzones(CONTEXTO_EJEMPLO)
+    with open("informe_ejemplo.pdf", "wb") as f:
+        f.write(pdf)
+    print("OK -> informe_ejemplo.pdf  (%d bytes)" % len(pdf))
+
+# ===== FIN GENERADOR PDF INFORME B =====
+
 def generar_pdf_garzones(ctx):
     """PDF Informe de Control de Ventas Salón — réplica visual del original (grises)."""
     import io as _io, os as _os
@@ -17355,9 +18293,28 @@ buildTree(data, 1, null);
                     "graf8": locals().get("_rows9", []),
                 }
                 _sg_pdf = generar_pdf_garzones(_sg_ctx)
-                st.download_button("📄 Descargar informe PDF", _sg_pdf,
-                    file_name=f"control_ventas_salon_{_sg_local}_{_sg_ini}.pdf",
-                    mime="application/pdf", use_container_width=True, key="sg_pdf")
+                _sg_cols_btn = st.columns(2)
+                with _sg_cols_btn[0]:
+                    st.download_button("📄 Descargar informe PDF", _sg_pdf,
+                        file_name=f"control_ventas_salon_{_sg_local}_{_sg_ini}.pdf",
+                        mime="application/pdf", use_container_width=True, key="sg_pdf")
+                with _sg_cols_btn[1]:
+                    try:
+                        _ctx_b = _sg_construir_ctx_b(
+                            _sg_local, _sg_ini, _sg_fin, _sg_ngarz,
+                            _SG_JEFATURAS.get(_sg_local, ("","","")),
+                            locals().get("_ranking_txt","—"),
+                            _sg_s1, _sg_s2, _sg_s3, _sg_s4,
+                            locals().get("_rows5", []), locals().get("_rows5_sem", []),
+                            locals().get("_sg_s6_raw"), locals().get("_sg_s7"),
+                            locals().get("_rows9", []), _g10,
+                        )
+                        _pdf_b = generar_pdf_garzones_b(_ctx_b, logo_path=LOGO_PATH)
+                        st.download_button("📄 Descargar informe B (réplica fiel)", _pdf_b,
+                            file_name=f"informe_B_{_sg_local}_{_sg_ini}.pdf",
+                            mime="application/pdf", use_container_width=True, key="sg_pdf_b")
+                    except Exception as _e_b:
+                        st.warning(f"Informe B pendiente: {_e_b}")
             except Exception as _e_sg:
                 st.warning(f"PDF pendiente de ajuste: {_e_sg}")
 
