@@ -5136,13 +5136,6 @@ def generar_pdf_garzones_b(ctx, logo_path=None):
     return pdf
 
 
-if __name__ == "__main__":
-    from datos_ejemplo import CONTEXTO_EJEMPLO
-    pdf = generar_pdf_garzones(CONTEXTO_EJEMPLO)
-    with open("informe_ejemplo.pdf", "wb") as f:
-        f.write(pdf)
-    print("OK -> informe_ejemplo.pdf  (%d bytes)" % len(pdf))
-
 # ===== FIN GENERADOR PDF INFORME B =====
 
 def generar_pdf_garzones(ctx):
