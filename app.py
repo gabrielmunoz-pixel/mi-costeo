@@ -10687,32 +10687,46 @@ elif modulo.startswith("📊"):
         import calendar as _cp_cal
         st.markdown("# 🏭 Control de Producción")
         st.caption(
-            "Máximo registrado (en unidades) de cada producto durante las semanas "
-            "cerradas del mes. Sirve para dimensionar cuánto producir como tope. "
-            "El desglose por semana muestra el origen del dato."
+            "Máximo registrado (en unidades) de cada categoría de proteína durante las "
+            "semanas cerradas del mes. Agrupa las opciones por proteína con la misma "
+            "lógica del informe de Rentabilidad. El desglose por semana muestra el origen."
         )
 
-        # ── Meses disponibles en la capa diaria ──
+        # Mapeo de prefijo de sku_opcion → categoría de proteína (lógica de rentabilidad)
+        _CP_PREFIX_CAT = {
+            'CHUX': 'CH POSTA',  'CHUSIT': 'CH POSTA',
+            'FILX': 'CH FILETE', 'FILSIT': 'CH FILETE',
+            'LOMX': 'LOMITO',    'LOMSIT': 'LOMITO',
+            'AVEX': 'AVE/POLLO', 'AVESIT': 'AVE/POLLO',
+            'HAMX': 'HAMBURGUESA','HAMSIT': 'HAMBURGUESA',
+            'HAQX': 'HAMB QUINOA',
+            'PERX': 'PERNIL',    'PERSIT': 'PERNIL',
+            'MECX': 'MECHADA',
+        }
+        def _cp_get_cat(sku):
+            s = str(sku or "")
+            for p, c in _CP_PREFIX_CAT.items():
+                if s.startswith(p):
+                    return c
+            return None  # no es proteína (agregado, modificador, pan, etc.) → se descarta
+
+        # ── Meses disponibles ──
         _cp_meses = run_query("""
             SELECT DISTINCT TO_CHAR(fecha_venta, 'YYYY-MM') AS mes
-            FROM opciones_diarias
-            ORDER BY mes DESC
+            FROM opciones_diarias ORDER BY mes DESC
         """)
         if _cp_meses is None or _cp_meses.empty:
-            st.warning("No hay datos en la capa diaria `opciones_diarias`. "
-                       "Carga un mes con **Gestión de Datos** o el proceso de actualización.")
+            st.warning("No hay datos en la capa diaria `opciones_diarias`.")
         else:
             _MN = {"01":"Enero","02":"Febrero","03":"Marzo","04":"Abril","05":"Mayo",
                    "06":"Junio","07":"Julio","08":"Agosto","09":"Septiembre",
                    "10":"Octubre","11":"Noviembre","12":"Diciembre"}
-            _meses_list = _cp_meses["mes"].tolist()
             def _cp_mes_lbl(m):
-                y, mo = m.split("-")
-                return f"{_MN.get(mo, mo)} {y}"
+                y, mo = m.split("-"); return f"{_MN.get(mo, mo)} {y}"
 
             _cp_c1, _cp_c2, _cp_c3 = st.columns([1.2, 1.2, 1])
             with _cp_c1:
-                _cp_mes = st.selectbox("📆 Mes", _meses_list,
+                _cp_mes = st.selectbox("📆 Mes", _cp_meses["mes"].tolist(),
                                        format_func=_cp_mes_lbl, key="cp_mes")
             with _cp_c2:
                 _cp_locales = ["Todos"] + sorted(
@@ -10721,20 +10735,17 @@ elif modulo.startswith("📊"):
             with _cp_c3:
                 _cp_desglosar = st.checkbox("Desglosar por local", value=False, key="cp_desg")
 
-            # ── Calcular semanas cerradas (Lun-Dom completas) del mes ──
+            # ── Semanas cerradas del mes ──
             _cp_y, _cp_mo = map(int, _cp_mes.split("-"))
             _dim = _cp_cal.monthrange(_cp_y, _cp_mo)[1]
             _ini_mes = _cp_dt.date(_cp_y, _cp_mo, 1)
             _fin_mes = _cp_dt.date(_cp_y, _cp_mo, _dim)
-            # Hoy: una semana es "cerrada" si su domingo ya pasó
             _hoy = _cp_dt.date.today()
-            # primer lunes en o después del inicio del mes
             _primer_lun = _ini_mes + _cp_dt.timedelta(days=(7 - _ini_mes.weekday()) % 7)
             _semanas = []
             _l = _primer_lun
             while _l <= _fin_mes:
-                _d = _l + _cp_dt.timedelta(days=6)  # domingo
-                # semana cerrada: domingo dentro o tocando el mes Y ya transcurrido
+                _d = _l + _cp_dt.timedelta(days=6)
                 if _d <= _fin_mes and _d < _hoy:
                     _semanas.append((_l, _d))
                 _l += _cp_dt.timedelta(days=7)
@@ -10743,10 +10754,9 @@ elif modulo.startswith("📊"):
                 st.info(f"{_cp_mes_lbl(_cp_mes)} no tiene semanas cerradas (Lun–Dom completas "
                         "y ya transcurridas). Elige otro mes.")
             else:
-                _rango_i = _semanas[0][0]
-                _rango_f = _semanas[-1][1]
+                _rango_i, _rango_f = _semanas[0][0], _semanas[-1][1]
                 st.caption(
-                    f"**{len(_semanas)} semana(s) cerrada(s)** en {_cp_mes_lbl(_cp_mes)}: "
+                    f"**{len(_semanas)} semana(s) cerrada(s)**: "
                     + " · ".join(f"{a.strftime('%d-%m')}→{b.strftime('%d-%m')}" for a, b in _semanas)
                 )
 
@@ -10756,21 +10766,13 @@ elif modulo.startswith("📊"):
                     _cp_loc_filter = "AND UPPER(local) = UPPER(:l)"
                     _cp_params["l"] = _cp_local
 
-                # ── Datos diarios por producto (nombre original, sin agrupar) ──
-                # Agregamos por (producto, local, fecha) sumando cant del día.
+                # Opciones por día desde la capa diaria (sku_opcion → categoría)
                 _grp_loc = "local," if _cp_desglosar else ""
                 _cp_dia = run_query(f"""
-                    SELECT
-                        {_grp_loc}
-                        sku_opcion,
-                        nombre_producto,
-                        ab_categoria,
-                        fecha_venta,
-                        SUM(cant) AS cant_dia
+                    SELECT {_grp_loc} sku_opcion, fecha_venta, SUM(cant) AS cant_dia
                     FROM opciones_diarias
-                    WHERE fecha_venta BETWEEN :i AND :f
-                      {_cp_loc_filter}
-                    GROUP BY {_grp_loc} sku_opcion, nombre_producto, ab_categoria, fecha_venta
+                    WHERE fecha_venta BETWEEN :i AND :f {_cp_loc_filter}
+                    GROUP BY {_grp_loc} sku_opcion, fecha_venta
                 """, _cp_params)
 
                 if _cp_dia is None or _cp_dia.empty:
@@ -10778,16 +10780,22 @@ elif modulo.startswith("📊"):
                 else:
                     import math as _cp_math
                     _cp_dia["cant_dia"] = pd.to_numeric(_cp_dia["cant_dia"], errors="coerce").fillna(0)
-                    # Etiqueta de producto: nombre original (cae a SKU si falta nombre)
-                    _cp_dia["producto"] = _cp_dia["nombre_producto"].fillna("").replace("", pd.NA)
-                    _cp_dia["producto"] = _cp_dia["producto"].fillna(_cp_dia["sku_opcion"])
+                    _cp_dia["categoria"] = _cp_dia["sku_opcion"].apply(_cp_get_cat)
+                    # Quedarse SOLO con proteínas mapeadas; descartar pan-no, agregados,
+                    # modificadores, cubiertos, salsas, bebidas, etc. (categoria None).
+                    _cp_dia = _cp_dia[_cp_dia["categoria"].notna()].copy()
+                    if _cp_dia.empty:
+                        st.warning("No hay opciones de proteína en ese mes/local.")
+                        st.stop()
+                    # Re-agregar por categoría + (local) + fecha (varias opciones caen en una categoría)
+                    _grp_cols = (["local"] if _cp_desglosar else []) + ["categoria", "fecha_venta"]
+                    _cp_cat = _cp_dia.groupby(_grp_cols)["cant_dia"].sum().reset_index()
 
-                    # ═══════ TABLA RESUMEN: máximo en Q por producto ═══════
-                    st.markdown("### 📊 Resumen — máximo por producto en el período")
-                    _key_cols = (["local"] if _cp_desglosar else []) + ["producto", "ab_categoria", "sku_opcion"]
-                    _resumen = (_cp_dia.groupby(_key_cols)["cant_dia"]
-                                .agg(max_dia="max", prom_dia="mean", total="sum")
-                                .reset_index())
+                    # ═══════ RESUMEN: máximo por categoría ═══════
+                    st.markdown("### 📊 Resumen — máximo por categoría de proteína")
+                    _key = (["local"] if _cp_desglosar else []) + ["categoria"]
+                    _resumen = (_cp_cat.groupby(_key)["cant_dia"]
+                                .agg(max_dia="max", prom_dia="mean", total="sum").reset_index())
                     _resumen["max_dia"] = _resumen["max_dia"].apply(
                         lambda v: int(_cp_math.ceil(v)) if v > 0 else 0)
                     _resumen["prom_dia"] = _resumen["prom_dia"].round(1)
@@ -10795,42 +10803,35 @@ elif modulo.startswith("📊"):
                     _resumen = _resumen.sort_values(
                         (["local"] if _cp_desglosar else []) + ["max_dia"],
                         ascending=([True] if _cp_desglosar else []) + [False])
-                    _ren = {"local": "Local", "producto": "Producto",
-                            "ab_categoria": "Categoría", "sku_opcion": "SKU",
-                            "max_dia": "Máx (Q)", "prom_dia": "Prom/día", "total": "Total período"}
-                    st.dataframe(
-                        _resumen.rename(columns=_ren)[[_ren[c] for c in
-                            (["local"] if _cp_desglosar else []) +
-                            ["producto", "ab_categoria", "sku_opcion", "max_dia", "prom_dia", "total"]]],
-                        use_container_width=True, hide_index=True)
-                    st.caption("**Máx (Q)** = mayor cantidad registrada en un solo día dentro "
-                               "de las semanas cerradas. Es el tope de producción sugerido.")
-
-                    # Descargar resumen
+                    _ren = {"local":"Local","categoria":"Categoría","max_dia":"Máx (Q)",
+                            "prom_dia":"Prom/día","total":"Total período"}
+                    _ord = (["local"] if _cp_desglosar else []) + ["categoria","max_dia","prom_dia","total"]
+                    st.dataframe(_resumen.rename(columns=_ren)[[_ren[c] for c in _ord]],
+                                 use_container_width=True, hide_index=True)
+                    st.caption("**Máx (Q)** = mayor cantidad de la categoría registrada en un solo "
+                               "día dentro de las semanas cerradas. Es el tope de producción sugerido.")
                     st.download_button(
                         "📥 Descargar resumen (CSV)",
                         _resumen.rename(columns=_ren).to_csv(index=False).encode("utf-8"),
                         file_name=f"control_produccion_{_cp_mes}_{_cp_local}.csv",
                         mime="text/csv", key="cp_dl_resumen")
 
-                    # ═══════ DESGLOSE POR SEMANA (origen del dato) ═══════
+                    # ═══════ DESGLOSE POR SEMANA ═══════
                     with st.expander("🔍 Ver desglose por semana cerrada (origen del dato)"):
                         _DOW = {0:"Lun",1:"Mar",2:"Mié",3:"Jue",4:"Vie",5:"Sáb",6:"Dom"}
                         for _si, (_sa, _sb) in enumerate(_semanas, start=1):
                             st.markdown(f"**Semana {_si}: {_sa.strftime('%d-%m')} → {_sb.strftime('%d-%m-%Y')}**")
-                            _wk = _cp_dia[(_cp_dia["fecha_venta"] >= _sa) &
-                                          (_cp_dia["fecha_venta"] <= _sb)].copy()
+                            _wk = _cp_cat[(_cp_cat["fecha_venta"] >= _sa) &
+                                          (_cp_cat["fecha_venta"] <= _sb)].copy()
                             if _wk.empty:
-                                st.caption("Sin registros esta semana.")
-                                continue
+                                st.caption("Sin registros esta semana."); continue
                             _wk["dia"] = _wk["fecha_venta"].apply(
                                 lambda d: f"{_DOW[pd.Timestamp(d).weekday()]} {pd.Timestamp(d).day:02d}")
-                            # Pivot producto × día (suma del día); columnas en orden de fecha
-                            _orden_dias = (_wk[["fecha_venta", "dia"]].drop_duplicates()
+                            _orden_dias = (_wk[["fecha_venta","dia"]].drop_duplicates()
                                            .sort_values("fecha_venta")["dia"].tolist())
-                            _idx_cols = (["local"] if _cp_desglosar else []) + ["producto"]
-                            _piv = _wk.pivot_table(index=_idx_cols, columns="dia",
-                                                   values="cant_dia", aggfunc="sum", fill_value=0)
+                            _idx = (["local"] if _cp_desglosar else []) + ["categoria"]
+                            _piv = _wk.pivot_table(index=_idx, columns="dia", values="cant_dia",
+                                                   aggfunc="sum", fill_value=0)
                             _piv = _piv.reindex(columns=_orden_dias, fill_value=0)
                             _piv["Máx"] = _piv.max(axis=1)
                             _piv = _piv.round(0).astype(int).sort_values("Máx", ascending=False)
@@ -16504,1558 +16505,214 @@ buildTree(data, 1, null);
 
     elif informe_sel == "SeguimientoGarzones":
         # ══════════════════════════════════════════════════════════════════
-        #  SEGUIMIENTO GARZONES  (replica del PDF "Control de Ventas Salón")
-        #  Informe semanal de trazabilidad de ventas por garzón / local / red.
-        #  Construido replicando la lógica del informe Garzones SIN modificarlo:
-        #  todas las constantes/funciones llevan sufijo _SG y son autónomas.
+        #  INFORME DE CONTROL DE VENTAS SALÓN  (replica PDF Vitacura)
+        #  Lógica validada en Informe_Salon_definiciones.md.
+        #  Reglas base: salón = origen IS NULL; venta = monto_venta_real +
+        #  coalesce(descuento,0); exclusiones de colación; whitelist 94 garzones.
+        #  Constantes/funciones con sufijo _SG, autónomas.
         # ══════════════════════════════════════════════════════════════════
-        from datetime import date as _d, timedelta as _td
-        # plotly protegido: si no está instalado, el informe sigue funcionando
-        # (solo se omiten los gráficos de evolución), en vez de tumbar toda la app.
-        try:
-            import plotly.graph_objects as go
-            _SG_HAS_PLOTLY = True
-        except Exception:
-            go = None
-            _SG_HAS_PLOTLY = False
+        from datetime import date as _sg_date, timedelta as _sg_td
 
-        # ── 1. Mapa de categorías (réplica EXACTA de _CAT_MENU_MAP de Garzones) ──
-        _CAT_MENU_MAP_SG = {
-            "Acompañamiento Almuerzo": "Alimentos", "AcompaÃ±amiento Almuerzo": "Alimentos",
-            "Acompañamientos": "Alimentos", "AcompaÃ±amientos": "Alimentos",
-            "Acompanamiento Almuerzo": "Alimentos", "Acompanamientos": "Alimentos",
-            "Ensaladas Y Otros": "Alimentos", "Ensaladas Almuerzo": "Alimentos",
-            "Para Compartir": "Alimentos",
-            "Platos Clásicos": "Alimentos", "Platos Clasicos": "Alimentos",
-            "PlÃ¡sicos": "Alimentos",
-            "Platos Alemanes": "Alimentos",
-            "Hamburguesa Clásica": "Alimentos", "Hamburguesa Clasica": "Alimentos",
-            "Hamburguesa De La Casa": "Alimentos", "Hamburguesa De Quinoa": "Alimentos",
-            "Lomito Clásico": "Alimentos", "Lomito Clasico": "Alimentos",
-            "Ave Clásica": "Alimentos", "Ave Clasica": "Alimentos",
-            "Churrasco Clásico": "Alimentos", "Churrasco Clasico": "Alimentos",
-            "Pernil Clásico": "Alimentos", "Pernil Clasico": "Alimentos",
-            "Filete Clásico": "Alimentos", "Filete Clasico": "Alimentos",
-            "Mechada Clásica": "Alimentos", "Mechada Clasica": "Alimentos",
-            "Sándwich Clásicos": "Alimentos", "Sandwich Clasicos": "Alimentos",
-            "SÃ¡ndwich ClÃ¡sicos": "Alimentos",
-            "Niños": "Alimentos", "NiÃ±os": "Alimentos", "Ninos": "Alimentos",
-            "Hot-Dog": "Alimentos", "Hot Dog": "Alimentos",
-            "ACOMPANAMIENTO ALMUERZO": "Colación",
-            "ENSALADAS ALMUERZO": "Colación",
-            "Seleccionados Para Ti": "Alimentos",
-            "PROTEINA ALMUERZO": "Colación",
-            "Postres": "Postres",
-            "Cafeteria": "Cafetería", "Cafetería": "Cafetería",
-            "Agregados": "Agregados", "Colacion": "Colación",
-            "Menu Ejecutivo": "Colación", "Menú Ejecutivo": "Colación",
-            "MenÃº Ejecutivo": "Colación",
-            "Proteina Almuerzo": "Colación",
-            "Cervezas": "Líquidos C/A", "Cocteles": "Líquidos C/A",
-            "Piscos": "Líquidos C/A", "Pisco Sour": "Líquidos C/A",
-            "Vinos": "Líquidos C/A", "Espumantes": "Líquidos C/A",
-            "Bajativos": "Líquidos C/A", "Ron": "Líquidos C/A",
-            "Whisky": "Líquidos C/A", "Vodka": "Líquidos C/A",
-            "Tequila": "Líquidos C/A", "Tragos": "Líquidos C/A",
-            "Royal Guard": "Líquidos C/A", "Heineken": "Líquidos C/A",
-            "Cerveza": "Líquidos C/A", "Vinos y Espumantes": "Líquidos C/A",
-            "Bebidas": "Líquidos S/A", "Jugos Naturales": "Líquidos S/A",
-            "Limonadas": "Líquidos S/A", "Aguas": "Líquidos S/A",
-            "Bebestibles": "Líquidos S/A", "Tragos S/A": "Líquidos S/A",
-            "Tragos Sin Alcohol": "Líquidos S/A",
-            "Jugos/Limonadas": "Líquidos S/A",
-        }
+        # ── Whitelist nominal de garzones evaluados (red completa) ──
+        _SG_WHITELIST = [
+            'Francisco Navarro','Jeshaylin Molina','Natalia Araya',
+            'Yuscarlenaidu Martinezsulbaran','Yirfrey Alexander Valero Ramirez','Yurubi',
+            'Genesis Penafiel','Raul Figueroa','David Ramirez','Miguel Menacho Oliveira',
+            'Maria Campos','Alejandro Vergara','Sofia Andarcia','Jesus Rodriguez Molina',
+            'Jose Ricardo Valdes Contreras','Jose Tomas Mora Castillo','Eduard Cabrera',
+            'Enrique Jose Saavedra Briceno','Jose Daniel Vera','Manuel Chacon','Robert Duran',
+            'Felipe Hueiquil','Joaquin Arandia','Alexander Quintero','Eloy Sandoval',
+            'Carlos Alberto Abarca Suarez','Yuliana Valdebenito','Victor Escalona','Eliscar Torres',
+            'Mariely Karina Rivera Linares','Yovanny Duarte','Manuel Rodriguez','Jose Chacin',
+            'Jesus Alberto Segovia Aranguren','Pedro Ruiz','Pedro Maldonado','Jonnatha Araujo',
+            'Wilmer Causil','Pablo Oviedo','Carolina Rodriguez','Maria Paula Gonzalez Franco',
+            'Carlos David Colina','Yusney Jaimes','Marco Valdez','Rocio Gutierrez Opazo',
+            'David Alcivar Rosero','Magdalena Castro','Manuel Aguila','Nayiber Campos',
+            'Daniel Espinoza','Julio Gil','Lascano Gaming','Jhoiner Garcia','Ivan Mazaby',
+            'Kevin Gaitan','Ana Araque','Eduard Quinones Quinones Yepez','Jhonny Gomez',
+            'Prospero Alexis Gutierrez Ramirez','Charlotte Gonzalez','Juan Agudelo',
+            'BERNARDO CASTRO Castro','Wilmer Alfonso','Evelyn jaque','Frettzy Lucena Querales',
+            'Ivan Eduardo Salazar Alvarez','Jeremit Orlando Asicle Suarez','Gustavo Alvarado',
+            'Lisette Morell Coloma','Junior Mora','Yenifer Pabon','Jose Aquiles Mora Ramirez',
+            'Gustavo Saldias','Jorge Grandon','Rodrigo Alejandro Romero Castillo','NICOLAS TERRAZA',
+            'Jose Castillo','Juan Rodriguez','Cindy Santander','Abelmary Romero','Diegorkn',
+            'Roy Lopez Prado','Edwar Pernalete','Jimmy Gallo','Jesus Antonio Ramirez','Yosman Rangel',
+            'Jonathan Araujo','Nasslo Beltran','Keiber Eduardo Munoz Urribarri','Jose Pacheco',
+            'Nestor Rosas','dubuc_juan Dubuc Martinez','Jackson Moreno','Richard Gonzalez',
+        ]
 
-        # ── 2. Whitelist de garzones (réplica EXACTA de _GARZONES_VALIDOS) ──
-        _GARZONES_VALIDOS_SG = {
-            "Johann Bermudez","Francisco Navarro","Yirfrey Alexander Valero Ramirez","Yurubi",
-            "Genesis Penafiel","Raul Figueroa","David Ramirez","Miguel Menacho Oliveira",
-            "Maria Campos","Alejandro Vergara","Sofia Andarcia","Jesus Rodriguez Molina",
-            "Jose Ricardo Valdes Contreras","Jose Tomas Mora Castillo","Eduard Cabrera",
-            "Enrique Jose Saavedra Briceno","Jose Daniel Vera","Manuel Chacon","Robert Duran",
-            "Felipe Hueiquil","Joaquin Arandia","Alexander Quintero","Eloy Sandoval",
-            "Carlos Alberto Abarca Suarez","Yuliana Valdebenito","Victor Escalona",
-            "Eliscar Torres","Mariely Karina Rivera Linares","Yovanny Duarte","Manuel Rodriguez",
-            "Jose Chacin","Jesus Alberto Segovia Aranguren","Pedro Ruiz","Pedro Maldonado",
-            "Jonnatha Araujo","Wilmer Causil","Pablo Oviedo","Carolina Rodriguez",
-            "Maria Paula Gonzalez Franco","Carlos David Colina","Yusney Jaimes","Marco Valdez",
-            "Rocio Gutierrez Opazo","David Alcivar Rosero","Magdalena Castro","Manuel Aguila",
-            "Nayiber Campos","Daniel Espinoza","Julio Gil","Lascano Gaming","Jhoiner Garcia",
-            "Ivan Mazaby","Kevin Gaitan","Ana Araque","Eduard Quinones Quinones Yepez",
-            "Jhonny Gomez","Prospero Alexis Gutierrez Ramirez","Charlotte Gonzalez","Juan Agudelo",
-            "BERNARDO CASTRO Castro","Wilmer Alfonso","Evelyn jaque","Frettzy Lucena Querales",
-            "Ivan Eduardo Salazar Alvarez","Jeremit Orlando Asicle Suarez","Gustavo Alvarado",
-            "Lisette Morell Coloma","Junior Mora","Yenifer Pabon","Jose Aquiles Mora Ramirez",
-            "Gustavo Saldias","Jorge Grandon","Rodrigo Alejandro Romero Castillo",
-            "NICOLAS TERRAZA","Jose Castillo","Juan Rodriguez","Cindy Santander","Abelmary Romero",
-            "Edwar Pernalete","Jimmy Gallo","Jesus Antonio Ramirez","Yosman Rangel",
-            "Jonathan Araujo","Nasslo Beltran","Keiber Eduardo Munoz Urribarri","Jose Pacheco",
-            "Nestor Rosas","dubuc_juan Dubuc Martinez","Jackson Moreno","Richard Gonzalez",
-        }
+        # ── Categorías macro (sección 1 y 2) ──
+        _SG_BAR_CATS = ('Bajativos','Cervezas','Cocteles','Espumantes','Piscos','Ron',
+                        'Tequila','Vinos','Vodka','Whisky',
+                        'Bebidas','Jugos Naturales','Limonadas','Tragos Sin Alcohol')
+        _SG_CAFE_CATS = ('Cafeteria','Postres')
+        _SG_EXCL = ('Menu Ejecutivo','COLACIONES','PROTEINA ALMUERZO',
+                    'ENSALADAS ALMUERZO','ACOMPANAMIENTO ALMUERZO')
 
-        # ── 3. Función de categorización (réplica EXACTA de _gz_categorizar) ──
-        def _categorizar_sg(cat_menu, nombre_producto):
-            """Traduce categoria_menu → categoría agrupada (igual que el PowerPivot)."""
-            cat_norm = str(cat_menu).strip() if cat_menu else ""
-            result = _CAT_MENU_MAP_SG.get(cat_norm)
-            if result:
-                return result
-            nom = str(nombre_producto).strip() if nombre_producto else ""
-            _NOMBRE_MAP = {
-                "Hot dog Italiano": "Alimentos", "Hot dog Dinamico": "Alimentos",
-                "Hot dog Completa": "Alimentos", "Hot dog Tomate Mayo": "Alimentos",
-                "Pisco Sour De La Casa": "Líquidos C/A", "Pisco Sour Peruano": "Líquidos C/A",
-                "Sangria  AE": "Líquidos C/A", "Royal Guard": "Líquidos C/A",
-                "Heineken": "Líquidos C/A",
-                "Coca Cola": "Líquidos S/A", "Coca Cola Zero": "Líquidos S/A",
-                "Coca Cola Light": "Líquidos S/A", "Sprite": "Líquidos S/A",
-                "Sprite Zero": "Líquidos S/A", "Fanta Zero": "Líquidos S/A",
-                "Agua con gas": "Líquidos S/A", "Agua sin gas": "Líquidos S/A",
-                "Mineral con Gas": "Líquidos S/A", "Mineral sin gas": "Líquidos S/A",
-                "Ginger Ale Ligh": "Líquidos S/A",
-                "Mojito Clasico Sin Alcohol": "Líquidos S/A",
-                "Mojito Berries Sin Alcohol": "Líquidos S/A",
-                "Mojito Maracuya Sin Alcohol": "Líquidos S/A",
-                "London Mule Sin Alcohol": "Líquidos S/A",
-                "Gin Tonic Sin Alcohol": "Líquidos S/A",
-            }
-            for k, v in _NOMBRE_MAP.items():
-                if k.lower() in nom.lower():
-                    return v
-            return None
+        # Normalización de nombre para mostrar: quitar prefijo 'palabra_' al inicio
+        def _sg_limpia_nombre(n):
+            s = str(n or "")
+            import re as _re
+            return _re.sub(r'^\S+_', '', s).strip()
 
-        # ── 4. Macro-familia para secciones 1 y 2 (3 grupos del PDF, §3.1) ──
-        def _macro_familia_sg(cat_agrupada):
-            if cat_agrupada in ("Alimentos", "Agregados", "Colación"):
-                return "ALIMENTOS"
-            if cat_agrupada in ("Líquidos C/A", "Líquidos S/A"):
-                return "BAR"
-            if cat_agrupada in ("Cafetería", "Postres"):
-                return "CAFETERÍA Y POSTRES"
-            return None
+        st.markdown("# 📋 Informe de Control de Ventas Salón")
 
-        # ── 5. Venta Salón = MISMO criterio que "Resumen de Ventas" (gestión de datos) ──
-        # La venta real es monto_venta_real SIN filtro es_opcion ni forma_pago.
-        # Salón vs Delivery se define por 'origen': vacío/null = Salón, con valor = Delivery.
-        def _es_salon_sg(origen):
-            return (origen is None) or (str(origen).strip() == '') or (str(origen).strip().lower() in ('none', 'nan'))
-
-        # ── 6. Jefatura por local (§6.1, llave = local canónico de la BD) ──
-        _JEFATURA_LOCAL_SG = {
-            "La Reina":          {"supervisor": "Cristian Ramirez", "jefe": "Jose Mendoza Escalante",    "subjefe": "Gerardo Delgado Villalobos"},
-            "Quilin":            {"supervisor": "Cristian Ramirez", "jefe": "Jose Gil Romero",            "subjefe": "Giovanni Rojas"},
-            "La Dehesa":         {"supervisor": "Cristian Ramirez", "jefe": "Miguel Quintero Rodriguez",  "subjefe": "Oscar Barrera Valdebenito"},
-            "Macul":             {"supervisor": "Cristian Ramirez", "jefe": "Alexander Marin Torrealba",  "subjefe": "Nathaly Papa Colmenares"},
-            "Los Trapenses":     {"supervisor": "Cristian Ramirez", "jefe": "Elicmer Uzcategui Rondon",   "subjefe": "Rodrigo Montt Creixell"},
-            "Providencia":       {"supervisor": "Luis Mendoza",     "jefe": "Jose Mora Carrero",          "subjefe": "Oscar Loyola Sepulveda"},
-            "Nueva Providencia": {"supervisor": "Luis Mendoza",     "jefe": "Rodrigo Calderon Villaseca", "subjefe": "Angel Seidel Caldero"},
-            "Chicureo":          {"supervisor": "Luis Mendoza",     "jefe": "Angel Molina Contreras",     "subjefe": "Maria Espina Cairasco"},
-            "Vitacura":          {"supervisor": "Luis Mendoza",     "jefe": "Sergio Salas Cazorla",       "subjefe": "Michelle Maleville Muñoz"},
-            "Las Condes":        {"supervisor": "Luis Mendoza",     "jefe": "Yuleidi Zambrano Hernandez", "subjefe": "Johelvi Pineda Salas"},
-        }
-
-        # ── 7. Metas Cafetería/Postres (réplica EXACTA de _METAS) ──
-        _METAS_SG = {
-            "La Reina":           {"Cafetería": {"mensual": 1499, "diaria": 50},  "Postres": {"mensual": 1543, "diaria": 51}},
-            "Quilin":             {"Cafetería": {"mensual": 1112, "diaria": 37},  "Postres": {"mensual": 1412, "diaria": 47}},
-            "Macul":              {"Cafetería": {"mensual": 1840, "diaria": 61},  "Postres": {"mensual": 2226, "diaria": 74}},
-            "Chicureo":           {"Cafetería": {"mensual": 1653, "diaria": 55},  "Postres": {"mensual": 1926, "diaria": 64}},
-            "La Dehesa":          {"Cafetería": {"mensual": 1736, "diaria": 58},  "Postres": {"mensual": 1658, "diaria": 55}},
-            "Las Condes":         {"Cafetería": {"mensual": 2024, "diaria": 67},  "Postres": {"mensual": 1984, "diaria": 66}},
-            "Los Trapenses":      {"Cafetería": {"mensual": 1857, "diaria": 62},  "Postres": {"mensual": 1962, "diaria": 65}},
-            "Nueva Providencia":  {"Cafetería": {"mensual": 1119, "diaria": 37},  "Postres": {"mensual": 1244, "diaria": 41}},
-            "Providencia":        {"Cafetería": {"mensual":  728, "diaria": 24},  "Postres": {"mensual":  942, "diaria": 31}},
-            "Vitacura":           {"Cafetería": {"mensual": 2764, "diaria": 92},  "Postres": {"mensual": 2431, "diaria": 81}},
-        }
-
-        # ── 8. Subcategorías finas de líquidos (§3.4) ──
-        def _subcat_liquidos_sg(sku, macro):
-            pref = str(sku).split('-')[0].upper() if '-' in str(sku) else ''
-            if macro == "Líquidos C/A":
-                if pref == "CER": return "CERVEZAS"
-                if pref in ("COC","PIS","RON","TEQ","VOD","WHI","BAJ"): return "TRAGOS Y COCTAILS"
-                if pref in ("VIN","ESP"): return "VINOS Y ESPUMANTES"
-                return "TRAGOS Y COCTAILS"
-            if macro == "Líquidos S/A":
-                if pref in ("BEB","BET"): return "BEBIDAS Y AGUAS"
-                if pref in ("JUG","LIM"): return "JUGOS, LIMONADAS Y TRAGOS S/A"
-                return "JUGOS, LIMONADAS Y TRAGOS S/A"
-            return None
-
-        # ── 9. Subcategorías de ALIMENTOS (§3.5) ──
-        def _subcat_alimentos_sg(cat_menu, cat_agrupada):
-            c = str(cat_menu).strip()
-            if cat_agrupada == "Alimentos":
-                if c in ("Para Compartir",): return "PARA COMPARTIR"
-                if c in ("Ensaladas Y Otros","Ensaladas y Otros","ENSALADAS ALMUERZO"): return "ENSALADAS Y OTROS"
-                if c in ("Niños","Ninos","NiÃ±os"): return "NIÑOS"
-                if c in ("Platos Clásicos","Platos Clasicos","Platos Alemanes","Platos"): return "PLATOS"
-                return "SANDWICH Y HAMBURGUESAS"
-            if cat_agrupada in ("Agregados",):
-                return "AGREGADOS Y ACOMPAÑAMIENTOS"
-            if cat_agrupada in ("Colación",):
-                return None  # colaciones NO van en este informe de salón. # TODO SENIOR: confirmar
-            return None
-
-        # ── 10. Productos estratégicos (§6.5, identificación por nombre) ──
-        _PRODUCTOS_ESTRATEGICOS_SG = {
-            "ALCAPARRAS":          ["alcaparras"],
-            "MAYONESA TRUFADA":    ["mayonesa trufada"],
-            "SALSA A LA PIMIENTA": ["salsa a la pimienta"],
-            "SALSA DE QUESO AZUL": ["salsa de queso azul", "salsa queso azul"],
-            "AJI VERDE":           ["aji verde", "ají verde"],
-        }
-
-        # ── 11. Constantes varias del informe ──
-        _CATS_ADICIONALES_SG = ["Agregados", "Cafetería", "Postres", "Líquidos S/A", "Líquidos C/A"]
-        _APORTE_PROPINA_PCT_SG = 0.10  # §6.6: propina estándar Chile = 10% de la venta del garzón
-        _AB_CAFETERIA_SG = "AB.210260"
-        _AB_POSTRES_SG   = "AB.210250"
-        _LOCALES_ORDEN_SG = ['La Reina','Quilin','La Dehesa','Las Condes','Los Trapenses',
-                             'Nueva Providencia','Vitacura','Providencia','Macul','Chicureo']
-
-        # ── Helpers de formato (réplica de _fmt_clp / _render_html_table) ──
-        def _fmt_clp_sg(v):
-            try: return f"${int(round(v)):,}".replace(',', '.')
-            except: return '-'
-
-        def _fmt_pct_sg(v):
-            try: return f"{v:.1f}%".replace('.', ',')
-            except: return '-'
-
-        def _fmt_q_sg(v):
-            try: return f"{int(round(v)):,}".replace(',', '.')
-            except: return '-'
-
-        st.markdown("---")
-
-        # ── CONTROLES (§6.0) ───────────────────────────────────────────────
-        _sg_c1, _sg_c2, _sg_c3, _sg_c4 = st.columns([2, 2, 2, 1])
+        # ── Selectores: local + semana ──
+        _sg_locales = ['Vitacura','Las Condes','Chicureo','La Dehesa','Macul',
+                       'La Reina','Quilin','Nueva Providencia','Providencia','Los Trapenses']
+        _sg_c1, _sg_c2, _sg_c3 = st.columns([1.3, 1.3, 1])
         with _sg_c1:
-            _sg_hoy = _d.today()
-            _sg_lunes_actual = _sg_hoy - _td(days=_sg_hoy.weekday())
-            _sg_fi = st.date_input("Semana desde", value=_sg_lunes_actual - _td(days=7), key="sg_fi")
+            _sg_local = st.selectbox("📍 Local", _sg_locales, key="sg_local")
         with _sg_c2:
-            _sg_ff = st.date_input("Semana hasta", value=_sg_lunes_actual - _td(days=1), key="sg_ff")
+            # Semana: por defecto la del informe (01-07 jun 2026)
+            _sg_lun = st.date_input("Lunes de la semana", value=_sg_date(2026, 6, 1), key="sg_lunes")
         with _sg_c3:
-            _sg_local = st.selectbox("Local", _LOCALES_ORDEN_SG, key="sg_local")
-        with _sg_c4:
             st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-            _sg_btn = st.button("Generar", key="sg_btn", type="primary", use_container_width=True)
+            _sg_go = st.button("📊 Generar", type="primary", use_container_width=True, key="sg_go")
 
-        # ── CARGA / CACHÉ ───────────────────────────────────────────────────
-        if _sg_btn:
-            with st.spinner("Cargando ventas de salón..."):
-                # UNA SOLA query con el rango más amplio (~4 meses): contiene la semana
-                # y las 4 semanas, así que la semana y el 4w se derivan en pandas sin
-                # volver a la BD ni duplicar datos en memoria. MISMO criterio que
-                # "Resumen de Ventas": monto_venta_real, sin filtro es_opcion,
-                # Venta Salón = origen vacío/null. TODA la red (para ranking y comparativas).
-                _sg_fi_mes = (_sg_fi.replace(day=1) - _td(days=1)).replace(day=1)
-                _sg_fi_mes = (_sg_fi_mes.replace(day=1) - _td(days=1)).replace(day=1)
-                _sg_fi_mes = (_sg_fi_mes.replace(day=1) - _td(days=1)).replace(day=1)
-                _sg_sql = """
-                    SELECT fecha_venta, local, garzon, sku_producto, nombre_producto,
-                           categoria_menu, ab_categoria, es_opcion,
-                           cantidad_vendida, monto_venta_real, propina, origen
-                    FROM ventas
-                    WHERE fecha_venta BETWEEN :fi AND :ff
-                      AND local IS NOT NULL
-                      AND (origen IS NULL OR TRIM(origen) = '')
-                """
-                _sg_full = run_query(_sg_sql, {"fi": str(_sg_fi_mes), "ff": str(_sg_ff)})
+        # Rango semanal: lunes elegido → domingo
+        _sg_ini = _sg_lun - _sg_td(days=_sg_lun.weekday())  # asegura lunes
+        _sg_fin = _sg_ini + _sg_td(days=6)
+        # Acumulado mensual: del 1° del mes al fin de la semana (tope del informe)
+        _sg_mes_ini = _sg_ini.replace(day=1)
+        _sg_dias_sem = 7
+        _sg_dias_acum = (_sg_fin - _sg_mes_ini).days + 1
 
-                # Reducir memoria: convertir columnas de texto repetido a 'category'
-                if _sg_full is not None and not _sg_full.empty:
-                    _sg_full['fecha_venta'] = pd.to_datetime(_sg_full['fecha_venta'], errors='coerce')
-                    for _c in ('local', 'garzon', 'categoria_menu', 'ab_categoria', 'origen'):
-                        if _c in _sg_full.columns:
-                            _sg_full[_c] = _sg_full[_c].astype('category')
+        if _sg_go or st.session_state.get("sg_data_ok"):
+            st.session_state["sg_data_ok"] = True
+            _sg_p = {
+                "loc": _sg_local, "si": str(_sg_ini), "sf": str(_sg_fin),
+                "ai": str(_sg_mes_ini), "af": str(_sg_fin),
+                "wl": _SG_WHITELIST,
+            }
+            _sg_excl_sql = "','".join(_SG_EXCL)
+            _sg_bar_sql = "','".join(_SG_BAR_CATS)
+            _sg_cafe_sql = "','".join(_SG_CAFE_CATS)
 
-                # Guardar UN solo dataframe (el amplio). La semana y el 4w se derivan al vuelo.
-                st.session_state["sg_data_full"] = _sg_full
-                st.session_state["sg_fi_val"]    = str(_sg_fi)
-                st.session_state["sg_ff_val"]    = str(_sg_ff)
-                st.session_state["sg_local_val"] = _sg_local
+            st.caption(f"**{_sg_local}** · Semana {_sg_ini.strftime('%d-%m')} al "
+                       f"{_sg_fin.strftime('%d-%m-%Y')} · Acumulado desde "
+                       f"{_sg_mes_ini.strftime('%d-%m')}")
 
-                # ── LIBERACIÓN DE MEMORIA ──────────────────────────────────────
-                # Al generar este informe, soltar los dataframes pesados de OTROS
-                # informes que pudieran haber quedado en memoria de una visita previa
-                # (Streamlit Cloud tiene RAM limitada). Solo se tocan llaves de datos
-                # de informes —dataframes grandes—, nunca el estado general de la app
-                # (filtros, login, etc.). Es seguro: cada informe recarga su data al
-                # presionar su botón Generar.
-                _SG_KEYS_DATA_OTROS = [
-                    "gz_data",          # Rendimiento Garzones (viejo)
-                    "sg_data", "sg_data_4w", "sg_data_mes",  # residuos de versiones previas
-                    # añade aquí otras llaves *_data de informes si las hubiera
-                ]
-                for _k in _SG_KEYS_DATA_OTROS:
-                    st.session_state.pop(_k, None)
-                try:
-                    import gc as _gc
-                    _gc.collect()
-                except Exception:
-                    pass
-
-        _sg_full = st.session_state.get("sg_data_full", pd.DataFrame())
-
-        # Derivar los tres rangos en pandas desde el único dataframe (sin tocar la BD)
-        if _sg_full is not None and not _sg_full.empty:
-            _sg_fd = _sg_full['fecha_venta'].dt.date if hasattr(_sg_full['fecha_venta'], 'dt') \
-                else pd.to_datetime(_sg_full['fecha_venta']).dt.date
-            _sg_raw     = _sg_full[(_sg_fd >= _sg_fi) & (_sg_fd <= _sg_ff)].copy()
-            _sg_raw_4w  = _sg_full[(_sg_fd >= (_sg_fi - _td(weeks=3))) & (_sg_fd <= _sg_ff)].copy()
-            _sg_raw_mes = _sg_full   # el dataframe completo ya es el rango mensual
-        else:
-            _sg_raw = _sg_raw_4w = _sg_raw_mes = pd.DataFrame()
-
-        if _sg_raw is None or _sg_raw.empty:
-            st.info("Selecciona la semana y el local, luego presiona **Generar**.")
-        else:
-            # es_opcion puede venir como bool, 't'/'f' o 0/1: normalizar a bool
-            def _to_bool_sg(x):
-                if isinstance(x, bool): return x
-                return str(x).strip().lower() in ('true', 't', '1', 'yes', 'y')
-
-            # COLACIONES EXCLUIDAS: no son venta de garzón, no entran en este informe.
-            _CATS_COLACION_EXCL = {'COLACIONES', 'PROTEINA ALMUERZO',
-                                   'ENSALADAS ALMUERZO', 'ACOMPANAMIENTO ALMUERZO'}
-
-            def _preparar_vend_sg(df_raw):
-                """Limpia tipos, deja productos vendibles, excluye colaciones y categoriza.
-                Devuelve el DataFrame de productos vendibles listo para agrupar."""
-                if df_raw is None or df_raw.empty:
-                    return pd.DataFrame()
-                d = df_raw.copy()
-                d['monto_venta_real'] = pd.to_numeric(d['monto_venta_real'], errors='coerce').fillna(0)
-                d['cantidad_vendida'] = pd.to_numeric(d['cantidad_vendida'], errors='coerce').fillna(0)
-                d['propina'] = pd.to_numeric(d.get('propina', 0), errors='coerce').fillna(0)
-                d['es_opcion'] = d['es_opcion'].apply(_to_bool_sg)
-                d = d[~d['es_opcion']].copy()
-                d['_cat_up'] = d['categoria_menu'].astype(str).str.strip().str.upper()
-                d = d[~d['_cat_up'].isin(_CATS_COLACION_EXCL)].copy()
-                d['cat_agr'] = d.apply(
-                    lambda r: _categorizar_sg(r['categoria_menu'], r['nombre_producto']), axis=1)
-                d['macro'] = d['cat_agr'].apply(_macro_familia_sg)
-                return d
-
-            try:
-                # ── EJE A · PERÍODO (v2 §0.5): SEMANAL vs ACUMULADO MENSUAL ──────
-                # SEMANAL = la semana seleccionada (_sg_fi → _sg_ff).
-                # ACUMULADO MENSUAL = día 1 del mes de la semana → fin de la semana.
-                _sg_fi_acum = _sg_ff.replace(day=1)   # primer día del mes del fin de semana
-                _sg_ff_acum = _sg_ff
-
-                # Universo SEMANAL (productos vendibles de la semana, sin opciones)
-                _sg_vend = _preparar_vend_sg(_sg_raw)
-
-                # Universo de VENTA TOTAL (igual que Resumen de Ventas): NO quita opciones,
-                # solo excluye colaciones. Para que el total de $ cuadre exacto con el
-                # Resumen de Ventas aunque las opciones tengan monto propio.
-                def _preparar_venta_total_sg(df_raw):
-                    if df_raw is None or df_raw.empty:
-                        return pd.DataFrame()
-                    d = df_raw.copy()
-                    d['monto_venta_real'] = pd.to_numeric(d['monto_venta_real'], errors='coerce').fillna(0)
-                    d['cantidad_vendida'] = pd.to_numeric(d['cantidad_vendida'], errors='coerce').fillna(0)
-                    d['_cat_up'] = d['categoria_menu'].astype(str).str.strip().str.upper()
-                    d = d[~d['_cat_up'].isin(_CATS_COLACION_EXCL)].copy()
-                    d['cat_agr'] = d.apply(
-                        lambda r: _categorizar_sg(r['categoria_menu'], r['nombre_producto']), axis=1)
-                    d['macro'] = d['cat_agr'].apply(_macro_familia_sg)
-                    return d
-                _sg_venta_total = _preparar_venta_total_sg(_sg_raw)
-                _sg_venta_total_acum_full = _preparar_venta_total_sg(_sg_raw_mes)
-
-                # Universo ACUMULADO: se deriva de _sg_raw_mes (ya cargado, cubre el mes)
-                # filtrando al rango [_sg_fi_acum, _sg_ff_acum]. No requiere query nueva.
-                _sg_vend_mes_full = _preparar_vend_sg(_sg_raw_mes)
-                if not _sg_vend_mes_full.empty:
-                    _fv = pd.to_datetime(_sg_vend_mes_full['fecha_venta']).dt.date
-                    _sg_vend_acum = _sg_vend_mes_full[
-                        (_fv >= _sg_fi_acum) & (_fv <= _sg_ff_acum)].copy()
-                else:
-                    _sg_vend_acum = pd.DataFrame()
-
-                # Subsets del local seleccionado — SEMANAL
-                _sg_loc    = _sg_vend[_sg_vend['local'] == _sg_local].copy()
-                _sg_loc_gz = _sg_loc[_sg_loc['garzon'].isin(_GARZONES_VALIDOS_SG)].copy()
-
-                # Subsets de VENTA TOTAL del local (incluye opciones)
-                _sg_loc_vt = _sg_venta_total[_sg_venta_total['local'] == _sg_local].copy()
-                if _sg_venta_total_acum_full is not None and not _sg_venta_total_acum_full.empty:
-                    _fvt = pd.to_datetime(_sg_venta_total_acum_full['fecha_venta']).dt.date
-                    _sg_loc_vt_acum = _sg_venta_total_acum_full[
-                        (_sg_venta_total_acum_full['local'] == _sg_local)
-                        & (_fvt >= _sg_fi_acum) & (_fvt <= _sg_ff_acum)].copy()
-                else:
-                    _sg_loc_vt_acum = pd.DataFrame(columns=_sg_loc_vt.columns)
-
-                # Subsets de VENTA TOTAL filtrados por WHITELIST de garzones (secciones 2-4).
-                # Sección 1 usa todo el local (_sg_loc_vt); de la 2 hacia abajo, whitelist.
-                _sg_loc_vt_wl = _sg_loc_vt[_sg_loc_vt['garzon'].isin(_GARZONES_VALIDOS_SG)].copy()
-                if not _sg_loc_vt_acum.empty:
-                    _sg_loc_vt_wl_acum = _sg_loc_vt_acum[
-                        _sg_loc_vt_acum['garzon'].isin(_GARZONES_VALIDOS_SG)].copy()
-                else:
-                    _sg_loc_vt_wl_acum = pd.DataFrame(columns=_sg_loc_vt.columns)
-
-                # Subsets del local seleccionado — ACUMULADO MENSUAL
-                if not _sg_vend_acum.empty:
-                    _sg_loc_acum    = _sg_vend_acum[_sg_vend_acum['local'] == _sg_local].copy()
-                    _sg_loc_gz_acum = _sg_loc_acum[_sg_loc_acum['garzon'].isin(_GARZONES_VALIDOS_SG)].copy()
-                else:
-                    _sg_loc_acum    = pd.DataFrame(columns=_sg_loc.columns)
-                    _sg_loc_gz_acum = pd.DataFrame(columns=_sg_loc_gz.columns)
-
-                # ── CABECERA (§6.1) ─────────────────────────────────────────────
-                _sg_jef = _JEFATURA_LOCAL_SG.get(_sg_local, {"supervisor": "-", "jefe": "-", "subjefe": "-"})
-                _sg_qg_auto = int(_sg_loc_gz['garzon'].nunique())
-
-                _h1, _h2 = st.columns([3, 1])
-                with _h1:
-                    st.markdown(
-                        f"<div style='font-family:DM Serif Display,serif;font-size:1.6rem;color:#1F3864'>"
-                        f"INFORME DE CONTROL DE VENTAS SALÓN</div>"
-                        f"<div style='color:#555;font-size:0.95rem'><b>{_sg_local}</b> · "
-                        f"Semana {_sg_fi.strftime('%d-%m')} al {_sg_ff.strftime('%d-%m-%Y')}</div>",
-                        unsafe_allow_html=True)
-                with _h2:
-                    _sg_qgar = st.number_input("Cantidad Garzones", min_value=0,
-                                               value=_sg_qg_auto, step=1, key="sg_qgar")
-                _sg_qgar = _sg_qgar if _sg_qgar > 0 else 1  # evita /0
-
-                st.markdown(
-                    f"<div style='display:flex;flex-wrap:wrap;gap:10px;margin:8px 0 4px 0'>"
-                    f"<span style='background:#1F3864;color:#fff;padding:4px 12px;border-radius:6px;font-size:0.82rem'>Supervisor: <b>{_sg_jef['supervisor']}</b></span>"
-                    f"<span style='background:#1F3864;color:#fff;padding:4px 12px;border-radius:6px;font-size:0.82rem'>Jefe: <b>{_sg_jef['jefe']}</b></span>"
-                    f"<span style='background:#1F3864;color:#fff;padding:4px 12px;border-radius:6px;font-size:0.82rem'>Sub Jefe: <b>{_sg_jef['subjefe']}</b></span>"
-                    f"<span style='background:#1F3864;color:#fff;padding:4px 12px;border-radius:6px;font-size:0.82rem'>Garzones: <b>{_sg_qgar}</b></span>"
-                    f"</div>", unsafe_allow_html=True)
-
-                # ── % ADICIONALES POR LOCAL (toda la red) → RANKING (§6.6/6.7) ──
-                # Para cada local: suma de los 5 % de categorías adicionales sobre su venta total.
-                _sg_red_gz = _sg_vend[_sg_vend['garzon'].isin(_GARZONES_VALIDOS_SG)].copy()
-                def _pct_adicionales_local(df_local):
-                    tot = df_local['monto_venta_real'].sum()
-                    if tot <= 0:
-                        return 0.0
-                    s = 0.0
-                    for _cat in _CATS_ADICIONALES_SG:
-                        s += df_local[df_local['cat_agr'] == _cat]['monto_venta_real'].sum() / tot * 100
-                    return s
-                _sg_rank_rows = []
-                for _lc in _LOCALES_ORDEN_SG:
-                    _df_lc = _sg_red_gz[_sg_red_gz['local'] == _lc]
-                    _sg_rank_rows.append({"local": _lc, "pct_total": _pct_adicionales_local(_df_lc)})
-                _sg_rank_df = pd.DataFrame(_sg_rank_rows).sort_values("pct_total", ascending=False).reset_index(drop=True)
-                _sg_rank_df['ranking'] = _sg_rank_df.index + 1
-                _sg_rank_pos = int(_sg_rank_df[_sg_rank_df['local'] == _sg_local]['ranking'].iloc[0]) \
-                    if _sg_local in _sg_rank_df['local'].values else 0
-
-                st.markdown(
-                    f"<div style='display:inline-block;background:#D4A853;color:#1F3864;padding:6px 16px;"
-                    f"border-radius:8px;font-weight:bold;font-size:1.05rem;margin:6px 0'>"
-                    f"RANKING {_sg_rank_pos}/10</div>", unsafe_allow_html=True)
-                st.markdown("---")
-
-                # ════════════════════════════════════════════════════════════════
-                # SECCIÓN 1 y 2 — Ventas por macro-familia
-                # Tres bloques de columnas (orden PDF): ACUMULADO · DIARIO · SEMANAL.
-                #   ACUMULADO = 1 del mes → fin de semana.
-                #   DIARIO    = SEMANAL ÷ días trabajados (fechas distintas con venta).
-                #   SEMANAL   = la semana.
-                # Secciones 1-4 comparten exactamente estas columnas.
-                # ════════════════════════════════════════════════════════════════
-                def _tabla_macro_sg(df):
-                    g = df.groupby('macro').agg(
-                        monto=('monto_venta_real', 'sum'),
-                        q=('cantidad_vendida', 'sum')
-                    ).reindex(['ALIMENTOS', 'BAR', 'CAFETERÍA Y POSTRES']).fillna(0)
-                    total = g['monto'].sum()
-                    g['pct'] = (g['monto'] / total * 100) if total > 0 else 0
-                    return g, total
-
-                # Días trabajados en la semana (fechas distintas con venta del local)
-                _sg_dias_trab = max(int(pd.to_datetime(_sg_loc_vt['fecha_venta']).dt.date.nunique()), 1) \
-                    if not _sg_loc_vt.empty else 1
-
-                # SECCIÓN 1 = TODO el local. SECCIÓN 2 = WHITELIST de garzones.
-                _sec1, _tot1 = _tabla_macro_sg(_sg_loc_vt)
-                _sec1_acum, _tot1_acum = _tabla_macro_sg(_sg_loc_vt_acum)
-                _sec2, _tot2 = _tabla_macro_sg(_sg_loc_vt_wl)
-                _sec2_acum, _tot2_acum = _tabla_macro_sg(_sg_loc_vt_wl_acum)
-
-                # ── Render genérico de 3 bloques (ACUMULADO · DIARIO · SEMANAL) ──
-                # filas: lista de dicts con claves: nombre, ac_monto, ac_q, ac_pct,
-                #        sem_monto, sem_q, sem_pct. El DIARIO se calcula aquí (÷ días).
-                # totales: dict con ac_monto, ac_q, sem_monto, sem_q (para fila TOTAL).
-                def _render_3bloques_sg(filas, totales, primera_col="ITEM", dias_trab=1,
-                                        total_label="TOTAL VENTA SALÓN", q_label="Q PRODUCTOS"):
-                    _A = '#1F3864'   # acumulado (azul)
-                    _D = '#16284a'   # diario (azul oscuro)
-                    _S = '#243a66'   # semanal (azul medio)
-                    html = "<div style='overflow-x:auto'><table style='width:100%;border-collapse:collapse;font-size:0.80rem'>"
-                    html += ("<thead><tr>"
-                             f"<th rowspan='2' style='text-align:center;padding:6px 8px;background:{_A};color:#fff;vertical-align:middle'>{primera_col}</th>"
-                             f"<th colspan='3' style='text-align:center;padding:6px 8px;background:{_A};color:#D4A853;border-left:2px solid #0d0d0d'>ACUMULADO</th>"
-                             f"<th colspan='3' style='text-align:center;padding:6px 8px;background:{_D};color:#D4A853;border-left:2px solid #0d0d0d'>DIARIO</th>"
-                             f"<th colspan='3' style='text-align:center;padding:6px 8px;background:{_S};color:#D4A853;border-left:2px solid #0d0d0d'>SEMANAL</th>"
-                             "</tr><tr>")
-                    for _bgc in (_A, _D, _S):
-                        html += (f"<th style='text-align:right;padding:5px 8px;background:{_bgc};color:#fff;border-left:2px solid #0d0d0d'>$</th>"
-                                 f"<th style='text-align:right;padding:5px 8px;background:{_bgc};color:#fff'>{q_label}</th>"
-                                 f"<th style='text-align:right;padding:5px 8px;background:{_bgc};color:#fff'>%</th>")
-                    html += "</tr></thead><tbody>"
-                    for _ri, _f in enumerate(filas):
-                        _bg = '#F5F5F5' if _ri % 2 == 0 else '#FFFFFF'
-                        _di_m = _f['sem_monto'] / dias_trab if dias_trab > 0 else 0
-                        _di_q = _f['sem_q'] / dias_trab if dias_trab > 0 else 0
-                        html += (f"<tr><td style='padding:6px 8px;background:{_bg};color:#222;font-weight:600'>{_f['nombre']}</td>"
-                                 # ACUMULADO
-                                 f"<td style='text-align:right;padding:6px 8px;background:{_bg};border-left:2px solid #D4D8E0'>{_fmt_clp_sg(_f['ac_monto'])}</td>"
-                                 f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{_fmt_q_sg(_f['ac_q'])}</td>"
-                                 f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{_fmt_pct_sg(_f['ac_pct'])}</td>"
-                                 # DIARIO
-                                 f"<td style='text-align:right;padding:6px 8px;background:{_bg};border-left:2px solid #D4D8E0'>{_fmt_clp_sg(_di_m)}</td>"
-                                 f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{_fmt_q_sg(_di_q)}</td>"
-                                 f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{_fmt_pct_sg(_f['sem_pct'])}</td>"
-                                 # SEMANAL
-                                 f"<td style='text-align:right;padding:6px 8px;background:{_bg};border-left:2px solid #D4D8E0'>{_fmt_clp_sg(_f['sem_monto'])}</td>"
-                                 f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{_fmt_q_sg(_f['sem_q'])}</td>"
-                                 f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{_fmt_pct_sg(_f['sem_pct'])}</td></tr>")
-                    # Fila TOTAL
-                    _td_m = totales['sem_monto'] / dias_trab if dias_trab > 0 else 0
-                    _td_q = totales['sem_q'] / dias_trab if dias_trab > 0 else 0
-                    html += (f"<tr><td style='padding:6px 8px;background:{_A};color:#fff;font-weight:bold'>{total_label}</td>"
-                             f"<td style='text-align:right;padding:6px 8px;background:{_A};color:#fff;font-weight:bold;border-left:2px solid #0d0d0d'>{_fmt_clp_sg(totales['ac_monto'])}</td>"
-                             f"<td style='text-align:right;padding:6px 8px;background:{_A};color:#fff;font-weight:bold'>{_fmt_q_sg(totales['ac_q'])}</td>"
-                             f"<td style='text-align:right;padding:6px 8px;background:{_A};color:#D4A853;font-weight:bold'>100,0%</td>"
-                             f"<td style='text-align:right;padding:6px 8px;background:{_D};color:#fff;font-weight:bold;border-left:2px solid #0d0d0d'>{_fmt_clp_sg(_td_m)}</td>"
-                             f"<td style='text-align:right;padding:6px 8px;background:{_D};color:#fff;font-weight:bold'>{_fmt_q_sg(_td_q)}</td>"
-                             f"<td style='text-align:right;padding:6px 8px;background:{_D};color:#D4A853;font-weight:bold'>100,0%</td>"
-                             f"<td style='text-align:right;padding:6px 8px;background:{_S};color:#fff;font-weight:bold;border-left:2px solid #0d0d0d'>{_fmt_clp_sg(totales['sem_monto'])}</td>"
-                             f"<td style='text-align:right;padding:6px 8px;background:{_S};color:#fff;font-weight:bold'>{_fmt_q_sg(totales['sem_q'])}</td>"
-                             f"<td style='text-align:right;padding:6px 8px;background:{_S};color:#D4A853;font-weight:bold'>100,0%</td></tr>")
-                    html += "</tbody></table></div>"
-                    return html
-
-                # Construir filas de macro-familia para el render de 3 bloques
-                def _filas_macro_sg(g_sem, g_acum):
-                    filas = []
-                    for _fam in ['ALIMENTOS', 'BAR', 'CAFETERÍA Y POSTRES']:
-                        _rs = g_sem.loc[_fam]; _ra = g_acum.loc[_fam]
-                        filas.append({
-                            'nombre': _fam,
-                            'ac_monto': _ra['monto'], 'ac_q': _ra['q'], 'ac_pct': _ra['pct'],
-                            'sem_monto': _rs['monto'], 'sem_q': _rs['q'], 'sem_pct': _rs['pct'],
-                        })
-                    return filas
-
-                _filas1 = _filas_macro_sg(_sec1, _sec1_acum)
-                _tot1_d = {'ac_monto': _tot1_acum, 'ac_q': _sec1_acum['q'].sum(),
-                           'sem_monto': _tot1, 'sem_q': _sec1['q'].sum()}
-                _filas2 = _filas_macro_sg(_sec2, _sec2_acum)
-                _tot2_d = {'ac_monto': _tot2_acum, 'ac_q': _sec2_acum['q'].sum(),
-                           'sem_monto': _tot2, 'sem_q': _sec2['q'].sum()}
-
-                st.markdown("#### 1 · Ventas Totales Salón")
-                st.markdown(_render_3bloques_sg(_filas1, _tot1_d, primera_col="ITEM",
-                                                dias_trab=_sg_dias_trab), unsafe_allow_html=True)
-                st.markdown("#### 2 · Ventas por Categoría")
-                st.markdown(_render_3bloques_sg(_filas2, _tot2_d, primera_col="ITEM",
-                                                dias_trab=_sg_dias_trab), unsafe_allow_html=True)
-                st.caption(f"ACUMULADO = {_sg_fi_acum.strftime('%d-%m')} al {_sg_ff_acum.strftime('%d-%m')}. "
-                           f"SEMANAL = {_sg_fi.strftime('%d-%m')} al {_sg_ff.strftime('%d-%m')}. "
-                           f"DIARIO = semanal ÷ {_sg_dias_trab} días trabajados. "
-                           "Sección 1 = todo el local · Sección 2 = garzones whitelist.")
-                st.markdown("---")
-
-                # ════════════════════════════════════════════════════════════════
-                # SECCIÓN 3 — Ventas por Categoría detalladas
-                # Mismas columnas que 1/2: ACUMULADO · DIARIO · SEMANAL.
-                # Universo: WHITELIST de garzones (del punto 2 hacia abajo).
-                # ════════════════════════════════════════════════════════════════
-                _sg_sec3_sem  = _sg_loc_vt_wl
-                _sg_sec3_acum = _sg_loc_vt_wl_acum
-                _tot_sem_loc = _sg_sec3_sem['monto_venta_real'].sum()
-                _tot_acum_loc = _sg_sec3_acum['monto_venta_real'].sum() if not _sg_sec3_acum.empty else 0
-
-                # Agrupa un universo por subcategoría → dict {subcat: (monto, q)}
-                # Monto = sobre todo (incluye opciones con precio). Q = solo padres
-                # (es_opcion=False), para no inflar unidades con modificadores/opciones.
-                def _agg_subcat_sg(df, col_subcat_func, modo="alim"):
-                    if df is None or df.empty:
-                        return {}
-                    d = df.copy()
-                    if modo == "alim":
-                        d['subcat'] = d.apply(lambda r: col_subcat_func(r['categoria_menu'], r['cat_agr']), axis=1)
-                    else:
-                        d['_macro_liq'] = d['cat_agr']
-                        d['subcat'] = d.apply(lambda r: col_subcat_func(r['sku_producto'], r['_macro_liq']), axis=1)
-                    d = d[d['subcat'].notna()]
-                    if d.empty:
-                        return {}
-                    d['_es_op'] = d['es_opcion'].apply(_to_bool_sg)
-                    g_m = d.groupby('subcat')['monto_venta_real'].sum()          # monto: todo
-                    g_q = d[~d['_es_op']].groupby('subcat')['cantidad_vendida'].sum()  # Q: solo padres
-                    out = {}
-                    for _sc in g_m.index:
-                        out[_sc] = (g_m.get(_sc, 0), g_q.get(_sc, 0))
-                    return out
-
-                # Construye filas {nombre, ac_*, sem_*} uniendo semanal y acumulado
-                def _filas_subcat_sg(df_sem, df_acum, col_func, modo, tot_sem, tot_acum):
-                    a_sem = _agg_subcat_sg(df_sem, col_func, modo)
-                    a_acu = _agg_subcat_sg(df_acum, col_func, modo)
-                    _orden = list(dict.fromkeys(list(a_sem.keys()) + list(a_acu.keys())))
-                    filas = []
-                    for _sc in _orden:
-                        _ms, _qs = a_sem.get(_sc, (0, 0))
-                        _ma, _qa = a_acu.get(_sc, (0, 0))
-                        filas.append({
-                            'nombre': _sc,
-                            'ac_monto': _ma, 'ac_q': _qa,
-                            'ac_pct': (_ma / tot_acum * 100) if tot_acum > 0 else 0,
-                            'sem_monto': _ms, 'sem_q': _qs,
-                            'sem_pct': (_ms / tot_sem * 100) if tot_sem > 0 else 0,
-                        })
-                    return filas
-
-                def _totales_filas_sg(filas):
-                    return {'ac_monto': sum(f['ac_monto'] for f in filas),
-                            'ac_q': sum(f['ac_q'] for f in filas),
-                            'sem_monto': sum(f['sem_monto'] for f in filas),
-                            'sem_q': sum(f['sem_q'] for f in filas)}
-
-                st.markdown("#### 3 · Ventas por Categoría (detalle)")
-
-                # --- 3a. ALIMENTOS ---
-                _alim_sem = _sg_sec3_sem[_sg_sec3_sem['cat_agr'].isin(['Alimentos', 'Agregados', 'Colación'])]
-                _alim_acu = _sg_sec3_acum[_sg_sec3_acum['cat_agr'].isin(['Alimentos', 'Agregados', 'Colación'])] if not _sg_sec3_acum.empty else _sg_sec3_acum
-                _filas_alim = _filas_subcat_sg(_alim_sem, _alim_acu, _subcat_alimentos_sg, "alim", _tot_sem_loc, _tot_acum_loc)
-                if _filas_alim:
-                    st.markdown("**VENTAS ALIMENTOS**")
-                    st.markdown(_render_3bloques_sg(_filas_alim, _totales_filas_sg(_filas_alim),
-                                primera_col="ITEM", dias_trab=_sg_dias_trab, total_label="TOTAL ALIMENTOS"),
-                                unsafe_allow_html=True)
-
-                # --- 3b. CAFETERÍA Y POSTRES (Q = padres por ab_categoria) ---
-                def _cafe_post_vals(df):
-                    # Q (unidades) = solo PADRES (es_opcion=False): las opciones hijas
-                    # (tipo de leche, tamaño, etc.) comparten ab_categoria y triplicarían el conteo.
-                    # Monto = sobre todo el df (incluye opciones con precio), para cuadrar con la venta.
-                    if df is None or df.empty:
-                        return 0, 0, 0, 0
-                    _es_op = df['es_opcion'].apply(_to_bool_sg)
-                    _padres = df[~_es_op]
-                    _mc = df[df['ab_categoria'] == _AB_CAFETERIA_SG]['monto_venta_real'].sum()
-                    _qc = _padres[_padres['ab_categoria'] == _AB_CAFETERIA_SG]['cantidad_vendida'].sum()
-                    _mp = df[df['ab_categoria'] == _AB_POSTRES_SG]['monto_venta_real'].sum()
-                    _qp = _padres[_padres['ab_categoria'] == _AB_POSTRES_SG]['cantidad_vendida'].sum()
-                    # Fallback por cat_agr si ab_categoria no viene poblado
-                    if _qc == 0 and _mc == 0:
-                        _dc = df[df['cat_agr'] == 'Cafetería']
-                        _mc = _dc['monto_venta_real'].sum()
-                        _qc = _dc[~_dc['es_opcion'].apply(_to_bool_sg)]['cantidad_vendida'].sum()
-                    if _qp == 0 and _mp == 0:
-                        _dp = df[df['cat_agr'] == 'Postres']
-                        _mp = _dp['monto_venta_real'].sum()
-                        _qp = _dp[~_dp['es_opcion'].apply(_to_bool_sg)]['cantidad_vendida'].sum()
-                    return _mc, _qc, _mp, _qp
-                _mc_s, _qc_s, _mp_s, _qp_s = _cafe_post_vals(_sg_sec3_sem)
-                _mc_a, _qc_a, _mp_a, _qp_a = _cafe_post_vals(_sg_sec3_acum) if not _sg_sec3_acum.empty else (0, 0, 0, 0)
-                _q_cafe, _m_cafe, _q_post, _m_post = _qc_s, _mc_s, _qp_s, _mp_s  # para metas/debug
-                _filas_cp = [
-                    {'nombre': 'CAFETERÍA', 'ac_monto': _mc_a, 'ac_q': _qc_a,
-                     'ac_pct': (_mc_a / _tot_acum_loc * 100) if _tot_acum_loc > 0 else 0,
-                     'sem_monto': _mc_s, 'sem_q': _qc_s,
-                     'sem_pct': (_mc_s / _tot_sem_loc * 100) if _tot_sem_loc > 0 else 0},
-                    {'nombre': 'POSTRES', 'ac_monto': _mp_a, 'ac_q': _qp_a,
-                     'ac_pct': (_mp_a / _tot_acum_loc * 100) if _tot_acum_loc > 0 else 0,
-                     'sem_monto': _mp_s, 'sem_q': _qp_s,
-                     'sem_pct': (_mp_s / _tot_sem_loc * 100) if _tot_sem_loc > 0 else 0},
-                ]
-                st.markdown("**VENTAS CAFETERÍA Y POSTRES**")
-                st.markdown(_render_3bloques_sg(_filas_cp, _totales_filas_sg(_filas_cp),
-                            primera_col="ITEM", dias_trab=_sg_dias_trab, total_label="TOTAL CAF. Y POSTRES"),
-                            unsafe_allow_html=True)
-                # Q vs META (semanal)
-                _meta_loc = _METAS_SG.get(_sg_local, {})
-                if _meta_loc:
-                    _dias_sem = (_sg_ff - _sg_fi).days + 1
-                    _mc_dia = _meta_loc.get('Cafetería', {}).get('diaria', 0)
-                    _mp_dia = _meta_loc.get('Postres', {}).get('diaria', 0)
-                    _meta_cafe = _mc_dia * _dias_sem; _meta_post = _mp_dia * _dias_sem
-                    _cmpl_cafe = (_q_cafe / _meta_cafe * 100) if _meta_cafe > 0 else 0
-                    _cmpl_post = (_q_post / _meta_post * 100) if _meta_post > 0 else 0
-                    def _color_meta(p):
-                        return '#2E7D32' if p >= 100 else ('#D4A853' if p >= 80 else '#B71C1C')
-                    _meta_html = "<div style='display:flex;flex-wrap:wrap;gap:10px;margin:6px 0'>"
-                    for _lbl, _q, _meta, _cmpl in [("Cafetería", _q_cafe, _meta_cafe, _cmpl_cafe),
-                                                   ("Postres", _q_post, _meta_post, _cmpl_post)]:
-                        _meta_html += (f"<div style='border:1px solid #E0E0E0;border-radius:8px;padding:8px 14px;background:#FFFFFF'>"
-                            f"<div style='font-size:0.78rem;color:#555'>{_lbl}</div>"
-                            f"<div style='font-size:1.05rem;font-weight:bold;color:#1F3864'>{_fmt_q_sg(_q)} <span style='color:#888;font-weight:normal'>/ {_fmt_q_sg(_meta)} meta</span></div>"
-                            f"<div style='font-size:0.85rem;font-weight:bold;color:{_color_meta(_cmpl)}'>{_fmt_pct_sg(_cmpl)} cumplimiento</div></div>")
-                    _meta_html += "</div>"
-                    st.markdown(_meta_html, unsafe_allow_html=True)
-                    st.caption(f"Meta = meta diaria × {_dias_sem} días. Cafetería {_mc_dia}/día · Postres {_mp_dia}/día.")
-
-                # --- 3c. LÍQUIDOS C/A ---
-                _ca_sem = _sg_sec3_sem[_sg_sec3_sem['cat_agr'] == 'Líquidos C/A']
-                _ca_acu = _sg_sec3_acum[_sg_sec3_acum['cat_agr'] == 'Líquidos C/A'] if not _sg_sec3_acum.empty else _sg_sec3_acum
-                _filas_ca = _filas_subcat_sg(_ca_sem, _ca_acu, _subcat_liquidos_sg, "liq", _tot_sem_loc, _tot_acum_loc)
-                if _filas_ca:
-                    st.markdown("**VENTAS LÍQUIDOS C/A**")
-                    st.markdown(_render_3bloques_sg(_filas_ca, _totales_filas_sg(_filas_ca),
-                                primera_col="ITEM", dias_trab=_sg_dias_trab, total_label="TOTAL LÍQUIDOS C/A"),
-                                unsafe_allow_html=True)
-
-                # --- 3d. LÍQUIDOS S/A ---
-                _sa_sem = _sg_sec3_sem[_sg_sec3_sem['cat_agr'] == 'Líquidos S/A']
-                _sa_acu = _sg_sec3_acum[_sg_sec3_acum['cat_agr'] == 'Líquidos S/A'] if not _sg_sec3_acum.empty else _sg_sec3_acum
-                _filas_sa = _filas_subcat_sg(_sa_sem, _sa_acu, _subcat_liquidos_sg, "liq", _tot_sem_loc, _tot_acum_loc)
-                if _filas_sa:
-                    st.markdown("**VENTAS LÍQUIDOS S/A**")
-                    st.markdown(_render_3bloques_sg(_filas_sa, _totales_filas_sg(_filas_sa),
-                                primera_col="ITEM", dias_trab=_sg_dias_trab, total_label="TOTAL LÍQUIDOS S/A"),
-                                unsafe_allow_html=True)
-                st.markdown("---")
-
-                # ════════════════════════════════════════════════════════════════
-                # SECCIÓN 4 — Control de Productos Estratégicos
-                # Mismas columnas: ACUMULADO · DIARIO · SEMANAL. Todo el local.
-                # ════════════════════════════════════════════════════════════════
-                st.markdown("#### 4 · Control de Productos Estratégicos")
-                def _estrat_vals(df):
-                    d = df.copy()
-                    d['_nom_low'] = d['nombre_producto'].astype(str).str.strip().str.lower()
-                    out = {}
-                    for _et, _variantes in _PRODUCTOS_ESTRATEGICOS_SG.items():
-                        _mask = d['_nom_low'].apply(lambda n: any(v in n for v in _variantes))
-                        _de = d[_mask]
-                        out[_et] = (_de['monto_venta_real'].sum(), _de['cantidad_vendida'].sum())
-                    return out
-                _es_sem = _estrat_vals(_sg_sec3_sem)
-                _es_acu = _estrat_vals(_sg_sec3_acum) if not _sg_sec3_acum.empty else {}
-                _filas_estr = []
-                for _et in _PRODUCTOS_ESTRATEGICOS_SG.keys():
-                    _ms, _qs = _es_sem.get(_et, (0, 0))
-                    _ma, _qa = _es_acu.get(_et, (0, 0))
-                    _filas_estr.append({
-                        'nombre': _et,
-                        'ac_monto': _ma, 'ac_q': _qa,
-                        'ac_pct': (_ma / _tot_acum_loc * 100) if _tot_acum_loc > 0 else 0,
-                        'sem_monto': _ms, 'sem_q': _qs,
-                        'sem_pct': (_ms / _tot_sem_loc * 100) if _tot_sem_loc > 0 else 0,
-                    })
-                # _estr_df para compatibilidad con el PDF (usa columnas prod/q/monto/pct)
-                _estr_df = pd.DataFrame([{'prod': f['nombre'], 'q': f['sem_q'], 'monto': f['sem_monto'],
-                                          'pct': f['sem_pct'], 'qprom': f['sem_q'] / _sg_qgar if _sg_qgar > 0 else 0}
-                                         for f in _filas_estr])
-                st.markdown(_render_3bloques_sg(_filas_estr, _totales_filas_sg(_filas_estr),
-                            primera_col="PRODUCTO", dias_trab=_sg_dias_trab, total_label="TOTAL ESTRATÉGICOS"),
-                            unsafe_allow_html=True)
-                st.markdown("---")
-
-                # ════════════════════════════════════════════════════════════════
-                # SECCIONES 5 y 9 — Por garzón del local (§6.6)
-                # Trazabilidad: venta, días trabajados, propina, y % adicionales.
-                # Cafetería/Postres → Q (unidades). Resto → % participación.
-                # %TOTAL = suma de los 5 % (test de cuadre Wilmer = 36,2%).
-                # ════════════════════════════════════════════════════════════════
-                st.markdown("#### 5 · Seguimiento por Garzón")
-
-                _gz_rows = []
-                for _gar, _gdf in _sg_loc_gz.groupby('garzon'):
-                    _vt = _gdf['monto_venta_real'].sum()
-                    if _vt <= 0:
-                        continue
-                    _dias = _gdf['fecha_venta'].nunique()
-                    _vdp = _vt / _dias if _dias > 0 else 0
-                    _aporte_prop = _vt * _APORTE_PROPINA_PCT_SG
-                    _row = {"garzon": _gar, "venta_total": _vt, "dias": _dias,
-                            "venta_diaria_prom": _vdp, "aporte_propina": _aporte_prop}
-                    _pct_total = 0.0
-                    for _cat in _CATS_ADICIONALES_SG:
-                        _cdf = _gdf[_gdf['cat_agr'] == _cat]
-                        _mc = _cdf['monto_venta_real'].sum()
-                        _qc = _cdf['cantidad_vendida'].sum()
-                        _pc = (_mc / _vt * 100) if _vt > 0 else 0
-                        _pct_total += _pc
-                        if _cat in ('Cafetería', 'Postres'):
-                            _row[_cat] = _qc          # se muestra como Q
-                            _row[_cat + "_pct"] = _pc  # se usa solo para %TOTAL
-                        else:
-                            _row[_cat] = _pc           # se muestra como %
-                    _row["pct_total"] = _pct_total
-                    _gz_rows.append(_row)
-
-                _gz_seg = pd.DataFrame(_gz_rows).sort_values("venta_total", ascending=False) \
-                    if _gz_rows else pd.DataFrame()
-
-                if _gz_seg.empty:
-                    st.info("No hay ventas de garzones válidos en este local/semana.")
-                else:
-                    _gh = "<div style='overflow-x:auto'><table style='width:100%;border-collapse:collapse;font-size:0.78rem'>"
-                    _gh += ("<thead><tr>"
-                            "<th style='text-align:left;padding:6px 8px;background:#1F3864;color:#fff'>Garzón</th>"
-                            "<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>Venta Total</th>"
-                            "<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>Días</th>"
-                            "<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>Venta Diaria Prom.</th>"
-                            "<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>Aporte Propina (10%)</th>"
-                            "<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>Agregados %</th>"
-                            "<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>Cafetería Q</th>"
-                            "<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>Postres Q</th>"
-                            "<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>Líq S/A %</th>"
-                            "<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>Líq C/A %</th>"
-                            "<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>% TOTAL</th>"
-                            "</tr></thead><tbody>")
-                    for _ri, _row in _gz_seg.reset_index(drop=True).iterrows():
-                        _bg = '#F5F5F5' if _ri % 2 == 0 else '#FFFFFF'
-                        _gh += (f"<tr><td style='padding:6px 8px;background:{_bg};color:#222'>{_row['garzon']}</td>"
-                                f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{_fmt_clp_sg(_row['venta_total'])}</td>"
-                                f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{int(_row['dias'])}</td>"
-                                f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{_fmt_clp_sg(_row['venta_diaria_prom'])}</td>"
-                                f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{_fmt_clp_sg(_row['aporte_propina'])}</td>"
-                                f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{_fmt_pct_sg(_row.get('Agregados', 0))}</td>"
-                                f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{_fmt_q_sg(_row.get('Cafetería', 0))}</td>"
-                                f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{_fmt_q_sg(_row.get('Postres', 0))}</td>"
-                                f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{_fmt_pct_sg(_row.get('Líquidos S/A', 0))}</td>"
-                                f"<td style='text-align:right;padding:6px 8px;background:{_bg}'>{_fmt_pct_sg(_row.get('Líquidos C/A', 0))}</td>"
-                                f"<td style='text-align:right;padding:6px 8px;background:{_bg};font-weight:bold;color:#1F3864'>{_fmt_pct_sg(_row['pct_total'])}</td></tr>")
-                    _gh += "</tbody></table></div>"
-                    st.markdown(_gh, unsafe_allow_html=True)
-                    st.caption("Agregados, Líq S/A y Líq C/A en % sobre la venta del garzón. Cafetería y Postres en unidades (Q). "
-                               "El % TOTAL suma los 5 porcentajes de categoría (Café/Postres también en %), confirmado contra los PDFs de referencia (v2 §4).")
-                st.markdown("---")
-
-                # ════════════════════════════════════════════════════════════════
-                # SECCIONES 6 y 7 — Comparativa por local (toda la red) (§6.7)
-                # ════════════════════════════════════════════════════════════════
-                st.markdown("#### 6 · Comparativa por Local (red completa)")
-
-                _loc_rows = []
-                for _lc in _LOCALES_ORDEN_SG:
-                    _dfl = _sg_red_gz[_sg_red_gz['local'] == _lc]
-                    _vt = _dfl['monto_venta_real'].sum()
-                    _row = {"local": _lc, "venta_total": _vt}
-                    _pct_total = 0.0
-                    for _cat in _CATS_ADICIONALES_SG:
-                        _cdf = _dfl[_dfl['cat_agr'] == _cat]
-                        _mc = _cdf['monto_venta_real'].sum()
-                        _qc = _cdf['cantidad_vendida'].sum()
-                        _pc = (_mc / _vt * 100) if _vt > 0 else 0
-                        _pct_total += _pc
-                        if _cat in ('Cafetería', 'Postres'):
-                            _row[_cat] = _qc
-                        else:
-                            _row[_cat] = _pc
-                    _row["pct_total"] = _pct_total
-                    _loc_rows.append(_row)
-                _loc_df = pd.DataFrame(_loc_rows).sort_values("pct_total", ascending=False).reset_index(drop=True)
-
-                _lh = "<div style='overflow-x:auto'><table style='width:100%;border-collapse:collapse;font-size:0.78rem'>"
-                _lh += ("<thead><tr>"
-                        "<th style='text-align:left;padding:6px 8px;background:#1F3864;color:#fff'>#</th>"
-                        "<th style='text-align:left;padding:6px 8px;background:#1F3864;color:#fff'>Local</th>"
-                        "<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>Venta Total</th>"
-                        "<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>Agregados %</th>"
-                        "<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>Cafetería Q</th>"
-                        "<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>Postres Q</th>"
-                        "<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>Líq S/A %</th>"
-                        "<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>Líq C/A %</th>"
-                        "<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>% TOTAL</th>"
-                        "</tr></thead><tbody>")
-                for _ri, _row in _loc_df.iterrows():
-                    _es_actual = _row['local'] == _sg_local
-                    _bg = '#D4A853' if _es_actual else ('#F5F5F5' if _ri % 2 == 0 else '#FFFFFF')
-                    _col = '#1F3864' if _es_actual else '#222'
-                    _fw = 'bold' if _es_actual else 'normal'
-                    _lh += (f"<tr><td style='padding:6px 8px;background:{_bg};color:{_col};font-weight:{_fw}'>{_ri+1}</td>"
-                            f"<td style='padding:6px 8px;background:{_bg};color:{_col};font-weight:{_fw}'>{_row['local']}</td>"
-                            f"<td style='text-align:right;padding:6px 8px;background:{_bg};color:{_col}'>{_fmt_clp_sg(_row['venta_total'])}</td>"
-                            f"<td style='text-align:right;padding:6px 8px;background:{_bg};color:{_col}'>{_fmt_pct_sg(_row.get('Agregados', 0))}</td>"
-                            f"<td style='text-align:right;padding:6px 8px;background:{_bg};color:{_col}'>{_fmt_q_sg(_row.get('Cafetería', 0))}</td>"
-                            f"<td style='text-align:right;padding:6px 8px;background:{_bg};color:{_col}'>{_fmt_q_sg(_row.get('Postres', 0))}</td>"
-                            f"<td style='text-align:right;padding:6px 8px;background:{_bg};color:{_col}'>{_fmt_pct_sg(_row.get('Líquidos S/A', 0))}</td>"
-                            f"<td style='text-align:right;padding:6px 8px;background:{_bg};color:{_col}'>{_fmt_pct_sg(_row.get('Líquidos C/A', 0))}</td>"
-                            f"<td style='text-align:right;padding:6px 8px;background:{_bg};color:{_col};font-weight:bold'>{_fmt_pct_sg(_row['pct_total'])}</td></tr>")
-                _lh += "</tbody></table></div>"
-                st.markdown(_lh, unsafe_allow_html=True)
-                st.caption(f"Ranking por % adicionales total. **{_sg_local}** resaltado en dorado (posición {_sg_rank_pos}/10).")
-                st.markdown("---")
-
-                # ════════════════════════════════════════════════════════════════
-                # SECCIÓN 7 — Comparativa Productos Estratégicos (matriz local × producto)
-                # Valor = promedio diario por garzón = Q producto / días período / nº garzones.
-                # Universo: toda la red, garzones whitelist (§8, §3.7).
-                # ════════════════════════════════════════════════════════════════
-                st.markdown("#### 7 · Comparativa Productos Estratégicos (promedio diario × garzón)")
-                _dias_periodo = max((_sg_ff - _sg_fi).days + 1, 1)
-                _sg_red_nom = _sg_red_gz.copy()
-                _sg_red_nom['_nom_low'] = _sg_red_nom['nombre_producto'].astype(str).str.strip().str.lower()
-                _estr_cols = list(_PRODUCTOS_ESTRATEGICOS_SG.keys())
-                _m7_rows = []
-                for _lc in _LOCALES_ORDEN_SG:
-                    _dfl = _sg_red_nom[_sg_red_nom['local'] == _lc]
-                    _ngar = max(int(_dfl['garzon'].nunique()), 1)
-                    _fila = {"local": _lc}
-                    for _et, _variantes in _PRODUCTOS_ESTRATEGICOS_SG.items():
-                        _mask = _dfl['_nom_low'].apply(lambda n: any(v in n for v in _variantes))
-                        _q = _dfl[_mask]['cantidad_vendida'].sum()
-                        # promedio diario por garzón
-                        _fila[_et] = _q / _dias_periodo / _ngar if (_dias_periodo > 0 and _ngar > 0) else 0
-                    _m7_rows.append(_fila)
-                _m7_df = pd.DataFrame(_m7_rows)
-                _m7h = "<div style='overflow-x:auto'><table style='width:100%;border-collapse:collapse;font-size:0.78rem'>"
-                _m7h += "<thead><tr><th style='text-align:left;padding:6px 8px;background:#1F3864;color:#fff'>Local</th>"
-                for _et in _estr_cols:
-                    _m7h += f"<th style='text-align:right;padding:6px 8px;background:#1F3864;color:#fff'>{_et}</th>"
-                _m7h += "</tr></thead><tbody>"
-                for _ri, _row in _m7_df.iterrows():
-                    _es_actual = _row['local'] == _sg_local
-                    _bg = '#D4A853' if _es_actual else ('#F5F5F5' if _ri % 2 == 0 else '#FFFFFF')
-                    _col = '#1F3864' if _es_actual else '#222'
-                    _fw = 'bold' if _es_actual else 'normal'
-                    _m7h += f"<tr><td style='padding:6px 8px;background:{_bg};color:{_col};font-weight:{_fw}'>{_row['local']}</td>"
-                    for _et in _estr_cols:
-                        _m7h += f"<td style='text-align:right;padding:6px 8px;background:{_bg};color:{_col}'>{('%.2f' % _row[_et]).replace('.', ',')}</td>"
-                    _m7h += "</tr>"
-                _m7h += "</tbody></table></div>"
-                st.markdown(_m7h, unsafe_allow_html=True)
-                st.caption(f"Promedio diario por garzón = unidades del producto ÷ {_dias_periodo} días ÷ nº garzones del local.")
-                st.markdown("---")
-
-                # ════════════════════════════════════════════════════════════════
-                # SECCIONES 8 y 10 — Evolución 4 semanas (§6.8)
-                # ════════════════════════════════════════════════════════════════
-                st.markdown("#### 8 · Evolución 4 Semanas (% adicionales)")
-
-                # Helper compartido por secciones 8, 10 y 11.
-                def _pct_adic_group(df_g):
-                    tot = df_g['monto_venta_real'].sum()
-                    if tot <= 0:
-                        return 0.0
-                    s = 0.0
-                    for _cat in _CATS_ADICIONALES_SG:
-                        s += df_g[df_g['cat_agr'] == _cat]['monto_venta_real'].sum() / tot * 100
-                    return s
-
-                # ── Tema sobrio compartido por gráficos 8, 10 y 11 ──
-                # Fondo transparente (integra al tema oscuro), paleta tenue controlada.
-                _SG_LAYOUT = dict(
-                    paper_bgcolor='rgba(0,0,0,0)',
-                    plot_bgcolor='rgba(0,0,0,0)',
-                    font=dict(color='#E8E8E8', family='Helvetica, Arial, sans-serif', size=12),
-                    xaxis=dict(showgrid=False, linecolor='#3a3a3a', tickfont=dict(color='#C8C8C8')),
-                    yaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.07)', zeroline=False,
-                               ticksuffix='%', tickfont=dict(color='#C8C8C8')),
-                    legend=dict(orientation='h', yanchor='bottom', y=-0.35,
-                                font=dict(color='#C8C8C8', size=10), bgcolor='rgba(0,0,0,0)'),
-                    margin=dict(t=44, b=70, l=10, r=10),
-                    colorway=['#D4A853', '#5B8DB8', '#8C9BAB', '#C97B6A', '#7BA18C',
-                              '#B0A06A', '#9A8CA8', '#6A8CA0'],  # paleta tenue, 8 tonos
+            # ═══════════ SECCIÓN 1 — VENTAS TOTALES SALÓN (sin whitelist) ═══════════
+            _sg_s1 = run_query(f"""
+                with base as (
+                  select
+                    monto_venta_real + coalesce(descuento,0) as venta,
+                    cantidad_vendida as q,
+                    case
+                      when categoria_menu in ('{_sg_bar_sql}') then 'BAR'
+                      when categoria_menu in ('{_sg_cafe_sql}') then 'CAFETERÍA Y POSTRES'
+                      else 'ALIMENTOS'
+                    end as macro,
+                    fecha_venta
+                  from ventas
+                  where local = :loc
+                    and origen is null
+                    and categoria_menu not in ('{_sg_excl_sql}')
                 )
-                # título se pasa aparte en cada gráfico (titlefont va en el layout)
-                _SG_TITLEFONT = dict(color='#D4A853', size=14)
+                select coalesce(macro,'TOTAL') as macro,
+                  sum(case when fecha_venta between :ai and :af then venta else 0 end) as venta_acum,
+                  sum(case when fecha_venta between :ai and :af then q else 0 end) as q_acum,
+                  sum(case when fecha_venta between :si and :sf then venta else 0 end) as venta_sem,
+                  sum(case when fecha_venta between :si and :sf then q else 0 end) as q_sem
+                from base
+                group by rollup(macro)
+                order by macro
+            """, _sg_p)
 
-                # Estructuras para llevar los datos de gráficos al PDF (secciones 8/10/11).
-                # Se llenan abajo si hay datos; si no, quedan vacías y el PDF las omite.
-                _pdf_sec8 = {"semanas": [], "garzones": [], "valores": {}}   # garzón -> [%/semana]
-                _pdf_sec10 = {"semanas": [], "series": []}                    # [(local, [%/semana], es_actual)]
-                _pdf_sec11 = {"meses": [], "valores": []}                     # [% por mes]
+            # ═══════════ SECCIÓN 2 — VENTAS POR CATEGORÍA (whitelist) ═══════════
+            _sg_s2 = run_query(f"""
+                with base as (
+                  select
+                    monto_venta_real + coalesce(descuento,0) as venta,
+                    cantidad_vendida as q,
+                    case
+                      when categoria_menu in ('{_sg_bar_sql}') then 'BAR'
+                      when categoria_menu in ('{_sg_cafe_sql}') then 'CAFETERÍA Y POSTRES'
+                      else 'ALIMENTOS'
+                    end as macro,
+                    fecha_venta
+                  from ventas
+                  where local = :loc
+                    and origen is null
+                    and categoria_menu not in ('{_sg_excl_sql}')
+                    and garzon = any(:wl)
+                )
+                select coalesce(macro,'TOTAL') as macro,
+                  sum(case when fecha_venta between :ai and :af then venta else 0 end) as venta_acum,
+                  sum(case when fecha_venta between :ai and :af then q else 0 end) as q_acum,
+                  sum(case when fecha_venta between :si and :sf then venta else 0 end) as venta_sem,
+                  sum(case when fecha_venta between :si and :sf then q else 0 end) as q_sem
+                from base
+                group by rollup(macro)
+                order by macro
+            """, _sg_p)
 
-                if not _SG_HAS_PLOTLY:
-                    st.info("Gráficos de evolución no disponibles (plotly no instalado en el servidor).")
-                elif _sg_raw_4w is not None and not _sg_raw_4w.empty:
-                    _w = _preparar_vend_sg(_sg_raw_4w)
-                    _w = _w[_w['garzon'].isin(_GARZONES_VALIDOS_SG)].copy()
-                    _w['semana'] = pd.to_datetime(_w['fecha_venta']).dt.isocalendar().week.astype(int)
-                    _semanas = sorted(_w['semana'].unique())[-4:]
+            # ── nº garzones whitelist con venta en el local (para promedios) ──
+            _sg_ng_df = run_query("""
+                select count(distinct garzon) as n
+                from ventas
+                where local = :loc and origen is null
+                  and garzon = any(:wl)
+                  and fecha_venta between :ai and :af
+            """, _sg_p)
+            _sg_ngarz = int(_sg_ng_df["n"].iloc[0]) if (_sg_ng_df is not None and not _sg_ng_df.empty) else 0
 
-                    # --- Sección 8: garzones en eje X, una barra por semana (agrupadas) ---
-                    # Así cada garzón muestra sus 4 semanas juntas → se ve al alza/baja.
-                    _w_loc = _w[_w['local'] == _sg_local]
-                    _fig8 = go.Figure()
-                    _gar_list = _w_loc.groupby('garzon')['monto_venta_real'].sum().nlargest(10).index.tolist()
-                    # Tono de azul ascendente por semana (más reciente = más claro/dorado)
-                    _sem_colors = ['#3a5a82', '#5B8DB8', '#8Fb4d6', '#D4A853']
-                    _pdf_sec8["semanas"] = list(_semanas)
-                    _pdf_sec8["garzones"] = [str(g) for g in _gar_list]
-                    _pdf_sec8["valores"] = {str(g): [] for g in _gar_list}
-                    for _i, _sem in enumerate(_semanas):
-                        _ys = []
-                        for _gar in _gar_list:
-                            _dfg = _w_loc[(_w_loc['garzon'] == _gar) & (_w_loc['semana'] == _sem)]
-                            _v = round(_pct_adic_group(_dfg), 1)
-                            _ys.append(_v)
-                            _pdf_sec8["valores"][str(_gar)].append(_v)
-                        _fig8.add_trace(go.Bar(
-                            name=f"Sem {_sem}",
-                            x=[str(g) for g in _gar_list], y=_ys,
-                            marker_color=_sem_colors[_i % len(_sem_colors)]))
-                    _fig8.update_layout(barmode='group', height=460,
-                                        title=dict(text=f"% Adicionales por garzón — {_sg_local}", font=_SG_TITLEFONT),
-                                        **_SG_LAYOUT)
-                    _fig8.update_xaxes(tickangle=-40)
-                    st.plotly_chart(_fig8, use_container_width=True, key="sg_fig8")
-                    st.caption("Top 10 garzones. Cada garzón muestra sus semanas agrupadas (más reciente en dorado) para ver tendencia al alza o a la baja.")
+            def _sg_fmt_money(v):
+                try: return f"${int(round(float(v))):,}".replace(",", ".")
+                except: return "$0"
 
-                    # --- Sección 10: evolución por local (tu local resaltado, resto contexto) ---
-                    st.markdown("#### 10 · Evolución 4 Semanas por Local (red)")
-                    _fig10 = go.Figure()
-                    _xsem = [f"Sem {s}" for s in _semanas]
-                    _pdf_sec10["semanas"] = list(_semanas)
-                    for _lc in _LOCALES_ORDEN_SG:
-                        _ys = []
-                        for _sem in _semanas:
-                            _dfl = _w[(_w['local'] == _lc) & (_w['semana'] == _sem)]
-                            _ys.append(round(_pct_adic_group(_dfl), 1))
-                        _es_actual = (_lc == _sg_local)
-                        _pdf_sec10["series"].append((_lc, list(_ys), _es_actual))
-                        _fig10.add_trace(go.Scatter(
-                            name=_lc, x=_xsem, y=_ys, mode='lines+markers',
-                            line=dict(width=3 if _es_actual else 1.5,
-                                      color='#D4A853' if _es_actual else 'rgba(140,155,171,0.55)'),
-                            marker=dict(size=7 if _es_actual else 4),
-                            opacity=1.0 if _es_actual else 0.7))
-                    _fig10.update_layout(height=440,
-                                         title=dict(text="% Adicionales por local — tu local en dorado", font=_SG_TITLEFONT),
-                                         **_SG_LAYOUT)
-                    st.plotly_chart(_fig10, use_container_width=True, key="sg_fig10")
-                    st.caption(f"**{_sg_local}** resaltado en dorado; el resto de la red en gris como contexto.")
-                else:
-                    st.info("Sin datos suficientes para la evolución de 4 semanas.")
-                st.markdown("---")
+            # ── Render Sección 1 ──
+            st.markdown("### 1 · Ventas Totales Salón")
+            if _sg_s1 is not None and not _sg_s1.empty:
+                _tot1 = _sg_s1[_sg_s1["macro"] == "TOTAL"]["venta_sem"]
+                _tot1v = float(_tot1.iloc[0]) if not _tot1.empty else 0
+                _rows1 = []
+                _order = ["ALIMENTOS","BAR","CAFETERÍA Y POSTRES","TOTAL"]
+                _s1i = _sg_s1.set_index("macro")
+                for m in _order:
+                    if m not in _s1i.index: continue
+                    r = _s1i.loc[m]
+                    vsem = float(r["venta_sem"]); vacum = float(r["venta_acum"])
+                    pct = (vsem / _tot1v * 100) if _tot1v else 0
+                    _rows1.append({
+                        "Ítem": m,
+                        "$ Acumulado": _sg_fmt_money(vacum),
+                        "Q Acum": int(r["q_acum"]),
+                        "$ Diario": _sg_fmt_money(vacum / _sg_dias_acum),
+                        "$ Semanal": _sg_fmt_money(vsem),
+                        "%": f"{pct:.1f}%",
+                    })
+                st.dataframe(pd.DataFrame(_rows1), use_container_width=True, hide_index=True)
 
-                # ════════════════════════════════════════════════════════════════
-                # SECCIÓN 11 — Comportamiento mensual por local (§6.8)
-                # ════════════════════════════════════════════════════════════════
-                st.markdown("#### 11 · Comportamiento Mensual (% adicionales)")
-                if not _SG_HAS_PLOTLY:
-                    st.info("Gráfico mensual no disponible (plotly no instalado en el servidor).")
-                elif _sg_raw_mes is not None and not _sg_raw_mes.empty:
-                    _m = _preparar_vend_sg(_sg_raw_mes)
-                    _m = _m[_m['garzon'].isin(_GARZONES_VALIDOS_SG)].copy()
-                    _m['mes'] = pd.to_datetime(_m['fecha_venta']).dt.to_period('M').astype(str)
-                    _meses = sorted(_m['mes'].unique())[-4:]
-                    _m_loc = _m[_m['local'] == _sg_local]
-                    _ys = []
-                    for _mm in _meses:
-                        _dfm = _m_loc[_m_loc['mes'] == _mm]
-                        _ys.append(round(_pct_adic_group(_dfm), 1))
-                    _pdf_sec11["meses"] = list(_meses)
-                    _pdf_sec11["valores"] = list(_ys)
-                    _fig11 = go.Figure()
-                    _fig11.add_trace(go.Bar(name=_sg_local, x=_meses, y=_ys,
-                                            marker_color='#D4A853',
-                                            marker_line=dict(width=0)))
-                    _fig11.update_layout(height=360,
-                                         title=dict(text=f"% Adicionales mensual — {_sg_local}", font=_SG_TITLEFONT),
-                                         **_SG_LAYOUT)
-                    _fig11.update_layout(showlegend=False)
-                    st.plotly_chart(_fig11, use_container_width=True, key="sg_fig11")
-                else:
-                    st.info("Sin datos suficientes para el comportamiento mensual.")
-                st.markdown("---")
+            # ── Render Sección 2 ──
+            st.markdown(f"### 2 · Ventas por Categoría — garzones evaluados ({_sg_ngarz})")
+            if _sg_s2 is not None and not _sg_s2.empty:
+                _tot2 = _sg_s2[_sg_s2["macro"] == "TOTAL"]["venta_sem"]
+                _tot2v = float(_tot2.iloc[0]) if not _tot2.empty else 0
+                _rows2 = []
+                _s2i = _sg_s2.set_index("macro")
+                for m in ["ALIMENTOS","BAR","CAFETERÍA Y POSTRES","TOTAL"]:
+                    if m not in _s2i.index: continue
+                    r = _s2i.loc[m]
+                    vsem = float(r["venta_sem"]); vacum = float(r["venta_acum"])
+                    pct = (vsem / _tot2v * 100) if _tot2v else 0
+                    _rows2.append({
+                        "Ítem": m,
+                        "$ Acumulado": _sg_fmt_money(vacum),
+                        "Q Acum": int(r["q_acum"]),
+                        "$ Diario": _sg_fmt_money(vacum / _sg_dias_acum),
+                        "$ Semanal": _sg_fmt_money(vsem),
+                        "%": f"{pct:.1f}%",
+                    })
+                st.dataframe(pd.DataFrame(_rows2), use_container_width=True, hide_index=True)
+                st.caption(f"Total venta salón evaluada: {_sg_fmt_money(_tot2v)} "
+                           f"(esperado Vitacura sem 01-07: $59.216.110)")
 
-                # ════════════════════════════════════════════════════════════════
-                # TEST DE REFERENCIA FIJO (§6) — solo MONTOS (el PDF no sirve para Q).
-                # Se muestra automáticamente cuando local+semana coinciden con un caso conocido.
-                # ════════════════════════════════════════════════════════════════
-                # Test de referencia: vacío hasta validar los montos con el criterio
-                # nuevo (origen, todo el local) contra el Resumen de Ventas. Cuando
-                # confirmes las cifras correctas, agrégalas aquí para auto-chequeo.
-                _REF_SG = {}
-                _ref_key = (_sg_local, str(_sg_fi), str(_sg_ff))
-                if _ref_key in _REF_SG:
-                    _ref = _REF_SG[_ref_key]
-                    st.markdown("#### ✅ Test de referencia (contra PDF — solo montos)")
-                    _ref_checks = []
-                    if "cafe_monto" in _ref:
-                        _ref_checks.append(("Cafetería $", _m_cafe, _ref["cafe_monto"]))
-                    if "post_monto" in _ref:
-                        _ref_checks.append(("Postres $", _m_post, _ref["post_monto"]))
-                    if "sec1_total" in _ref:
-                        _ref_checks.append(("Sección 1 total $", _tot1, _ref["sec1_total"]))
-                    if "sec2_total" in _ref:
-                        _ref_checks.append(("Sección 2 total $", _tot2, _ref["sec2_total"]))
-                    _rc_html = "<div style='font-size:0.88rem'>"
-                    for _lbl, _val, _esp in _ref_checks:
-                        _ok = abs(_val - _esp) < 1
-                        _ic = '✅' if _ok else '❌'
-                        _rc_html += (f"<div>{_ic} <b>{_lbl}</b>: {_fmt_clp_sg(_val)} "
-                                     f"<span style='color:#888'>(esperado {_fmt_clp_sg(_esp)})</span></div>")
-                    _rc_html += "</div>"
-                    st.markdown(_rc_html, unsafe_allow_html=True)
-                    st.markdown("---")
+            st.info("✅ Bloque 1 (encabezado + secciones 1 y 2) listo. "
+                    "Las secciones 3–11, gráficos y PDF se agregan en los próximos pasos.")
 
-                # ════════════════════════════════════════════════════════════════
-                # MODO DEBUG / VALIDACIÓN DE MONTOS (§6) — detrás de checkbox.
-                # Cada chequeo compara una suma reconstruida vs un total ya calculado.
-                # Cualquier ❌ es un descuadre a reportar, NO a parchar a mano.
-                # ════════════════════════════════════════════════════════════════
-                if st.checkbox("🔧 Modo debug / validación de montos", key="sg_debug"):
-                    _dbg = []
 
-                    # 1) Sección 1 = suma de las 3 macro-familias = venta salón total del local.
-                    _tot_macro_sec1 = _sec1['monto'].sum()
-                    _venta_salon_total_local = _sg_loc_vt['monto_venta_real'].sum()
-                    _dbg.append(("Sección 1 = suma de 3 familias = venta salón local",
-                                 abs(_tot_macro_sec1 - _venta_salon_total_local) < 1))
-
-                    # 2) Sección 1 = Sección 2 (ambas son todo el local).
-                    _dbg.append(("Sección 1 = Sección 2 (ambas todo el local)",
-                                 abs(_tot2 - _tot1) < 1))
-
-                    # 3) % TOTAL de cada garzón == suma de sus 5 % adicionales (tol. 0,15 pp).
-                    if _gz_seg is not None and not _gz_seg.empty:
-                        _n_ok_gz, _n_tot_gz = 0, 0
-                        for _, _grow in _gz_seg.iterrows():
-                            _suma5 = (_grow.get('Agregados', 0)
-                                      + _grow.get('Cafetería_pct', 0)
-                                      + _grow.get('Postres_pct', 0)
-                                      + _grow.get('Líquidos S/A', 0)
-                                      + _grow.get('Líquidos C/A', 0))
-                            _n_tot_gz += 1
-                            if abs(_suma5 - _grow['pct_total']) < 0.15:
-                                _n_ok_gz += 1
-                        _dbg.append((f"%TOTAL = Σ 5 categorías en cada garzón ({_n_ok_gz}/{_n_tot_gz})",
-                                     _n_ok_gz == _n_tot_gz))
-
-                    # 4) Suma de montos por garzón == monto total del local (whitelist).
-                    if _gz_seg is not None and not _gz_seg.empty:
-                        _suma_gz = _gz_seg['venta_total'].sum()
-                        _venta_local_wl = _sg_loc_gz['monto_venta_real'].sum()
-                        _dbg.append(("Σ venta garzones = venta local (whitelist)",
-                                     abs(_suma_gz - _venta_local_wl) < 1))
-
-                    # 5) Cafetería/Postres: monto whitelist ≤ monto sin filtro (coherencia universo).
-                    _m_cafe_all = _sg_loc[_sg_loc['ab_categoria'] == _AB_CAFETERIA_SG]['monto_venta_real'].sum()
-                    _m_post_all = _sg_loc[_sg_loc['ab_categoria'] == _AB_POSTRES_SG]['monto_venta_real'].sum()
-                    _dbg.append(("Cafetería $ whitelist ≤ todo salón", _m_cafe <= _m_cafe_all + 1))
-                    _dbg.append(("Postres $ whitelist ≤ todo salón", _m_post <= _m_post_all + 1))
-
-                    _n_ok = sum(1 for _, _ok in _dbg if _ok)
-                    st.markdown(f"**Resultado: {_n_ok}/{len(_dbg)} chequeos OK**")
-                    for _txt, _ok in _dbg:
-                        st.markdown(f"{'✅' if _ok else '❌'} {_txt}")
-                    st.caption("Tolerancia: ±1 peso en montos, ±0,15 punto en porcentajes. "
-                               "Cualquier ❌ es un descuadre real a revisar, no a corregir a mano.")
-                    st.markdown("---")
-
-                # ════════════════════════════════════════════════════════════════
-                # SALIDA PDF (§7) — estilo casa: oscuro + dorado + logo
-                # ════════════════════════════════════════════════════════════════
-                def _generar_pdf_sg(local, semana_label, ranking, jefatura, qgar,
-                                    filas1, tot1_d, filas2, tot2_d,
-                                    bloques_sec3, filas_estr, tot_estr,
-                                    gz_seg, loc_df, m7_df, dias_trab,
-                                    sec8=None, sec10=None, sec11=None):
-                    """Genera el PDF calcando el diseño del informe de ejemplo:
-                    fondo blanco, tablas con header gris/azul, 3 bloques de columnas."""
-                    import os
-                    from reportlab.lib.pagesizes import A4, landscape
-                    from reportlab.lib import colors as rc
-                    from reportlab.lib.units import mm
-                    from reportlab.platypus import (SimpleDocTemplate, Table, TableStyle,
-                                                    Paragraph, Spacer, HRFlowable, PageBreak)
-                    from reportlab.lib.styles import ParagraphStyle
-                    from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
-                    from reportlab.platypus import Image as RLImage
-
-                    # Paleta calcada del PDF (fondo blanco, headers gris/azul)
-                    C_HDR   = rc.HexColor('#404040')   # header gris oscuro
-                    C_HDR2  = rc.HexColor('#1F3864')   # azul AE (títulos sección)
-                    C_GOLD  = rc.HexColor('#D4A853')   # dorado (total / acento)
-                    C_TOT   = rc.HexColor('#1F3864')   # fila total azul
-                    C_ROW1  = rc.HexColor('#FFFFFF')
-                    C_ROW2  = rc.HexColor('#F2F2F2')
-                    C_TXT   = rc.HexColor('#222222')
-                    C_WHITE = rc.HexColor('#FFFFFF')
-                    C_GREY  = rc.HexColor('#666666')
-                    C_LINE  = rc.HexColor('#CCCCCC')
-
-                    PAGE = landscape(A4); W, H = PAGE
-                    LM = RM = 10 * mm; AVAIL = W - LM - RM
-
-                    def sty(sz, col, bold=False, align=TA_LEFT):
-                        return ParagraphStyle('_', fontSize=sz, textColor=col,
-                            fontName='Helvetica-Bold' if bold else 'Helvetica',
-                            alignment=align, leading=sz * 1.2)
-
-                    def P(txt, sz=6.5, col=None, bold=False, align=TA_RIGHT):
-                        return Paragraph(str(txt), sty(sz, col or C_TXT, bold=bold, align=align))
-
-                    def _clp(v):
-                        try: return f"${int(round(v)):,}".replace(',', '.')
-                        except: return '-'
-                    def _q(v):
-                        try: return f"{int(round(v)):,}".replace(',', '.')
-                        except: return '-'
-                    def _pct(v):
-                        try: return f"{v:.1f}%".replace('.', ',')
-                        except: return '-'
-
-                    buf = io.BytesIO()
-                    doc = SimpleDocTemplate(buf, pagesize=PAGE, leftMargin=LM, rightMargin=RM,
-                                            topMargin=8 * mm, bottomMargin=8 * mm)
-                    story = []
-
-                    # ── CABECERA ──
-                    logo_cell = Spacer(34 * mm, 16 * mm)
-                    if os.path.exists(LOGO_PATH):
-                        try:
-                            logo_cell = RLImage(LOGO_PATH, width=34 * mm, height=16 * mm)
-                        except Exception:
-                            pass
-                    _titulo = [
-                        Paragraph("INFORME DE CONTROL DE VENTAS SALÓN", sty(13, C_HDR2, bold=True, align=TA_CENTER)),
-                        Spacer(1, 1 * mm),
-                        Paragraph(f"LOCAL  -  {local.upper()}", sty(10, C_TXT, bold=True, align=TA_CENTER)),
-                        Paragraph(f"SEMANA {semana_label}", sty(8, C_GREY, align=TA_CENTER)),
-                    ]
-                    _ranking_box = Table([[Paragraph("RANKING", sty(11, C_TXT, bold=True, align=TA_CENTER))],
-                                          [Paragraph(f"{ranking}/10", sty(14, C_HDR2, bold=True, align=TA_CENTER))]],
-                                         colWidths=[55 * mm])
-                    _ranking_box.setStyle(TableStyle([
-                        ('BOX', (0, 0), (-1, -1), 1, C_LINE),
-                        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                        ('TOPPADDING', (0, 0), (-1, -1), 4), ('BOTTOMPADDING', (0, 0), (-1, -1), 4)]))
-                    hdr = Table([[logo_cell, _titulo, _ranking_box]],
-                                colWidths=[40 * mm, AVAIL - 40 * mm - 60 * mm, 60 * mm])
-                    hdr.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                                             ('ALIGN', (2, 0), (2, 0), 'RIGHT')]))
-                    story += [hdr, Spacer(1, 3 * mm)]
-
-                    # ── JEFATURA ──
-                    _jef_data = [
-                        [P("SUPERVISOR SERVICIO:", 7.5, C_TXT, bold=True, align=TA_LEFT),
-                         P(jefatura.get('supervisor', '-').upper(), 7.5, C_TXT, bold=True, align=TA_LEFT)],
-                        [P("JEFE SERVICIO:", 7.5, C_TXT, bold=True, align=TA_LEFT),
-                         P(jefatura.get('jefe', '-').upper(), 7.5, C_TXT, bold=True, align=TA_LEFT)],
-                        [P("SUB JEFE SERVICIO:", 7.5, C_TXT, bold=True, align=TA_LEFT),
-                         P(jefatura.get('subjefe', '-').upper(), 7.5, C_TXT, bold=True, align=TA_LEFT)],
-                        [P("CANTIDAD GARZONES:", 7.5, C_TXT, bold=True, align=TA_LEFT),
-                         P(str(qgar), 7.5, C_TXT, bold=True, align=TA_LEFT)],
-                    ]
-                    _jt = Table(_jef_data, colWidths=[45 * mm, 90 * mm])
-                    _jt.setStyle(TableStyle([('TOPPADDING', (0, 0), (-1, -1), 0),
-                                             ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
-                                             ('LEFTPADDING', (0, 0), (-1, -1), 0)]))
-                    story += [_jt, Spacer(1, 4 * mm)]
-
-                    # ── Helper: tabla de 3 bloques (ACUMULADO · DIARIO · SEMANAL) ──
-                    def _tabla_3b(titulo_seccion, filas, totales, primera_col, total_label, q_label="Q PRODUCTOS"):
-                        out = []
-                        if titulo_seccion:
-                            out.append(Paragraph(titulo_seccion, sty(8.5, C_HDR2, bold=True, align=TA_LEFT)))
-                            out.append(Spacer(1, 1.5 * mm))
-                        # encabezado de dos filas
-                        head1 = [P(primera_col, 6.5, C_WHITE, bold=True, align=TA_CENTER),
-                                 P("ACUMULADO", 6.5, C_GOLD, bold=True, align=TA_CENTER), '', '',
-                                 P("DIARIO", 6.5, C_GOLD, bold=True, align=TA_CENTER), '', '',
-                                 P("SEMANAL", 6.5, C_GOLD, bold=True, align=TA_CENTER), '', '']
-                        head2 = ['', P("$", 6, C_WHITE, bold=True), P(q_label, 6, C_WHITE, bold=True), P("%", 6, C_WHITE, bold=True),
-                                 P("$", 6, C_WHITE, bold=True), P(q_label, 6, C_WHITE, bold=True), P("%", 6, C_WHITE, bold=True),
-                                 P("$", 6, C_WHITE, bold=True), P(q_label, 6, C_WHITE, bold=True), P("%", 6, C_WHITE, bold=True)]
-                        data = [head1, head2]
-                        for f in filas:
-                            di_m = f['sem_monto'] / dias_trab if dias_trab > 0 else 0
-                            di_q = f['sem_q'] / dias_trab if dias_trab > 0 else 0
-                            data.append([
-                                P(f['nombre'], 6.2, C_TXT, bold=True, align=TA_LEFT),
-                                P(_clp(f['ac_monto']), 6.2), P(_q(f['ac_q']), 6.2), P(_pct(f['ac_pct']), 6.2),
-                                P(_clp(di_m), 6.2), P(_q(di_q), 6.2), P(_pct(f['sem_pct']), 6.2),
-                                P(_clp(f['sem_monto']), 6.2), P(_q(f['sem_q']), 6.2), P(_pct(f['sem_pct']), 6.2),
-                            ])
-                        # fila total
-                        td_m = totales['sem_monto'] / dias_trab if dias_trab > 0 else 0
-                        td_q = totales['sem_q'] / dias_trab if dias_trab > 0 else 0
-                        data.append([
-                            P(total_label, 6.2, C_WHITE, bold=True, align=TA_LEFT),
-                            P(_clp(totales['ac_monto']), 6.2, C_WHITE, bold=True), P(_q(totales['ac_q']), 6.2, C_WHITE, bold=True), P("100,0%", 6.2, C_GOLD, bold=True),
-                            P(_clp(td_m), 6.2, C_WHITE, bold=True), P(_q(td_q), 6.2, C_WHITE, bold=True), P("100,0%", 6.2, C_GOLD, bold=True),
-                            P(_clp(totales['sem_monto']), 6.2, C_WHITE, bold=True), P(_q(totales['sem_q']), 6.2, C_WHITE, bold=True), P("100,0%", 6.2, C_GOLD, bold=True),
-                        ])
-                        _cw = [AVAIL * 0.16] + [AVAIL * 0.084] * 10
-                        t = Table(data, colWidths=_cw, repeatRows=2)
-                        ts = [
-                            ('BACKGROUND', (0, 0), (-1, 1), C_HDR),
-                            ('SPAN', (0, 0), (0, 1)),
-                            ('SPAN', (1, 0), (3, 0)), ('SPAN', (4, 0), (6, 0)), ('SPAN', (7, 0), (9, 0)),
-                            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                            ('TOPPADDING', (0, 0), (-1, -1), 2), ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
-                            ('LEFTPADDING', (0, 0), (-1, -1), 3), ('RIGHTPADDING', (0, 0), (-1, -1), 3),
-                            ('LINEBELOW', (0, 1), (-1, 1), 0.6, C_GOLD),
-                            # separadores entre bloques
-                            ('LINEBEFORE', (1, 0), (1, -1), 1, C_HDR2),
-                            ('LINEBEFORE', (4, 0), (4, -1), 1, C_HDR2),
-                            ('LINEBEFORE', (7, 0), (7, -1), 1, C_HDR2),
-                            # fila total
-                            ('BACKGROUND', (0, -1), (-1, -1), C_TOT),
-                        ]
-                        for i in range(2, len(data) - 1):
-                            ts.append(('BACKGROUND', (0, i), (-1, i), C_ROW1 if i % 2 == 0 else C_ROW2))
-                            ts.append(('LINEBELOW', (0, i), (-1, i), 0.25, C_LINE))
-                        t.setStyle(TableStyle(ts))
-                        out.append(t)
-                        return out
-
-                    # ── SECCIÓN 1 ──
-                    story += _tabla_3b("1.- VENTAS TOTALES SALÓN", filas1, tot1_d, "ITEM", "TOTAL VENTA SALÓN")
-                    story += [Spacer(1, 4 * mm)]
-                    # ── SECCIÓN 2 ──
-                    story += _tabla_3b("2.- VENTAS POR CATEGORÍA", filas2, tot2_d, "ITEM", "TOTAL VENTA SALÓN")
-                    story += [Spacer(1, 4 * mm)]
-
-                    # ── SECCIÓN 3 (sub-bloques) ──
-                    story.append(Paragraph("3.- VENTAS POR CATEGORÍA", sty(8.5, C_HDR2, bold=True, align=TA_LEFT)))
-                    story.append(Spacer(1, 1.5 * mm))
-                    for _titb, _filb, _totlab in bloques_sec3:
-                        if _filb:
-                            story += _tabla_3b(_titb, _filb,
-                                               {'ac_monto': sum(x['ac_monto'] for x in _filb),
-                                                'ac_q': sum(x['ac_q'] for x in _filb),
-                                                'sem_monto': sum(x['sem_monto'] for x in _filb),
-                                                'sem_q': sum(x['sem_q'] for x in _filb)},
-                                               "ITEM", _totlab)
-                            story += [Spacer(1, 2.5 * mm)]
-
-                    story += [PageBreak()]
-
-                    # ── SECCIÓN 4 ──
-                    story += _tabla_3b("4.- CONTROL DE PRODUCTOS ESTRATÉGICOS", filas_estr, tot_estr,
-                                       "PRODUCTO", "TOTAL", q_label="Q")
-                    story += [Spacer(1, 5 * mm)]
-
-                    # ── SECCIÓN 5 — Ventas por garzón ──
-                    if gz_seg is not None and not gz_seg.empty:
-                        story.append(Paragraph("5.- COMPARATIVA VENTA ADICIONALES - VENTAS POR GARZÓN",
-                                               sty(8.5, C_HDR2, bold=True, align=TA_LEFT)))
-                        story.append(Spacer(1, 1.5 * mm))
-                        _gh = [[P("GARZÓN", 5.5, C_WHITE, bold=True, align=TA_LEFT),
-                                P("VENTA", 5.5, C_WHITE, bold=True), P("PROPINA", 5.5, C_WHITE, bold=True),
-                                P("V.DIARIA", 5.5, C_WHITE, bold=True), P("DÍAS", 5.5, C_WHITE, bold=True),
-                                P("AGREG %", 5.5, C_WHITE, bold=True), P("CAFÉ Q", 5.5, C_WHITE, bold=True),
-                                P("POSTRE Q", 5.5, C_WHITE, bold=True), P("LÍQ S/A %", 5.5, C_WHITE, bold=True),
-                                P("LÍQ C/A %", 5.5, C_WHITE, bold=True), P("% TOTAL", 5.5, C_WHITE, bold=True)]]
-                        for _, r in gz_seg.iterrows():
-                            _gh.append([
-                                P(r['garzon'], 5.5, C_TXT, align=TA_LEFT),
-                                P(_clp(r['venta_total']), 5.5), P(_clp(r['aporte_propina']), 5.5),
-                                P(_clp(r['venta_diaria_prom']), 5.5), P(str(int(r['dias'])), 5.5),
-                                P(_pct(r.get('Agregados', 0)), 5.5),
-                                P(_q(r.get('Cafetería', 0)), 5.5), P(_q(r.get('Postres', 0)), 5.5),
-                                P(_pct(r.get('Líquidos S/A', 0)), 5.5), P(_pct(r.get('Líquidos C/A', 0)), 5.5),
-                                P(_pct(r['pct_total']), 5.5, C_HDR2, bold=True)])
-                        _cw5 = [AVAIL * 0.16] + [AVAIL * 0.084] * 10
-                        _t5 = Table(_gh, colWidths=_cw5, repeatRows=1)
-                        _ts5 = [('BACKGROUND', (0, 0), (-1, 0), C_HDR),
-                                ('LINEBELOW', (0, 0), (-1, 0), 0.6, C_GOLD),
-                                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                                ('TOPPADDING', (0, 0), (-1, -1), 2), ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
-                                ('LEFTPADDING', (0, 0), (-1, -1), 3), ('RIGHTPADDING', (0, 0), (-1, -1), 3)]
-                        for i in range(1, len(_gh)):
-                            _ts5.append(('BACKGROUND', (0, i), (-1, i), C_ROW1 if i % 2 else C_ROW2))
-                            _ts5.append(('LINEBELOW', (0, i), (-1, i), 0.25, C_LINE))
-                        _t5.setStyle(TableStyle(_ts5))
-                        story += [_t5, Spacer(1, 5 * mm)]
-
-                    # ── SECCIÓN 6 — Ventas por local ──
-                    if loc_df is not None and not loc_df.empty:
-                        story.append(Paragraph("6.- COMPARATIVA VENTA ADICIONALES - VENTAS POR LOCAL",
-                                               sty(8.5, C_HDR2, bold=True, align=TA_LEFT)))
-                        story.append(Spacer(1, 1.5 * mm))
-                        _lh = [[P("#", 6, C_WHITE, bold=True, align=TA_CENTER), P("LOCAL", 6, C_WHITE, bold=True, align=TA_LEFT),
-                                P("VENTA", 6, C_WHITE, bold=True), P("AGREG %", 6, C_WHITE, bold=True),
-                                P("CAFÉ Q", 6, C_WHITE, bold=True), P("POSTRE Q", 6, C_WHITE, bold=True),
-                                P("LÍQ S/A %", 6, C_WHITE, bold=True), P("LÍQ C/A %", 6, C_WHITE, bold=True),
-                                P("% TOTAL", 6, C_WHITE, bold=True)]]
-                        for i, r in loc_df.reset_index(drop=True).iterrows():
-                            _es = (r['local'] == local)
-                            _lh.append([P(str(i + 1), 6, C_TXT, align=TA_CENTER),
-                                P(r['local'], 6, C_HDR2 if _es else C_TXT, bold=_es, align=TA_LEFT),
-                                P(_clp(r['venta_total']), 6), P(_pct(r.get('Agregados', 0)), 6),
-                                P(_q(r.get('Cafetería', 0)), 6), P(_q(r.get('Postres', 0)), 6),
-                                P(_pct(r.get('Líquidos S/A', 0)), 6), P(_pct(r.get('Líquidos C/A', 0)), 6),
-                                P(_pct(r['pct_total']), 6, C_HDR2, bold=True)])
-                        _cw6 = [AVAIL * 0.04, AVAIL * 0.18] + [AVAIL * 0.111] * 7
-                        _t6 = Table(_lh, colWidths=_cw6, repeatRows=1)
-                        _ts6 = [('BACKGROUND', (0, 0), (-1, 0), C_HDR),
-                                ('LINEBELOW', (0, 0), (-1, 0), 0.6, C_GOLD),
-                                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                                ('TOPPADDING', (0, 0), (-1, -1), 2), ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
-                                ('LEFTPADDING', (0, 0), (-1, -1), 3), ('RIGHTPADDING', (0, 0), (-1, -1), 3)]
-                        for i in range(1, len(_lh)):
-                            _es = (loc_df.reset_index(drop=True).iloc[i - 1]['local'] == local)
-                            _bg = C_GOLD if _es else (C_ROW1 if i % 2 else C_ROW2)
-                            _ts6.append(('BACKGROUND', (0, i), (-1, i), _bg))
-                            _ts6.append(('LINEBELOW', (0, i), (-1, i), 0.25, C_LINE))
-                        _t6.setStyle(TableStyle(_ts6))
-                        story += [_t6, Spacer(1, 5 * mm)]
-
-                    # ── SECCIÓN 7 — Matriz estratégicos local × producto ──
-                    if m7_df is not None and not m7_df.empty:
-                        story.append(Paragraph("7.- COMPARATIVA PRODUCTOS ESTRATÉGICOS - PROMEDIO DIARIO POR GARZÓN",
-                                               sty(8.5, C_HDR2, bold=True, align=TA_LEFT)))
-                        story.append(Spacer(1, 1.5 * mm))
-                        _cols7 = [c for c in m7_df.columns if c != 'local']
-                        _h7 = [[P("LOCAL", 6, C_WHITE, bold=True, align=TA_LEFT)] +
-                               [P(c, 6, C_WHITE, bold=True, align=TA_CENTER) for c in _cols7]]
-                        for _, r in m7_df.iterrows():
-                            _es = (r['local'] == local)
-                            _h7.append([P(r['local'], 6, C_HDR2 if _es else C_TXT, bold=_es, align=TA_LEFT)] +
-                                       [P(('%.2f' % r[c]).replace('.', ','), 6) for c in _cols7])
-                        _cw7 = [AVAIL * 0.22] + [(AVAIL * 0.78) / len(_cols7)] * len(_cols7)
-                        _t7 = Table(_h7, colWidths=_cw7, repeatRows=1)
-                        _ts7 = [('BACKGROUND', (0, 0), (-1, 0), C_HDR),
-                                ('LINEBELOW', (0, 0), (-1, 0), 0.6, C_GOLD),
-                                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                                ('TOPPADDING', (0, 0), (-1, -1), 2), ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
-                                ('LEFTPADDING', (0, 0), (-1, -1), 3), ('RIGHTPADDING', (0, 0), (-1, -1), 3)]
-                        for i in range(1, len(_h7)):
-                            _ts7.append(('BACKGROUND', (0, i), (-1, i), C_ROW1 if i % 2 else C_ROW2))
-                            _ts7.append(('LINEBELOW', (0, i), (-1, i), 0.25, C_LINE))
-                        _t7.setStyle(TableStyle(_ts7))
-                        story += [_t7]
-
-                    # ════════════════════════════════════════════════════════════
-                    # SECCIONES 8, 10, 11 — Gráficos (estilo ejecutivo sobrio)
-                    # Dibujados con reportlab.graphics (sin dependencias externas).
-                    # ════════════════════════════════════════════════════════════
-                    from reportlab.graphics.shapes import Drawing
-                    from reportlab.graphics.charts.barcharts import VerticalBarChart
-                    from reportlab.graphics.charts.linecharts import HorizontalLineChart
-                    from reportlab.graphics.charts.legends import Legend
-
-                    # Paleta sobria para gráficos (azules apagados + dorado, nada brillante)
-                    _GCOL = [rc.HexColor('#3A5A82'), rc.HexColor('#5B8DB8'),
-                             rc.HexColor('#8FB4D6'), rc.HexColor('#D4A853')]
-                    _GGREY = rc.HexColor('#B8BFC8')
-
-                    def _titulo_sec(txt):
-                        return Paragraph(txt, sty(8.5, C_HDR2, bold=True, align=TA_LEFT))
-
-                    # ── SECCIÓN 8: barras agrupadas, garzón en X, una barra por semana ──
-                    if sec8 and sec8.get("garzones") and sec8.get("semanas"):
-                        story += [PageBreak(), _titulo_sec("8.- EVOLUCIÓN VENTAS POR GARZÓN"), Spacer(1, 2 * mm)]
-                        _gars = sec8["garzones"]; _sems = sec8["semanas"]
-                        _d8 = Drawing(AVAIL, 200)
-                        _bc = VerticalBarChart()
-                        _bc.x = 30; _bc.y = 35; _bc.width = AVAIL - 50; _bc.height = 150
-                        _bc.data = [[sec8["valores"][g][i] if i < len(sec8["valores"][g]) else 0
-                                     for g in _gars] for i in range(len(_sems))]
-                        _bc.categoryAxis.categoryNames = [g.split()[0][:10] for g in _gars]
-                        _bc.categoryAxis.labels.angle = 30
-                        _bc.categoryAxis.labels.boxAnchor = 'ne'
-                        _bc.categoryAxis.labels.fontSize = 5.5
-                        _bc.categoryAxis.labels.fontName = 'Helvetica'
-                        _bc.valueAxis.valueMin = 0
-                        _bc.valueAxis.labels.fontSize = 6
-                        _bc.barSpacing = 0.5
-                        _bc.groupSpacing = 4
-                        for _i in range(len(_sems)):
-                            _bc.bars[_i].fillColor = _GCOL[_i % len(_GCOL)]
-                            _bc.bars[_i].strokeColor = None
-                        _d8.add(_bc)
-                        _leg = Legend()
-                        _leg.x = 30; _leg.y = 198; _leg.deltax = 60; _leg.fontSize = 6
-                        _leg.alignment = 'right'; _leg.boxAnchor = 'nw'
-                        _leg.colorNamePairs = [(_GCOL[i % len(_GCOL)], f"Sem {s}") for i, s in enumerate(_sems)]
-                        _leg.dxTextSpace = 4; _leg.dx = 6; _leg.dy = 6; _leg.deltay = 0
-                        _d8.add(_leg)
-                        story += [_d8, Spacer(1, 2 * mm),
-                                  P("Top 10 garzones. Cada grupo muestra las semanas (más reciente en dorado): permite ver tendencia al alza o a la baja.",
-                                    6, C_GREY, align=TA_LEFT)]
-
-                    # ── SECCIÓN 10: líneas por local, tu local resaltado ──
-                    if sec10 and sec10.get("series") and sec10.get("semanas"):
-                        story += [Spacer(1, 5 * mm), _titulo_sec("10.- COMPARATIVA VENTAS ADICIONALES POR LOCAL"), Spacer(1, 2 * mm)]
-                        _sems = sec10["semanas"]
-                        _d10 = Drawing(AVAIL, 200)
-                        _lc_chart = HorizontalLineChart()
-                        _lc_chart.x = 30; _lc_chart.y = 30; _lc_chart.width = AVAIL - 50; _lc_chart.height = 155
-                        _lc_chart.data = [s[1] for s in sec10["series"]]
-                        _lc_chart.categoryAxis.categoryNames = [f"Sem {s}" for s in _sems]
-                        _lc_chart.categoryAxis.labels.fontSize = 6
-                        _lc_chart.valueAxis.labels.fontSize = 6
-                        _lc_chart.lines.strokeWidth = 1
-                        for _i, _s in enumerate(sec10["series"]):
-                            _es_actual = _s[2]
-                            _lc_chart.lines[_i].strokeColor = C_GOLD if _es_actual else _GGREY
-                            _lc_chart.lines[_i].strokeWidth = 2.5 if _es_actual else 0.8
-                        _d10.add(_lc_chart)
-                        story += [_d10, Spacer(1, 2 * mm),
-                                  P(f"{local} resaltado en dorado; el resto de la red en gris como contexto.",
-                                    6, C_GREY, align=TA_LEFT)]
-
-                    # ── SECCIÓN 11: barras mensuales (dorado sobrio) ──
-                    if sec11 and sec11.get("meses"):
-                        story += [Spacer(1, 5 * mm), _titulo_sec("11.- COMPORTAMIENTO MENSUAL"), Spacer(1, 2 * mm)]
-                        _d11 = Drawing(AVAIL, 180)
-                        _bc11 = VerticalBarChart()
-                        _bc11.x = 30; _bc11.y = 30; _bc11.width = AVAIL - 60; _bc11.height = 135
-                        _bc11.data = [sec11["valores"]]
-                        _bc11.categoryAxis.categoryNames = list(sec11["meses"])
-                        _bc11.categoryAxis.labels.fontSize = 6.5
-                        _bc11.valueAxis.valueMin = 0
-                        _bc11.valueAxis.labels.fontSize = 6
-                        _bc11.bars[0].fillColor = C_GOLD
-                        _bc11.bars[0].strokeColor = None
-                        _bc11.barWidth = 14
-                        _d11.add(_bc11)
-                        story += [_d11, Spacer(1, 2 * mm),
-                                  P(f"Evolución mensual del % de adicionales — {local}.", 6, C_GREY, align=TA_LEFT)]
-
-                    story += [Spacer(1, 4 * mm),
-                              HRFlowable(width="100%", thickness=0.4, color=C_LINE),
-                              Spacer(1, 1 * mm),
-                              P(f"Alemán Experto · {local} · Semana {semana_label} · Control de Ventas Salón",
-                                5.5, C_GREY, align=TA_CENTER)]
-
-                    doc.build(story)
-                    buf.seek(0)
-                    return buf.getvalue()
-
-                st.markdown("#### 📄 Exportar")
-                try:
-                    _sem_label = f"{_sg_fi.strftime('%d-%m')} al {_sg_ff.strftime('%d-%m-%Y')}"
-                    # Bloques de sección 3 (título, filas, etiqueta total). Solo los no vacíos.
-                    _bloques3 = []
-                    if _filas_alim:
-                        _bloques3.append(("VENTAS ALIMENTOS", _filas_alim, "TOTAL ALIMENTOS"))
-                    if _filas_cp:
-                        _bloques3.append(("VENTAS CAFETERÍA Y POSTRES", _filas_cp, "TOTAL CAF. Y POSTRES"))
-                    if _filas_ca:
-                        _bloques3.append(("VENTAS LÍQUIDOS C/A", _filas_ca, "TOTAL LÍQUIDOS C/A"))
-                    if _filas_sa:
-                        _bloques3.append(("VENTAS LÍQUIDOS S/A", _filas_sa, "TOTAL LÍQUIDOS S/A"))
-                    _tot_estr_d = _totales_filas_sg(_filas_estr) if _filas_estr else \
-                        {'ac_monto': 0, 'ac_q': 0, 'sem_monto': 0, 'sem_q': 0}
-                    _m7_df_pdf = _m7_df if '_m7_df' in dir() else None
-                    _pdf_bytes = _generar_pdf_sg(
-                        _sg_local, _sem_label, _sg_rank_pos, _sg_jef, _sg_qgar,
-                        _filas1, _tot1_d, _filas2, _tot2_d,
-                        _bloques3, _filas_estr, _tot_estr_d,
-                        _gz_seg, _loc_df, _m7_df_pdf, _sg_dias_trab,
-                        sec8=_pdf_sec8, sec10=_pdf_sec10, sec11=_pdf_sec11)
-                    st.download_button("📄 Descargar PDF (réplica del informe)", _pdf_bytes,
-                        f"Control_Ventas_Salon_{_sg_local}_{_sg_fi}_{_sg_ff}.pdf",
-                        mime="application/pdf", key="sg_pdf_dl")
-                except Exception as _e_pdf:
-                    import traceback as _tb_pdf
-                    st.warning(f"No se pudo generar el PDF: {_e_pdf}")
-                    with st.expander("Ver detalle técnico del PDF"):
-                        st.code(_tb_pdf.format_exc())
-            except Exception as _sg_err:
-                import traceback as _sg_tb
-                st.error(f"Error al generar el informe: {_sg_err}")
-                with st.expander("Ver detalle técnico"):
-                    st.code(_sg_tb.format_exc())
 elif informe_sel == "Auditor":
     from datetime import date as _date2
 
