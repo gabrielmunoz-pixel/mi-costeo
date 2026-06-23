@@ -4498,6 +4498,44 @@ def _sg_construir_ctx_b(local, ini, fin, ng, jef, ranking,
         total = {"valores": valores_t, "total": (ga / gv) if gv else None}
         return {"columnas": columnas, "filas": filas, "total": total}
 
+    # ---- Gráficos 8 y 10 (se derivan de las tablas 9 y 11-semanal ya construidas) ----
+    def _wrap_nombre(nombre, maxlen=14):
+        """Parte un nombre largo en dos líneas, en el espacio más cercano al medio."""
+        s = str(nombre or "")
+        if len(s) <= maxlen or " " not in s:
+            return s
+        espacios = [i for i, ch in enumerate(s) if ch == " "]
+        medio = len(s) / 2.0
+        corte = min(espacios, key=lambda i: abs(i - medio))
+        return s[:corte] + "\n" + s[corte + 1:]
+
+    def _sec8_evol_block(sec9):
+        """Sección 8 (gráfico): % adicionales por garzón y semana, desde la sección 9."""
+        if not sec9 or not sec9.get("filas"):
+            return {"series": [], "filas": []}
+        series = sec9.get("series", [])
+        filas = [{"nombre": _wrap_nombre(f.get("nombre", "")),
+                  "valores": [(a["pct"] if a else None) for a in f.get("anios", [])]}
+                 for f in sec9["filas"]]
+        return {"series": series, "filas": filas}
+
+    def _sec10_comp_block(sem11):
+        """Sección 10 (gráfico): % adicionales por local y semana, desde la sección 11 semanal."""
+        if not sem11 or not sem11.get("filas"):
+            return {"series": [], "filas": []}
+        cols = sem11.get("columnas", [])
+        filas = [{"local": r.get("local", ""),
+                  "valores": [r["valores"].get(c) for c in cols]}
+                 for r in sem11["filas"]]
+        return {"series": cols, "filas": filas}
+
+    # Bloques base (tablas) que también alimentan a los gráficos
+    _sec9_tab  = _sec9_anual_block(s9_raw)
+    _sem11_tab = _comportamiento_block(
+        s11s, "iso_week", sort_key=lambda p: int(p), label_fn=lambda p: str(int(p)))
+    _mes11_tab = _comportamiento_block(
+        s11m, "mes", sort_key=lambda p: str(p), label_fn=_lab_mes)
+
     ctx = {
         "local": local.upper(),
         "semana": f"{ini.strftime('%d-%m')} AL {fin.strftime('%d-%m')}",
@@ -4514,13 +4552,11 @@ def _sg_construir_ctx_b(local, ini, fin, ng, jef, ranking,
         "adicionales_por_garzon_mensual": _sec5_block(rows5),
         "adicionales_por_local": _adic_local_block(s6_raw),
         "estrategicos_por_local": _estrat_local_block(s7),
-        "evolucion_por_garzon": {"series": [], "filas": []},
-        "adicionales_por_garzon_anual": _sec9_anual_block(s9_raw),
-        "comparativa_por_local": {"series": [], "filas": []},
-        "comportamiento_semanal": _comportamiento_block(
-            s11s, "iso_week", sort_key=lambda p: int(p), label_fn=lambda p: str(int(p))),
-        "comportamiento_mensual": _comportamiento_block(
-            s11m, "mes", sort_key=lambda p: str(p), label_fn=_lab_mes),
+        "evolucion_por_garzon": _sec8_evol_block(_sec9_tab),
+        "adicionales_por_garzon_anual": _sec9_tab,
+        "comparativa_por_local": _sec10_comp_block(_sem11_tab),
+        "comportamiento_semanal": _sem11_tab,
+        "comportamiento_mensual": _mes11_tab,
     }
     return ctx
 
