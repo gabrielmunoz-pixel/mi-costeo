@@ -5180,6 +5180,34 @@ def _igb__pagina_2(ctx):
     return el
 
 
+def _igb_rango_auto(vals_2d, pad_frac=0.10, headroom_top=1.8, headroom_bot=1.0):
+    """Calcula (ymin, ymax, ystep) para enmarcar las barras con un poco de aire.
+
+    vals_2d : lista de series; cada serie es lista de fracciones (0..1) o None.
+    Da más aire arriba que abajo, para que las etiquetas de valor sobre cada
+    barra no queden pegadas al borde. Redondea a un paso 'bonito' (~6 divisiones).
+    Si no hay datos, devuelve un rango seguro (0..100%).
+    """
+    import math
+    planos = [v for serie in vals_2d for v in serie
+              if isinstance(v, (int, float)) and v is not None]
+    if not planos:
+        return 0.0, 1.0, 0.2
+    lo, hi = min(planos), max(planos)
+    pad = max((hi - lo) * pad_frac, 0.004)          # al menos 0,4 pp
+    raw_min = max(lo - pad * headroom_bot, 0.0)      # nunca bajo 0%
+    raw_max = hi + pad * headroom_top
+    rango = max(raw_max - raw_min, 1e-6)
+    objetivo = rango / 6.0
+    step = min([0.005, 0.01, 0.02, 0.025, 0.05, 0.1],
+               key=lambda p: abs(p - objetivo))
+    ymin = math.floor(raw_min / step) * step
+    ymax = math.ceil(raw_max / step) * step
+    if ymax - hi < step * 0.4:                       # asegura aire para la etiqueta
+        ymax += step
+    return round(ymin, 6), round(ymax, 6), step
+
+
 def _igb__pagina_3(ctx):
     el = []
     el.append(_igb_P("SEGUIMIENTO VENTA POR GARZON", "pg_titulo"))
@@ -5191,8 +5219,9 @@ def _igb__pagina_3(ctx):
     series8 = g8.get("series", ["20", "21", "22", "23"])
     vals8 = [[f["valores"][i] if i < len(f["valores"]) else None
               for f in g8["filas"]] for i in range(len(series8))]
+    _ymin8, _ymax8, _ystep8 = _igb_rango_auto(vals8)
     el.append(_igb__grafico_barras(cats8, series8, vals8,
-                              ymin=0.27, ymax=0.41, ystep=0.02,
+                              ymin=_ymin8, ymax=_ymax8, ystep=_ystep8,
                               ancho_pt=ANCHO_UTIL, alto_pt=140))
     el.append(Spacer(1, 4))
 
@@ -5252,8 +5281,9 @@ def _igb__pagina_3(ctx):
     series10 = g10.get("series", ["20", "21", "22", "23"])
     vals10 = [[f["valores"][i] if i < len(f["valores"]) else None
                for f in g10["filas"]] for i in range(len(series10))]
+    _ymin10, _ymax10, _ystep10 = _igb_rango_auto(vals10)
     el.append(_igb__grafico_barras(cats10, series10, vals10,
-                              ymin=0.32, ymax=0.39, ystep=0.01,
+                              ymin=_ymin10, ymax=_ymax10, ystep=_ystep10,
                               ancho_pt=ANCHO_UTIL, alto_pt=140))
     el.append(Spacer(1, 4))
 
