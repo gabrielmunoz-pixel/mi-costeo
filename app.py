@@ -12482,36 +12482,205 @@ elif modulo.startswith("📊"):
         import calendar as _cp_cal
         st.markdown("# 🏭 Control de Producción")
         st.caption(
-            "Máximo registrado (en unidades) de cada categoría de proteína durante las "
-            "semanas cerradas del mes. Agrupa las opciones por proteína con la misma "
-            "lógica del informe de Rentabilidad. El desglose por semana muestra el origen."
+            "Cantidad de SKU vendidos agrupados por categoría de proteína (mapeo del "
+            "maestro de productos). Muestra el máximo diario del mes por categoría y, "
+            "debajo, una tabla por semana ISO (Lun–Dom) con las cantidades reales por día."
         )
 
-        # Mapeo de prefijo de sku_opcion → categoría de proteína (lógica de rentabilidad)
-        _CP_PREFIX_CAT = {
-            'CHUX': 'CH POSTA',  'CHUSIT': 'CH POSTA',
-            'FILX': 'CH FILETE', 'FILSIT': 'CH FILETE',
-            'LOMX': 'LOMITO',    'LOMSIT': 'LOMITO',
-            'AVEX': 'AVE/POLLO', 'AVESIT': 'AVE/POLLO',
-            'HAMX': 'HAMBURGUESA','HAMSIT': 'HAMBURGUESA',
-            'HAQX': 'HAMB QUINOA',
-            'PERX': 'PERNIL',    'PERSIT': 'PERNIL',
-            'MECX': 'MECHADA',
+        # ── Mapeo SKU → categoría de proteína (maestro normalizado) ──
+        _CP_SKU_CAT = {
+            'AE02': 'Crudo Aleman Experto',
+            'AE03': 'Hamburguesa',
+            'AE04': 'Hamburguesa',
+            'AE22': 'Pollo Ensalada Cesar',
+            'AE23': 'Pollo Panko Ensalada',
+            'AE24': 'Churrasco',
+            'AE25': 'Crudo Aleman Experto',
+            'AE26': 'Costillas',
+            'AVE-001': 'Ave',
+            'AVE-002': 'Ave',
+            'AVE-003': 'Ave',
+            'AVE-004': 'Ave',
+            'AVE-005': 'Ave',
+            'AVE-006': 'Ave',
+            'AVE-007': 'Ave',
+            'AVE-008': 'Ave',
+            'AVE-009': 'Ave',
+            'AVE-010': 'Ave',
+            'AVESIT-002': 'Ave',
+            'AVEX-020': 'Ave',
+            'AVEX-021': 'Ave',
+            'BOLNX-01': 'Hamburguesa Niño',
+            'BOLNX-02': 'Churrasco Niño',
+            'CHU-001': 'Churrasco',
+            'CHU-002': 'Churrasco',
+            'CHU-003': 'Churrasco',
+            'CHU-004': 'Churrasco',
+            'CHU-005': 'Churrasco',
+            'CHU-006': 'Churrasco',
+            'CHU-007': 'Churrasco',
+            'CHU-008': 'Churrasco',
+            'CHU-009': 'Churrasco',
+            'CHU-010': 'Churrasco',
+            'CHUSIT-002': 'Churrasco',
+            'CHUX-020': 'Churrasco',
+            'CHUX-021': 'Churrasco',
+            'CPC-010': 'Hamburguesa',
+            'CPP-001': 'Mechada',
+            'CPP-002': 'Churrasco',
+            'CPP-003': 'Lomito',
+            'CPP-004': 'Pollo Panko',
+            'CPP-007': 'Hamburguesa',
+            'ENS-001': 'Atun',
+            'ENS-007': 'Pollo Panko Ensalada',
+            'ENS-008': 'Atun Ensalada',
+            'ENS-019': 'Carpaccio Filete Ens',
+            'FIL-001': 'Churrasco Filete',
+            'FIL-002': 'Churrasco Filete',
+            'FIL-003': 'Churrasco Filete',
+            'FIL-004': 'Churrasco Filete',
+            'FIL-005': 'Churrasco Filete',
+            'FIL-006': 'Churrasco Filete',
+            'FIL-007': 'Churrasco Filete',
+            'FIL-008': 'Churrasco Filete',
+            'FIL-009': 'Churrasco Filete',
+            'FIL-010': 'Churrasco Filete',
+            'FILSIT-002': 'Churrasco Filete',
+            'FILX-020': 'Churrasco Filete',
+            'FILX-021': 'Churrasco Filete',
+            'HAC-001': 'Hamburguesa Rellena',
+            'HAC-003': 'Hamburguesa',
+            'HAC-006': 'Hamburguesa',
+            'HAC-007': 'Hamburguesa',
+            'HAC-008': 'Hamburguesa',
+            'HAC-009': 'Hamburguesa',
+            'HAC-010': 'Hamburguesa',
+            'HAC-012': 'Hamburguesa',
+            'HAM-001': 'Hamburguesa',
+            'HAM-002': 'Hamburguesa',
+            'HAM-003': 'Hamburguesa',
+            'HAM-004': 'Hamburguesa',
+            'HAM-005': 'Hamburguesa',
+            'HAM-006': 'Hamburguesa',
+            'HAM-007': 'Hamburguesa',
+            'HAM-008': 'Hamburguesa',
+            'HAM-009': 'Hamburguesa',
+            'HAM-010': 'Hamburguesa',
+            'HAMSIT-002': 'Hamburguesa',
+            'HAMX-020': 'Hamburguesa',
+            'HAMX-021': 'Hamburguesa',
+            'HAQ-001': 'Hamburguesa Quinoa',
+            'HAQ-002': 'Hamburguesa Quinoa',
+            'HAQ-003': 'Hamburguesa Quinoa',
+            'HAQ-004': 'Hamburguesa Quinoa',
+            'HAQ-005': 'Hamburguesa Quinoa',
+            'HAQ-006': 'Hamburguesa Quinoa',
+            'HAQ-007': 'Hamburguesa Quinoa',
+            'LOM-001': 'Lomito',
+            'LOM-002': 'Lomito',
+            'LOM-003': 'Lomito',
+            'LOM-004': 'Lomito',
+            'LOM-005': 'Lomito',
+            'LOM-006': 'Lomito',
+            'LOM-007': 'Lomito',
+            'LOM-008': 'Lomito',
+            'LOM-009': 'Lomito',
+            'LOM-010': 'Lomito',
+            'LOMSIT-002': 'Lomito',
+            'LOMX-020': 'Lomito',
+            'LOMX-021': 'Lomito',
+            'MEC-001': 'Mechada',
+            'MEC-002': 'Mechada',
+            'MEC-003': 'Mechada',
+            'MEC-004': 'Mechada',
+            'MEC-005': 'Mechada',
+            'MEC-006': 'Mechada',
+            'MEC-007': 'Mechada',
+            'MEC-008': 'Mechada',
+            'MEC-009': 'Mechada',
+            'MEC-010': 'Mechada',
+            'MECX-020': 'Mechada',
+            'MECX-021': 'Mechada',
+            'MEJ-001': 'Churrasco',
+            'MEJ-003': 'Hamburguesa',
+            'MEJ-046': 'Hamburguesa Quinoa',
+            'MEJ-047': 'Pollo Ensalada Cesar',
+            'MEJ-048': 'Churrasco',
+            'MEJ-049': 'Lomito',
+            'MEJ-050': 'Hamburguesa',
+            'MEJ-052': 'Ave',
+            'MEJ-055': 'Crudo Aleman Experto',
+            'NIN-003': 'Churrasco Niño',
+            'NIN-004': 'Hamburguesa Niño',
+            'NIN-006': 'Hamburguesa Niño',
+            'NIN-007': 'Hamburguesa Niño',
+            'NIN-009': 'Churrasco Niño',
+            'PAC-001': 'Crudo Aleman Experto',
+            'PAC-002': 'Crudo Filete',
+            'PAC-004': 'Tiradito de Atun',
+            'PAC-005': 'Tartar de Atun',
+            'PAC-013': 'Currywurst',
+            'PAC-015': 'Carpaccio Filete',
+            'PAC-018': 'Tiradito de Atun',
+            'PER-001': 'Pernil',
+            'PER-002': 'Pernil',
+            'PER-003': 'Pernil',
+            'PER-004': 'Pernil',
+            'PER-005': 'Pernil',
+            'PER-006': 'Pernil',
+            'PER-007': 'Pernil',
+            'PER-008': 'Pernil',
+            'PER-009': 'Pernil',
+            'PER-010': 'Pernil',
+            'PERSIT-002': 'Pernil',
+            'PERX-020': 'Pernil',
+            'PERX-021': 'Pernil',
+            'PLA-001': 'Escalopa',
+            'PLA-002': 'Escalopa',
+            'PLA-003': 'Escalopa',
+            'PLA-004': 'Escalopa',
+            'PLA-005': 'Chuleta',
+            'PLA-006': 'Bratwurst',
+            'PLA-007': 'Bratwurst',
+            'PLA-009': 'Chuleta',
+            'PLC-001': 'Costillas',
+            'PLC-002': 'Costillas',
+            'PLC-003': 'Costillas',
+            'PLC-004': 'Filete Medallon',
+            'PLC-005': 'Filete Medallon',
+            'PLC-006': 'Filete Medallon',
+            'PLC-007': 'Filete Medallon',
+            'PLC-008': 'Lomo Liso',
+            'PLC-009': 'Lomo Liso',
+            'PLC-012': 'Pollo Panko',
+            'PLC-013': 'Hamburguesa',
+            'PLC-014': 'Hamburguesa',
+            'PLC-016': 'Atun',
+            'PLC-018': 'Costillas',
+            'PLC-019': 'Costillas',
+            'PLC-020': 'Costillas',
+            'PLC-021': 'Pollo Panko',
+            'PLC-022': 'Lomo Vetado',
+            'PYAH-001': 'Hamburguesa',
+            'SUB001': 'Hamburguesa',
+            'SUB002': 'Hamburguesa Rellena',
+            'SUB003': 'Hamburguesa Niño',
         }
-        def _cp_get_cat(sku):
-            s = str(sku or "")
-            for p, c in _CP_PREFIX_CAT.items():
-                if s.startswith(p):
-                    return c
-            return None  # no es proteína (agregado, modificador, pan, etc.) → se descarta
 
-        # ── Meses disponibles ──
+        def _cp_get_cat(sku):
+            return _CP_SKU_CAT.get(str(sku or "").strip())
+
+        # ── Meses disponibles (desde ventas, sobre SKU de proteína) ──
+        _cp_skus = list(_CP_SKU_CAT.keys())
         _cp_meses = run_query("""
             SELECT DISTINCT TO_CHAR(fecha_venta, 'YYYY-MM') AS mes
-            FROM opciones_diarias ORDER BY mes DESC
-        """)
+            FROM ventas
+            WHERE sku_producto = ANY(:skus)
+            ORDER BY mes DESC
+        """, {"skus": _cp_skus})
+
         if _cp_meses is None or _cp_meses.empty:
-            st.warning("No hay datos en la capa diaria `opciones_diarias`.")
+            st.warning("No hay ventas registradas para los SKU de proteína del maestro.")
         else:
             _MN = {"01":"Enero","02":"Febrero","03":"Marzo","04":"Abril","05":"Mayo",
                    "06":"Junio","07":"Julio","08":"Agosto","09":"Septiembre",
@@ -12519,118 +12688,106 @@ elif modulo.startswith("📊"):
             def _cp_mes_lbl(m):
                 y, mo = m.split("-"); return f"{_MN.get(mo, mo)} {y}"
 
-            _cp_c1, _cp_c2, _cp_c3 = st.columns([1.2, 1.2, 1])
+            _cp_c1, _cp_c2 = st.columns([1.2, 1.2])
             with _cp_c1:
                 _cp_mes = st.selectbox("📆 Mes", _cp_meses["mes"].tolist(),
                                        format_func=_cp_mes_lbl, key="cp_mes")
             with _cp_c2:
                 _cp_locales = ["Todos"] + sorted(
-                    run_query("SELECT DISTINCT local FROM opciones_diarias ORDER BY local")["local"].tolist())
+                    run_query("""SELECT DISTINCT local FROM ventas
+                                 WHERE sku_producto = ANY(:skus) AND local IS NOT NULL
+                                 ORDER BY local""", {"skus": _cp_skus})["local"].tolist())
                 _cp_local = st.selectbox("📍 Local", _cp_locales, key="cp_local")
-            with _cp_c3:
-                _cp_desglosar = st.checkbox("Desglosar por local", value=False, key="cp_desg")
 
-            # ── Semanas cerradas del mes ──
+            # ── Rango del mes y semanas ISO (Lun–Dom) que lo tocan ──
             _cp_y, _cp_mo = map(int, _cp_mes.split("-"))
             _dim = _cp_cal.monthrange(_cp_y, _cp_mo)[1]
             _ini_mes = _cp_dt.date(_cp_y, _cp_mo, 1)
             _fin_mes = _cp_dt.date(_cp_y, _cp_mo, _dim)
-            _hoy = _cp_dt.date.today()
-            _primer_lun = _ini_mes + _cp_dt.timedelta(days=(7 - _ini_mes.weekday()) % 7)
+            # primera semana ISO: lunes <= primer día del mes
+            _lun0 = _ini_mes - _cp_dt.timedelta(days=_ini_mes.weekday())
             _semanas = []
-            _l = _primer_lun
+            _l = _lun0
             while _l <= _fin_mes:
-                _d = _l + _cp_dt.timedelta(days=6)
-                if _d <= _fin_mes and _d < _hoy:
-                    _semanas.append((_l, _d))
+                _semanas.append((_l, _l + _cp_dt.timedelta(days=6)))
                 _l += _cp_dt.timedelta(days=7)
 
-            if not _semanas:
-                st.info(f"{_cp_mes_lbl(_cp_mes)} no tiene semanas cerradas (Lun–Dom completas "
-                        "y ya transcurridas). Elige otro mes.")
+            # ── Query de ventas por SKU/día (todo el mes) ──
+            _cp_params = {"i": str(_ini_mes), "f": str(_fin_mes), "skus": _cp_skus}
+            _cp_loc_filter = ""
+            if _cp_local != "Todos":
+                _cp_loc_filter = "AND UPPER(local) = UPPER(:l)"
+                _cp_params["l"] = _cp_local
+            _cp_raw = run_query(f"""
+                SELECT sku_producto, fecha_venta,
+                       SUM(cantidad_vendida) AS cant
+                FROM ventas
+                WHERE fecha_venta BETWEEN :i AND :f
+                  AND sku_producto = ANY(:skus) {_cp_loc_filter}
+                GROUP BY sku_producto, fecha_venta
+            """, _cp_params)
+
+            if _cp_raw is None or _cp_raw.empty:
+                st.warning("Sin ventas de proteína para ese mes/local.")
             else:
-                _rango_i, _rango_f = _semanas[0][0], _semanas[-1][1]
-                st.caption(
-                    f"**{len(_semanas)} semana(s) cerrada(s)**: "
-                    + " · ".join(f"{a.strftime('%d-%m')}→{b.strftime('%d-%m')}" for a, b in _semanas)
-                )
+                _cp_raw["cant"] = pd.to_numeric(_cp_raw["cant"], errors="coerce").fillna(0)
+                _cp_raw["categoria"] = _cp_raw["sku_producto"].apply(_cp_get_cat)
+                _cp_raw = _cp_raw[_cp_raw["categoria"].notna()].copy()
+                _cp_raw["fecha_venta"] = pd.to_datetime(_cp_raw["fecha_venta"]).dt.date
+                # cantidad por categoría + día
+                _cp_cat = (_cp_raw.groupby(["categoria", "fecha_venta"])["cant"]
+                           .sum().reset_index())
 
-                _cp_params = {"i": str(_rango_i), "f": str(_rango_f)}
-                _cp_loc_filter = ""
-                if _cp_local != "Todos":
-                    _cp_loc_filter = "AND UPPER(local) = UPPER(:l)"
-                    _cp_params["l"] = _cp_local
+                # ═══════ RESUMEN: máximo diario del mes por categoría ═══════
+                st.markdown(f"### 📊 Resumen del mes — máximo diario por categoría · {_cp_mes_lbl(_cp_mes)}")
+                _res = (_cp_cat.groupby("categoria")["cant"]
+                        .agg(max_dia="max", total="sum").reset_index())
+                # fecha del día pico por categoría
+                _idx_max = _cp_cat.loc[_cp_cat.groupby("categoria")["cant"].idxmax()]
+                _fmap = dict(zip(_idx_max["categoria"], _idx_max["fecha_venta"]))
+                _res["dia_pico"] = _res["categoria"].map(
+                    lambda c: _fmap[c].strftime("%d-%m-%Y") if c in _fmap else "")
+                _res["max_dia"] = _res["max_dia"].round(0).astype(int)
+                _res["total"] = _res["total"].round(0).astype(int)
+                _res = _res.sort_values("max_dia", ascending=False)
+                _res_show = _res.rename(columns={
+                    "categoria": "Categoría", "max_dia": "Máx día (Q)",
+                    "dia_pico": "Día pico", "total": "Total mes",
+                })[["Categoría", "Máx día (Q)", "Día pico", "Total mes"]]
+                st.dataframe(_res_show, use_container_width=True, hide_index=True)
+                st.caption("**Máx día (Q)** = mayor cantidad vendida de la categoría en un solo "
+                           "día del mes. Es el tope de producción sugerido.")
+                st.download_button(
+                    "📥 Descargar resumen (CSV)",
+                    _res_show.to_csv(index=False).encode("utf-8"),
+                    file_name=f"control_produccion_resumen_{_cp_mes}_{_cp_local}.csv",
+                    mime="text/csv", key="cp_dl_resumen")
 
-                # Opciones por día desde la capa diaria (sku_opcion → categoría)
-                _grp_loc = "local," if _cp_desglosar else ""
-                _cp_dia = run_query(f"""
-                    SELECT {_grp_loc} sku_opcion, fecha_venta, SUM(cant) AS cant_dia
-                    FROM opciones_diarias
-                    WHERE fecha_venta BETWEEN :i AND :f {_cp_loc_filter}
-                    GROUP BY {_grp_loc} sku_opcion, fecha_venta
-                """, _cp_params)
-
-                if _cp_dia is None or _cp_dia.empty:
-                    st.warning("Sin datos para ese mes/local en las semanas cerradas.")
-                else:
-                    import math as _cp_math
-                    _cp_dia["cant_dia"] = pd.to_numeric(_cp_dia["cant_dia"], errors="coerce").fillna(0)
-                    _cp_dia["categoria"] = _cp_dia["sku_opcion"].apply(_cp_get_cat)
-                    # Quedarse SOLO con proteínas mapeadas; descartar pan-no, agregados,
-                    # modificadores, cubiertos, salsas, bebidas, etc. (categoria None).
-                    _cp_dia = _cp_dia[_cp_dia["categoria"].notna()].copy()
-                    if _cp_dia.empty:
-                        st.warning("No hay opciones de proteína en ese mes/local.")
-                        st.stop()
-                    # Re-agregar por categoría + (local) + fecha (varias opciones caen en una categoría)
-                    _grp_cols = (["local"] if _cp_desglosar else []) + ["categoria", "fecha_venta"]
-                    _cp_cat = _cp_dia.groupby(_grp_cols)["cant_dia"].sum().reset_index()
-
-                    # ═══════ RESUMEN: máximo por categoría ═══════
-                    st.markdown("### 📊 Resumen — máximo por categoría de proteína")
-                    _key = (["local"] if _cp_desglosar else []) + ["categoria"]
-                    _resumen = (_cp_cat.groupby(_key)["cant_dia"]
-                                .agg(max_dia="max", prom_dia="mean", total="sum").reset_index())
-                    _resumen["max_dia"] = _resumen["max_dia"].apply(
-                        lambda v: int(_cp_math.ceil(v)) if v > 0 else 0)
-                    _resumen["prom_dia"] = _resumen["prom_dia"].round(1)
-                    _resumen["total"] = _resumen["total"].round(0).astype(int)
-                    _resumen = _resumen.sort_values(
-                        (["local"] if _cp_desglosar else []) + ["max_dia"],
-                        ascending=([True] if _cp_desglosar else []) + [False])
-                    _ren = {"local":"Local","categoria":"Categoría","max_dia":"Máx (Q)",
-                            "prom_dia":"Prom/día","total":"Total período"}
-                    _ord = (["local"] if _cp_desglosar else []) + ["categoria","max_dia","prom_dia","total"]
-                    st.dataframe(_resumen.rename(columns=_ren)[[_ren[c] for c in _ord]],
-                                 use_container_width=True, hide_index=True)
-                    st.caption("**Máx (Q)** = mayor cantidad de la categoría registrada en un solo "
-                               "día dentro de las semanas cerradas. Es el tope de producción sugerido.")
-                    st.download_button(
-                        "📥 Descargar resumen (CSV)",
-                        _resumen.rename(columns=_ren).to_csv(index=False).encode("utf-8"),
-                        file_name=f"control_produccion_{_cp_mes}_{_cp_local}.csv",
-                        mime="text/csv", key="cp_dl_resumen")
-
-                    # ═══════ DESGLOSE POR SEMANA ═══════
-                    with st.expander("🔍 Ver desglose por semana cerrada (origen del dato)"):
-                        _DOW = {0:"Lun",1:"Mar",2:"Mié",3:"Jue",4:"Vie",5:"Sáb",6:"Dom"}
-                        for _si, (_sa, _sb) in enumerate(_semanas, start=1):
-                            st.markdown(f"**Semana {_si}: {_sa.strftime('%d-%m')} → {_sb.strftime('%d-%m-%Y')}**")
-                            _wk = _cp_cat[(_cp_cat["fecha_venta"] >= _sa) &
-                                          (_cp_cat["fecha_venta"] <= _sb)].copy()
-                            if _wk.empty:
-                                st.caption("Sin registros esta semana."); continue
-                            _wk["dia"] = _wk["fecha_venta"].apply(
-                                lambda d: f"{_DOW[pd.Timestamp(d).weekday()]} {pd.Timestamp(d).day:02d}")
-                            _orden_dias = (_wk[["fecha_venta","dia"]].drop_duplicates()
-                                           .sort_values("fecha_venta")["dia"].tolist())
-                            _idx = (["local"] if _cp_desglosar else []) + ["categoria"]
-                            _piv = _wk.pivot_table(index=_idx, columns="dia", values="cant_dia",
-                                                   aggfunc="sum", fill_value=0)
-                            _piv = _piv.reindex(columns=_orden_dias, fill_value=0)
-                            _piv["Máx"] = _piv.max(axis=1)
-                            _piv = _piv.round(0).astype(int).sort_values("Máx", ascending=False)
-                            st.dataframe(_piv, use_container_width=True)
+                # ═══════ TABLAS POR SEMANA ISO ═══════
+                st.markdown("### 📅 Detalle por semana (Lun–Dom)")
+                _DOW = {0:"Lun",1:"Mar",2:"Mié",3:"Jue",4:"Vie",5:"Sáb",6:"Dom"}
+                _cats_orden = _res["categoria"].tolist()  # orden por máx del mes
+                for _si, (_sa, _sb) in enumerate(_semanas, start=1):
+                    _wk = _cp_cat[(_cp_cat["fecha_venta"] >= _sa) &
+                                  (_cp_cat["fecha_venta"] <= _sb)].copy()
+                    _tag = "" if (_sa >= _ini_mes and _sb <= _fin_mes) else " · (cruza mes)"
+                    st.markdown(f"**Semana {_si}: {_sa.strftime('%d-%m')} → {_sb.strftime('%d-%m-%Y')}**{_tag}")
+                    if _wk.empty:
+                        st.caption("Sin ventas esta semana."); continue
+                    _wk["dia"] = _wk["fecha_venta"].apply(
+                        lambda d: f"{_DOW[pd.Timestamp(d).weekday()]} {pd.Timestamp(d).day:02d}")
+                    _orden_dias = (_wk[["fecha_venta","dia"]].drop_duplicates()
+                                   .sort_values("fecha_venta")["dia"].tolist())
+                    _piv = _wk.pivot_table(index="categoria", columns="dia", values="cant",
+                                           aggfunc="sum", fill_value=0)
+                    _piv = _piv.reindex(columns=_orden_dias, fill_value=0)
+                    _piv["Máx"] = _piv.max(axis=1)
+                    _piv["Total"] = _piv[_orden_dias].sum(axis=1)
+                    _piv = _piv.round(0).astype(int)
+                    # ordenar filas según máximo del mes
+                    _piv = _piv.reindex([c for c in _cats_orden if c in _piv.index])
+                    _piv.index.name = "Categoría"
+                    st.dataframe(_piv, use_container_width=True)
 
 
     elif informe_sel == "ColacionesRRHH":
