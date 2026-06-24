@@ -4227,6 +4227,36 @@ def _sg_color_bands(n):
     return nv, na, nr
 
 
+# Conteos FIJOS por local (verde, amarillo), leídos de las fotos enviadas por el usuario.
+# Clave = nombre del local en la BD ('Providencia' se muestra como 'Pedro de Valdivia').
+# El orden sigue saliendo del ranking triple; aquí solo se fija CUÁNTOS de cada color.
+_SG_COLOR_FIJO = {
+    "Vitacura":          (3, 1),
+    "Las Condes":        (3, 1),
+    "Chicureo":          (3, 1),
+    "La Dehesa":         (3, 1),
+    "Macul":             (3, 1),
+    "Los Trapenses":     (3, 1),
+    "La Reina":          (2, 1),
+    "Quilin":            (2, 1),
+    "Nueva Providencia": (2, 1),
+    "Providencia":       (2, 1),   # foto: PEDRO DE VALDIVIA
+}
+
+
+def _sg_bandas_local(local, n):
+    """(nv, na, nr) fijos por local (de las fotos). Si el local no está mapeado,
+    cae a la regla general. Hace cap si hay menos garzones que verdes+amarillos."""
+    par = _SG_COLOR_FIJO.get(local)
+    if par is None:
+        return _sg_color_bands(n)
+    nv, na = par
+    nv = min(nv, n)
+    na = min(na, max(n - nv, 0))
+    nr = max(n - nv - na, 0)
+    return nv, na, nr
+
+
 def _sg_rank_dense_desc(valores):
     """Rank denso descendente (igual que RANKX(...; DESC; DENSE))."""
     uniq = sorted(set(valores), reverse=True)
@@ -4234,7 +4264,7 @@ def _sg_rank_dense_desc(valores):
     return [pos[v] for v in valores]
 
 
-def _sg_orden_colores(df_acum, dias_periodo):
+def _sg_orden_colores(df_acum, dias_periodo, local=None):
     """Ordena garzones por el ranking triple y asigna color por posición.
 
     df_acum: DataFrame crudo de la sección 5 acumulado
@@ -4270,7 +4300,7 @@ def _sg_orden_colores(df_acum, dias_periodo):
     comp = [(rvp[i] + r2[i] - g[i]["venta"] / 1e10) / 2 for i in range(len(g))]
     orden = sorted(range(len(g)), key=lambda i: comp[i])
     filas = [g[i] for i in orden]
-    nv, na, nr = _sg_color_bands(len(filas))
+    nv, na, nr = _sg_bandas_local(local, len(filas))
     colores = ["verde"] * nv + ["amar"] * na + ["rojo"] * nr
     for i, f in enumerate(filas):
         f["rank"] = i + 1
@@ -4305,7 +4335,7 @@ def _sg_resumen_colores_pdf(df_acum, local, dias_periodo, logo_path=None):
         try: return f"{float(v)*100:.1f}%".replace(".", ",")
         except: return "0,0%"
 
-    filas, tot = _sg_orden_colores(df_acum, dias_periodo)
+    filas, tot = _sg_orden_colores(df_acum, dias_periodo, local=local)
 
     VERDE = _colors.HexColor("#63BE7B"); AMAR = _colors.HexColor("#FFEB84")
     ROJO = _colors.HexColor("#F8696B"); GRIS = _colors.HexColor("#D9D9D9")
@@ -4367,7 +4397,8 @@ def _sg_resumen_colores_pdf(df_acum, local, dias_periodo, logo_path=None):
     buf = _io.BytesIO()
     doc = _Doc(buf, pagesize=_landscape(_letter),
                leftMargin=MX, rightMargin=MX, topMargin=18, bottomMargin=18)
-    doc.build([_Par(str(local).upper(), st_t), _Sp(1, 6), t])
+    _titulo_loc = "Pedro de Valdivia" if str(local) == "Providencia" else str(local)
+    doc.build([_Par(_titulo_loc.upper(), st_t), _Sp(1, 6), t])
     buf.seek(0)
     return buf.getvalue()
 
@@ -18013,7 +18044,7 @@ buildTree(data, 1, null);
         from datetime import date as _sg_date, timedelta as _sg_td
 
         # ── Whitelist nominal de garzones evaluados (red completa) ──
-        _SG_WHITELIST = [
+        _SG_WHITELIST_FALLBACK = [
             'Francisco Navarro','Jeshaylin Molina',
             'Yuscarlenaidu Martinezsulbaran','Yirfrey Alexander Valero Ramirez','Yurubi',
             'Genesis Penafiel','Raul Figueroa','David Ramirez','Miguel Menacho Oliveira',
@@ -18039,6 +18070,15 @@ buildTree(data, 1, null);
             'Jonathan Araujo','Nasslo Beltran','Keiber Eduardo Munoz Urribarri','Jose Pacheco',
             'Nestor Rosas','dubuc_juan Dubuc Martinez','Jackson Moreno','Richard Gonzalez',
         ]
+
+        # Whitelist desde tabla garzones_whitelist (activo=true). Respaldo: lista fija.
+        try:
+            _wl_df = run_query("select garzon from garzones_whitelist where activo = true order by garzon")
+            _SG_WHITELIST = (_wl_df["garzon"].tolist()
+                             if (_wl_df is not None and not _wl_df.empty)
+                             else list(_SG_WHITELIST_FALLBACK))
+        except Exception:
+            _SG_WHITELIST = list(_SG_WHITELIST_FALLBACK)
 
         # ── Categorías macro (sección 1 y 2) ──
         # ── Jefaturas por local (supervisor / jefe salón / sub jefe salón) ──
@@ -20724,7 +20764,7 @@ elif modulo.startswith("📋 Notas de Crédito"):
         st.markdown("<div class='info-box'>Registra una nota de crédito pendiente de emisión. Se considerará automáticamente en el Informe de Costos del período correspondiente mientras el estado sea <b>Pendiente</b>.</div>", unsafe_allow_html=True)
 
         _locales_nc_vals = ["Todos","Vitacura","Las Condes","Chicureo","La Dehesa","Macul","La Reina","Quilin","Nueva Providencia","Providencia","Los Trapenses"]
-        _locales_nc_list = _locales_nc['local'].tolist() if not _locales_nc.empty else []
+        _locales_nc_list = _locales_nc_vals
         _user_local_nc = st.session_state.get("user_local")
 
         if _is_admin_nc or not _user_local_nc:
@@ -20767,6 +20807,7 @@ elif modulo.startswith("📋 Notas de Crédito"):
                     _nc_prov = _prov_sel.split(" | ")[0]
                     _nc_rut  = _prov_sel.split(" | ")[1] if " | " in _prov_sel else ""
 
+        with _nc2:
             _nc_fecha_dte = st.date_input("Fecha factura original", key="nc_fecha_dte", value=None)
 
             # Auto-calcular período lunes-domingo
@@ -20783,29 +20824,53 @@ elif modulo.startswith("📋 Notas de Crédito"):
                     _nc_periodo = f"{_lunes.day} {_MESES_NC[_lunes.month]}-{_domingo.day} {_MESES_NC[_domingo.month]} {_lunes.year}"
                 st.caption(f"Período asignado: **{_nc_periodo}**")
 
-        with _nc2:
-            # Producto — selectbox único con búsqueda nativa
-            _nc_prod, _nc_sku = "", ""
-            if not _df_prods_nc.empty:
-                _prod_opts_all = [f"{r['nombre_producto']} | {r['sku']}"
-                                   for _, r in _df_prods_nc.iterrows()]
-                _prod_sel = st.selectbox("Producto", _prod_opts_all,
-                                          key="nc_prod_sel", index=None,
-                                          placeholder="Escribe para buscar...")
-                if _prod_sel:
-                    _nc_prod = _prod_sel.split(" | ")[0]
-                    _nc_sku  = _prod_sel.split(" | ")[1] if " | " in _prod_sel else ""
-
-            _nc_monto = st.number_input("Monto NC ($)", min_value=0.0, step=1000.0,
-                                         key="nc_monto", value=None,
-                                         placeholder="Ingresa el monto")
+        # ── Productos: una o varias líneas para la MISMA nota de crédito ──
+        st.markdown("**Productos de la nota de crédito**")
+        st.caption("Agrega una línea por cada producto que no llegó. Todas comparten el mismo proveedor y folio.")
+        if "nc_n_lineas" not in st.session_state:
+            st.session_state["nc_n_lineas"] = 1
+        _prod_opts_all = ([f"{r['nombre_producto']} | {r['sku']}"
+                            for _, r in _df_prods_nc.iterrows()]
+                           if not _df_prods_nc.empty else [])
+        for _i in range(st.session_state["nc_n_lineas"]):
+            _lc1, _lc2 = st.columns([7, 3])
+            with _lc1:
+                st.selectbox(f"Producto {_i+1}", _prod_opts_all,
+                             key=f"nc_prod_sel_{_i}", index=None,
+                             placeholder="Escribe para buscar...")
+            with _lc2:
+                st.number_input(f"Monto {_i+1} ($)", min_value=0.0, step=1000.0,
+                                key=f"nc_monto_{_i}", value=None,
+                                placeholder="Monto")
+        _bl1, _bl2, _bl3 = st.columns([2, 2, 6])
+        with _bl1:
+            if st.button("➕ Agregar producto", key="nc_add_linea", use_container_width=True):
+                st.session_state["nc_n_lineas"] += 1
+                st.rerun()
+        with _bl2:
+            if st.session_state["nc_n_lineas"] > 1 and st.button(
+                    "➖ Quitar última", key="nc_del_linea", use_container_width=True):
+                _li = st.session_state["nc_n_lineas"] - 1
+                st.session_state.pop(f"nc_prod_sel_{_li}", None)
+                st.session_state.pop(f"nc_monto_{_li}", None)
+                st.session_state["nc_n_lineas"] -= 1
+                st.rerun()
 
         _nc_obs = st.text_area("Observación", key="nc_obs",
                                 placeholder="Descripción del error / motivo de la NC")
 
         if st.button("💾 Registrar Nota de Crédito", type="primary", key="btn_nc_reg"):
-            if not _nc_local or not _nc_folio or not _nc_monto or not _nc_prod:
-                st.error("Local, folio, producto y monto son obligatorios.")
+            # Recolectar las líneas de producto (producto + monto)
+            _nc_lineas = []
+            for _i in range(st.session_state.get("nc_n_lineas", 1)):
+                _ps = st.session_state.get(f"nc_prod_sel_{_i}")
+                _mt = st.session_state.get(f"nc_monto_{_i}")
+                if _ps and _mt:
+                    _pn = _ps.split(" | ")[0].strip()
+                    _sk = (_ps.split(" | ")[1].strip() if " | " in _ps else "") or None
+                    _nc_lineas.append((_pn, _sk, _mt))
+            if not _nc_local or not _nc_folio or not _nc_lineas:
+                st.error("Local, folio y al menos un producto con monto son obligatorios.")
             elif not _nc_fecha_dte:
                 st.error("La fecha de la factura es obligatoria para calcular el período.")
             elif not _nc_prov:
@@ -20814,30 +20879,32 @@ elif modulo.startswith("📋 Notas de Crédito"):
                 try:
                     _eng_nc = get_engine()
                     with _eng_nc.connect() as _conn_nc:
-                        _conn_nc.execute(text("""
-                            INSERT INTO notas_credito
-                                (local, folio_factura, rut_proveedor, nombre_proveedor,
-                                 nombre_producto, sku, monto, periodo, fecha_dte,
-                                 estado, observacion, registrado_por)
-                            VALUES
-                                (:local, :folio, :rut, :prov,
-                                 :prod, :sku, :monto, :periodo, :fecha_dte,
-                                 'Pendiente', :obs, :reg_por)
-                        """), {
-                            "local":    _nc_local,
-                            "folio":    _nc_folio.strip(),
-                            "rut":      _nc_rut.strip(),
-                            "prov":     _nc_prov.strip(),
-                            "prod":     _nc_prod.strip(),
-                            "sku":      _nc_sku.strip() or None,
-                            "monto":    _nc_monto,
-                            "periodo":  _nc_periodo.strip() or None,
-                            "fecha_dte": str(_nc_fecha_dte) if _nc_fecha_dte else None,
-                            "obs":      _nc_obs.strip() or None,
-                            "reg_por":  _uname_nc,
-                        })
+                        for _pn, _sk, _mt in _nc_lineas:
+                            _conn_nc.execute(text("""
+                                INSERT INTO notas_credito
+                                    (local, folio_factura, rut_proveedor, nombre_proveedor,
+                                     nombre_producto, sku, monto, periodo, fecha_dte,
+                                     estado, observacion, registrado_por)
+                                VALUES
+                                    (:local, :folio, :rut, :prov,
+                                     :prod, :sku, :monto, :periodo, :fecha_dte,
+                                     'Pendiente', :obs, :reg_por)
+                            """), {
+                                "local":    _nc_local,
+                                "folio":    _nc_folio.strip(),
+                                "rut":      _nc_rut.strip(),
+                                "prov":     _nc_prov.strip(),
+                                "prod":     _pn,
+                                "sku":      _sk,
+                                "monto":    _mt,
+                                "periodo":  _nc_periodo.strip() or None,
+                                "fecha_dte": str(_nc_fecha_dte) if _nc_fecha_dte else None,
+                                "obs":      _nc_obs.strip() or None,
+                                "reg_por":  _uname_nc,
+                            })
                         _conn_nc.commit()
-                    st.success("✅ Nota de crédito registrada.")
+                    st.success(f"✅ {len(_nc_lineas)} producto(s) registrado(s) en la nota de crédito.")
+                    st.session_state["nc_n_lineas"] = 1
                     st.rerun()
                 except Exception as _enc:
                     st.error(f"Error: {_enc}")
