@@ -12670,14 +12670,22 @@ elif modulo.startswith("📊"):
         def _cp_get_cat(sku):
             return _CP_SKU_CAT.get(str(sku or "").strip())
 
-        # ── Meses disponibles (desde ventas, sobre SKU de proteína) ──
+        # ── Catálogo (meses + locales). Se cachea en sesión: no depende del
+        #    mes/local elegido, así no re-escanea `ventas` en cada rerun. ──
         _cp_skus = list(_CP_SKU_CAT.keys())
-        _cp_meses = run_query("""
-            SELECT DISTINCT TO_CHAR(fecha_venta, 'YYYY-MM') AS mes
-            FROM ventas
-            WHERE sku_producto = ANY(:skus)
-            ORDER BY mes DESC
-        """, {"skus": _cp_skus})
+        if "cp_catalogo" not in st.session_state:
+            _cp_cat_q = run_query("""
+                SELECT DISTINCT TO_CHAR(fecha_venta, 'YYYY-MM') AS mes, local
+                FROM ventas
+                WHERE sku_producto = ANY(:skus)
+                  AND fecha_venta IS NOT NULL
+            """, {"skus": _cp_skus})
+            st.session_state["cp_catalogo"] = (
+                _cp_cat_q if _cp_cat_q is not None else pd.DataFrame(columns=["mes", "local"])
+            )
+        _cp_catalogo = st.session_state["cp_catalogo"]
+        _cp_meses = (_cp_catalogo[["mes"]].dropna().drop_duplicates()
+                     .sort_values("mes", ascending=False).reset_index(drop=True))
 
         if _cp_meses is None or _cp_meses.empty:
             st.warning("No hay ventas registradas para los SKU de proteína del maestro.")
@@ -12694,9 +12702,7 @@ elif modulo.startswith("📊"):
                                        format_func=_cp_mes_lbl, key="cp_mes")
             with _cp_c2:
                 _cp_locales = ["Todos"] + sorted(
-                    run_query("""SELECT DISTINCT local FROM ventas
-                                 WHERE sku_producto = ANY(:skus) AND local IS NOT NULL
-                                 ORDER BY local""", {"skus": _cp_skus})["local"].tolist())
+                    _cp_catalogo["local"].dropna().unique().tolist())
                 _cp_local = st.selectbox("📍 Local", _cp_locales, key="cp_local")
 
             # ── Rango del mes y semanas ISO (Lun–Dom) que lo tocan ──
@@ -12738,35 +12744,34 @@ elif modulo.startswith("📊"):
                 _cp_cat = (_cp_raw.groupby(["categoria", "fecha_venta"])["cant"]
                            .sum().reset_index())
 
-                # ═══════ RESUMEN: máximo diario del mes por categoría ═══════
-                st.markdown(f"### 📊 Resumen del mes — máximo diario por categoría · {_cp_mes_lbl(_cp_mes)}")
-                _res = (_cp_cat.groupby("categoria")["cant"]
-                        .agg(max_dia="max", total="sum").reset_index())
-                # fecha del día pico por categoría
-                _idx_max = _cp_cat.loc[_cp_cat.groupby("categoria")["cant"].idxmax()]
-                _fmap = dict(zip(_idx_max["categoria"], _idx_max["fecha_venta"]))
-                _res["dia_pico"] = _res["categoria"].map(
-                    lambda c: _fmap[c].strftime("%d-%m-%Y") if c in _fmap else "")
-                _res["max_dia"] = _res["max_dia"].round(0).astype(int)
-                _res["total"] = _res["total"].round(0).astype(int)
-                _res = _res.sort_values("max_dia", ascending=False)
-                _res_show = _res.rename(columns={
-                    "categoria": "Categoría", "max_dia": "Máx día (Q)",
-                    "dia_pico": "Día pico", "total": "Total mes",
-                })[["Categoría", "Máx día (Q)", "Día pico", "Total mes"]]
-                st.dataframe(_res_show, use_container_width=True, hide_index=True)
-                st.caption("**Máx día (Q)** = mayor cantidad vendida de la categoría en un solo "
-                           "día del mes. Es el tope de producción sugerido.")
+                # ═══════ RESUMEN: máximo por día de la semana ═══════
+                # Por categoría y día de la semana (Lun..Dom), el MAYOR valor
+                # registrado en ese día dentro del mes (mejor lunes, mejor martes, ...).
+                st.markdown(f"### 📊 Resumen del mes — máximo por día de la semana · {_cp_mes_lbl(_cp_mes)}")
+                _DOW_RES = {0:"Lun",1:"Mar",2:"Mié",3:"Jue",4:"Vie",5:"Sáb",6:"Dom"}
+                _ORD_DOW = ["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"]
+                _cp_cat["dow"] = _cp_cat["fecha_venta"].apply(
+                    lambda d: _DOW_RES[pd.Timestamp(d).weekday()])
+                _res = _cp_cat.pivot_table(index="categoria", columns="dow",
+                                           values="cant", aggfunc="max", fill_value=0)
+                _res = _res.reindex(columns=_ORD_DOW, fill_value=0)
+                _res["Máx"] = _res.max(axis=1)
+                _res = _res.round(0).astype(int).sort_values("Máx", ascending=False)
+                _res.index.name = "Categoría"
+                st.dataframe(_res, use_container_width=True)
+                st.caption("Cada celda = mayor cantidad vendida de la categoría en ese día de "
+                           "la semana dentro del mes (p. ej. el mejor lunes). **Máx** = tope "
+                           "de producción sugerido.")
                 st.download_button(
                     "📥 Descargar resumen (CSV)",
-                    _res_show.to_csv(index=False).encode("utf-8"),
+                    _res.reset_index().to_csv(index=False).encode("utf-8"),
                     file_name=f"control_produccion_resumen_{_cp_mes}_{_cp_local}.csv",
                     mime="text/csv", key="cp_dl_resumen")
 
                 # ═══════ TABLAS POR SEMANA ISO ═══════
                 st.markdown("### 📅 Detalle por semana (Lun–Dom)")
                 _DOW = {0:"Lun",1:"Mar",2:"Mié",3:"Jue",4:"Vie",5:"Sáb",6:"Dom"}
-                _cats_orden = _res["categoria"].tolist()  # orden por máx del mes
+                _cats_orden = _res.index.tolist()  # orden por máx del mes
                 for _si, (_sa, _sb) in enumerate(_semanas, start=1):
                     _wk = _cp_cat[(_cp_cat["fecha_venta"] >= _sa) &
                                   (_cp_cat["fecha_venta"] <= _sb)].copy()
