@@ -4251,7 +4251,9 @@ def _sg_orden_colores(df_acum, dias_periodo):
         if vt <= 0:
             continue
         dias = int(r["dias"]) or 1
-        va, vc, vp = float(r["v_agr"]), float(r["v_caf"]), float(r["v_pos"])
+        # AGREGADOS del cuadro = SOLO 'Agregados' (sin Acompañamientos), como el Excel original
+        va = float(r["v_agr_solo"]) if ("v_agr_solo" in r.index and pd.notna(r["v_agr_solo"])) else float(r["v_agr"])
+        vc, vp = float(r["v_caf"]), float(r["v_pos"])
         vsa, vca = float(r["v_lsa"]), float(r["v_lca"])
         adic = va + vc + vp + vsa + vca
         g.append({
@@ -18410,11 +18412,11 @@ buildTree(data, 1, null);
             """
 
             # ═══════════ SECCIÓN 5 — ADICIONALES POR GARZÓN ═══════════
-            def _sg_seccion5(rango_i, rango_f, etiqueta):
-                _p5 = dict(_sg_p); _p5["r_i"] = str(rango_i); _p5["r_f"] = str(rango_f)
+            def _sg_seccion5(rango_i, rango_f, etiqueta, p=None, mostrar=True):
+                _p5 = dict(p if p is not None else _sg_p); _p5["r_i"] = str(rango_i); _p5["r_f"] = str(rango_f)
                 _df = run_query(f"""
                     with d as (
-                      select v.garzon, v.fecha_venta,
+                      select v.garzon, v.fecha_venta, v.categoria_menu as cat,
                         v.monto_venta_real + coalesce(v.descuento,0) as venta,
                         v.cantidad_vendida as q,
                         {_SG_GRP_CASE} as grp_cat, {_SG_BUCKET} as liq_bucket
@@ -18426,6 +18428,7 @@ buildTree(data, 1, null);
                     select garzon, count(distinct fecha_venta) as dias, sum(venta) as venta_total,
                       sum(case when grp_cat='AGREGADOS' then venta else 0 end) as v_agr,
                       sum(case when grp_cat='AGREGADOS' then q else 0 end) as q_agr,
+                      sum(case when cat='Agregados' then venta else 0 end) as v_agr_solo,
                       sum(case when grp_cat='CAFETERIA' then venta else 0 end) as v_caf,
                       sum(case when grp_cat='CAFETERIA' then q else 0 end) as q_caf,
                       sum(case when grp_cat='POSTRES' then venta else 0 end) as v_pos,
@@ -18436,7 +18439,8 @@ buildTree(data, 1, null);
                       sum(case when liq_bucket='LIQ_CA' then q else 0 end) as q_lca
                     from d group by garzon having sum(venta) > 0 order by venta_total desc
                 """, _p5)
-                st.markdown(f"### 5 · Adicionales por Garzón ({etiqueta})")
+                if mostrar:
+                    st.markdown(f"### 5 · Adicionales por Garzón ({etiqueta})")
                 _rows = []
                 if _df is not None and not _df.empty:
                     for _, r in _df.iterrows():
@@ -18458,11 +18462,12 @@ buildTree(data, 1, null);
                             "Líq C/A": _sg_fmt_money(r["v_lca"]), "Q CA": int(r["q_lca"]), "%CA": _pg(float(r["v_lca"])),
                             "%Total": f"{pct_total:.1f}%",
                         })
-                    st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True)
-                return _rows
+                    if mostrar:
+                        st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True)
+                return _rows, _df
 
-            _rows5 = _sg_seccion5(_sg_mes_ini, _sg_fin, "acumulado mensual")
-            _rows5_sem = _sg_seccion5(_sg_ini, _sg_fin, "semanal")
+            _rows5, _df5_acum = _sg_seccion5(_sg_mes_ini, _sg_fin, "acumulado mensual")
+            _rows5_sem, _df5_sem = _sg_seccion5(_sg_ini, _sg_fin, "semanal")
 
             # ═══════════ SECCIÓN 6 — ADICIONALES POR LOCAL (red, acum mensual) ═══════════
             _sg_s6 = run_query(f"""
@@ -18676,7 +18681,7 @@ buildTree(data, 1, null);
                     "graf8": locals().get("_rows9", []),
                 }
                 _sg_pdf = generar_pdf_garzones(_sg_ctx)
-                _sg_cols_btn = st.columns(2)
+                _sg_cols_btn = st.columns(3)
                 with _sg_cols_btn[0]:
                     st.download_button("📄 Descargar informe PDF", _sg_pdf,
                         file_name=f"control_ventas_salon_{_sg_local}_{_sg_ini}.pdf",
@@ -18701,6 +18706,188 @@ buildTree(data, 1, null);
                             mime="application/pdf", use_container_width=True, key="sg_pdf_b")
                     except Exception as _e_b:
                         st.warning(f"Informe B pendiente: {_e_b}")
+                with _sg_cols_btn[2]:
+                    try:
+                        _df5r = locals().get("_df5_acum")
+                        if _df5r is not None and not _df5r.empty:
+                            _pdf_res = _sg_resumen_colores_pdf(_df5r, _sg_local, _sg_dias_acum,
+                                                              logo_path=LOGO_PATH)
+                            st.download_button("🎨 Descargar resumen (colores)", _pdf_res,
+                                file_name=f"resumen_{_sg_local}_{_sg_ini}.pdf",
+                                mime="application/pdf", use_container_width=True, key="sg_pdf_res")
+                        else:
+                            st.caption("Resumen sin datos.")
+                    except Exception as _e_r:
+                        st.warning(f"Resumen pendiente: {_e_r}")
+
+                # ═══════════ GENERAR LOS 10 LOCALES (ZIP) ═══════════
+                st.markdown("---")
+                st.markdown("**Generar los 10 locales de una vez**")
+                _s6 = locals().get("_s6")  # asegura binding (sección 6 compartida)
+
+                def _sg_calc_local(loc):
+                    """Recalcula el informe B + df del resumen para un local cualquiera.
+                    Reusa s6/s7/s11 (compartidos, todos los locales) y _sg_seccion5.
+                    Devuelve (ctx_b, df5_acum)."""
+                    _pl = dict(_sg_p); _pl["loc"] = loc
+                    _pe = dict(_pl); _pe["nombres"] = _sg_estrat_nombres
+                    # Sección 1 (raw)
+                    s1 = run_query(f"""
+                        with base as (
+                          select monto_venta_real + coalesce(descuento,0) as venta,
+                            cantidad_vendida as q,
+                            case when categoria_menu in ('{_sg_bar_sql}') then 'BAR'
+                                 when categoria_menu in ('{_sg_cafe_sql}') then 'CAFETERÍA Y POSTRES'
+                                 else 'ALIMENTOS' end as macro,
+                            fecha_venta
+                          from ventas where local = :loc and origen is null
+                            and categoria_menu not in ('{_sg_excl_sql}')
+                        )
+                        select coalesce(macro,'TOTAL') as macro,
+                          sum(case when fecha_venta between :ai and :af then venta else 0 end) as venta_acum,
+                          sum(case when fecha_venta between :ai and :af then q else 0 end) as q_acum,
+                          sum(case when fecha_venta between :si and :sf then venta else 0 end) as venta_sem,
+                          sum(case when fecha_venta between :si and :sf then q else 0 end) as q_sem
+                        from base group by rollup(macro) order by macro
+                    """, _pl)
+                    # Sección 2 (raw, whitelist)
+                    s2 = run_query(f"""
+                        with base as (
+                          select monto_venta_real + coalesce(descuento,0) as venta,
+                            cantidad_vendida as q,
+                            case when categoria_menu in ('{_sg_bar_sql}') then 'BAR'
+                                 when categoria_menu in ('{_sg_cafe_sql}') then 'CAFETERÍA Y POSTRES'
+                                 else 'ALIMENTOS' end as macro,
+                            fecha_venta
+                          from ventas where local = :loc and origen is null
+                            and categoria_menu not in ('{_sg_excl_sql}') and garzon = any(:wl)
+                        )
+                        select coalesce(macro,'TOTAL') as macro,
+                          sum(case when fecha_venta between :ai and :af then venta else 0 end) as venta_acum,
+                          sum(case when fecha_venta between :ai and :af then q else 0 end) as q_acum,
+                          sum(case when fecha_venta between :si and :sf then venta else 0 end) as venta_sem,
+                          sum(case when fecha_venta between :si and :sf then q else 0 end) as q_sem
+                        from base group by rollup(macro) order by macro
+                    """, _pl)
+                    tot_eval = 0.0
+                    if s2 is not None and not s2.empty:
+                        _t = s2[s2["macro"] == "TOTAL"]
+                        tot_eval = float(_t["venta_sem"].iloc[0]) if not _t.empty else 0.0
+                    # nº garzones del local
+                    _ngdf = run_query("""
+                        select count(distinct garzon) as n from ventas
+                        where local = :loc and origen is null and garzon = any(:wl)
+                          and fecha_venta between :ai and :af
+                    """, _pl)
+                    ng = int(_ngdf["n"].iloc[0]) if (_ngdf is not None and not _ngdf.empty) else 0
+                    ng_div = ng if ng else 1
+                    # Sección 3 (raw)
+                    s3 = run_query(f"""
+                        select categoria_menu,
+                          sum(case when fecha_venta between :ai and :af then monto_venta_real + coalesce(descuento,0) else 0 end) as venta_acum,
+                          sum(case when fecha_venta between :ai and :af then cantidad_vendida else 0 end) as q_acum,
+                          sum(case when fecha_venta between :si and :sf then monto_venta_real + coalesce(descuento,0) else 0 end) as venta_sem,
+                          sum(case when fecha_venta between :si and :sf then cantidad_vendida else 0 end) as q_sem
+                        from ventas where local = :loc and origen is null
+                          and categoria_menu not in ('{_sg_excl_sql}') and garzon = any(:wl)
+                        group by categoria_menu
+                    """, _pl)
+                    # Sección 4 -> rows4
+                    s4 = run_query("""
+                        select nombre_producto,
+                          sum(case when fecha_venta between :ai and :af then monto_venta_real + coalesce(descuento,0) else 0 end) as venta_acum,
+                          sum(case when fecha_venta between :ai and :af then cantidad_vendida else 0 end) as q_acum,
+                          sum(case when fecha_venta between :si and :sf then monto_venta_real + coalesce(descuento,0) else 0 end) as venta_sem,
+                          sum(case when fecha_venta between :si and :sf then cantidad_vendida else 0 end) as q_sem
+                        from ventas where local = :loc and origen is null and garzon = any(:wl)
+                          and nombre_producto = any(:nombres)
+                        group by nombre_producto
+                    """, _pe)
+                    _s4i = s4.set_index("nombre_producto") if (s4 is not None and not s4.empty) else None
+                    rows4 = []; _t4s = _t4a = _t4q = 0.0
+                    for _etq, _nom in _SG_ESTRAT:
+                        if _s4i is not None and _nom in _s4i.index:
+                            _r = _s4i.loc[_nom]; _vs = float(_r["venta_sem"]); _va = float(_r["venta_acum"]); _qa = float(_r["q_acum"])
+                        else:
+                            _vs = _va = _qa = 0.0
+                        _pct = (_vs / tot_eval * 100) if tot_eval else 0
+                        rows4.append({"Ítem": _etq, "$ Acumulado": _sg_fmt_money(_va), "Q": int(_qa),
+                                      "Q prom × garzón": round(_qa / ng_div, 0),
+                                      "$ Diario": _sg_fmt_money(_va / _sg_dias_acum),
+                                      "$ Semanal": _sg_fmt_money(_vs), "%": f"{_pct:.1f}%"})
+                        _t4s += _vs; _t4a += _va; _t4q += _qa
+                    rows4.append({"Ítem": "TOTAL", "$ Acumulado": _sg_fmt_money(_t4a), "Q": int(_t4q),
+                                  "Q prom × garzón": round(_t4q / ng_div, 0),
+                                  "$ Diario": _sg_fmt_money(_t4a / _sg_dias_acum),
+                                  "$ Semanal": _sg_fmt_money(_t4s),
+                                  "%": f"{(_t4s / tot_eval * 100) if tot_eval else 0:.1f}%"})
+                    # Sección 5 (acum + semanal), sin pintar en pantalla
+                    rows5, df5 = _sg_seccion5(_sg_mes_ini, _sg_fin, "", p=_pl, mostrar=False)
+                    rows5_sem, _ = _sg_seccion5(_sg_ini, _sg_fin, "", p=_pl, mostrar=False)
+                    # Sección 9 (raw, por local)
+                    s9 = run_query(f"""
+                        with d as (
+                          select v.garzon, extract(week from v.fecha_venta)::int as iso_week,
+                            v.monto_venta_real + coalesce(v.descuento,0) as venta,
+                            {_SG_GRP_CASE} as grp_cat, {_SG_BUCKET} as liq_bucket
+                          from ventas v {_SG_LIQ_JOIN}
+                          where v.local = :loc and v.origen is null and v.garzon = any(:wl)
+                            and v.categoria_menu not in ('{_sg_excl_sql}')
+                            and extract(week from v.fecha_venta)::int between 20 and 23
+                            and extract(year from v.fecha_venta)::int = 2026
+                        )
+                        select garzon, iso_week, sum(venta) as venta,
+                          sum(case when grp_cat is not null or liq_bucket is not null then venta else 0 end) as adic
+                        from d group by garzon, iso_week
+                    """, _pl)
+                    # Ranking x/10 (compartido, sección 6)
+                    rk = "—"
+                    _rk_df = _sg_rank
+                    if _rk_df is not None and not _rk_df.empty:
+                        _rs = _rk_df.sort_values("pct_total", ascending=False).reset_index(drop=True)
+                        _pos = _rs.index[_rs["local"] == loc].tolist()
+                        rk = f"{_pos[0]+1}/{len(_rs)}" if _pos else "—"
+                    jef = _SG_JEFATURAS.get(loc, ("", "", ""))
+                    ctx = _sg_construir_ctx_b(
+                        loc, _sg_ini, _sg_fin, ng, jef, rk,
+                        s1, s2, s3, rows4, rows5, rows5_sem,
+                        _s6, _sg_s7, [], [],
+                        s9_raw=s9, s11s=_sg_s11s, s11m=_sg_s11m,
+                    )
+                    return ctx, df5
+
+                _locales_todos = list(_SG_JEFATURAS.keys())
+                if st.button(f"📦 Generar los {len(_locales_todos)} locales (ZIP)",
+                             use_container_width=True, key="sg_zip_btn"):
+                    import zipfile as _zipf
+                    _buf_zip = io.BytesIO()
+                    _errs = []; _ok = 0
+                    _prog = st.progress(0.0, text="Generando informes…")
+                    with _zipf.ZipFile(_buf_zip, "w", _zipf.ZIP_DEFLATED) as _zf:
+                        for _i, _loc in enumerate(_locales_todos):
+                            try:
+                                _ctx_l, _df5_l = _sg_calc_local(_loc)
+                                _pdf_l = generar_pdf_garzones_b(_ctx_l, logo_path=LOGO_PATH)
+                                _zf.writestr(f"informe_B_{_loc}_{_sg_ini}.pdf", _pdf_l)
+                                if _df5_l is not None and not _df5_l.empty:
+                                    _res_l = _sg_resumen_colores_pdf(_df5_l, _loc, _sg_dias_acum,
+                                                                    logo_path=LOGO_PATH)
+                                    _zf.writestr(f"resumen_{_loc}_{_sg_ini}.pdf", _res_l)
+                                _ok += 1
+                            except Exception as _e_loc:
+                                _errs.append(f"{_loc}: {_e_loc}")
+                            _prog.progress((_i + 1) / len(_locales_todos),
+                                           text=f"{_loc} ({_i+1}/{len(_locales_todos)})")
+                    _prog.empty()
+                    _buf_zip.seek(0)
+                    if _ok:
+                        st.success(f"Listo: {_ok}/{len(_locales_todos)} locales generados.")
+                        st.download_button("⬇️ Descargar ZIP (10 informes + 10 resúmenes)",
+                            _buf_zip.getvalue(),
+                            file_name=f"informes_garzones_{_sg_ini}.zip",
+                            mime="application/zip", use_container_width=True, key="sg_zip_dl")
+                    if _errs:
+                        st.warning("Locales con problemas:\n- " + "\n- ".join(_errs))
             except Exception as _e_sg:
                 st.warning(f"PDF pendiente de ajuste: {_e_sg}")
 
