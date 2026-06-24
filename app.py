@@ -12735,15 +12735,17 @@ elif modulo.startswith("📊"):
             _cr_res["ratio"] = (_cr_res["colaciones"] / _cr_res["turnos"].replace(0, pd.NA)).round(2)
             _cr_res = _cr_res.sort_values("ratio", ascending=False, na_position="last")
 
-            # Semáforo: ratio > 1 = más colaciones que turnos (alerta);
-            # cercano a 1 = razonable; muy bajo = poca colación registrada.
+            # Semáforo (criterios definidos por negocio):
+            #   🟢 Bajo     : ratio < 2,5
+            #   🟡 Atención : 2,5 ≤ ratio ≤ 3,0
+            #   🔴 Alto     : ratio > 3,0
             def _cr_sem(r):
                 if pd.isna(r):
                     return "⚪ s/d"
-                if r > 1.15:
+                if r > 3.0:
                     return "🔴 Alto"
-                if r >= 0.85:
-                    return "🟡 Normal"
+                if r >= 2.5:
+                    return "🟡 Atención"
                 return "🟢 Bajo"
             _cr_res["alerta"] = _cr_res["ratio"].apply(_cr_sem)
 
@@ -12759,12 +12761,13 @@ elif modulo.startswith("📊"):
             _cr_show["Personas"] = _cr_show["Personas"].fillna(0).astype(int)
             st.dataframe(_cr_show, use_container_width=True, hide_index=True)
             st.caption(
-                "Ratio = colaciones servidas ÷ turnos trabajados. 🔴 > 1,15 (posible fuga) · "
-                "🟡 0,85–1,15 · 🟢 < 0,85. 'Personas' = distintas que trabajaron en el período."
+                "Ratio = colaciones servidas ÷ turnos trabajados. "
+                "🟢 < 2,5 · 🟡 2,5–3,0 · 🔴 > 3,0 (posible fuga). "
+                "'Personas' = distintas que trabajaron en el período."
             )
 
             # Alerta de locales rojos
-            _cr_rojos = _cr_res[_cr_res["ratio"] > 1.15]["local"].tolist()
+            _cr_rojos = _cr_res[_cr_res["ratio"] > 3.0]["local"].tolist()
             if _cr_rojos:
                 st.error("🔴 Ratio alto (revisar): " + ", ".join(_cr_rojos))
 
@@ -12786,6 +12789,49 @@ elif modulo.startswith("📊"):
                 _cr_t_d = _cr_t_d[_cr_t_d["local"] == _cr_loc_sel]
                 _cr_c_d = _cr_c_d[_cr_c_d["local"] == _cr_loc_sel]
 
+            # ── Bajada de título: números que construyen el ratio del local ──
+            # (p. ej.  Providencia · 584 colaciones · 173 turnos · 35 personas · 3,38 🔴)
+            _bd_col = float(_cr_c_d["colaciones"].sum()) if not _cr_c_d.empty else 0.0
+            _bd_tur = float(_cr_t_d["turnos"].sum())
+            if _cr_loc_sel == "Todos":
+                _bd_per = int(_cr_res["personas_periodo"].fillna(0).sum())
+                _bd_nombre = "Todos los locales"
+            else:
+                _bd_row = _cr_res[_cr_res["local"] == _cr_loc_sel]
+                _bd_per = int(_bd_row["personas_periodo"].fillna(0).iloc[0]) if not _bd_row.empty else 0
+                _bd_nombre = _cr_loc_sel
+            _bd_ratio = (_bd_col / _bd_tur) if _bd_tur > 0 else float("nan")
+            _bd_estado = _cr_sem(_bd_ratio)
+            # color de acento según estado
+            _bd_acc = ("#e84545" if "🔴" in _bd_estado
+                       else "#e6b800" if "🟡" in _bd_estado
+                       else "#4caf7d" if "🟢" in _bd_estado else "#888")
+            _bd_ratio_txt = f"{_bd_ratio:.2f}".replace(".", ",") if _bd_tur > 0 else "s/d"
+
+            st.markdown(
+                f"<div style='display:flex;flex-wrap:wrap;align-items:baseline;gap:18px;"
+                f"background:#0e1116;border-left:4px solid {_bd_acc};"
+                f"padding:14px 18px;border-radius:8px;margin:6px 0 14px 0'>"
+                f"<span style='font-size:1.15rem;font-weight:700;color:#f0ede8'>{_bd_nombre}</span>"
+                f"<span style='color:#9aa0a6;font-size:0.9rem'>"
+                f"<b style='color:#f0ede8'>{int(_bd_col)}</b> colaciones · "
+                f"<b style='color:#f0ede8'>{int(_bd_tur)}</b> turnos · "
+                f"<b style='color:#f0ede8'>{_bd_per}</b> personas</span>"
+                f"<span style='margin-left:auto;font-size:1.35rem;font-weight:800;color:{_bd_acc}'>"
+                f"{_bd_ratio_txt}</span>"
+                f"<span style='font-size:1.05rem;color:{_bd_acc};font-weight:600'>{_bd_estado}</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+            if _bd_per > 0:
+                _bd_cp = f"{(_bd_col/_bd_per):.2f}".replace(".", ",")
+                st.caption(
+                    "Ratio de la bajada = colaciones ÷ turnos del rango. "
+                    f"Colac./persona = {_bd_cp} (referencia)."
+                )
+            else:
+                st.caption("Ratio de la bajada = colaciones ÷ turnos del rango.")
+
             _cr_t_dia = _cr_t_d.groupby("fecha")["turnos"].sum().reset_index()
             _cr_c_dia = (_cr_c_d.groupby("fecha")["colaciones"].sum().reset_index()
                          if not _cr_c_d.empty else pd.DataFrame(columns=["fecha","colaciones"]))
@@ -12795,18 +12841,35 @@ elif modulo.startswith("📊"):
             _cr_dia = _cr_dia.sort_values("fecha")
 
             if not _cr_dia.empty:
+                _cr_dia["alerta"] = _cr_dia["ratio"].apply(_cr_sem)
                 _cr_dia_show = _cr_dia.rename(columns={
                     "fecha": "Fecha", "colaciones": "Colaciones",
-                    "turnos": "Turnos", "ratio": "Colac./turno",
-                })
+                    "turnos": "Turnos", "ratio": "Colac./turno", "alerta": "Alerta",
+                })[["Fecha", "Colaciones", "Turnos", "Colac./turno", "Alerta"]]
                 _cr_dia_show["Colaciones"] = _cr_dia_show["Colaciones"].astype(int)
                 _cr_dia_show["Turnos"] = _cr_dia_show["Turnos"].astype(int)
                 st.dataframe(_cr_dia_show, use_container_width=True, hide_index=True)
 
-                st.markdown("#### 📈 Tendencia diaria del ratio")
+                # ── Gráfico de tendencia: solo aplica con ≥ 3 días con dato ──
                 _cr_trend = _cr_dia.dropna(subset=["ratio"]).set_index("fecha")["ratio"]
-                if not _cr_trend.empty:
-                    st.line_chart(_cr_trend)
+                if len(_cr_trend) >= 3:
+                    st.markdown("#### 📈 Tendencia diaria del ratio")
+                    _cr_trend_df = _cr_trend.rename("Colac./turno").to_frame()
+                    _cr_trend_df["🟡 2,5"] = 2.5
+                    _cr_trend_df["🔴 3,0"] = 3.0
+                    st.line_chart(_cr_trend_df,
+                                  color=["#5b8dd9", "#e6b800", "#e84545"])
+                    st.caption(
+                        "Líneas de referencia: 2,5 (atención) y 3,0 (alto). "
+                        "Útil para ver si un local sube de forma sostenida o si hay "
+                        "días puntuales (ej. cierres de mes) que inflan el promedio."
+                    )
+                else:
+                    st.info(
+                        "📈 Tendencia no aplicable: se necesitan al menos 3 días con dato "
+                        f"en el rango (hay {len(_cr_trend)}). Amplía el rango de fechas "
+                        "para visualizar la evolución."
+                    )
 
             # ════════ 4) INFORME COMPLETO (PDF) ════════
             st.markdown("### 📄 Informe completo")
