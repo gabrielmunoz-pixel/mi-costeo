@@ -9600,6 +9600,271 @@ if modulo.startswith("📦"):
 
 
 
+    # ── Tab 12: Estimador de Compras ──────────────────────────────────────────
+    with tab12:
+        st.markdown("#### 🛍️ Estimador de Compras por Local")
+        st.markdown("<div class='info-box'>Selecciona un mes de referencia y un local. El sistema calcula la cantidad ideal de cada ingrediente basándose en las ventas reales de ese período, aplicando un buffer de seguridad ajustable.</div>", unsafe_allow_html=True)
+
+        # ── Controles ────────────────────────────────────────────────────
+        _ec1, _ec2, _ec3, _ec4 = st.columns([2, 2, 1.5, 1])
+        with _ec1:
+            if 'ec_meses_cache' not in st.session_state:
+                st.session_state['ec_meses_cache'] = run_query("""
+                    SELECT DISTINCT DATE_TRUNC('month', fecha_venta)::date AS mes
+                    FROM ventas WHERE fecha_venta IS NOT NULL
+                    ORDER BY mes DESC LIMIT 24
+                """)
+            _meses_disp = st.session_state['ec_meses_cache']
+            if not _meses_disp.empty:
+                _meses_opts = _meses_disp['mes'].tolist()
+                _mes_labels = {m: m.strftime('%B %Y').capitalize() for m in _meses_opts}
+                _ec_mes = st.selectbox(
+                    "Mes de referencia",
+                    _meses_opts,
+                    format_func=lambda m: _mes_labels.get(m, str(m)),
+                    key='ec_mes'
+                )
+            else:
+                st.warning("Sin datos de ventas disponibles.")
+                _ec_mes = None
+
+        with _ec2:
+            _ec_locales = ['Todos'] + [l for l in [
+                'Vitacura','Las Condes','Chicureo','La Dehesa','Macul',
+                'La Reina','Quilin','Nueva Providencia','Providencia','Los Trapenses'
+            ]]
+            _ec_local = st.selectbox("Local", _ec_locales, key='ec_local')
+
+        with _ec3:
+            _ec_buffer = st.number_input(
+                "Buffer de seguridad (%)",
+                min_value=0, max_value=50, value=15, step=1,
+                key='ec_buffer',
+                help="Estándar industria: 10-20% para perecibles, 5-10% para secos."
+            )
+
+        with _ec4:
+            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+            _ec_btn = st.button("Calcular", key='ec_gen', use_container_width=True, type='primary')
+
+        # ── Cálculo ───────────────────────────────────────────────────────
+        _ec_cached = st.session_state.get('ec_result')
+        if _ec_btn or (_ec_cached is not None and not _ec_cached.empty):
+            if _ec_btn and _ec_mes:
+                with st.spinner("Calculando estimado de compras..."):
+                    import calendar as _cal
+                    _ec_fi = _ec_mes.replace(day=1)
+                    _ec_ff = _ec_mes.replace(day=_cal.monthrange(_ec_mes.year, _ec_mes.month)[1])
+                    _local_filter = "" if _ec_local == 'Todos' else "AND v.local = :local"
+
+                    # 1. Ventas del período: cantidad por sku_producto (incluye opciones)
+                    _q_ventas = f"""
+                        SELECT
+                            v.sku_producto,
+                            SUM(v.cantidad_vendida) AS unidades
+                        FROM ventas v
+                        WHERE v.fecha_venta BETWEEN :fi AND :ff
+                          AND v.local IS NOT NULL
+                          {_local_filter}
+                        GROUP BY v.sku_producto
+                    """
+                    _p_ventas = {'fi': str(_ec_fi), 'ff': str(_ec_ff)}
+                    if _ec_local != 'Todos':
+                        _p_ventas['local'] = _ec_local
+                    _df_ventas = run_query(_q_ventas, _p_ventas)
+
+                    # 2. Recetario completo (incluyendo opciones y PRO como ingrediente directo)
+                    _df_rec = get_recetas()
+
+                    if not _df_ventas.empty and not _df_rec.empty:
+                        _df_ventas['unidades'] = pd.to_numeric(_df_ventas['unidades'], errors='coerce').fillna(0)
+                        _df_rec['cant_real']   = pd.to_numeric(_df_rec['cant_real'],   errors='coerce').fillna(0)
+
+                        # 3. Cruzar ventas × receta → cantidad bruta por ingrediente
+                        _df_cross = pd.merge(
+                            _df_ventas,
+                            _df_rec[['codigo_venta','sku_ingrediente','nombre_ingrediente','cant_real']],
+                            left_on='sku_producto', right_on='codigo_venta',
+                            how='inner'
+                        )
+                        _df_cross['cantidad_total'] = _df_cross['unidades'] * _df_cross['cant_real']
+
+                        # 4. Agrupar por ingrediente
+                        _df_agg = (
+                            _df_cross
+                            .groupby(['sku_ingrediente','nombre_ingrediente'], as_index=False)
+                            ['cantidad_total'].sum()
+                        )
+                        _df_agg = _df_agg[_df_agg['cantidad_total'] > 0].copy()
+
+                        # 5. Aplicar buffer
+                        _buf = 1 + (_ec_buffer / 100)
+                        _df_agg['cantidad_con_buffer'] = _df_agg['cantidad_total'] * _buf
+
+                        # 6. Redondear a 2 decimales
+                        _df_agg['cantidad_total']       = _df_agg['cantidad_total'].round(2)
+                        _df_agg['cantidad_con_buffer']  = _df_agg['cantidad_con_buffer'].round(2)
+
+                        _df_agg = _df_agg.sort_values('cantidad_con_buffer', ascending=False).reset_index(drop=True)
+                        _df_agg['mes_ref']   = str(_ec_fi)
+                        _df_agg['local_ref'] = _ec_local
+                        _df_agg['buffer_pct'] = _ec_buffer
+
+                        st.session_state['ec_result']   = _df_agg
+                        st.session_state['ec_mes_label'] = _mes_labels.get(_ec_mes, str(_ec_mes))
+                        st.session_state['ec_local']    = _ec_local
+                        st.session_state['ec_buffer']   = _ec_buffer
+                    else:
+                        st.warning("Sin datos suficientes para el período/local seleccionado.")
+                        st.session_state['ec_result'] = pd.DataFrame()
+
+            _df_result = st.session_state.get('ec_result', pd.DataFrame())
+
+            if _df_result is not None and not _df_result.empty:
+                _ec_label  = st.session_state.get('ec_mes_label', '')
+                _ec_loc_lbl = st.session_state.get('ec_local', '')
+                _ec_buf_lbl = st.session_state.get('ec_buffer', 15)
+
+                st.markdown(f"<div style='margin-top:0.5rem'></div>", unsafe_allow_html=True)
+                st.caption(f"📅 Mes ref: **{_ec_label}** · 🏪 Local: **{_ec_loc_lbl}** · 🔒 Buffer: **+{_ec_buf_lbl}%** · {len(_df_result)} ingredientes")
+
+                # ── Tabla HTML ────────────────────────────────────────────
+                _ec_cols = ['sku_ingrediente','nombre_ingrediente','cantidad_total','cantidad_con_buffer']
+                _ec_headers = ['SKU', 'Ingrediente', 'Cantidad base', f'Con buffer (+{_ec_buf_lbl}%)']
+
+                _ec_html = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:0.8rem">'
+                _ec_html += '<thead><tr>'
+                for _h in _ec_headers:
+                    _align = 'left' if _h in ['SKU','Ingrediente'] else 'right'
+                    _ec_html += f'<th style="text-align:{_align};padding:8px 10px;background:#1F3864;color:#fff">{_h}</th>'
+                _ec_html += '</tr></thead><tbody>'
+
+                for _ri, _row in _df_result.iterrows():
+                    _bg = '#F5F5F5' if _ri % 2 == 0 else '#FFFFFF'
+                    _ec_html += f'<tr>'
+                    _ec_html += f'<td style="padding:6px 10px;background:{_bg};font-family:monospace;font-size:0.75rem">{_row["sku_ingrediente"]}</td>'
+                    _ec_html += f'<td style="padding:6px 10px;background:{_bg}">{_row["nombre_ingrediente"]}</td>'
+                    _ec_html += f'<td style="text-align:right;padding:6px 10px;background:{_bg}">{_row["cantidad_total"]:,.2f}</td>'
+                    _buf_val = _row["cantidad_con_buffer"]
+                    _ec_html += f'<td style="text-align:right;padding:6px 10px;background:{_bg};font-weight:bold;color:#1F3864">{_buf_val:,.2f}</td>'
+                    _ec_html += '</tr>'
+
+                _ec_html += '</tbody></table></div>'
+                st.markdown(_ec_html, unsafe_allow_html=True)
+
+                # ── Gráfico top 20 ────────────────────────────────────────
+                st.markdown("<div style='margin-top:1.5rem'></div>", unsafe_allow_html=True)
+                st.markdown("##### 📊 Top 20 ingredientes por volumen (con buffer)")
+
+                import plotly.graph_objects as go
+                _top20 = _df_result.head(20).copy()
+                _top20 = _top20.sort_values('cantidad_con_buffer', ascending=True)
+
+                _fig = go.Figure()
+                _fig.add_trace(go.Bar(
+                    y=_top20['nombre_ingrediente'],
+                    x=_top20['cantidad_total'],
+                    name='Cantidad base',
+                    orientation='h',
+                    marker_color='#ADBFD8',
+                ))
+                _fig.add_trace(go.Bar(
+                    y=_top20['nombre_ingrediente'],
+                    x=_top20['cantidad_con_buffer'] - _top20['cantidad_total'],
+                    name=f'Buffer +{_ec_buf_lbl}%',
+                    orientation='h',
+                    marker_color='#1F3864',
+                ))
+                _fig.update_layout(
+                    barmode='stack',
+                    height=560,
+                    margin=dict(l=0, r=20, t=20, b=20),
+                    xaxis_title="Cantidad",
+                    yaxis_title="",
+                    legend=dict(orientation='h', y=1.06, x=0),
+                    plot_bgcolor='white',
+                    paper_bgcolor='white',
+                    font=dict(size=11),
+                )
+                _fig.update_xaxes(showgrid=True, gridcolor='#EEEEEE')
+                _fig.update_yaxes(showgrid=False)
+                st.plotly_chart(_fig, use_container_width=True)
+
+                # ── Exportar Excel ────────────────────────────────────────
+                st.markdown("<div style='margin-top:1rem'></div>", unsafe_allow_html=True)
+                import io as _io_ec
+                from openpyxl import Workbook as _WBec
+                from openpyxl.styles import Font as _Fec, PatternFill as _PFec, Alignment as _Aec
+                from openpyxl.utils import get_column_letter as _gcl_ec
+
+                _ec_buf_io = _io_ec.BytesIO()
+                _wb_ec = _WBec()
+                _ws_ec = _wb_ec.active
+                _ws_ec.title = 'Estimado de Compras'
+                _ws_ec.sheet_properties.tabColor = '1F3864'
+                _ws_ec.sheet_view.showGridLines = False
+
+                # Título
+                _ws_ec.merge_cells('A1:D1')
+                _tc = _ws_ec.cell(row=1, column=1, value=f'Estimado de Compras — {_ec_label} — {_ec_loc_lbl}')
+                _tc.font = _Fec(name='Calibri', bold=True, size=12, color='FFFFFF')
+                _tc.fill = _PFec('solid', start_color='1F3864', end_color='1F3864')
+                _tc.alignment = _Aec(horizontal='left', vertical='center')
+                _ws_ec.row_dimensions[1].height = 26
+
+                # Subtítulo buffer
+                _ws_ec.merge_cells('A2:D2')
+                _sc = _ws_ec.cell(row=2, column=1, value=f'Buffer de seguridad aplicado: +{_ec_buf_lbl}%  |  Estándar industria: 10-20% perecibles, 5-10% secos')
+                _sc.font = _Fec(name='Calibri', italic=True, size=9, color='555555')
+                _sc.alignment = _Aec(horizontal='left', vertical='center')
+                _ws_ec.row_dimensions[2].height = 18
+
+                # Header
+                _hdrs = ['SKU Ingrediente', 'Nombre Ingrediente', 'Cantidad Base', f'Con Buffer (+{_ec_buf_lbl}%)']
+                for _ci, _h in enumerate(_hdrs, 1):
+                    _c = _ws_ec.cell(row=3, column=_ci, value=_h)
+                    _c.font = _Fec(name='Calibri', bold=True, size=9, color='FFFFFF')
+                    _c.fill = _PFec('solid', start_color='2E5090', end_color='2E5090')
+                    _c.alignment = _Aec(horizontal='right' if _ci > 2 else 'left', vertical='center')
+                _ws_ec.row_dimensions[3].height = 22
+
+                # Datos
+                for _ri, _row in _df_result.iterrows():
+                    _er = _ri + 4
+                    _bg = 'F5F5F5' if _ri % 2 == 0 else 'FFFFFF'
+                    _vals = [_row['sku_ingrediente'], _row['nombre_ingrediente'],
+                             _row['cantidad_total'], _row['cantidad_con_buffer']]
+                    for _ci, _v in enumerate(_vals, 1):
+                        _c = _ws_ec.cell(row=_er, column=_ci, value=_v)
+                        _c.font = _Fec(name='Calibri', size=9)
+                        _c.fill = _PFec('solid', start_color=_bg, end_color=_bg)
+                        _is_num = _ci > 2
+                        _c.alignment = _Aec(horizontal='right' if _is_num else 'left', vertical='center')
+                        if _is_num:
+                            _c.number_format = '#,##0.00'
+                        if _ci == 4:
+                            _c.font = _Fec(name='Calibri', size=9, bold=True, color='1F3864')
+                    _ws_ec.row_dimensions[_er].height = 15
+
+                # Anchos
+                _ws_ec.column_dimensions['A'].width = 20
+                _ws_ec.column_dimensions['B'].width = 34
+                _ws_ec.column_dimensions['C'].width = 18
+                _ws_ec.column_dimensions['D'].width = 20
+                _ws_ec.freeze_panes = 'A4'
+
+                _wb_ec.save(_ec_buf_io)
+                _ec_buf_io.seek(0)
+
+                _fname_ec = f"estimado_compras_{_ec_label.replace(' ','_')}_{_ec_loc_lbl.replace(' ','_')}.xlsx"
+                st.download_button(
+                    "📥 Exportar Excel",
+                    _ec_buf_io.getvalue(),
+                    file_name=_fname_ec,
+                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    use_container_width=True,
+                )
+
     with tab13:
         import re
         st.markdown("#### 👥 Asistencia RRHH — Hora Hombre")
@@ -20983,273 +21248,6 @@ elif modulo.startswith("📋 Notas de Crédito"):
                                     st.rerun()
                                 except Exception as _eu:
                                     st.error(f"Error: {_eu}")
-
-
-
-# ── Tab 12: Estimador de Compras ──────────────────────────────────────────
-    with tab12:
-        st.markdown("#### 🛍️ Estimador de Compras por Local")
-        st.markdown("<div class='info-box'>Selecciona un mes de referencia y un local. El sistema calcula la cantidad ideal de cada ingrediente basándose en las ventas reales de ese período, aplicando un buffer de seguridad ajustable.</div>", unsafe_allow_html=True)
-
-        # ── Controles ────────────────────────────────────────────────────
-        _ec1, _ec2, _ec3, _ec4 = st.columns([2, 2, 1.5, 1])
-        with _ec1:
-            if 'ec_meses_cache' not in st.session_state:
-                st.session_state['ec_meses_cache'] = run_query("""
-                    SELECT DISTINCT DATE_TRUNC('month', fecha_venta)::date AS mes
-                    FROM ventas WHERE fecha_venta IS NOT NULL
-                    ORDER BY mes DESC LIMIT 24
-                """)
-            _meses_disp = st.session_state['ec_meses_cache']
-            if not _meses_disp.empty:
-                _meses_opts = _meses_disp['mes'].tolist()
-                _mes_labels = {m: m.strftime('%B %Y').capitalize() for m in _meses_opts}
-                _ec_mes = st.selectbox(
-                    "Mes de referencia",
-                    _meses_opts,
-                    format_func=lambda m: _mes_labels.get(m, str(m)),
-                    key='ec_mes'
-                )
-            else:
-                st.warning("Sin datos de ventas disponibles.")
-                _ec_mes = None
-
-        with _ec2:
-            _ec_locales = ['Todos'] + [l for l in [
-                'Vitacura','Las Condes','Chicureo','La Dehesa','Macul',
-                'La Reina','Quilin','Nueva Providencia','Providencia','Los Trapenses'
-            ]]
-            _ec_local = st.selectbox("Local", _ec_locales, key='ec_local')
-
-        with _ec3:
-            _ec_buffer = st.number_input(
-                "Buffer de seguridad (%)",
-                min_value=0, max_value=50, value=15, step=1,
-                key='ec_buffer',
-                help="Estándar industria: 10-20% para perecibles, 5-10% para secos."
-            )
-
-        with _ec4:
-            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-            _ec_btn = st.button("Calcular", key='ec_gen', use_container_width=True, type='primary')
-
-        # ── Cálculo ───────────────────────────────────────────────────────
-        _ec_cached = st.session_state.get('ec_result')
-        if _ec_btn or (_ec_cached is not None and not _ec_cached.empty):
-            if _ec_btn and _ec_mes:
-                with st.spinner("Calculando estimado de compras..."):
-                    import calendar as _cal
-                    _ec_fi = _ec_mes.replace(day=1)
-                    _ec_ff = _ec_mes.replace(day=_cal.monthrange(_ec_mes.year, _ec_mes.month)[1])
-                    _local_filter = "" if _ec_local == 'Todos' else "AND v.local = :local"
-
-                    # 1. Ventas del período: cantidad por sku_producto (incluye opciones)
-                    _q_ventas = f"""
-                        SELECT
-                            v.sku_producto,
-                            SUM(v.cantidad_vendida) AS unidades
-                        FROM ventas v
-                        WHERE v.fecha_venta BETWEEN :fi AND :ff
-                          AND v.local IS NOT NULL
-                          {_local_filter}
-                        GROUP BY v.sku_producto
-                    """
-                    _p_ventas = {'fi': str(_ec_fi), 'ff': str(_ec_ff)}
-                    if _ec_local != 'Todos':
-                        _p_ventas['local'] = _ec_local
-                    _df_ventas = run_query(_q_ventas, _p_ventas)
-
-                    # 2. Recetario completo (incluyendo opciones y PRO como ingrediente directo)
-                    _df_rec = get_recetas()
-
-                    if not _df_ventas.empty and not _df_rec.empty:
-                        _df_ventas['unidades'] = pd.to_numeric(_df_ventas['unidades'], errors='coerce').fillna(0)
-                        _df_rec['cant_real']   = pd.to_numeric(_df_rec['cant_real'],   errors='coerce').fillna(0)
-
-                        # 3. Cruzar ventas × receta → cantidad bruta por ingrediente
-                        _df_cross = pd.merge(
-                            _df_ventas,
-                            _df_rec[['codigo_venta','sku_ingrediente','nombre_ingrediente','cant_real']],
-                            left_on='sku_producto', right_on='codigo_venta',
-                            how='inner'
-                        )
-                        _df_cross['cantidad_total'] = _df_cross['unidades'] * _df_cross['cant_real']
-
-                        # 4. Agrupar por ingrediente
-                        _df_agg = (
-                            _df_cross
-                            .groupby(['sku_ingrediente','nombre_ingrediente'], as_index=False)
-                            ['cantidad_total'].sum()
-                        )
-                        _df_agg = _df_agg[_df_agg['cantidad_total'] > 0].copy()
-
-                        # 5. Aplicar buffer
-                        _buf = 1 + (_ec_buffer / 100)
-                        _df_agg['cantidad_con_buffer'] = _df_agg['cantidad_total'] * _buf
-
-                        # 6. Redondear a 2 decimales
-                        _df_agg['cantidad_total']       = _df_agg['cantidad_total'].round(2)
-                        _df_agg['cantidad_con_buffer']  = _df_agg['cantidad_con_buffer'].round(2)
-
-                        _df_agg = _df_agg.sort_values('cantidad_con_buffer', ascending=False).reset_index(drop=True)
-                        _df_agg['mes_ref']   = str(_ec_fi)
-                        _df_agg['local_ref'] = _ec_local
-                        _df_agg['buffer_pct'] = _ec_buffer
-
-                        st.session_state['ec_result']   = _df_agg
-                        st.session_state['ec_mes_label'] = _mes_labels.get(_ec_mes, str(_ec_mes))
-                        st.session_state['ec_local']    = _ec_local
-                        st.session_state['ec_buffer']   = _ec_buffer
-                    else:
-                        st.warning("Sin datos suficientes para el período/local seleccionado.")
-                        st.session_state['ec_result'] = pd.DataFrame()
-
-            _df_result = st.session_state.get('ec_result', pd.DataFrame())
-
-            if _df_result is not None and not _df_result.empty:
-                _ec_label  = st.session_state.get('ec_mes_label', '')
-                _ec_loc_lbl = st.session_state.get('ec_local', '')
-                _ec_buf_lbl = st.session_state.get('ec_buffer', 15)
-
-                st.markdown(f"<div style='margin-top:0.5rem'></div>", unsafe_allow_html=True)
-                st.caption(f"📅 Mes ref: **{_ec_label}** · 🏪 Local: **{_ec_loc_lbl}** · 🔒 Buffer: **+{_ec_buf_lbl}%** · {len(_df_result)} ingredientes")
-
-                # ── Tabla HTML ────────────────────────────────────────────
-                _ec_cols = ['sku_ingrediente','nombre_ingrediente','cantidad_total','cantidad_con_buffer']
-                _ec_headers = ['SKU', 'Ingrediente', 'Cantidad base', f'Con buffer (+{_ec_buf_lbl}%)']
-
-                _ec_html = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:0.8rem">'
-                _ec_html += '<thead><tr>'
-                for _h in _ec_headers:
-                    _align = 'left' if _h in ['SKU','Ingrediente'] else 'right'
-                    _ec_html += f'<th style="text-align:{_align};padding:8px 10px;background:#1F3864;color:#fff">{_h}</th>'
-                _ec_html += '</tr></thead><tbody>'
-
-                for _ri, _row in _df_result.iterrows():
-                    _bg = '#F5F5F5' if _ri % 2 == 0 else '#FFFFFF'
-                    _ec_html += f'<tr>'
-                    _ec_html += f'<td style="padding:6px 10px;background:{_bg};font-family:monospace;font-size:0.75rem">{_row["sku_ingrediente"]}</td>'
-                    _ec_html += f'<td style="padding:6px 10px;background:{_bg}">{_row["nombre_ingrediente"]}</td>'
-                    _ec_html += f'<td style="text-align:right;padding:6px 10px;background:{_bg}">{_row["cantidad_total"]:,.2f}</td>'
-                    _buf_val = _row["cantidad_con_buffer"]
-                    _ec_html += f'<td style="text-align:right;padding:6px 10px;background:{_bg};font-weight:bold;color:#1F3864">{_buf_val:,.2f}</td>'
-                    _ec_html += '</tr>'
-
-                _ec_html += '</tbody></table></div>'
-                st.markdown(_ec_html, unsafe_allow_html=True)
-
-                # ── Gráfico top 20 ────────────────────────────────────────
-                st.markdown("<div style='margin-top:1.5rem'></div>", unsafe_allow_html=True)
-                st.markdown("##### 📊 Top 20 ingredientes por volumen (con buffer)")
-
-                import plotly.graph_objects as go
-                _top20 = _df_result.head(20).copy()
-                _top20 = _top20.sort_values('cantidad_con_buffer', ascending=True)
-
-                _fig = go.Figure()
-                _fig.add_trace(go.Bar(
-                    y=_top20['nombre_ingrediente'],
-                    x=_top20['cantidad_total'],
-                    name='Cantidad base',
-                    orientation='h',
-                    marker_color='#ADBFD8',
-                ))
-                _fig.add_trace(go.Bar(
-                    y=_top20['nombre_ingrediente'],
-                    x=_top20['cantidad_con_buffer'] - _top20['cantidad_total'],
-                    name=f'Buffer +{_ec_buf_lbl}%',
-                    orientation='h',
-                    marker_color='#1F3864',
-                ))
-                _fig.update_layout(
-                    barmode='stack',
-                    height=560,
-                    margin=dict(l=0, r=20, t=20, b=20),
-                    xaxis_title="Cantidad",
-                    yaxis_title="",
-                    legend=dict(orientation='h', y=1.06, x=0),
-                    plot_bgcolor='white',
-                    paper_bgcolor='white',
-                    font=dict(size=11),
-                )
-                _fig.update_xaxes(showgrid=True, gridcolor='#EEEEEE')
-                _fig.update_yaxes(showgrid=False)
-                st.plotly_chart(_fig, use_container_width=True)
-
-                # ── Exportar Excel ────────────────────────────────────────
-                st.markdown("<div style='margin-top:1rem'></div>", unsafe_allow_html=True)
-                import io as _io_ec
-                from openpyxl import Workbook as _WBec
-                from openpyxl.styles import Font as _Fec, PatternFill as _PFec, Alignment as _Aec
-                from openpyxl.utils import get_column_letter as _gcl_ec
-
-                _ec_buf_io = _io_ec.BytesIO()
-                _wb_ec = _WBec()
-                _ws_ec = _wb_ec.active
-                _ws_ec.title = 'Estimado de Compras'
-                _ws_ec.sheet_properties.tabColor = '1F3864'
-                _ws_ec.sheet_view.showGridLines = False
-
-                # Título
-                _ws_ec.merge_cells('A1:D1')
-                _tc = _ws_ec.cell(row=1, column=1, value=f'Estimado de Compras — {_ec_label} — {_ec_loc_lbl}')
-                _tc.font = _Fec(name='Calibri', bold=True, size=12, color='FFFFFF')
-                _tc.fill = _PFec('solid', start_color='1F3864', end_color='1F3864')
-                _tc.alignment = _Aec(horizontal='left', vertical='center')
-                _ws_ec.row_dimensions[1].height = 26
-
-                # Subtítulo buffer
-                _ws_ec.merge_cells('A2:D2')
-                _sc = _ws_ec.cell(row=2, column=1, value=f'Buffer de seguridad aplicado: +{_ec_buf_lbl}%  |  Estándar industria: 10-20% perecibles, 5-10% secos')
-                _sc.font = _Fec(name='Calibri', italic=True, size=9, color='555555')
-                _sc.alignment = _Aec(horizontal='left', vertical='center')
-                _ws_ec.row_dimensions[2].height = 18
-
-                # Header
-                _hdrs = ['SKU Ingrediente', 'Nombre Ingrediente', 'Cantidad Base', f'Con Buffer (+{_ec_buf_lbl}%)']
-                for _ci, _h in enumerate(_hdrs, 1):
-                    _c = _ws_ec.cell(row=3, column=_ci, value=_h)
-                    _c.font = _Fec(name='Calibri', bold=True, size=9, color='FFFFFF')
-                    _c.fill = _PFec('solid', start_color='2E5090', end_color='2E5090')
-                    _c.alignment = _Aec(horizontal='right' if _ci > 2 else 'left', vertical='center')
-                _ws_ec.row_dimensions[3].height = 22
-
-                # Datos
-                for _ri, _row in _df_result.iterrows():
-                    _er = _ri + 4
-                    _bg = 'F5F5F5' if _ri % 2 == 0 else 'FFFFFF'
-                    _vals = [_row['sku_ingrediente'], _row['nombre_ingrediente'],
-                             _row['cantidad_total'], _row['cantidad_con_buffer']]
-                    for _ci, _v in enumerate(_vals, 1):
-                        _c = _ws_ec.cell(row=_er, column=_ci, value=_v)
-                        _c.font = _Fec(name='Calibri', size=9)
-                        _c.fill = _PFec('solid', start_color=_bg, end_color=_bg)
-                        _is_num = _ci > 2
-                        _c.alignment = _Aec(horizontal='right' if _is_num else 'left', vertical='center')
-                        if _is_num:
-                            _c.number_format = '#,##0.00'
-                        if _ci == 4:
-                            _c.font = _Fec(name='Calibri', size=9, bold=True, color='1F3864')
-                    _ws_ec.row_dimensions[_er].height = 15
-
-                # Anchos
-                _ws_ec.column_dimensions['A'].width = 20
-                _ws_ec.column_dimensions['B'].width = 34
-                _ws_ec.column_dimensions['C'].width = 18
-                _ws_ec.column_dimensions['D'].width = 20
-                _ws_ec.freeze_panes = 'A4'
-
-                _wb_ec.save(_ec_buf_io)
-                _ec_buf_io.seek(0)
-
-                _fname_ec = f"estimado_compras_{_ec_label.replace(' ','_')}_{_ec_loc_lbl.replace(' ','_')}.xlsx"
-                st.download_button(
-                    "📥 Exportar Excel",
-                    _ec_buf_io.getvalue(),
-                    file_name=_fname_ec,
-                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                    use_container_width=True,
-                )
 
 
 
