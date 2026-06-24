@@ -20912,7 +20912,7 @@ elif modulo.startswith("📋 Notas de Crédito"):
     # ── Historial ─────────────────────────────────────────────
     with _nc_tab2:
         _df_nc_hist = run_query("""
-            SELECT id, fecha_registro, local, folio_factura, nombre_proveedor,
+            SELECT id, fecha_registro, local, folio_factura, rut_proveedor, nombre_proveedor,
                    nombre_producto, sku, monto, periodo, fecha_dte,
                    estado, observacion, registrado_por
             FROM notas_credito
