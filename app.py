@@ -263,13 +263,15 @@ def _check_login(username, password):
             return None
         with engine.connect() as conn:
             df = pd.read_sql(
-                text("SELECT password_hash, permisos, local FROM app_usuarios WHERE username=:u"),
+                text("SELECT username, password_hash, permisos, local "
+                     "FROM app_usuarios WHERE LOWER(username)=LOWER(:u)"),
                 conn, params={"u": username}
             )
         if not df.empty and df["password_hash"].iloc[0] == _hash_pw(password):
+            _uname = df["username"].iloc[0]  # username real (forma canónica en BD)
             _local = df["local"].iloc[0] if "local" in df.columns else None
             _permisos = df["permisos"].iloc[0]
-            return (_permisos, _local)
+            return (_permisos, _local, _uname)
     except Exception:
         pass
     return None
@@ -373,7 +375,10 @@ def _render_login():
             if not username.strip():
                 st.error("Ingresa tu usuario.")
             else:
-                bloqueado, segundos = _esta_bloqueado(username.strip())
+                # Username normalizado (minúsculas) para contador de intentos/bloqueo,
+                # de modo que "Nicolas" y "nicolas" cuenten como el mismo usuario.
+                _u_norm = username.strip().lower()
+                bloqueado, segundos = _esta_bloqueado(_u_norm)
                 if bloqueado:
                     minutos = segundos // 60
                     segs    = segundos % 60
@@ -381,24 +386,24 @@ def _render_login():
                 else:
                     result = _check_login(username.strip(), password)
                     if result is not None:
-                        _resetear_intentos(username.strip())
-                        permisos_raw, user_local = result
+                        _resetear_intentos(_u_norm)
+                        permisos_raw, user_local, _uname_real = result
                         role    = "admin" if permisos_raw == "admin" else "user"
                         permisos = permisos_raw
-                        token   = _create_session(username.strip(), role, permisos, local=user_local)
+                        token   = _create_session(_uname_real, role, permisos, local=user_local)
                         if token:
                             st.query_params["s"] = token
                         st.session_state["logged_in"]     = True
-                        st.session_state["current_user"]  = username.strip()
+                        st.session_state["current_user"]  = _uname_real
                         st.session_state["user_role"]     = role
                         st.session_state["user_permisos"] = permisos
                         st.session_state["user_local"]    = user_local
                         st.session_state["session_token"] = token
                         st.rerun()
                     else:
-                        _registrar_intento_fallido(username.strip())
-                        _, segundos_post = _esta_bloqueado(username.strip())
-                        intentos, _ = _get_login_intentos(username.strip())
+                        _registrar_intento_fallido(_u_norm)
+                        _, segundos_post = _esta_bloqueado(_u_norm)
+                        intentos, _ = _get_login_intentos(_u_norm)
                         restantes = max(0, 4 - intentos)
                         if segundos_post > 0:
                             st.error("🔒 Demasiados intentos fallidos. Usuario bloqueado por 15 minutos.")
@@ -498,13 +503,22 @@ def _render_gestion_usuarios():
             else:
                 try:
                     engine = get_engine()
+                    # Evitar duplicados que difieran solo en mayúsculas/minúsculas
                     with engine.connect() as conn:
-                        conn.execute(text(
-                            "INSERT INTO app_usuarios (username, password_hash, permisos, local) VALUES (:u,:h,:p,:l)"),
-                            {"u": nu_user.strip(), "h": _hash_pw(nu_pw), "p": ",".join(nu_perm), "l": nu_local_val})
-                        conn.commit()
-                    st.success(f"✅ Usuario {nu_user} creado.")
-                    st.rerun()
+                        _dup = pd.read_sql(text(
+                            "SELECT username FROM app_usuarios WHERE LOWER(username)=LOWER(:u)"),
+                            conn, params={"u": nu_user.strip()})
+                    if not _dup.empty:
+                        st.error(f"Ya existe un usuario '{_dup['username'].iloc[0]}' "
+                                 "(el nombre no distingue mayúsculas/minúsculas).")
+                    else:
+                        with engine.connect() as conn:
+                            conn.execute(text(
+                                "INSERT INTO app_usuarios (username, password_hash, permisos, local) VALUES (:u,:h,:p,:l)"),
+                                {"u": nu_user.strip(), "h": _hash_pw(nu_pw), "p": ",".join(nu_perm), "l": nu_local_val})
+                            conn.commit()
+                        st.success(f"✅ Usuario {nu_user} creado.")
+                        st.rerun()
                 except Exception as e:
                     st.error(f"Error: {e}")
 
