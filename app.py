@@ -159,40 +159,72 @@ def _ensure_sessions_table():
                     last_activity TIMESTAMP NOT NULL DEFAULT NOW()
                 )
             """))
+            # Migración: columna fingerprint para atar la sesión a un navegador
+            conn.execute(text(
+                "ALTER TABLE app_sesiones ADD COLUMN IF NOT EXISTS fingerprint TEXT"))
             conn.commit()
     except Exception:
         pass
+
+
+def _client_fingerprint():
+    """Huella del navegador/cliente: hash de User-Agent + IP aproximada.
+    Sirve para que un token robado desde otro equipo no sea válido."""
+    import hashlib
+    ua, ip = "", ""
+    try:
+        _h = st.context.headers or {}
+        ua = _h.get("User-Agent", "") or _h.get("user-agent", "")
+        # IP: detrás de proxy (Streamlit Cloud) suele venir en X-Forwarded-For
+        ip = (_h.get("X-Forwarded-For", "") or _h.get("x-forwarded-for", "")
+              or _h.get("Host", ""))
+        ip = ip.split(",")[0].strip()  # primer hop
+    except Exception:
+        pass
+    base = f"{ua}|{ip}"
+    if not base.strip("|"):
+        return None  # no se pudo determinar -> no atamos (evita falsos bloqueos)
+    return hashlib.sha256(base.encode("utf-8")).hexdigest()
 
 def _create_session(username, role, permisos, local=None):
     """Crea sesión en BD y retorna token."""
     engine = get_engine()
     if engine is None: return None
     token = str(_uuid.uuid4())
+    _fp = _client_fingerprint()
     try:
         with engine.connect() as conn:
             conn.execute(text(
-                "INSERT INTO app_sesiones (token, username, role, permisos, local, last_activity) "
-                "VALUES (:t, :u, :r, :p, :l, NOW())"
-            ), {"t": token, "u": username, "r": role, "p": permisos, "l": local})
+                "INSERT INTO app_sesiones (token, username, role, permisos, local, fingerprint, last_activity) "
+                "VALUES (:t, :u, :r, :p, :l, :fp, NOW())"
+            ), {"t": token, "u": username, "r": role, "p": permisos, "l": local, "fp": _fp})
             conn.commit()
         return token
     except Exception:
         return None
 
 def _validate_session(token):
-    """Valida token y actualiza actividad. Retorna (username, role, permisos, local) o None."""
+    """Valida token y actualiza actividad. Retorna (username, role, permisos, local) o None.
+    Rechaza si el navegador actual no coincide con el que creó la sesión."""
     engine = get_engine()
     if engine is None or not token: return None
     try:
         with engine.connect() as conn:
             df = pd.read_sql(text(
-                "SELECT username, role, permisos, local, last_activity FROM app_sesiones WHERE token=:t"
+                "SELECT username, role, permisos, local, last_activity, fingerprint FROM app_sesiones WHERE token=:t"
             ), conn, params={"t": token})
             if df.empty: return None
             last = pd.to_datetime(df['last_activity'].iloc[0])
             if (datetime.utcnow() - last).total_seconds() > _SESSION_TIMEOUT_HOURS * 3600:
                 conn.execute(text("DELETE FROM app_sesiones WHERE token=:t"), {"t": token})
                 conn.commit()
+                return None
+            # ── Validación de navegador (anti session-hijacking por URL) ──
+            _fp_guardado = df['fingerprint'].iloc[0] if 'fingerprint' in df.columns else None
+            _fp_actual = _client_fingerprint()
+            # Solo bloqueamos si AMBOS existen y difieren. Si alguno es None
+            # (no se pudo leer la huella), no bloqueamos para evitar lockouts.
+            if _fp_guardado and _fp_actual and _fp_guardado != _fp_actual:
                 return None
             conn.execute(text("UPDATE app_sesiones SET last_activity=NOW() WHERE token=:t"), {"t": token})
             conn.commit()
@@ -331,6 +363,9 @@ def _render_login():
     """, unsafe_allow_html=True)
     col = st.columns([1,2,1])[1]
     with col:
+        if st.session_state.pop("_sesion_rechazada", False):
+            st.warning("🔒 Por seguridad, debes iniciar sesión desde este navegador. "
+                       "Un enlace de sesión no puede usarse en otro equipo o navegador.")
         st.markdown("#### Iniciar Sesión")
         username = st.text_input("Usuario", key="login_user")
         password = st.text_input("Contraseña", type="password", key="login_pw")
@@ -3282,8 +3317,9 @@ if not st.session_state.get("logged_in"):
             st.session_state["user_local"]    = _sess[3] if len(_sess) > 3 else None
             st.session_state["session_token"] = _token_from_url
         else:
-            # Token expirado o inválido: limpiar URL
+            # Token expirado, inválido, o abierto desde otro navegador/equipo.
             st.query_params.clear()
+            st.session_state["_sesion_rechazada"] = True
 
 if not st.session_state.get("logged_in"):
     _render_login()
