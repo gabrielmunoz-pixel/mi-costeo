@@ -397,7 +397,7 @@ def _render_gestion_usuarios():
             for _, row in df_users.iterrows():
                 with st.expander(f"👤 {row['username']} {('· ' + str(row.get('local','')) ) if row.get('local') else ''}"):
                     permisos_act = row['permisos'] if row['permisos'] else ""
-                    opciones_mod = ["📦 Gestión de Datos", "📊 Informes", "📋 Notas de Crédito"]
+                    opciones_mod = ["📦 Gestión de Datos", "📊 Informes", "📋 Notas de Crédito", "📥 Stock Cierre"]
                     sel = st.multiselect(
                         "Módulos habilitados",
                         opciones_mod,
@@ -452,7 +452,7 @@ def _render_gestion_usuarios():
         st.markdown("#### Nuevo Usuario")
         nu_user = st.text_input("Usuario", key="nu_user")
         nu_pw   = st.text_input("Contraseña", type="password", key="nu_pw")
-        opciones_mod2 = ["📦 Gestión de Datos", "📊 Informes", "📋 Notas de Crédito"]
+        opciones_mod2 = ["📦 Gestión de Datos", "📊 Informes", "📋 Notas de Crédito", "📥 Stock Cierre"]
         nu_perm = st.multiselect("Módulos habilitados", opciones_mod2, key="nu_perm")
         _locales_nu_list = ["— Sin restricción —", "Vitacura", "Las Condes", "Chicureo", "La Dehesa", "Macul", "La Reina", "Quilin", "Nueva Providencia", "Providencia", "Los Trapenses"]
         nu_local = st.selectbox("Local asignado", _locales_nu_list, key="nu_local")
@@ -923,6 +923,19 @@ def _init_db():
         "CREATE INDEX IF NOT EXISTS idx_opdia_local_fecha ON opciones_diarias (local, fecha_venta)",
         "CREATE INDEX IF NOT EXISTS idx_opdia_padre       ON opciones_diarias (sku_padre, sku_opcion)",
         "CREATE INDEX IF NOT EXISTS idx_ventas_esopcion_ab ON ventas (es_opcion, ab_categoria, fecha_venta)",
+        # --- Cierre diario de stock sobrante por categoría de proteína ---
+        """CREATE TABLE IF NOT EXISTS stock_cierre_diario (
+            id              bigserial         PRIMARY KEY,
+            fecha           date              NOT NULL,
+            local           text              NOT NULL,
+            categoria       text              NOT NULL,
+            cantidad        double precision  NOT NULL DEFAULT 0,
+            fecha_registro  timestamp         NOT NULL DEFAULT now(),
+            registrado_por  text,
+            observacion     text,
+            UNIQUE (fecha, local, categoria)
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_stkcierre_local_fecha ON stock_cierre_diario (local, fecha)",
     ]
     try:
         with engine.begin() as conn:
@@ -944,6 +957,225 @@ def run_query(sql, params=None):
     except Exception as e:
         st.error(f"Error en consulta: {e}")
         return pd.DataFrame()
+
+
+# ============================================================
+# Helper: máximos por día de semana (Control de Producción)
+# Reutilizable por el módulo Stock Cierre / Producción sugerida
+# ============================================================
+_CP_SKU_CAT = {
+    'AE02': 'Crudo Aleman Experto',
+    'AE03': 'Hamburguesa',
+    'AE04': 'Hamburguesa',
+    'AE22': 'Pollo Ensalada Cesar',
+    'AE23': 'Pollo Panko Ensalada',
+    'AE24': 'Churrasco',
+    'AE25': 'Crudo Aleman Experto',
+    'AE26': 'Costillas',
+    'AVE-001': 'Ave',
+    'AVE-002': 'Ave',
+    'AVE-003': 'Ave',
+    'AVE-004': 'Ave',
+    'AVE-005': 'Ave',
+    'AVE-006': 'Ave',
+    'AVE-007': 'Ave',
+    'AVE-008': 'Ave',
+    'AVE-009': 'Ave',
+    'AVE-010': 'Ave',
+    'AVESIT-002': 'Ave',
+    'AVEX-020': 'Ave',
+    'AVEX-021': 'Ave',
+    'BOLNX-01': 'Hamburguesa Niño',
+    'BOLNX-02': 'Churrasco Niño',
+    'CHU-001': 'Churrasco',
+    'CHU-002': 'Churrasco',
+    'CHU-003': 'Churrasco',
+    'CHU-004': 'Churrasco',
+    'CHU-005': 'Churrasco',
+    'CHU-006': 'Churrasco',
+    'CHU-007': 'Churrasco',
+    'CHU-008': 'Churrasco',
+    'CHU-009': 'Churrasco',
+    'CHU-010': 'Churrasco',
+    'CHUSIT-002': 'Churrasco',
+    'CHUX-020': 'Churrasco',
+    'CHUX-021': 'Churrasco',
+    'CPC-010': 'Hamburguesa',
+    'CPP-001': 'Mechada',
+    'CPP-002': 'Churrasco',
+    'CPP-003': 'Lomito',
+    'CPP-004': 'Pollo Panko',
+    'CPP-007': 'Hamburguesa',
+    'ENS-001': 'Atun',
+    'ENS-007': 'Pollo Panko Ensalada',
+    'ENS-008': 'Atun Ensalada',
+    'ENS-019': 'Carpaccio Filete Ens',
+    'FIL-001': 'Churrasco Filete',
+    'FIL-002': 'Churrasco Filete',
+    'FIL-003': 'Churrasco Filete',
+    'FIL-004': 'Churrasco Filete',
+    'FIL-005': 'Churrasco Filete',
+    'FIL-006': 'Churrasco Filete',
+    'FIL-007': 'Churrasco Filete',
+    'FIL-008': 'Churrasco Filete',
+    'FIL-009': 'Churrasco Filete',
+    'FIL-010': 'Churrasco Filete',
+    'FILSIT-002': 'Churrasco Filete',
+    'FILX-020': 'Churrasco Filete',
+    'FILX-021': 'Churrasco Filete',
+    'HAC-001': 'Hamburguesa Rellena',
+    'HAC-003': 'Hamburguesa',
+    'HAC-006': 'Hamburguesa',
+    'HAC-007': 'Hamburguesa',
+    'HAC-008': 'Hamburguesa',
+    'HAC-009': 'Hamburguesa',
+    'HAC-010': 'Hamburguesa',
+    'HAC-012': 'Hamburguesa',
+    'HAM-001': 'Hamburguesa',
+    'HAM-002': 'Hamburguesa',
+    'HAM-003': 'Hamburguesa',
+    'HAM-004': 'Hamburguesa',
+    'HAM-005': 'Hamburguesa',
+    'HAM-006': 'Hamburguesa',
+    'HAM-007': 'Hamburguesa',
+    'HAM-008': 'Hamburguesa',
+    'HAM-009': 'Hamburguesa',
+    'HAM-010': 'Hamburguesa',
+    'HAMSIT-002': 'Hamburguesa',
+    'HAMX-020': 'Hamburguesa',
+    'HAMX-021': 'Hamburguesa',
+    'HAQ-001': 'Hamburguesa Quinoa',
+    'HAQ-002': 'Hamburguesa Quinoa',
+    'HAQ-003': 'Hamburguesa Quinoa',
+    'HAQ-004': 'Hamburguesa Quinoa',
+    'HAQ-005': 'Hamburguesa Quinoa',
+    'HAQ-006': 'Hamburguesa Quinoa',
+    'HAQ-007': 'Hamburguesa Quinoa',
+    'LOM-001': 'Lomito',
+    'LOM-002': 'Lomito',
+    'LOM-003': 'Lomito',
+    'LOM-004': 'Lomito',
+    'LOM-005': 'Lomito',
+    'LOM-006': 'Lomito',
+    'LOM-007': 'Lomito',
+    'LOM-008': 'Lomito',
+    'LOM-009': 'Lomito',
+    'LOM-010': 'Lomito',
+    'LOMSIT-002': 'Lomito',
+    'LOMX-020': 'Lomito',
+    'LOMX-021': 'Lomito',
+    'MEC-001': 'Mechada',
+    'MEC-002': 'Mechada',
+    'MEC-003': 'Mechada',
+    'MEC-004': 'Mechada',
+    'MEC-005': 'Mechada',
+    'MEC-006': 'Mechada',
+    'MEC-007': 'Mechada',
+    'MEC-008': 'Mechada',
+    'MEC-009': 'Mechada',
+    'MEC-010': 'Mechada',
+    'MECX-020': 'Mechada',
+    'MECX-021': 'Mechada',
+    'MEJ-001': 'Churrasco',
+    'MEJ-003': 'Hamburguesa',
+    'MEJ-046': 'Hamburguesa Quinoa',
+    'MEJ-047': 'Pollo Ensalada Cesar',
+    'MEJ-048': 'Churrasco',
+    'MEJ-049': 'Lomito',
+    'MEJ-050': 'Hamburguesa',
+    'MEJ-052': 'Ave',
+    'MEJ-055': 'Crudo Aleman Experto',
+    'NIN-003': 'Churrasco Niño',
+    'NIN-004': 'Hamburguesa Niño',
+    'NIN-006': 'Hamburguesa Niño',
+    'NIN-007': 'Hamburguesa Niño',
+    'NIN-009': 'Churrasco Niño',
+    'PAC-001': 'Crudo Aleman Experto',
+    'PAC-002': 'Crudo Filete',
+    'PAC-004': 'Tiradito de Atun',
+    'PAC-005': 'Tartar de Atun',
+    'PAC-013': 'Currywurst',
+    'PAC-015': 'Carpaccio Filete',
+    'PAC-018': 'Tiradito de Atun',
+    'PER-001': 'Pernil',
+    'PER-002': 'Pernil',
+    'PER-003': 'Pernil',
+    'PER-004': 'Pernil',
+    'PER-005': 'Pernil',
+    'PER-006': 'Pernil',
+    'PER-007': 'Pernil',
+    'PER-008': 'Pernil',
+    'PER-009': 'Pernil',
+    'PER-010': 'Pernil',
+    'PERSIT-002': 'Pernil',
+    'PERX-020': 'Pernil',
+    'PERX-021': 'Pernil',
+    'PLA-001': 'Escalopa',
+    'PLA-002': 'Escalopa',
+    'PLA-003': 'Escalopa',
+    'PLA-004': 'Escalopa',
+    'PLA-005': 'Chuleta',
+    'PLA-006': 'Bratwurst',
+    'PLA-007': 'Bratwurst',
+    'PLA-009': 'Chuleta',
+    'PLC-001': 'Costillas',
+    'PLC-002': 'Costillas',
+    'PLC-003': 'Costillas',
+    'PLC-004': 'Filete Medallon',
+    'PLC-005': 'Filete Medallon',
+    'PLC-006': 'Filete Medallon',
+    'PLC-007': 'Filete Medallon',
+    'PLC-008': 'Lomo Liso',
+    'PLC-009': 'Lomo Liso',
+    'PLC-012': 'Pollo Panko',
+    'PLC-013': 'Hamburguesa',
+    'PLC-014': 'Hamburguesa',
+    'PLC-016': 'Atun',
+    'PLC-018': 'Costillas',
+    'PLC-019': 'Costillas',
+    'PLC-020': 'Costillas',
+    'PLC-021': 'Pollo Panko',
+    'PLC-022': 'Lomo Vetado',
+    'PYAH-001': 'Hamburguesa',
+    'SUB001': 'Hamburguesa',
+    'SUB002': 'Hamburguesa Rellena',
+    'SUB003': 'Hamburguesa Niño',
+}
+
+
+def _cp_maximos_por_dia(mes, local="Todos"):
+    """Devuelve dict {categoria: {dow: max}} con el máximo vendido por categoría
+    en cada día de la semana (Lun..Dom) dentro del mes 'YYYY-MM'."""
+    import calendar as _cal
+    skus = list(_CP_SKU_CAT.keys())
+    y, mo = map(int, mes.split("-"))
+    dim = _cal.monthrange(y, mo)[1]
+    params = {"i": f"{y:04d}-{mo:02d}-01", "f": f"{y:04d}-{mo:02d}-{dim:02d}", "skus": skus}
+    loc_filter = ""
+    if local and local != "Todos":
+        loc_filter = "AND UPPER(local) = UPPER(:l)"
+        params["l"] = local
+    raw = run_query(f"""
+        SELECT sku_producto, fecha_venta, SUM(cantidad_vendida) AS cant
+        FROM ventas
+        WHERE fecha_venta BETWEEN :i AND :f
+          AND sku_producto = ANY(:skus) {loc_filter}
+        GROUP BY sku_producto, fecha_venta
+    """, params)
+    DOW = {0:"Lun",1:"Mar",2:"Mié",3:"Jue",4:"Vie",5:"Sáb",6:"Dom"}
+    if raw is None or raw.empty:
+        return {}
+    raw = raw.copy()
+    raw["cant"] = pd.to_numeric(raw["cant"], errors="coerce").fillna(0)
+    raw["categoria"] = raw["sku_producto"].map(_CP_SKU_CAT)
+    raw = raw[raw["categoria"].notna()]
+    raw["fecha_venta"] = pd.to_datetime(raw["fecha_venta"])
+    raw["dow"] = raw["fecha_venta"].dt.weekday.map(DOW)
+    diario = raw.groupby(["categoria", "fecha_venta", "dow"])["cant"].sum().reset_index()
+    out = {}
+    for (cat, dow), g in diario.groupby(["categoria", "dow"]):
+        out.setdefault(cat, {})[dow] = float(g["cant"].max())
+    return out
 
 
 def init_exclusiones():
@@ -3094,6 +3326,8 @@ with st.sidebar:
         menu_items["📊 Informes"] = ["Rentabilidad", "Desviación", "Variación Precio Compras", "Informe de Costos", "Auditor Categorías", "Tendencias Bar", "Cuentas Casa", "Venta Diaria", "Rendimiento Garzones", "Tendencia de Ventas", "Control de Producción", "Seguimiento Garzones", "Colaciones RRHH"]
     if _is_admin or _user_puede("📋 Notas de Crédito"):
         menu_items["📋 Notas de Crédito"] = []
+    if _is_admin or _user_puede("📥 Stock Cierre"):
+        menu_items["📥 Stock Cierre"] = []
     if _is_admin:
         menu_items["👥 Gestión de Usuarios"] = []
 
@@ -21474,6 +21708,322 @@ elif modulo.startswith("📋 Notas de Crédito"):
                                 except Exception as _eu:
                                     st.error(f"Error: {_eu}")
 
+
+
+elif modulo.startswith("📥 Stock Cierre"):
+    import datetime as _sk_dt
+    _is_admin_sk = st.session_state.get("user_role") == "admin"
+    _uname_sk    = st.session_state.get("current_user", "")
+    _user_local_sk = st.session_state.get("user_local")
+
+    st.markdown("""
+    <div style="margin-bottom:1.5rem">
+        <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#555;margin-bottom:4px">Operaciones</div>
+        <div style="font-family:'DM Serif Display',serif;font-size:2rem;color:#f0ede8;letter-spacing:-0.02em;line-height:1.1">
+            📥 Stock Cierre de Día
+        </div>
+        <div style="font-size:0.8rem;color:#888;margin-top:4px">Sobrante en cámara · por categoría de proteína</div>
+        <div style="width:40px;height:2px;background:#d4a853;margin-top:8px;border-radius:2px"></div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Lista canónica de categorías de proteína (orden alfabético) ──
+    _SK_CATS = [
+        'Atun', 'Atun Ensalada', 'Ave', 'Bratwurst', 'Carpaccio Filete',
+        'Carpaccio Filete Ens', 'Chuleta', 'Churrasco', 'Churrasco Filete',
+        'Churrasco Niño', 'Costillas', 'Crudo Aleman Experto', 'Crudo Filete',
+        'Currywurst', 'Escalopa', 'Filete Medallon', 'Hamburguesa',
+        'Hamburguesa Niño', 'Hamburguesa Quinoa', 'Hamburguesa Rellena',
+        'Lomito', 'Lomo Liso', 'Lomo Vetado', 'Mechada', 'Pernil',
+        'Pollo Ensalada Cesar', 'Pollo Panko', 'Pollo Panko Ensalada',
+        'Tartar de Atun', 'Tiradito de Atun',
+    ]
+    _SK_LOCALES = ["Vitacura","Las Condes","Chicureo","La Dehesa","Macul",
+                   "La Reina","Quilin","Nueva Providencia","Providencia","Los Trapenses"]
+
+    _sk_tab1, _sk_tab2, _sk_tab3 = st.tabs(
+        ["➕ Registrar cierre", "📋 Historial", "🎯 Producir hoy"])
+
+    # ══════════ TAB 1: REGISTRAR ══════════
+    with _sk_tab1:
+        st.markdown("<div class='info-box'>Registra al cierre del día las <b>unidades sobrantes en cámara</b> de cada categoría. Si ya existe un registro para ese local y fecha, se <b>sobrescribe</b>.</div>", unsafe_allow_html=True)
+
+        _skc1, _skc2 = st.columns(2)
+        with _skc1:
+            if _is_admin_sk or not _user_local_sk:
+                _sk_local = st.selectbox("Local", _SK_LOCALES, key="sk_local")
+            else:
+                _sk_local = _user_local_sk
+                st.markdown(f"**Local:** `{_sk_local}`")
+        with _skc2:
+            _sk_fecha = st.date_input("Fecha del cierre", key="sk_fecha",
+                                      value=_sk_dt.date.today())
+
+        # ── Precargar valores existentes (si los hay) para ese local/fecha ──
+        _sk_prev = run_query("""
+            SELECT categoria, cantidad
+            FROM stock_cierre_diario
+            WHERE local = :l AND fecha = :f
+        """, {"l": _sk_local, "f": str(_sk_fecha)})
+        _sk_prev_map = (dict(zip(_sk_prev["categoria"], _sk_prev["cantidad"]))
+                        if _sk_prev is not None and not _sk_prev.empty else {})
+        if _sk_prev_map:
+            st.caption(f"✏️ Ya hay un cierre para **{_sk_local}** el **{_sk_fecha.strftime('%d-%m-%Y')}** "
+                       f"({len(_sk_prev_map)} ítem(s)). Los valores se muestran abajo y se actualizarán al guardar.")
+
+        st.markdown("**Unidades sobrantes por categoría**")
+        _sk_inputs = {}
+        _sk_cols = st.columns(3)
+        for _i, _cat in enumerate(_SK_CATS):
+            with _sk_cols[_i % 3]:
+                _sk_inputs[_cat] = st.number_input(
+                    _cat, min_value=0.0, step=1.0,
+                    value=float(_sk_prev_map.get(_cat, 0) or 0),
+                    key=f"sk_in_{_i}")
+
+        _sk_obs = st.text_area("Observación (opcional)", key="sk_obs",
+                               placeholder="Notas del cierre (ej. merma, traspaso a otro local...)")
+
+        if st.button("💾 Guardar cierre del día", type="primary", key="btn_sk_save"):
+            # Solo guardamos categorías con cantidad > 0 (más las que ya existían, para permitir poner en 0)
+            _sk_rows = []
+            for _cat, _val in _sk_inputs.items():
+                if (_val and _val > 0) or _cat in _sk_prev_map:
+                    _sk_rows.append((_cat, float(_val or 0)))
+            if not _sk_rows:
+                st.error("Ingresa al menos una cantidad mayor a cero.")
+            else:
+                try:
+                    _eng_sk = get_engine()
+                    with _eng_sk.connect() as _conn_sk:
+                        for _cat, _val in _sk_rows:
+                            _conn_sk.execute(text("""
+                                INSERT INTO stock_cierre_diario
+                                    (fecha, local, categoria, cantidad, registrado_por, observacion)
+                                VALUES
+                                    (:f, :l, :c, :q, :reg, :obs)
+                                ON CONFLICT (fecha, local, categoria)
+                                DO UPDATE SET cantidad = EXCLUDED.cantidad,
+                                              registrado_por = EXCLUDED.registrado_por,
+                                              observacion = EXCLUDED.observacion,
+                                              fecha_registro = now()
+                            """), {
+                                "f": str(_sk_fecha), "l": _sk_local, "c": _cat,
+                                "q": _val, "reg": _uname_sk,
+                                "obs": (_sk_obs.strip() or None),
+                            })
+                        _conn_sk.commit()
+                    st.success(f"✅ Cierre guardado: {len(_sk_rows)} categoría(s) para {_sk_local} · {_sk_fecha.strftime('%d-%m-%Y')}.")
+                    st.rerun()
+                except Exception as _esk:
+                    st.error(f"Error: {_esk}")
+
+    # ══════════ TAB 2: HISTORIAL ══════════
+    with _sk_tab2:
+        _sk_hist = run_query("""
+            SELECT id, fecha, local, categoria, cantidad,
+                   fecha_registro, registrado_por, observacion
+            FROM stock_cierre_diario
+            ORDER BY fecha DESC, local, categoria
+        """)
+        if _sk_hist is None or _sk_hist.empty:
+            st.info("Sin cierres de stock registrados.")
+        else:
+            _shf1, _shf2 = st.columns(2)
+            with _shf1:
+                _sk_f_local = st.selectbox(
+                    "Local", ["Todos"] + sorted(_sk_hist["local"].dropna().unique().tolist()),
+                    key="sk_hist_local")
+            with _shf2:
+                _sk_fechas = sorted(_sk_hist["fecha"].astype(str).unique().tolist(), reverse=True)
+                _sk_f_fecha = st.selectbox("Fecha", ["Todas"] + _sk_fechas, key="sk_hist_fecha")
+
+            _sk_v = _sk_hist.copy()
+            if _sk_f_local != "Todos":
+                _sk_v = _sk_v[_sk_v["local"] == _sk_f_local]
+            if _sk_f_fecha != "Todas":
+                _sk_v = _sk_v[_sk_v["fecha"].astype(str) == _sk_f_fecha]
+
+            _sk_k1, _sk_k2, _sk_k3 = st.columns(3)
+            _sk_k1.metric("Registros", len(_sk_v))
+            _sk_k2.metric("Unidades totales", f"{_sk_v['cantidad'].sum():,.0f}")
+            _sk_k3.metric("Cierres (local·día)",
+                          _sk_v.groupby(["local","fecha"]).ngroups if not _sk_v.empty else 0)
+
+            # Vista pivote: filas=categoría, columnas=fecha (para un local) o resumen
+            if _sk_f_local != "Todos" and not _sk_v.empty:
+                _sk_piv = _sk_v.pivot_table(index="categoria", columns="fecha",
+                                            values="cantidad", aggfunc="sum", fill_value=0)
+                _sk_piv = _sk_piv.round(0).astype(int)
+                _sk_piv.index.name = "Categoría"
+                st.markdown(f"**Sobrante por día — {_sk_f_local}**")
+                st.dataframe(_sk_piv, use_container_width=True)
+            else:
+                _sk_show = _sk_v.rename(columns={
+                    "fecha":"Fecha","local":"Local","categoria":"Categoría",
+                    "cantidad":"Unidades","registrado_por":"Por","observacion":"Obs.",
+                }).copy()
+                _sk_show["Unidades"] = _sk_show["Unidades"].round(0).astype(int)
+                st.dataframe(
+                    _sk_show[["Fecha","Local","Categoría","Unidades","Por","Obs."]],
+                    use_container_width=True, hide_index=True)
+
+            st.download_button(
+                "📥 Descargar (CSV)",
+                _sk_v.to_csv(index=False).encode("utf-8"),
+                file_name="stock_cierre_diario.csv", mime="text/csv",
+                key="sk_dl_hist")
+
+            # Borrado (solo admin)
+            if _is_admin_sk and _sk_f_local != "Todos" and _sk_f_fecha != "Todas":
+                st.divider()
+                if st.button(f"🗑️ Eliminar cierre de {_sk_f_local} · {_sk_f_fecha}",
+                             key="sk_del"):
+                    try:
+                        _eng_d = get_engine()
+                        with _eng_d.connect() as _cd:
+                            _cd.execute(text(
+                                "DELETE FROM stock_cierre_diario WHERE local=:l AND fecha=:f"
+                            ), {"l": _sk_f_local, "f": _sk_f_fecha})
+                            _cd.commit()
+                        st.success("✅ Cierre eliminado.")
+                        st.rerun()
+                    except Exception as _ed:
+                        st.error(f"Error: {_ed}")
+
+    # ══════════ TAB 3: PRODUCIR HOY ══════════
+    with _sk_tab3:
+        st.markdown("<div class='info-box'>Revisa a primera hora de la mañana. Compara el <b>máximo histórico del día de la semana</b> (meta) con lo que <b>quedó en cámara</b> (saldo) y sugiere <b>cuánto producir hoy</b>.</div>", unsafe_allow_html=True)
+
+        _ph1, _ph2, _ph3 = st.columns(3)
+        with _ph1:
+            if _is_admin_sk or not _user_local_sk:
+                _ph_local = st.selectbox("Local", _SK_LOCALES, key="ph_local")
+            else:
+                _ph_local = _user_local_sk
+                st.markdown(f"**Local:** `{_ph_local}`")
+        with _ph2:
+            _ph_fecha = st.date_input("Día a producir", key="ph_fecha",
+                                      value=_sk_dt.date.today())
+        with _ph3:
+            # Mes de referencia para los máximos (mayo por defecto, refinará luego)
+            _ph_meses_q = run_query("""
+                SELECT DISTINCT TO_CHAR(fecha_venta, 'YYYY-MM') AS mes
+                FROM ventas WHERE fecha_venta IS NOT NULL ORDER BY mes DESC
+            """)
+            _ph_meses = (_ph_meses_q["mes"].tolist()
+                         if _ph_meses_q is not None and not _ph_meses_q.empty else [])
+            _ph_def = "2026-05" if "2026-05" in _ph_meses else (_ph_meses[0] if _ph_meses else "2026-05")
+            _MN_PH = {"01":"Enero","02":"Febrero","03":"Marzo","04":"Abril","05":"Mayo",
+                      "06":"Junio","07":"Julio","08":"Agosto","09":"Septiembre",
+                      "10":"Octubre","11":"Noviembre","12":"Diciembre"}
+            _ph_mes = st.selectbox(
+                "Mes de referencia (máximos)",
+                _ph_meses if _ph_meses else [_ph_def],
+                index=(_ph_meses.index(_ph_def) if _ph_def in _ph_meses else 0),
+                format_func=lambda m: f"{_MN_PH.get(m.split('-')[1], m)} {m.split('-')[0]}",
+                key="ph_mes")
+
+        _DOW_PH = {0:"Lun",1:"Mar",2:"Mié",3:"Jue",4:"Vie",5:"Sáb",6:"Dom"}
+        _DOW_FULL = {0:"lunes",1:"martes",2:"miércoles",3:"jueves",4:"viernes",5:"sábado",6:"domingo"}
+        _ph_dow = _DOW_PH[_ph_fecha.weekday()]
+        _ph_dow_full = _DOW_FULL[_ph_fecha.weekday()]
+        st.markdown(f"#### 🎯 Producción sugerida para el **{_ph_dow_full} {_ph_fecha.strftime('%d-%m-%Y')}** · {_ph_local}")
+        st.caption(f"Meta = mejor **{_ph_dow_full}** de {_MN_PH.get(_ph_mes.split('-')[1], _ph_mes)} {_ph_mes.split('-')[0]} por categoría.")
+
+        # 1) Meta: máximos del día de la semana correspondiente
+        _ph_max = _cp_maximos_por_dia(_ph_mes, _ph_local)
+        # 2) Saldo: último cierre registrado ANTES del día a producir, para ese local
+        _ph_saldo_q = run_query("""
+            SELECT categoria, cantidad, fecha
+            FROM stock_cierre_diario
+            WHERE local = :l AND fecha < :f
+              AND fecha = (
+                  SELECT MAX(fecha) FROM stock_cierre_diario
+                  WHERE local = :l AND fecha < :f
+              )
+        """, {"l": _ph_local, "f": str(_ph_fecha)})
+        _ph_saldo_map = {}
+        _ph_saldo_fecha = None
+        if _ph_saldo_q is not None and not _ph_saldo_q.empty:
+            _ph_saldo_map = dict(zip(_ph_saldo_q["categoria"], _ph_saldo_q["cantidad"]))
+            _ph_saldo_fecha = str(_ph_saldo_q["fecha"].iloc[0])
+
+        if not _ph_max:
+            st.warning(f"No hay ventas de referencia para {_ph_local} en ese mes. "
+                       "Prueba con 'Todos' los locales o con otro mes.")
+        else:
+            if _ph_saldo_fecha:
+                st.caption(f"📦 Saldo tomado del último cierre: **{_ph_saldo_fecha}**.")
+            else:
+                st.caption("📦 Sin cierre previo registrado para este local — se asume saldo 0 en todo.")
+
+            # Armar tabla meta / saldo / a producir + estado por criterio
+            import pandas as _pd_ph
+            _rows = []
+            for _cat in _SK_CATS:
+                _cat_dows = _ph_max.get(_cat, {})
+                _tiene_ref = _ph_dow in _cat_dows           # ¿hubo venta ese día en el mes?
+                _meta = _cat_dows.get(_ph_dow, 0) or 0
+                _saldo = _ph_saldo_map.get(_cat, 0) or 0
+                _producir = max(_meta - _saldo, 0)
+                if not _tiene_ref:
+                    _estado = "⚠️ Sin referencia"
+                elif _producir > 0:
+                    _estado = "🔴 Producir"
+                else:
+                    _estado = "✅ Cubierto"
+                _rows.append({
+                    "Categoría": _cat,
+                    f"Meta ({_ph_dow})": round(_meta),
+                    "Saldo ayer": round(_saldo),
+                    "A producir": round(_producir),
+                    "Estado": _estado,
+                })
+            _ph_df = _pd_ph.DataFrame(_rows)
+            # orden: primero lo que hay que producir, luego sin referencia, luego cubierto
+            _ord_estado = {"🔴 Producir": 0, "⚠️ Sin referencia": 1, "✅ Cubierto": 2}
+            _ph_df["_o"] = _ph_df["Estado"].map(_ord_estado)
+            _ph_df = (_ph_df.sort_values(["_o", "A producir"], ascending=[True, False])
+                      .drop(columns="_o").reset_index(drop=True))
+
+            # KPIs (la meta total solo suma categorías CON referencia)
+            _con_ref = _ph_df[_ph_df["Estado"] != "⚠️ Sin referencia"]
+            _n_sinref = int((_ph_df["Estado"] == "⚠️ Sin referencia").sum())
+            _phk1, _phk2, _phk3, _phk4 = st.columns(4)
+            _phk1.metric("Meta total", f"{_con_ref[f'Meta ({_ph_dow})'].sum():,.0f}")
+            _phk2.metric("Saldo total", f"{_ph_df['Saldo ayer'].sum():,.0f}")
+            _phk3.metric("A producir (total)", f"{_ph_df['A producir'].sum():,.0f}")
+            _phk4.metric("Sin referencia", _n_sinref)
+
+            # coloreado por estado
+            def _ph_hl(row):
+                _e = row["Estado"]
+                if _e == "🔴 Producir":
+                    _bg = "background-color: rgba(232,69,69,0.12)"
+                elif _e == "⚠️ Sin referencia":
+                    _bg = "background-color: rgba(212,168,83,0.16)"
+                else:
+                    _bg = "background-color: rgba(76,175,125,0.10)"
+                return [_bg] * len(row)
+            st.dataframe(_ph_df.style.apply(_ph_hl, axis=1),
+                         use_container_width=True, hide_index=True)
+            st.caption(
+                "**A producir = Meta − Saldo** (mínimo 0). "
+                "🔴 **Producir**: falta stock para la meta · "
+                "✅ **Cubierto**: el saldo alcanza, no produzcas · "
+                "⚠️ **Sin referencia**: no hubo ventas de esa categoría ese día de la semana en "
+                "el mes elegido, así que la meta 0 no es confiable — revisa manualmente o usa "
+                "'Todos' / otro mes como referencia."
+            )
+            if _n_sinref:
+                st.info(f"⚠️ {_n_sinref} categoría(s) sin referencia para el {_ph_dow_full} "
+                        "en este local/mes. No se incluyen en la meta total.")
+            st.download_button(
+                "📥 Descargar plan (CSV)",
+                _ph_df.to_csv(index=False).encode("utf-8"),
+                file_name=f"producir_{_ph_local}_{_ph_fecha}.csv",
+                mime="text/csv", key="ph_dl")
 
 
 elif modulo.startswith("👥"):
