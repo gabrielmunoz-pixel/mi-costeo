@@ -22493,23 +22493,11 @@ elif modulo.startswith("📋 Notas de Crédito"):
     _is_admin_nc = st.session_state.get("user_role") == "admin"
     _uname_nc    = st.session_state.get("current_user", "")
 
-    st.markdown("""
-    <div style="margin-bottom:1.5rem">
-        <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#555;margin-bottom:4px">Operaciones</div>
-        <div style="font-family:'DM Serif Display',serif;font-size:2rem;color:#f0ede8;letter-spacing:-0.02em;line-height:1.1">
-            📋 Notas de Crédito
-        </div>
-        <div style="font-size:0.8rem;color:#888;margin-top:4px">Registro · Seguimiento · Trazabilidad</div>
-        <div style="width:40px;height:2px;background:#d4a853;margin-top:8px;border-radius:2px"></div>
-    </div>
-    """, unsafe_allow_html=True)
-
     _user_local_nc = st.session_state.get("user_local")
     _nc_tab1, _nc_tab2 = st.tabs(["➕ Registrar NC", "📋 Historial"])
 
     # ── Registrar NC ──────────────────────────────────────────
     with _nc_tab1:
-        st.markdown("<div class='info-box'>Registra una nota de crédito pendiente de emisión. Se considerará automáticamente en el Informe de Costos del período correspondiente mientras el estado sea <b>Pendiente</b>.</div>", unsafe_allow_html=True)
         _msg_nc = st.session_state.pop("_nc_reg_msg", None)
         if _msg_nc:
             st.success(_msg_nc)
@@ -22753,17 +22741,6 @@ elif modulo.startswith("📥 Stock Cierre"):
     _uname_sk    = st.session_state.get("current_user", "")
     _user_local_sk = st.session_state.get("user_local")
 
-    st.markdown("""
-    <div style="margin-bottom:1.5rem">
-        <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#555;margin-bottom:4px">Operaciones</div>
-        <div style="font-family:'DM Serif Display',serif;font-size:2rem;color:#f0ede8;letter-spacing:-0.02em;line-height:1.1">
-            📥 Stock Cierre de Día
-        </div>
-        <div style="font-size:0.8rem;color:#888;margin-top:4px">Sobrante en cámara · por categoría de proteína</div>
-        <div style="width:40px;height:2px;background:#d4a853;margin-top:8px;border-radius:2px"></div>
-    </div>
-    """, unsafe_allow_html=True)
-
     # ── Lista canónica de categorías de proteína (orden alfabético) ──
     _SK_CATS = [
         'Atun', 'Atun Ensalada', 'Ave', 'Bratwurst', 'Carpaccio Filete',
@@ -22783,7 +22760,6 @@ elif modulo.startswith("📥 Stock Cierre"):
 
     # ══════════ TAB 1: REGISTRAR ══════════
     with _sk_tab1:
-        st.markdown("<div class='info-box'>Registra al cierre del día las <b>unidades sobrantes en cámara</b> de cada categoría. Si ya existe un registro para ese local y fecha, se <b>sobrescribe</b>.</div>", unsafe_allow_html=True)
 
         _skc1, _skc2 = st.columns(2)
         with _skc1:
@@ -23020,7 +22996,6 @@ elif modulo.startswith("📥 Stock Cierre"):
 
     # ══════════ TAB 3: PRODUCIR HOY ══════════
     with _sk_tab3:
-        st.markdown("<div class='info-box'>Revisa a primera hora de la mañana. Compara el <b>máximo histórico del día de la semana</b> (meta) con lo que <b>quedó en cámara</b> (saldo) y sugiere <b>cuánto producir hoy</b>.</div>", unsafe_allow_html=True)
 
         if _user_local_sk:
             # Admin de local: local fijo y fecha fija HOY. Solo ve la producción del día.
