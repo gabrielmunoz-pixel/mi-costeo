@@ -490,6 +490,10 @@ def _render_gestion_usuarios():
 
     with gu_tab2:
         st.markdown("#### Nuevo Usuario")
+        # Mensaje persistente tras crear (sobrevive al rerun)
+        _msg_nu = st.session_state.pop("_nu_creado_msg", None)
+        if _msg_nu:
+            st.success(_msg_nu)
         nu_user = st.text_input("Usuario", key="nu_user")
         nu_pw   = st.text_input("Contraseña", type="password", key="nu_pw")
         opciones_mod2 = ["📦 Gestión de Datos", "📊 Informes", "📋 Notas de Crédito", "📥 Stock Cierre", "🎯 Config Producción"]
@@ -517,7 +521,7 @@ def _render_gestion_usuarios():
                                 "INSERT INTO app_usuarios (username, password_hash, permisos, local) VALUES (:u,:h,:p,:l)"),
                                 {"u": nu_user.strip(), "h": _hash_pw(nu_pw), "p": ",".join(nu_perm), "l": nu_local_val})
                             conn.commit()
-                        st.success(f"✅ Usuario {nu_user} creado.")
+                        st.session_state["_nu_creado_msg"] = f"✅ Usuario '{nu_user.strip()}' creado correctamente."
                         st.rerun()
                 except Exception as e:
                     st.error(f"Error: {e}")
@@ -22506,6 +22510,9 @@ elif modulo.startswith("📋 Notas de Crédito"):
     # ── Registrar NC ──────────────────────────────────────────
     with _nc_tab1:
         st.markdown("<div class='info-box'>Registra una nota de crédito pendiente de emisión. Se considerará automáticamente en el Informe de Costos del período correspondiente mientras el estado sea <b>Pendiente</b>.</div>", unsafe_allow_html=True)
+        _msg_nc = st.session_state.pop("_nc_reg_msg", None)
+        if _msg_nc:
+            st.success(_msg_nc)
 
         _locales_nc_vals = ["Todos","Vitacura","Las Condes","Chicureo","La Dehesa","Macul","La Reina","Quilin","Nueva Providencia","Providencia","Los Trapenses"]
         _locales_nc_list = _locales_nc_vals
@@ -22516,75 +22523,38 @@ elif modulo.startswith("📋 Notas de Crédito"):
         else:
             _nc_local = st.selectbox("Local", _locales_nc_list, key="nc_local")
 
-        # ── Catálogos ─────────────────────────────────────────
-        _df_provs = run_query("""
-            SELECT DISTINCT rut_proveedor, nombre_proveedor
-            FROM compras
-            WHERE rut_proveedor IS NOT NULL AND nombre_proveedor IS NOT NULL
-            ORDER BY nombre_proveedor
-        """)
-        _df_prods_nc = run_query("""
-            SELECT DISTINCT nombre_producto, sku
-            FROM compras
-            WHERE nombre_producto IS NOT NULL AND sku IS NOT NULL
-              AND LOWER(COALESCE(subcat,'')) NOT LIKE '%admin%'
-              AND LOWER(COALESCE(categoria_producto,'')) NOT LIKE '%admin%'
-              AND sku NOT LIKE 'ADM%'
-            ORDER BY nombre_producto
-        """)
+        # ── Catálogos (se cargan UNA vez y se cachean; no consultan BD en cada rerun) ──
+        if "_nc_cat_provs" not in st.session_state:
+            _df_provs = run_query("""
+                SELECT DISTINCT rut_proveedor, nombre_proveedor
+                FROM compras
+                WHERE rut_proveedor IS NOT NULL AND nombre_proveedor IS NOT NULL
+                ORDER BY nombre_proveedor
+            """)
+            st.session_state["_nc_cat_provs"] = (
+                [f"{r['nombre_proveedor']} | {r['rut_proveedor']}"
+                 for _, r in _df_provs.iterrows()] if _df_provs is not None and not _df_provs.empty else [])
+        if "_nc_cat_prods" not in st.session_state:
+            _df_prods_nc = run_query("""
+                SELECT DISTINCT nombre_producto, sku
+                FROM compras
+                WHERE nombre_producto IS NOT NULL AND sku IS NOT NULL
+                  AND LOWER(COALESCE(subcat,'')) NOT LIKE '%admin%'
+                  AND LOWER(COALESCE(categoria_producto,'')) NOT LIKE '%admin%'
+                  AND sku NOT LIKE 'ADM%'
+                ORDER BY nombre_producto
+            """)
+            st.session_state["_nc_cat_prods"] = (
+                [f"{r['nombre_producto']} | {r['sku']}"
+                 for _, r in _df_prods_nc.iterrows()] if _df_prods_nc is not None and not _df_prods_nc.empty else [])
+        _prov_opts_all = st.session_state["_nc_cat_provs"]
+        _prod_opts_all = st.session_state["_nc_cat_prods"]
 
-        _nc1, _nc2 = st.columns(2)
-        with _nc1:
-            _nc_folio = st.text_input("Folio factura original", key="nc_folio",
-                                       placeholder="Ej: 12345")
-
-            # Proveedor — selectbox único con búsqueda nativa
-            _nc_prov, _nc_rut = "", ""
-            if not _df_provs.empty:
-                _prov_opts_all = [f"{r['nombre_proveedor']} | {r['rut_proveedor']}"
-                                   for _, r in _df_provs.iterrows()]
-                _prov_sel = st.selectbox("Proveedor", _prov_opts_all,
-                                          key="nc_prov_sel", index=None,
-                                          placeholder="Escribe para buscar...")
-                if _prov_sel:
-                    _nc_prov = _prov_sel.split(" | ")[0]
-                    _nc_rut  = _prov_sel.split(" | ")[1] if " | " in _prov_sel else ""
-
-        with _nc2:
-            _nc_fecha_dte = st.date_input("Fecha factura original", key="nc_fecha_dte", value=None)
-
-            # Auto-calcular período lunes-domingo
-            _nc_periodo = ""
-            if _nc_fecha_dte:
-                from datetime import timedelta
-                _MESES_NC = {1:'Ene',2:'Feb',3:'Mar',4:'Abr',5:'May',6:'Jun',
-                             7:'Jul',8:'Ago',9:'Sep',10:'Oct',11:'Nov',12:'Dic'}
-                _lunes   = _nc_fecha_dte - timedelta(days=_nc_fecha_dte.weekday())
-                _domingo = _lunes + timedelta(days=6)
-                if _lunes.month == _domingo.month:
-                    _nc_periodo = f"{_lunes.day}-{_domingo.day} {_MESES_NC[_lunes.month]} {_lunes.year}"
-                else:
-                    _nc_periodo = f"{_lunes.day} {_MESES_NC[_lunes.month]}-{_domingo.day} {_MESES_NC[_domingo.month]} {_lunes.year}"
-                st.caption(f"Período asignado: **{_nc_periodo}**")
-
-        # ── Productos: una o varias líneas para la MISMA nota de crédito ──
+        # ── Productos: control de cuántas líneas (FUERA del form, dinámico) ──
         st.markdown("**Productos de la nota de crédito**")
         st.caption("Agrega una línea por cada producto que no llegó. Todas comparten el mismo proveedor y folio.")
         if "nc_n_lineas" not in st.session_state:
             st.session_state["nc_n_lineas"] = 1
-        _prod_opts_all = ([f"{r['nombre_producto']} | {r['sku']}"
-                            for _, r in _df_prods_nc.iterrows()]
-                           if not _df_prods_nc.empty else [])
-        for _i in range(st.session_state["nc_n_lineas"]):
-            _lc1, _lc2 = st.columns([7, 3])
-            with _lc1:
-                st.selectbox(f"Producto {_i+1}", _prod_opts_all,
-                             key=f"nc_prod_sel_{_i}", index=None,
-                             placeholder="Escribe para buscar...")
-            with _lc2:
-                st.number_input(f"Monto {_i+1} ($)", min_value=0.0, step=1000.0,
-                                key=f"nc_monto_{_i}", value=None,
-                                placeholder="Monto")
         _bl1, _bl2, _bl3 = st.columns([2, 2, 6])
         with _bl1:
             if st.button("➕ Agregar producto", key="nc_add_linea", use_container_width=True):
@@ -22599,10 +22569,54 @@ elif modulo.startswith("📋 Notas de Crédito"):
                 st.session_state["nc_n_lineas"] -= 1
                 st.rerun()
 
-        _nc_obs = st.text_area("Observación", key="nc_obs",
-                                placeholder="Descripción del error / motivo de la NC")
+        # ── Formulario: NO consulta la BD hasta pulsar "Registrar" ──
+        with st.form("nc_form_registro"):
+            _ncf1, _ncf2 = st.columns(2)
+            with _ncf1:
+                _nc_folio = st.text_input("Folio factura original", key="nc_folio",
+                                           placeholder="Ej: 12345")
+                # Proveedor — sugerencias desde catálogo cacheado
+                _prov_sel = st.selectbox("Proveedor", _prov_opts_all,
+                                          key="nc_prov_sel", index=None,
+                                          placeholder="Escribe para buscar...")
+            with _ncf2:
+                _nc_fecha_dte = st.date_input("Fecha factura original", key="nc_fecha_dte", value=None)
 
-        if st.button("💾 Registrar Nota de Crédito", type="primary", key="btn_nc_reg"):
+            # Líneas de producto (sugerencias desde catálogo cacheado)
+            for _i in range(st.session_state["nc_n_lineas"]):
+                _lc1, _lc2 = st.columns([7, 3])
+                with _lc1:
+                    st.selectbox(f"Producto {_i+1}", _prod_opts_all,
+                                 key=f"nc_prod_sel_{_i}", index=None,
+                                 placeholder="Escribe para buscar...")
+                with _lc2:
+                    st.number_input(f"Monto {_i+1} ($)", min_value=0.0, step=1000.0,
+                                    key=f"nc_monto_{_i}", value=None, placeholder="Monto")
+
+            _nc_obs = st.text_area("Observación", key="nc_obs",
+                                    placeholder="Descripción del error / motivo de la NC")
+
+            _nc_submit = st.form_submit_button("💾 Registrar Nota de Crédito",
+                                               type="primary", use_container_width=True)
+
+        if _nc_submit:
+            # Resolver proveedor seleccionado
+            _nc_prov, _nc_rut = "", ""
+            if _prov_sel:
+                _nc_prov = _prov_sel.split(" | ")[0]
+                _nc_rut  = _prov_sel.split(" | ")[1] if " | " in _prov_sel else ""
+            # Calcular período lunes-domingo desde la fecha
+            _nc_periodo = ""
+            if _nc_fecha_dte:
+                from datetime import timedelta
+                _MESES_NC = {1:'Ene',2:'Feb',3:'Mar',4:'Abr',5:'May',6:'Jun',
+                             7:'Jul',8:'Ago',9:'Sep',10:'Oct',11:'Nov',12:'Dic'}
+                _lunes   = _nc_fecha_dte - timedelta(days=_nc_fecha_dte.weekday())
+                _domingo = _lunes + timedelta(days=6)
+                if _lunes.month == _domingo.month:
+                    _nc_periodo = f"{_lunes.day}-{_domingo.day} {_MESES_NC[_lunes.month]} {_lunes.year}"
+                else:
+                    _nc_periodo = f"{_lunes.day} {_MESES_NC[_lunes.month]}-{_domingo.day} {_MESES_NC[_domingo.month]} {_lunes.year}"
             # Recolectar las líneas de producto (producto + monto)
             _nc_lineas = []
             for _i in range(st.session_state.get("nc_n_lineas", 1)):
@@ -22646,7 +22660,7 @@ elif modulo.startswith("📋 Notas de Crédito"):
                                 "reg_por":  _uname_nc,
                             })
                         _conn_nc.commit()
-                    st.success(f"✅ {len(_nc_lineas)} producto(s) registrado(s) en la nota de crédito.")
+                    st.session_state["_nc_reg_msg"] = f"✅ {len(_nc_lineas)} producto(s) registrado(s) en la nota de crédito."
                     st.session_state["nc_n_lineas"] = 1
                     st.rerun()
                 except Exception as _enc:
@@ -23008,18 +23022,23 @@ elif modulo.startswith("📥 Stock Cierre"):
     with _sk_tab3:
         st.markdown("<div class='info-box'>Revisa a primera hora de la mañana. Compara el <b>máximo histórico del día de la semana</b> (meta) con lo que <b>quedó en cámara</b> (saldo) y sugiere <b>cuánto producir hoy</b>.</div>", unsafe_allow_html=True)
 
-        _ph1, _ph2 = st.columns(2)
-        with _ph1:
-            if _user_local_sk:
-                # Usuario con local asignado (incl. admin): asume su local, sin selector.
-                _ph_local = _user_local_sk
+        if _user_local_sk:
+            # Admin de local: local fijo y fecha fija HOY. Solo ve la producción del día.
+            _ph_local = _user_local_sk
+            _ph_fecha = _sk_dt.date.today()
+            _phc1, _phc2 = st.columns(2)
+            with _phc1:
                 st.markdown(f"**Local:** `{_ph_local}`")
-            else:
-                # Sin local asignado (admin general): puede revisar cualquier local.
+            with _phc2:
+                st.markdown(f"**Día:** `{_ph_fecha.strftime('%d-%m-%Y')}`")
+        else:
+            # Admin general: elige local y fecha.
+            _ph1, _ph2 = st.columns(2)
+            with _ph1:
                 _ph_local = st.selectbox("Local", _SK_LOCALES, key="ph_local")
-        with _ph2:
-            _ph_fecha = st.date_input("Día a producir", key="ph_fecha",
-                                      value=_sk_dt.date.today())
+            with _ph2:
+                _ph_fecha = st.date_input("Día a producir", key="ph_fecha",
+                                          value=_sk_dt.date.today())
 
         _MN_PH = {"01":"Enero","02":"Febrero","03":"Marzo","04":"Abril","05":"Mayo",
                   "06":"Junio","07":"Julio","08":"Agosto","09":"Septiembre",
