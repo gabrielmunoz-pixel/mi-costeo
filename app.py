@@ -4744,8 +4744,13 @@ def _cm_pct_color_estado(meta, real):
     else:            color = "rojo";  estado = "✘ NO CUMPLE"
     return pct, color, estado
 
-def generar_pdf_cumplimiento_metas(rows, tot, mes_label, meta_col_label="Meta Mensual", nota=None, logo_path=None):
-    """rows: lista de dicts {local, mc, rc, mp, rp}. tot: {mc,rc,mp,rp}."""
+def generar_pdf_cumplimiento_metas(rows, tot, mes_label, meta_col_label="Meta Mensual",
+                                   nota=None, logo_path=None,
+                                   rows2=None, tot2=None, meta_col_label2=None,
+                                   subtitulo1=None, subtitulo2=None):
+    """rows: lista de dicts {local, mc, rc, mp, rp}. tot: {mc,rc,mp,rp}.
+    Si rows2/tot2 se entregan, dibuja un SEGUNDO cuadro idéntico debajo
+    (p. ej. cuadro 1 = meta proyectada, cuadro 2 = meta mensual total)."""
     import io as _io
     from reportlab.lib.pagesizes import letter, landscape
     from reportlab.lib import colors
@@ -4762,6 +4767,7 @@ def generar_pdf_cumplimiento_metas(rows, tot, mes_label, meta_col_label="Meta Me
     _ctext = {"verde": VERDE_T, "ambar": AMBAR_T, "rojo": ROJO_T}
 
     stt = ParagraphStyle("t", fontName="Helvetica-Bold", fontSize=12.5, alignment=TA_CENTER, leading=15, textColor=AZUL)
+    sst = ParagraphStyle("sst", fontName="Helvetica-Bold", fontSize=9.5, alignment=TA_CENTER, leading=12, textColor=AZUL)
     sts = ParagraphStyle("s", fontName="Helvetica", fontSize=7.5, alignment=TA_CENTER, leading=9, textColor=colors.HexColor("#555"))
     sgh = ParagraphStyle("gh", fontName="Helvetica-Bold", fontSize=8.5, alignment=TA_CENTER, leading=10, textColor=colors.white)
     sh  = ParagraphStyle("h", fontName="Helvetica-Bold", fontSize=6.6, alignment=TA_CENTER, leading=8, textColor=colors.white)
@@ -4773,65 +4779,66 @@ def generar_pdf_cumplimiento_metas(rows, tot, mes_label, meta_col_label="Meta Me
     def _fmeta(v): return f"{v:,.1f}".replace(",", "@").replace(".", ",").replace("@", ".")
     def _fp(v): return f"{v:.1f}%".replace(".", ",")
 
-    # Cabecera: fila de grupos (con SPAN) + fila de subcolumnas
-    g_row = [Paragraph("LOCAL", sgh),
-             Paragraph("CAFETERÍA", sgh), "", "", "",
-             Paragraph("POSTRES", sgh), "", "", "",
-             Paragraph("TOTAL LOCAL", sgh), "", "", ""]
-    sub = ["", meta_col_label,"Real","Cumpl. %","Estado",
-               meta_col_label,"Real","Cumpl. %","Estado",
-               meta_col_label,"Real","Cumpl. %","Estado"]
-    h_row = [Paragraph(x, sh) if x else "" for x in sub]
-
-    data = [g_row, h_row]
-    cell_styles = []  # (col,row,color)
-    r = 2
-    for row in rows:
-        cels = [Paragraph(row["local"], scl)]
-        for meta, real in [(row["mc"],row["rc"]), (row["mp"],row["rp"]),
-                           (row["mc"]+row["mp"], row["rc"]+row["rp"])]:
-            pct, color, estado = _cm_pct_color_estado(meta, real)
-            base = len(cels)
-            cels += [Paragraph(_fmeta(meta), sc), Paragraph(_fm(real), sc),
-                     Paragraph(_fp(pct), ParagraphStyle("p", parent=se, textColor=_ctext[color])),
-                     Paragraph(estado, ParagraphStyle("es", parent=se, textColor=_ctext[color]))]
-            cell_styles.append((base+3, r, _cfill[color]))  # Estado cell bg
-            cell_styles.append((base+2, r, _cfill[color]))  # Cumpl% cell bg
-        data.append(cels)
-        r += 1
-    # TOTAL RED
-    cels = [Paragraph("TOTAL RED", ParagraphStyle("tr", parent=scl, textColor=colors.white))]
-    for meta, real in [(tot["mc"],tot["rc"]), (tot["mp"],tot["rp"]),
-                       (tot["mc"]+tot["mp"], tot["rc"]+tot["rp"])]:
-        pct, color, estado = _cm_pct_color_estado(meta, real)
-        cels += [Paragraph(_fmeta(meta), ParagraphStyle("w", parent=sc, textColor=colors.white)),
-                 Paragraph(_fm(real), ParagraphStyle("w", parent=sc, textColor=colors.white)),
-                 Paragraph(_fp(pct), ParagraphStyle("w", parent=se, textColor=colors.white)),
-                 Paragraph(estado, ParagraphStyle("w", parent=se, textColor=colors.white))]
-    data.append(cels)
-    r_total = r
-
     PAG_W = landscape(letter)[0]; MX = 20
     util = PAG_W - 2*MX
     pesos = [3.0, 2.3,1.6,1.5,2.0,  2.3,1.6,1.5,2.0,  2.3,1.6,1.5,2.0]
     sp = sum(pesos); wcols = [util*p/sp for p in pesos]
 
-    t = Table(data, colWidths=wcols, repeatRows=2)
-    style = [
-        ("GRID",(0,0),(-1,-1),0.5,BORDE),
-        ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
-        ("ALIGN",(0,0),(-1,-1),"CENTER"),
-        ("SPAN",(1,0),(4,0)), ("SPAN",(5,0),(8,0)), ("SPAN",(9,0),(12,0)),
-        ("SPAN",(0,0),(0,1)),
-        ("BACKGROUND",(0,0),(-1,1),AZUL),
-        ("TOPPADDING",(0,0),(-1,-1),3),("BOTTOMPADDING",(0,0),(-1,-1),3),
-        ("LEFTPADDING",(0,0),(-1,-1),2),("RIGHTPADDING",(0,0),(-1,-1),2),
-        ("ROWBACKGROUNDS",(0,2),(-1,r_total-1),[colors.white, colors.HexColor("#F2F2F2")]),
-        ("BACKGROUND",(0,r_total),(-1,r_total),AZUL),
-    ]
-    for (c, rr, col) in cell_styles:
-        style.append(("BACKGROUND",(c,rr),(c,rr),col))
-    t.setStyle(TableStyle(style))
+    def _build_tabla(_rows, _tot, _meta_lbl):
+        """Construye la Table de cumplimiento (cabecera + filas + TOTAL RED)."""
+        g_row = [Paragraph("LOCAL", sgh),
+                 Paragraph("CAFETERÍA", sgh), "", "", "",
+                 Paragraph("POSTRES", sgh), "", "", "",
+                 Paragraph("TOTAL LOCAL", sgh), "", "", ""]
+        sub = ["", _meta_lbl,"Real","Cumpl. %","Estado",
+                   _meta_lbl,"Real","Cumpl. %","Estado",
+                   _meta_lbl,"Real","Cumpl. %","Estado"]
+        h_row = [Paragraph(x, sh) if x else "" for x in sub]
+        data = [g_row, h_row]
+        cell_styles = []
+        r = 2
+        for row in _rows:
+            cels = [Paragraph(row["local"], scl)]
+            for meta, real in [(row["mc"],row["rc"]), (row["mp"],row["rp"]),
+                               (row["mc"]+row["mp"], row["rc"]+row["rp"])]:
+                pct, color, estado = _cm_pct_color_estado(meta, real)
+                base = len(cels)
+                cels += [Paragraph(_fmeta(meta), sc), Paragraph(_fm(real), sc),
+                         Paragraph(_fp(pct), ParagraphStyle("p", parent=se, textColor=_ctext[color])),
+                         Paragraph(estado, ParagraphStyle("es", parent=se, textColor=_ctext[color]))]
+                cell_styles.append((base+3, r, _cfill[color]))
+                cell_styles.append((base+2, r, _cfill[color]))
+            data.append(cels)
+            r += 1
+        cels = [Paragraph("TOTAL RED", ParagraphStyle("tr", parent=scl, textColor=colors.white))]
+        for meta, real in [(_tot["mc"],_tot["rc"]), (_tot["mp"],_tot["rp"]),
+                           (_tot["mc"]+_tot["mp"], _tot["rc"]+_tot["rp"])]:
+            pct, color, estado = _cm_pct_color_estado(meta, real)
+            cels += [Paragraph(_fmeta(meta), ParagraphStyle("w", parent=sc, textColor=colors.white)),
+                     Paragraph(_fm(real), ParagraphStyle("w", parent=sc, textColor=colors.white)),
+                     Paragraph(_fp(pct), ParagraphStyle("w", parent=se, textColor=colors.white)),
+                     Paragraph(estado, ParagraphStyle("w", parent=se, textColor=colors.white))]
+        data.append(cels)
+        r_total = r
+        t = Table(data, colWidths=wcols, repeatRows=2)
+        style = [
+            ("GRID",(0,0),(-1,-1),0.5,BORDE),
+            ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
+            ("ALIGN",(0,0),(-1,-1),"CENTER"),
+            ("SPAN",(1,0),(4,0)), ("SPAN",(5,0),(8,0)), ("SPAN",(9,0),(12,0)),
+            ("SPAN",(0,0),(0,1)),
+            ("BACKGROUND",(0,0),(-1,1),AZUL),
+            ("TOPPADDING",(0,0),(-1,-1),3),("BOTTOMPADDING",(0,0),(-1,-1),3),
+            ("LEFTPADDING",(0,0),(-1,-1),2),("RIGHTPADDING",(0,0),(-1,-1),2),
+            ("ROWBACKGROUNDS",(0,2),(-1,r_total-1),[colors.white, colors.HexColor("#F2F2F2")]),
+            ("BACKGROUND",(0,r_total),(-1,r_total),AZUL),
+        ]
+        for (c, rr, col) in cell_styles:
+            style.append(("BACKGROUND",(c,rr),(c,rr),col))
+        t.setStyle(TableStyle(style))
+        return t
+
+    t1 = _build_tabla(rows, tot, meta_col_label)
 
     buf = _io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=landscape(letter),
@@ -4840,8 +4847,22 @@ def generar_pdf_cumplimiento_metas(rows, tot, mes_label, meta_col_label="Meta Me
         Paragraph(f"CUADRO RESUMEN · CUMPLIMIENTO DE METAS · {mes_label}", stt),
         Spacer(1,3),
         Paragraph("% Cumplimiento = Ventas Reales ÷ Meta × 100  |  Verde ≥100% · Ámbar 90–99% · Rojo &lt;90%", sts),
-    ] + ([Spacer(1,2), Paragraph(nota, ParagraphStyle("n", parent=sts, textColor=colors.HexColor("#9C6500")))] if nota else []) + [
-        Spacer(1,8), t, Spacer(1,6),
+    ] + ([Spacer(1,2), Paragraph(nota, ParagraphStyle("n", parent=sts, textColor=colors.HexColor("#9C6500")))] if nota else [])
+
+    # ── Cuadro 1 ──
+    if subtitulo1:
+        elems += [Spacer(1,8), Paragraph(subtitulo1, sst)]
+    elems += [Spacer(1,6), t1]
+
+    # ── Cuadro 2 (opcional): meta total del mes ──
+    if rows2 is not None and tot2 is not None:
+        t2 = _build_tabla(rows2, tot2, meta_col_label2 or "Meta Mensual")
+        elems += [Spacer(1,14)]
+        if subtitulo2:
+            elems += [Paragraph(subtitulo2, sst), Spacer(1,6)]
+        elems += [t2]
+
+    elems += [Spacer(1,6),
         Paragraph("Real: unidades vendidas en Salón (es_opcion=false). 'Providencia' en ventas = 'Pedro de Valdivia' en metas.", sts),
     ]
     doc.build(elems)
@@ -13550,6 +13571,8 @@ elif modulo.startswith("📊"):
                 def _cm_es_cafe(c): return str(c).strip().lower() in ("cafeteria","cafetería")
                 def _cm_es_post(c): return str(c).strip().lower() == "postres"
                 _cm_rows = []; _ct = {"mc":0.0,"rc":0.0,"mp":0.0,"rp":0.0}
+                # Segundo set: meta TOTAL del mes (factor 1.0) vs el mismo real
+                _cm_rows_tot = []; _ct_tot = {"mc":0.0,"rc":0.0,"mp":0.0,"rp":0.0}
                 for _loc in _CM_ORDEN:
                     _sub = _cm_real[_cm_real["local"] == _loc]
                     _rc = float(_sub[_sub["categoria_menu"].apply(_cm_es_cafe)]["uds"].sum())
@@ -13558,9 +13581,17 @@ elif modulo.startswith("📊"):
                     _mp = _CM_METAS[_loc]["Postres"] * _cm_factor
                     _cm_rows.append({"local": _loc, "mc": _mc, "rc": _rc, "mp": _mp, "rp": _rp})
                     _ct["mc"]+=_mc; _ct["rc"]+=_rc; _ct["mp"]+=_mp; _ct["rp"]+=_rp
+                    # meta total (mensual completa) con el real acumulado
+                    _mc_t = _CM_METAS[_loc]["Cafetería"]
+                    _mp_t = _CM_METAS[_loc]["Postres"]
+                    _cm_rows_tot.append({"local": _loc, "mc": _mc_t, "rc": _rc, "mp": _mp_t, "rp": _rp})
+                    _ct_tot["mc"]+=_mc_t; _ct_tot["rc"]+=_rc; _ct_tot["mp"]+=_mp_t; _ct_tot["rp"]+=_rp
                 st.session_state["cm_data"] = {
                     "rows": _cm_rows, "tot": _ct, "lbl": _cm_lbl,
                     "meta_col": _cm_meta_col, "nota": _cm_nota,
+                    "rows_tot": _cm_rows_tot, "tot_tot": _ct_tot,
+                    "en_curso": _cm_en_curso,
+                    "dias_transc": _cm_dias_transc, "dias_mes": _cm_dias_mes,
                 }
 
         _cm_cache = st.session_state.get("cm_data")
@@ -13584,9 +13615,24 @@ elif modulo.startswith("📊"):
                 })
             st.dataframe(pd.DataFrame(_cm_disp), use_container_width=True, hide_index=True)
             try:
+                # Cuadro 1 = meta proyectada (lo actual). Cuadro 2 = meta total del
+                # mes vs real acumulado (solo aporta info nueva si el mes está en curso;
+                # si el mes ya cerró, ambos serían idénticos, así que se omite).
+                _cm_en_curso_c = _cm_cache.get("en_curso", False)
+                _cm_kw = {}
+                if _cm_en_curso_c and _cm_cache.get("rows_tot"):
+                    _dt_t = _cm_cache.get("dias_transc"); _dm_t = _cm_cache.get("dias_mes")
+                    _cm_kw = {
+                        "rows2": _cm_cache["rows_tot"],
+                        "tot2": _cm_cache["tot_tot"],
+                        "meta_col_label2": "Meta Mensual",
+                        "subtitulo1": f"1) AVANCE PROYECTADO · meta al día {_dt_t} de {_dm_t}",
+                        "subtitulo2": f"2) AVANCE HACIA META TOTAL DEL MES · meta {_dm_t}/{_dm_t} días",
+                    }
                 _cm_pdf = generar_pdf_cumplimiento_metas(
                     _cm_rows, _ct, _cm_cache["lbl"],
-                    meta_col_label=_cm_cache["meta_col"], nota=_cm_cache.get("nota"))
+                    meta_col_label=_cm_cache["meta_col"], nota=_cm_cache.get("nota"),
+                    **_cm_kw)
                 _cm_fn = _cm_cache["lbl"].split(" ·")[0].replace(" ", "_")
                 st.download_button("📄 Descargar cuadro (PDF)", _cm_pdf,
                     file_name=f"cumplimiento_metas_{_cm_fn}.pdf",
