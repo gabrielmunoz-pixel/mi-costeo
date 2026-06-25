@@ -21990,31 +21990,77 @@ elif modulo.startswith("📥 Stock Cierre"):
             # KPIs (la meta total solo suma categorías CON referencia)
             _con_ref = _ph_df[_ph_df["Estado"] != "⚠️ Sin referencia"]
             _n_sinref = int((_ph_df["Estado"] == "⚠️ Sin referencia").sum())
-            _phk1, _phk2, _phk3, _phk4 = st.columns(4)
-            _phk1.metric("Meta total", f"{_con_ref[f'Meta ({_ph_dow})'].sum():,.0f}")
-            _phk2.metric("Saldo total", f"{_ph_df['Saldo ayer'].sum():,.0f}")
-            _phk3.metric("A producir (total)", f"{_ph_df['A producir'].sum():,.0f}")
-            _phk4.metric("Sin referencia", _n_sinref)
+            _meta_tot = int(_con_ref[f'Meta ({_ph_dow})'].sum())
+            _saldo_tot = int(_ph_df['Saldo ayer'].sum())
+            _prod_tot = int(_ph_df['A producir'].sum())
+            _n_producir = int((_ph_df["Estado"] == "🔴 Producir").sum())
 
-            # coloreado por estado
-            def _ph_hl(row):
-                _e = row["Estado"]
-                if _e == "🔴 Producir":
-                    _bg = "background-color: rgba(232,69,69,0.12)"
-                elif _e == "⚠️ Sin referencia":
-                    _bg = "background-color: rgba(212,168,83,0.16)"
-                else:
-                    _bg = "background-color: rgba(76,175,125,0.10)"
-                return [_bg] * len(row)
-            st.dataframe(_ph_df.style.apply(_ph_hl, axis=1),
-                         use_container_width=True, hide_index=True)
+            # ── Resumen superior (chips, responsive con flex-wrap) ──
+            st.markdown(f"""
+            <div style="display:flex;flex-wrap:wrap;gap:8px;margin:4px 0 14px 0">
+              <div style="flex:1 1 90px;min-width:90px;background:#0e1116;border:1px solid #1f242c;
+                          border-radius:12px;padding:12px 14px">
+                <div style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;color:#888">A producir</div>
+                <div style="font-family:'DM Serif Display',serif;font-size:1.8rem;color:#d4a853;line-height:1.1">{_prod_tot:,}</div>
+              </div>
+              <div style="flex:1 1 90px;min-width:90px;background:#0e1116;border:1px solid #1f242c;
+                          border-radius:12px;padding:12px 14px">
+                <div style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;color:#888">Meta</div>
+                <div style="font-family:'DM Serif Display',serif;font-size:1.8rem;color:#f0ede8;line-height:1.1">{_meta_tot:,}</div>
+              </div>
+              <div style="flex:1 1 90px;min-width:90px;background:#0e1116;border:1px solid #1f242c;
+                          border-radius:12px;padding:12px 14px">
+                <div style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;color:#888">Saldo</div>
+                <div style="font-family:'DM Serif Display',serif;font-size:1.8rem;color:#f0ede8;line-height:1.1">{_saldo_tot:,}</div>
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # ── Tarjetas por categoría (1 columna, optimizado móvil) ──
+            _ESTILO_EST = {
+                "🔴 Producir":      ("#e84545", "rgba(232,69,69,0.10)",  "Producir"),
+                "⚠️ Sin referencia":("#d4a853", "rgba(212,168,83,0.10)", "Sin referencia"),
+                "✅ Cubierto":      ("#4caf7d", "rgba(76,175,125,0.08)", "Cubierto"),
+            }
+            _cards = []
+            for _, _r in _ph_df.iterrows():
+                _col, _bg, _lbl = _ESTILO_EST.get(_r["Estado"], ("#888", "#0e1116", "—"))
+                _meta_v = int(_r[f"Meta ({_ph_dow})"])
+                _saldo_v = int(_r["Saldo ayer"])
+                _prod_v = int(_r["A producir"])
+                _sinref = _r["Estado"] == "⚠️ Sin referencia"
+                # número protagonista: a producir (o guion si sin referencia)
+                _big = "—" if _sinref else f"{_prod_v:,}"
+                _big_col = "#555" if _sinref else (_col if _prod_v > 0 else "#4caf7d")
+                _cards.append(f"""
+                <div style="display:flex;align-items:stretch;gap:0;background:{_bg};
+                            border:1px solid #1f242c;border-left:4px solid {_col};
+                            border-radius:12px;margin-bottom:8px;overflow:hidden">
+                  <div style="flex:1;padding:11px 14px;min-width:0">
+                    <div style="font-size:0.95rem;font-weight:600;color:#f0ede8;
+                                white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{_r['Categoría']}</div>
+                    <div style="font-size:0.72rem;color:#888;margin-top:3px">
+                      Meta <b style="color:#cfcabf">{_meta_v:,}</b>
+                      &nbsp;·&nbsp; Saldo <b style="color:#cfcabf">{_saldo_v:,}</b>
+                      &nbsp;·&nbsp; <span style="color:{_col};font-weight:600">{_lbl}</span>
+                    </div>
+                  </div>
+                  <div style="flex:0 0 78px;display:flex;flex-direction:column;
+                              align-items:center;justify-content:center;
+                              background:rgba(0,0,0,0.18);padding:6px 4px">
+                    <div style="font-family:'DM Serif Display',serif;font-size:1.5rem;
+                                color:{_big_col};line-height:1">{_big}</div>
+                    <div style="font-size:0.6rem;text-transform:uppercase;
+                                letter-spacing:0.06em;color:#777;margin-top:2px">producir</div>
+                  </div>
+                </div>
+                """)
+            st.markdown("".join(_cards), unsafe_allow_html=True)
             st.caption(
                 "**A producir = Meta − Saldo** (mínimo 0). "
-                "🔴 **Producir**: falta stock para la meta · "
-                "✅ **Cubierto**: el saldo alcanza, no produzcas · "
-                "⚠️ **Sin referencia**: no hubo ventas de esa categoría ese día de la semana en "
-                "el mes elegido, así que la meta 0 no es confiable — revisa manualmente o usa "
-                "'Todos' / otro mes como referencia."
+                "🔴 falta stock · ✅ el saldo alcanza · "
+                "⚠️ sin ventas de esa categoría ese día en el mes elegido (meta no confiable; "
+                "revisa manual o usa 'Todos' / otro mes)."
             )
             if _n_sinref:
                 st.info(f"⚠️ {_n_sinref} categoría(s) sin referencia para el {_ph_dow_full} "
