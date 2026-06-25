@@ -4734,6 +4734,121 @@ def _cr_conclusiones_empresa(comp, red, periodos, modo, cp_red):
 #  Ranking triple (DAX): (rankVdp + rankPctTotal - venta/1e10)/2, ascendente.
 #  Colores por posición de ranking: verde (mejores) / amarillo (medio) / rojo.
 # ===========================================================================
+# ===========================================================================
+#  CUMPLIMIENTO DE METAS (Cafetería/Postres) — cuadro mensual 1 pág horizontal
+# ===========================================================================
+def _cm_pct_color_estado(meta, real):
+    pct = (real/meta*100) if meta else 0.0
+    if pct >= 100:   color = "verde"; estado = "✔ CUMPLE"
+    elif pct >= 90:  color = "ambar"; estado = "✘ NO CUMPLE"
+    else:            color = "rojo";  estado = "✘ NO CUMPLE"
+    return pct, color, estado
+
+def generar_pdf_cumplimiento_metas(rows, tot, mes_label, meta_col_label="Meta Mensual", nota=None, logo_path=None):
+    """rows: lista de dicts {local, mc, rc, mp, rp}. tot: {mc,rc,mp,rp}."""
+    import io as _io
+    from reportlab.lib.pagesizes import letter, landscape
+    from reportlab.lib import colors
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+
+    VERDE = colors.HexColor("#C6EFCE"); VERDE_T = colors.HexColor("#1E7B34")
+    AMBAR = colors.HexColor("#FFEB9C"); AMBAR_T = colors.HexColor("#9C6500")
+    ROJO  = colors.HexColor("#FFC7CE"); ROJO_T  = colors.HexColor("#9C0006")
+    GRIS  = colors.HexColor("#D9D9D9"); AZUL = colors.HexColor("#1F3864")
+    BORDE = colors.HexColor("#808080")
+    _cfill = {"verde": VERDE, "ambar": AMBAR, "rojo": ROJO}
+    _ctext = {"verde": VERDE_T, "ambar": AMBAR_T, "rojo": ROJO_T}
+
+    stt = ParagraphStyle("t", fontName="Helvetica-Bold", fontSize=12.5, alignment=TA_CENTER, leading=15, textColor=AZUL)
+    sts = ParagraphStyle("s", fontName="Helvetica", fontSize=7.5, alignment=TA_CENTER, leading=9, textColor=colors.HexColor("#555"))
+    sgh = ParagraphStyle("gh", fontName="Helvetica-Bold", fontSize=8.5, alignment=TA_CENTER, leading=10, textColor=colors.white)
+    sh  = ParagraphStyle("h", fontName="Helvetica-Bold", fontSize=6.6, alignment=TA_CENTER, leading=8, textColor=colors.white)
+    sc  = ParagraphStyle("c", fontName="Helvetica", fontSize=7.2, alignment=TA_CENTER, leading=8.6)
+    scl = ParagraphStyle("cl", fontName="Helvetica-Bold", fontSize=7.4, alignment=TA_LEFT, leading=8.6)
+    se  = ParagraphStyle("e", fontName="Helvetica-Bold", fontSize=6.3, alignment=TA_CENTER, leading=7.6)
+
+    def _fm(v): return f"{v:,.0f}".replace(",", ".")
+    def _fmeta(v): return f"{v:,.1f}".replace(",", "@").replace(".", ",").replace("@", ".")
+    def _fp(v): return f"{v:.1f}%".replace(".", ",")
+
+    # Cabecera: fila de grupos (con SPAN) + fila de subcolumnas
+    g_row = [Paragraph("LOCAL", sgh),
+             Paragraph("CAFETERÍA", sgh), "", "", "",
+             Paragraph("POSTRES", sgh), "", "", "",
+             Paragraph("TOTAL LOCAL", sgh), "", "", ""]
+    sub = ["", meta_col_label,"Real","Cumpl. %","Estado",
+               meta_col_label,"Real","Cumpl. %","Estado",
+               meta_col_label,"Real","Cumpl. %","Estado"]
+    h_row = [Paragraph(x, sh) if x else "" for x in sub]
+
+    data = [g_row, h_row]
+    cell_styles = []  # (col,row,color)
+    r = 2
+    for row in rows:
+        cels = [Paragraph(row["local"], scl)]
+        for meta, real in [(row["mc"],row["rc"]), (row["mp"],row["rp"]),
+                           (row["mc"]+row["mp"], row["rc"]+row["rp"])]:
+            pct, color, estado = _cm_pct_color_estado(meta, real)
+            base = len(cels)
+            cels += [Paragraph(_fmeta(meta), sc), Paragraph(_fm(real), sc),
+                     Paragraph(_fp(pct), ParagraphStyle("p", parent=se, textColor=_ctext[color])),
+                     Paragraph(estado, ParagraphStyle("es", parent=se, textColor=_ctext[color]))]
+            cell_styles.append((base+3, r, _cfill[color]))  # Estado cell bg
+            cell_styles.append((base+2, r, _cfill[color]))  # Cumpl% cell bg
+        data.append(cels)
+        r += 1
+    # TOTAL RED
+    cels = [Paragraph("TOTAL RED", ParagraphStyle("tr", parent=scl, textColor=colors.white))]
+    for meta, real in [(tot["mc"],tot["rc"]), (tot["mp"],tot["rp"]),
+                       (tot["mc"]+tot["mp"], tot["rc"]+tot["rp"])]:
+        pct, color, estado = _cm_pct_color_estado(meta, real)
+        cels += [Paragraph(_fmeta(meta), ParagraphStyle("w", parent=sc, textColor=colors.white)),
+                 Paragraph(_fm(real), ParagraphStyle("w", parent=sc, textColor=colors.white)),
+                 Paragraph(_fp(pct), ParagraphStyle("w", parent=se, textColor=colors.white)),
+                 Paragraph(estado, ParagraphStyle("w", parent=se, textColor=colors.white))]
+    data.append(cels)
+    r_total = r
+
+    PAG_W = landscape(letter)[0]; MX = 20
+    util = PAG_W - 2*MX
+    pesos = [3.0, 2.3,1.6,1.5,2.0,  2.3,1.6,1.5,2.0,  2.3,1.6,1.5,2.0]
+    sp = sum(pesos); wcols = [util*p/sp for p in pesos]
+
+    t = Table(data, colWidths=wcols, repeatRows=2)
+    style = [
+        ("GRID",(0,0),(-1,-1),0.5,BORDE),
+        ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
+        ("ALIGN",(0,0),(-1,-1),"CENTER"),
+        ("SPAN",(1,0),(4,0)), ("SPAN",(5,0),(8,0)), ("SPAN",(9,0),(12,0)),
+        ("SPAN",(0,0),(0,1)),
+        ("BACKGROUND",(0,0),(-1,1),AZUL),
+        ("TOPPADDING",(0,0),(-1,-1),3),("BOTTOMPADDING",(0,0),(-1,-1),3),
+        ("LEFTPADDING",(0,0),(-1,-1),2),("RIGHTPADDING",(0,0),(-1,-1),2),
+        ("ROWBACKGROUNDS",(0,2),(-1,r_total-1),[colors.white, colors.HexColor("#F2F2F2")]),
+        ("BACKGROUND",(0,r_total),(-1,r_total),AZUL),
+    ]
+    for (c, rr, col) in cell_styles:
+        style.append(("BACKGROUND",(c,rr),(c,rr),col))
+    t.setStyle(TableStyle(style))
+
+    buf = _io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=landscape(letter),
+                            leftMargin=MX, rightMargin=MX, topMargin=20, bottomMargin=20)
+    elems = [
+        Paragraph(f"CUADRO RESUMEN · CUMPLIMIENTO DE METAS · {mes_label}", stt),
+        Spacer(1,3),
+        Paragraph("% Cumplimiento = Ventas Reales ÷ Meta × 100  |  Verde ≥100% · Ámbar 90–99% · Rojo &lt;90%", sts),
+    ] + ([Spacer(1,2), Paragraph(nota, ParagraphStyle("n", parent=sts, textColor=colors.HexColor("#9C6500")))] if nota else []) + [
+        Spacer(1,8), t, Spacer(1,6),
+        Paragraph("Real: unidades vendidas en Salón (es_opcion=false). 'Providencia' en ventas = 'Pedro de Valdivia' en metas.", sts),
+    ]
+    doc.build(elems)
+    buf.seek(0)
+    return buf.getvalue()
+
+
 def _sg_color_bands(n):
     """Cantidad de verdes/amarillos/rojos según nº de garzones (regla confirmada)."""
     if n <= 0:
@@ -12997,6 +13112,124 @@ elif modulo.startswith("📊"):
                     key="tv_dl"
                 )
 
+
+
+        # ═══════════ 🎯 CUMPLIMIENTO DE METAS (mensual) ═══════════
+        st.markdown("---")
+        st.markdown("### 🎯 Cumplimiento de Metas (mensual)")
+        st.caption("Cafetería y Postres · unidades vendidas en Salón · meta fija mensual por local. "
+                   "Para el mes en curso, la meta se proyecta a los días transcurridos (hasta ayer).")
+
+        # Metas fijas (fuente: Metas_Servicio_05-26.xlsx). Clave = local en ventas.
+        _CM_METAS = {
+            "Vitacura":          {"Cafetería": 2998.9, "Postres": 2637.6},
+            "Las Condes":        {"Cafetería": 2196.0, "Postres": 2152.6},
+            "Macul":             {"Cafetería": 1996.4, "Postres": 2415.2},
+            "Los Trapenses":     {"Cafetería": 2014.8, "Postres": 2128.8},
+            "La Reina":          {"Cafetería": 1626.4, "Postres": 1594.4},
+            "Quilin":            {"Cafetería": 1206.5, "Postres": 1532.0},
+            "Nueva Providencia": {"Cafetería": 1214.1, "Postres": 1285.5},
+            "Providencia":       {"Cafetería":  789.9, "Postres":  973.4},
+            "La Dehesa":         {"Cafetería": 1883.6, "Postres": 1713.3},
+            "Chicureo":          {"Cafetería": 1708.1, "Postres": 1990.2},
+        }
+        _CM_ORDEN = ["Vitacura","Las Condes","Macul","Los Trapenses","La Reina",
+                     "Quilin","Nueva Providencia","Providencia","La Dehesa","Chicureo"]
+
+        _cmc1, _cmc2 = st.columns([2, 1])
+        with _cmc1:
+            _cm_idx = st.selectbox("📅 Mes", range(len(_tv_meses)),
+                format_func=lambda i: _tv_mlabels[i], key="cm_mes")
+        with _cmc2:
+            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+            _cm_btn = st.button("🎯 Generar cumplimiento", key="cm_btn",
+                                type="primary", use_container_width=True)
+
+        if _cm_btn:
+            import datetime as _cm_dt
+            _cm_mes = _tv_meses[_cm_idx]
+            _cm_lbl_base = _tv_mlabels[_cm_idx]
+            _cm_dias_mes = _tv_cal.monthrange(_cm_mes.year, _cm_mes.month)[1]
+            _cm_hoy = _cm_dt.date.today()
+            _cm_en_curso = (_cm_mes.year == _cm_hoy.year and _cm_mes.month == _cm_hoy.month)
+
+            if _cm_en_curso:
+                _cm_ayer = _cm_hoy - _cm_dt.timedelta(days=1)
+                _cm_dias_transc = _cm_ayer.day if _cm_ayer.month == _cm_mes.month else 0
+                _cm_fi = _cm_mes.replace(day=1); _cm_ff = _cm_ayer
+                _cm_factor = (_cm_dias_transc / _cm_dias_mes) if _cm_dias_mes else 0
+                _cm_meta_col = f"Meta proy. ({_cm_dias_transc}/{_cm_dias_mes})"
+                _cm_lbl = f"{_cm_lbl_base} · al {_cm_dias_transc}/{_cm_dias_mes} días"
+                _cm_nota = (f"Mes en curso: meta proyectada a {_cm_dias_transc} de "
+                            f"{_cm_dias_mes} días. Real hasta ayer ({_cm_ff}), excluye hoy.")
+            else:
+                _cm_dias_transc = _cm_dias_mes
+                _cm_fi = _cm_mes.replace(day=1); _cm_ff = _cm_mes.replace(day=_cm_dias_mes)
+                _cm_factor = 1.0; _cm_meta_col = "Meta Mensual"
+                _cm_lbl = _cm_lbl_base; _cm_nota = None
+
+            if _cm_en_curso and _cm_dias_transc == 0:
+                st.warning("El mes recién comienza: aún no hay días transcurridos (hasta ayer) para comparar.")
+                st.session_state.pop("cm_data", None)
+            else:
+                _cm_real = run_query("""
+                    SELECT local, categoria_menu, SUM(cantidad_vendida) AS uds
+                    FROM ventas
+                    WHERE fecha_venta BETWEEN :fi AND :ff
+                      AND es_opcion = false
+                      AND (origen IS NULL OR origen = '')
+                      AND local IS NOT NULL
+                    GROUP BY local, categoria_menu
+                """, {"fi": str(_cm_fi), "ff": str(_cm_ff)})
+                if _cm_real is None:
+                    _cm_real = pd.DataFrame(columns=["local","categoria_menu","uds"])
+                _cm_real["uds"] = pd.to_numeric(_cm_real["uds"], errors="coerce").fillna(0)
+                def _cm_es_cafe(c): return str(c).strip().lower() in ("cafeteria","cafetería")
+                def _cm_es_post(c): return str(c).strip().lower() == "postres"
+                _cm_rows = []; _ct = {"mc":0.0,"rc":0.0,"mp":0.0,"rp":0.0}
+                for _loc in _CM_ORDEN:
+                    _sub = _cm_real[_cm_real["local"] == _loc]
+                    _rc = float(_sub[_sub["categoria_menu"].apply(_cm_es_cafe)]["uds"].sum())
+                    _rp = float(_sub[_sub["categoria_menu"].apply(_cm_es_post)]["uds"].sum())
+                    _mc = _CM_METAS[_loc]["Cafetería"] * _cm_factor
+                    _mp = _CM_METAS[_loc]["Postres"] * _cm_factor
+                    _cm_rows.append({"local": _loc, "mc": _mc, "rc": _rc, "mp": _mp, "rp": _rp})
+                    _ct["mc"]+=_mc; _ct["rc"]+=_rc; _ct["mp"]+=_mp; _ct["rp"]+=_rp
+                st.session_state["cm_data"] = {
+                    "rows": _cm_rows, "tot": _ct, "lbl": _cm_lbl,
+                    "meta_col": _cm_meta_col, "nota": _cm_nota,
+                }
+
+        _cm_cache = st.session_state.get("cm_data")
+        if _cm_cache:
+            _cm_rows = _cm_cache["rows"]; _ct = _cm_cache["tot"]
+            if _cm_cache.get("nota"):
+                st.info(_cm_cache["nota"])
+            def _cm_pct(m, r): return (r/m*100) if m else 0
+            _cm_disp = []
+            for _row in _cm_rows + [{"local":"TOTAL RED","mc":_ct["mc"],"rc":_ct["rc"],
+                                     "mp":_ct["mp"],"rp":_ct["rp"]}]:
+                _mt = _row["mc"]+_row["mp"]; _rt = _row["rc"]+_row["rp"]
+                _cm_disp.append({
+                    "Local": _row["local"],
+                    "Meta Café": round(_row["mc"],1), "Real Café": int(round(_row["rc"])),
+                    "% Café": f"{_cm_pct(_row['mc'],_row['rc']):.1f}%",
+                    "Meta Postres": round(_row["mp"],1), "Real Postres": int(round(_row["rp"])),
+                    "% Postres": f"{_cm_pct(_row['mp'],_row['rp']):.1f}%",
+                    "Meta Total": round(_mt,1), "Real Total": int(round(_rt)),
+                    "% Total": f"{_cm_pct(_mt,_rt):.1f}%",
+                })
+            st.dataframe(pd.DataFrame(_cm_disp), use_container_width=True, hide_index=True)
+            try:
+                _cm_pdf = generar_pdf_cumplimiento_metas(
+                    _cm_rows, _ct, _cm_cache["lbl"],
+                    meta_col_label=_cm_cache["meta_col"], nota=_cm_cache.get("nota"))
+                _cm_fn = _cm_cache["lbl"].split(" ·")[0].replace(" ", "_")
+                st.download_button("📄 Descargar cuadro (PDF)", _cm_pdf,
+                    file_name=f"cumplimiento_metas_{_cm_fn}.pdf",
+                    mime="application/pdf", use_container_width=True, key="cm_pdf_dl")
+            except Exception as _ecm:
+                st.warning(f"No se pudo generar el PDF: {_ecm}")
 
 
     elif informe_sel == "ControlProduccion":
