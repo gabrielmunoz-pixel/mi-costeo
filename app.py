@@ -4747,10 +4747,11 @@ def _cm_pct_color_estado(meta, real):
 def generar_pdf_cumplimiento_metas(rows, tot, mes_label, meta_col_label="Meta Mensual",
                                    nota=None, logo_path=None,
                                    rows2=None, tot2=None, meta_col_label2=None,
-                                   subtitulo1=None, subtitulo2=None):
+                                   subtitulo1=None, subtitulo2=None,
+                                   real_col_label="Real", real_col_label2="Real"):
     """rows: lista de dicts {local, mc, rc, mp, rp}. tot: {mc,rc,mp,rp}.
     Si rows2/tot2 se entregan, dibuja un SEGUNDO cuadro idéntico debajo
-    (p. ej. cuadro 1 = meta proyectada, cuadro 2 = meta mensual total)."""
+    (p. ej. cuadro 1 = venta proyectada, cuadro 2 = real acumulado)."""
     import io as _io
     from reportlab.lib.pagesizes import letter, landscape
     from reportlab.lib import colors
@@ -4784,15 +4785,15 @@ def generar_pdf_cumplimiento_metas(rows, tot, mes_label, meta_col_label="Meta Me
     pesos = [3.0, 2.3,1.6,1.5,2.0,  2.3,1.6,1.5,2.0,  2.3,1.6,1.5,2.0]
     sp = sum(pesos); wcols = [util*p/sp for p in pesos]
 
-    def _build_tabla(_rows, _tot, _meta_lbl):
+    def _build_tabla(_rows, _tot, _meta_lbl, _real_lbl="Real"):
         """Construye la Table de cumplimiento (cabecera + filas + TOTAL RED)."""
         g_row = [Paragraph("LOCAL", sgh),
                  Paragraph("CAFETERÍA", sgh), "", "", "",
                  Paragraph("POSTRES", sgh), "", "", "",
                  Paragraph("TOTAL LOCAL", sgh), "", "", ""]
-        sub = ["", _meta_lbl,"Real","Cumpl. %","Estado",
-                   _meta_lbl,"Real","Cumpl. %","Estado",
-                   _meta_lbl,"Real","Cumpl. %","Estado"]
+        sub = ["", _meta_lbl,_real_lbl,"Cumpl. %","Estado",
+                   _meta_lbl,_real_lbl,"Cumpl. %","Estado",
+                   _meta_lbl,_real_lbl,"Cumpl. %","Estado"]
         h_row = [Paragraph(x, sh) if x else "" for x in sub]
         data = [g_row, h_row]
         cell_styles = []
@@ -4838,7 +4839,7 @@ def generar_pdf_cumplimiento_metas(rows, tot, mes_label, meta_col_label="Meta Me
         t.setStyle(TableStyle(style))
         return t
 
-    t1 = _build_tabla(rows, tot, meta_col_label)
+    t1 = _build_tabla(rows, tot, meta_col_label, real_col_label)
 
     buf = _io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=landscape(letter),
@@ -4856,7 +4857,7 @@ def generar_pdf_cumplimiento_metas(rows, tot, mes_label, meta_col_label="Meta Me
 
     # ── Cuadro 2 (opcional): meta total del mes ──
     if rows2 is not None and tot2 is not None:
-        t2 = _build_tabla(rows2, tot2, meta_col_label2 or "Meta Mensual")
+        t2 = _build_tabla(rows2, tot2, meta_col_label2 or "Meta Mensual", real_col_label2)
         elems += [Spacer(1,14)]
         if subtitulo2:
             elems += [Paragraph(subtitulo2, sst), Spacer(1,6)]
@@ -13541,15 +13542,17 @@ elif modulo.startswith("📊"):
                 _cm_ayer = _cm_hoy - _cm_dt.timedelta(days=1)
                 _cm_dias_transc = _cm_ayer.day if _cm_ayer.month == _cm_mes.month else 0
                 _cm_fi = _cm_mes.replace(day=1); _cm_ff = _cm_ayer
-                _cm_factor = (_cm_dias_transc / _cm_dias_mes) if _cm_dias_mes else 0
-                _cm_meta_col = f"Meta proy. ({_cm_dias_transc}/{_cm_dias_mes})"
-                _cm_lbl = f"{_cm_lbl_base} · al {_cm_dias_transc}/{_cm_dias_mes} días"
-                _cm_nota = (f"Mes en curso: meta proyectada a {_cm_dias_transc} de "
-                            f"{_cm_dias_mes} días. Real hasta ayer ({_cm_ff}), excluye hoy.")
+                # Factor de proyección: extrapola lo vendido al total de días del mes
+                _cm_factor = (_cm_dias_mes / _cm_dias_transc) if _cm_dias_transc else 0
+                _cm_meta_col = "Venta proyectada"
+                _cm_lbl = f"{_cm_lbl_base} · proyección al cierre ({_cm_dias_transc}/{_cm_dias_mes} días)"
+                _cm_nota = (f"Mes en curso: venta proyectada al cierre = "
+                            f"(real ÷ {_cm_dias_transc} días) × {_cm_dias_mes} días. "
+                            f"Real hasta ayer ({_cm_ff}), excluye hoy. Meta = mensual completa.")
             else:
                 _cm_dias_transc = _cm_dias_mes
                 _cm_fi = _cm_mes.replace(day=1); _cm_ff = _cm_mes.replace(day=_cm_dias_mes)
-                _cm_factor = 1.0; _cm_meta_col = "Meta Mensual"
+                _cm_factor = 1.0; _cm_meta_col = "Venta real"
                 _cm_lbl = _cm_lbl_base; _cm_nota = None
 
             if _cm_en_curso and _cm_dias_transc == 0:
@@ -13570,20 +13573,22 @@ elif modulo.startswith("📊"):
                 _cm_real["uds"] = pd.to_numeric(_cm_real["uds"], errors="coerce").fillna(0)
                 def _cm_es_cafe(c): return str(c).strip().lower() in ("cafeteria","cafetería")
                 def _cm_es_post(c): return str(c).strip().lower() == "postres"
+                # Cuadro 1: meta MENSUAL vs VENTA PROYECTADA al cierre (real × factor)
                 _cm_rows = []; _ct = {"mc":0.0,"rc":0.0,"mp":0.0,"rp":0.0}
-                # Segundo set: meta TOTAL del mes (factor 1.0) vs el mismo real
+                # Cuadro 2: meta MENSUAL vs REAL acumulado (sin proyectar)
                 _cm_rows_tot = []; _ct_tot = {"mc":0.0,"rc":0.0,"mp":0.0,"rp":0.0}
                 for _loc in _CM_ORDEN:
                     _sub = _cm_real[_cm_real["local"] == _loc]
                     _rc = float(_sub[_sub["categoria_menu"].apply(_cm_es_cafe)]["uds"].sum())
                     _rp = float(_sub[_sub["categoria_menu"].apply(_cm_es_post)]["uds"].sum())
-                    _mc = round(_CM_METAS[_loc]["Cafetería"] * _cm_factor)
-                    _mp = round(_CM_METAS[_loc]["Postres"] * _cm_factor)
-                    _cm_rows.append({"local": _loc, "mc": _mc, "rc": _rc, "mp": _mp, "rp": _rp})
-                    _ct["mc"]+=_mc; _ct["rc"]+=_rc; _ct["mp"]+=_mp; _ct["rp"]+=_rp
-                    # meta total (mensual completa) con el real acumulado
                     _mc_t = _CM_METAS[_loc]["Cafetería"]
                     _mp_t = _CM_METAS[_loc]["Postres"]
+                    # venta proyectada al cierre
+                    _pc = round(_rc * _cm_factor)
+                    _pp = round(_rp * _cm_factor)
+                    _cm_rows.append({"local": _loc, "mc": _mc_t, "rc": _pc, "mp": _mp_t, "rp": _pp})
+                    _ct["mc"]+=_mc_t; _ct["rc"]+=_pc; _ct["mp"]+=_mp_t; _ct["rp"]+=_pp
+                    # cuadro 2: real acumulado
                     _cm_rows_tot.append({"local": _loc, "mc": _mc_t, "rc": _rc, "mp": _mp_t, "rp": _rp})
                     _ct_tot["mc"]+=_mc_t; _ct_tot["rc"]+=_rc; _ct_tot["mp"]+=_mp_t; _ct_tot["rp"]+=_rp
                 st.session_state["cm_data"] = {
@@ -13600,38 +13605,47 @@ elif modulo.startswith("📊"):
             if _cm_cache.get("nota"):
                 st.info(_cm_cache["nota"])
             def _cm_pct(m, r): return (r/m*100) if m else 0
+            _cm_proy = _cm_cache.get("en_curso", False)
+            _rlbl = "Proy." if _cm_proy else "Real"
             _cm_disp = []
             for _row in _cm_rows + [{"local":"TOTAL RED","mc":_ct["mc"],"rc":_ct["rc"],
                                      "mp":_ct["mp"],"rp":_ct["rp"]}]:
                 _mt = _row["mc"]+_row["mp"]; _rt = _row["rc"]+_row["rp"]
                 _cm_disp.append({
                     "Local": _row["local"],
-                    "Meta Café": int(round(_row["mc"])), "Real Café": int(round(_row["rc"])),
+                    "Meta Café": int(round(_row["mc"])), f"{_rlbl} Café": int(round(_row["rc"])),
                     "% Café": f"{_cm_pct(_row['mc'],_row['rc']):.1f}%",
-                    "Meta Postres": int(round(_row["mp"])), "Real Postres": int(round(_row["rp"])),
+                    "Meta Postres": int(round(_row["mp"])), f"{_rlbl} Postres": int(round(_row["rp"])),
                     "% Postres": f"{_cm_pct(_row['mp'],_row['rp']):.1f}%",
-                    "Meta Total": int(round(_mt)), "Real Total": int(round(_rt)),
+                    "Meta Total": int(round(_mt)), f"{_rlbl} Total": int(round(_rt)),
                     "% Total": f"{_cm_pct(_mt,_rt):.1f}%",
                 })
+            if _cm_proy:
+                st.caption("Cuadro en pantalla = **proyección al cierre** (venta estimada a fin "
+                           "de mes según el ritmo actual) vs meta mensual. El PDF incluye además "
+                           "el avance real a la fecha.")
             st.dataframe(pd.DataFrame(_cm_disp), use_container_width=True, hide_index=True)
             try:
-                # Cuadro 1 = meta proyectada (lo actual). Cuadro 2 = meta total del
-                # mes vs real acumulado (solo aporta info nueva si el mes está en curso;
-                # si el mes ya cerró, ambos serían idénticos, así que se omite).
+                # Cuadro 1 = META MENSUAL vs VENTA PROYECTADA al cierre.
+                # Cuadro 2 = META MENSUAL vs REAL acumulado (solo si el mes está en
+                # curso; si ya cerró, proyección = real, así que se omite el 2º).
                 _cm_en_curso_c = _cm_cache.get("en_curso", False)
-                _cm_kw = {}
+                _dt_t = _cm_cache.get("dias_transc"); _dm_t = _cm_cache.get("dias_mes")
+                _cm_kw = {"real_col_label": "Venta proy." if _cm_en_curso_c else "Venta real"}
                 if _cm_en_curso_c and _cm_cache.get("rows_tot"):
-                    _dt_t = _cm_cache.get("dias_transc"); _dm_t = _cm_cache.get("dias_mes")
-                    _cm_kw = {
+                    _cm_kw.update({
                         "rows2": _cm_cache["rows_tot"],
                         "tot2": _cm_cache["tot_tot"],
                         "meta_col_label2": "Meta Mensual",
-                        "subtitulo1": f"1) AVANCE PROYECTADO · meta al día {_dt_t} de {_dm_t}",
-                        "subtitulo2": f"2) AVANCE HACIA META TOTAL DEL MES · meta {_dm_t}/{_dm_t} días",
-                    }
+                        "real_col_label2": "Real acum.",
+                        "subtitulo1": f"1) PROYECCIÓN AL CIERRE · venta estimada a fin de mes "
+                                      f"(ritmo de {_dt_t} días) vs meta mensual",
+                        "subtitulo2": f"2) AVANCE REAL · vendido a la fecha ({_dt_t} días) "
+                                      f"vs meta mensual",
+                    })
                 _cm_pdf = generar_pdf_cumplimiento_metas(
                     _cm_rows, _ct, _cm_cache["lbl"],
-                    meta_col_label=_cm_cache["meta_col"], nota=_cm_cache.get("nota"),
+                    meta_col_label="Meta Mensual", nota=_cm_cache.get("nota"),
                     **_cm_kw)
                 _cm_fn = _cm_cache["lbl"].split(" ·")[0].replace(" ", "_")
                 st.download_button("📄 Descargar cuadro (PDF)", _cm_pdf,
