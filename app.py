@@ -13513,42 +13513,6 @@ elif modulo.startswith("📊"):
                         "para visualizar la evolución."
                     )
 
-                # ── PDF ejecutivo del local seleccionado ──
-                if _cr_loc_sel != "Todos":
-                    st.markdown("#### 📄 Informe del local")
-                    st.caption(f"Genera un PDF ejecutivo de **{_cr_loc_sel}** con resumen, "
-                               "desglose diario y lista del personal del período.")
-                    # Personal del local en el período (turnos y colación promedio)
-                    _cr_pers = run_query("""
-                        SELECT TRIM(COALESCE(nombre,'') || ' ' || COALESCE(apellidos,'')) AS nombre,
-                               MAX(cargo) AS cargo,
-                               COUNT(*) FILTER (WHERE trabajo) AS turnos,
-                               AVG(NULLIF(colacion_min,0)) FILTER (WHERE trabajo) AS colacion_min_prom
-                        FROM asistencia_rrhh
-                        WHERE fecha BETWEEN :fi AND :ff AND local = :loc
-                        GROUP BY TRIM(COALESCE(nombre,'') || ' ' || COALESCE(apellidos,''))
-                        HAVING COUNT(*) FILTER (WHERE trabajo) > 0
-                    """, {"fi": _cr_meta["fi"], "ff": _cr_meta["ff"], "loc": _cr_loc_sel})
-                    if _cr_pers is None:
-                        _cr_pers = pd.DataFrame(columns=["nombre","cargo","turnos","colacion_min_prom"])
-                    try:
-                        _modo_ind = _cr_detectar_modo(
-                            _cr_dt.date.fromisoformat(_cr_meta["fi"]),
-                            _cr_dt.date.fromisoformat(_cr_meta["ff"]))
-                        _pdf_ind = generar_pdf_colaciones_individual(
-                            _cr_loc_sel, _cr_meta["fi"], _cr_meta["ff"],
-                            _cr_dia[["fecha","colaciones","turnos","ratio"]].copy(),
-                            _cr_pers, _modo_ind)
-                        st.download_button(
-                            f"📄 Descargar PDF · {_cr_loc_sel}",
-                            _pdf_ind,
-                            file_name=f"colaciones_{_cr_loc_sel}_{_cr_meta['fi']}_{_cr_meta['ff']}.pdf",
-                            mime="application/pdf", use_container_width=True,
-                            key="cr_pdf_individual",
-                        )
-                    except Exception as _eind:
-                        st.warning(f"No se pudo generar el PDF del local: {_eind}")
-
             # ════════ 4) INFORME COMPLETO (PDF) ════════
             st.markdown("### 📄 Informe completo")
             _cr_modo = _cr_detectar_modo(
@@ -13579,17 +13543,37 @@ elif modulo.startswith("📊"):
 
             _cr_pb1, _cr_pb2 = st.columns(2)
             with _cr_pb1:
-                try:
-                    _pdf_loc = generar_pdf_colaciones_local(
-                        _cr_comp, _cr_modo, _cr_meta["fi"], _cr_meta["ff"])
-                    st.download_button(
-                        "📄 PDF por local",
-                        _pdf_loc,
-                        file_name=f"colaciones_local_{_cr_meta['fi']}_{_cr_meta['ff']}.pdf",
-                        mime="application/pdf", use_container_width=True, key="cr_pdf_loc",
-                    )
-                except Exception as _e1:
-                    st.warning(f"No se pudo generar el PDF por local: {_e1}")
+                if _cr_loc_sel == "Todos":
+                    st.button("📄 PDF por local", use_container_width=True,
+                              disabled=True, key="cr_pdf_loc_off")
+                    st.caption("Selecciona un local en **Desglose diario** para generar su PDF.")
+                else:
+                    # Personal del local en el período (turnos y colación promedio)
+                    _cr_pers = run_query("""
+                        SELECT TRIM(COALESCE(nombre,'') || ' ' || COALESCE(apellidos,'')) AS nombre,
+                               MAX(cargo) AS cargo,
+                               COUNT(*) FILTER (WHERE trabajo) AS turnos,
+                               AVG(NULLIF(colacion_min,0)) FILTER (WHERE trabajo) AS colacion_min_prom
+                        FROM asistencia_rrhh
+                        WHERE fecha BETWEEN :fi AND :ff AND local = :loc
+                        GROUP BY TRIM(COALESCE(nombre,'') || ' ' || COALESCE(apellidos,''))
+                        HAVING COUNT(*) FILTER (WHERE trabajo) > 0
+                    """, {"fi": _cr_meta["fi"], "ff": _cr_meta["ff"], "loc": _cr_loc_sel})
+                    if _cr_pers is None:
+                        _cr_pers = pd.DataFrame(columns=["nombre","cargo","turnos","colacion_min_prom"])
+                    try:
+                        _pdf_loc = generar_pdf_colaciones_individual(
+                            _cr_loc_sel, _cr_meta["fi"], _cr_meta["ff"],
+                            _cr_dia[["fecha","colaciones","turnos","ratio"]].copy(),
+                            _cr_pers, _cr_modo)
+                        st.download_button(
+                            f"📄 PDF · {_cr_loc_sel}",
+                            _pdf_loc,
+                            file_name=f"colaciones_{_cr_loc_sel}_{_cr_meta['fi']}_{_cr_meta['ff']}.pdf",
+                            mime="application/pdf", use_container_width=True, key="cr_pdf_loc",
+                        )
+                    except Exception as _e1:
+                        st.warning(f"No se pudo generar el PDF del local: {_e1}")
             with _cr_pb2:
                 try:
                     _pdf_emp = generar_pdf_colaciones_empresa(
