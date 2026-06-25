@@ -432,7 +432,7 @@ def _render_gestion_usuarios():
             for _, row in df_users.iterrows():
                 with st.expander(f"👤 {row['username']} {('· ' + str(row.get('local','')) ) if row.get('local') else ''}"):
                     permisos_act = row['permisos'] if row['permisos'] else ""
-                    opciones_mod = ["📦 Gestión de Datos", "📊 Informes", "📋 Notas de Crédito", "📥 Stock Cierre"]
+                    opciones_mod = ["📦 Gestión de Datos", "📊 Informes", "📋 Notas de Crédito", "📥 Stock Cierre", "🎯 Config Producción"]
                     sel = st.multiselect(
                         "Módulos habilitados",
                         opciones_mod,
@@ -487,7 +487,7 @@ def _render_gestion_usuarios():
         st.markdown("#### Nuevo Usuario")
         nu_user = st.text_input("Usuario", key="nu_user")
         nu_pw   = st.text_input("Contraseña", type="password", key="nu_pw")
-        opciones_mod2 = ["📦 Gestión de Datos", "📊 Informes", "📋 Notas de Crédito", "📥 Stock Cierre"]
+        opciones_mod2 = ["📦 Gestión de Datos", "📊 Informes", "📋 Notas de Crédito", "📥 Stock Cierre", "🎯 Config Producción"]
         nu_perm = st.multiselect("Módulos habilitados", opciones_mod2, key="nu_perm")
         _locales_nu_list = ["— Sin restricción —", "Vitacura", "Las Condes", "Chicureo", "La Dehesa", "Macul", "La Reina", "Quilin", "Nueva Providencia", "Providencia", "Los Trapenses"]
         nu_local = st.selectbox("Local asignado", _locales_nu_list, key="nu_local")
@@ -996,6 +996,14 @@ def _init_db():
             UNIQUE (fecha, local, categoria)
         )""",
         "CREATE INDEX IF NOT EXISTS idx_stkcierre_local_fecha ON stock_cierre_diario (local, fecha)",
+        # --- Configuración: mes de muestra por local para 'Producir hoy' ---
+        """CREATE TABLE IF NOT EXISTS config_mes_muestra (
+            local           text       PRIMARY KEY,
+            anio            integer    NOT NULL,
+            mes             integer    NOT NULL,
+            actualizado_por text,
+            fecha_registro  timestamp  NOT NULL DEFAULT now()
+        )""",
     ]
     try:
         with engine.begin() as conn:
@@ -3389,6 +3397,8 @@ with st.sidebar:
         menu_items["📋 Notas de Crédito"] = []
     if _is_admin or _user_puede("📥 Stock Cierre"):
         menu_items["📥 Stock Cierre"] = []
+    if _is_admin or _user_puede("🎯 Config Producción"):
+        menu_items["🎯 Config Producción"] = []
     if _is_admin:
         menu_items["👥 Gestión de Usuarios"] = []
 
@@ -22976,7 +22986,7 @@ elif modulo.startswith("📥 Stock Cierre"):
     with _sk_tab3:
         st.markdown("<div class='info-box'>Revisa a primera hora de la mañana. Compara el <b>máximo histórico del día de la semana</b> (meta) con lo que <b>quedó en cámara</b> (saldo) y sugiere <b>cuánto producir hoy</b>.</div>", unsafe_allow_html=True)
 
-        _ph1, _ph2, _ph3 = st.columns(3)
+        _ph1, _ph2 = st.columns(2)
         with _ph1:
             if _is_admin_sk or not _user_local_sk:
                 _ph_local = st.selectbox("Local", _SK_LOCALES, key="ph_local")
@@ -22986,31 +22996,34 @@ elif modulo.startswith("📥 Stock Cierre"):
         with _ph2:
             _ph_fecha = st.date_input("Día a producir", key="ph_fecha",
                                       value=_sk_dt.date.today())
-        with _ph3:
-            # Mes de referencia para los máximos (mayo por defecto, refinará luego)
-            _ph_meses_q = run_query("""
-                SELECT DISTINCT TO_CHAR(fecha_venta, 'YYYY-MM') AS mes
-                FROM ventas WHERE fecha_venta IS NOT NULL ORDER BY mes DESC
-            """)
-            _ph_meses = (_ph_meses_q["mes"].tolist()
-                         if _ph_meses_q is not None and not _ph_meses_q.empty else [])
-            _ph_def = "2026-05" if "2026-05" in _ph_meses else (_ph_meses[0] if _ph_meses else "2026-05")
-            _MN_PH = {"01":"Enero","02":"Febrero","03":"Marzo","04":"Abril","05":"Mayo",
-                      "06":"Junio","07":"Julio","08":"Agosto","09":"Septiembre",
-                      "10":"Octubre","11":"Noviembre","12":"Diciembre"}
-            _ph_mes = st.selectbox(
-                "Mes de referencia (máximos)",
-                _ph_meses if _ph_meses else [_ph_def],
-                index=(_ph_meses.index(_ph_def) if _ph_def in _ph_meses else 0),
-                format_func=lambda m: f"{_MN_PH.get(m.split('-')[1], m)} {m.split('-')[0]}",
-                key="ph_mes")
+
+        _MN_PH = {"01":"Enero","02":"Febrero","03":"Marzo","04":"Abril","05":"Mayo",
+                  "06":"Junio","07":"Julio","08":"Agosto","09":"Septiembre",
+                  "10":"Octubre","11":"Noviembre","12":"Diciembre"}
+
+        # Mes de muestra: definido por configuración (módulo 🎯 Config Producción),
+        # NO elegido por el usuario aquí. Se lee por local.
+        _ph_cfg = run_query("""
+            SELECT anio, mes FROM config_mes_muestra WHERE local = :l
+        """, {"l": _ph_local})
+        _ph_mes = None
+        if _ph_cfg is not None and not _ph_cfg.empty:
+            _ph_anio = int(_ph_cfg["anio"].iloc[0]); _ph_mnum = int(_ph_cfg["mes"].iloc[0])
+            _ph_mes = f"{_ph_anio:04d}-{_ph_mnum:02d}"
 
         _DOW_PH = {0:"Lun",1:"Mar",2:"Mié",3:"Jue",4:"Vie",5:"Sáb",6:"Dom"}
         _DOW_FULL = {0:"lunes",1:"martes",2:"miércoles",3:"jueves",4:"viernes",5:"sábado",6:"domingo"}
         _ph_dow = _DOW_PH[_ph_fecha.weekday()]
         _ph_dow_full = _DOW_FULL[_ph_fecha.weekday()]
+
+        if _ph_mes is None:
+            st.warning(f"⚠️ El local **{_ph_local}** no tiene un mes de muestra configurado. "
+                       "Un encargado debe definirlo en el módulo **🎯 Config Producción** "
+                       "para poder calcular la producción sugerida.")
+            st.stop()
+
         st.markdown(f"#### 🎯 Producción sugerida para el **{_ph_dow_full} {_ph_fecha.strftime('%d-%m-%Y')}** · {_ph_local}")
-        st.caption(f"Meta = mejor **{_ph_dow_full}** de {_MN_PH.get(_ph_mes.split('-')[1], _ph_mes)} {_ph_mes.split('-')[0]} por categoría.")
+        st.caption(f"Meta = mejor **{_ph_dow_full}** de {_MN_PH.get(_ph_mes.split('-')[1], _ph_mes)} {_ph_mes.split('-')[0]} por categoría (mes de muestra configurado).")
 
         # 1) Meta: máximos del día de la semana correspondiente
         _ph_max = _cp_maximos_por_dia(_ph_mes, _ph_local)
@@ -23151,6 +23164,117 @@ elif modulo.startswith("📥 Stock Cierre"):
                 _ph_df.to_csv(index=False).encode("utf-8"),
                 file_name=f"producir_{_ph_local}_{_ph_fecha}.csv",
                 mime="text/csv", key="ph_dl")
+
+
+
+elif modulo.startswith("🎯 Config Producción"):
+    st.markdown(f"""
+    <div style="margin-bottom:1.5rem">
+        <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#555;margin-bottom:4px">Módulo</div>
+        <div style="font-family:'DM Serif Display',serif;font-size:2rem;color:#f0ede8;letter-spacing:-0.02em;line-height:1.1">
+            🎯 Configuración de Producción
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    st.markdown("<div class='info-box'>Define, <b>por local</b>, el <b>mes de muestra</b> que se "
+                "usará para calcular la producción sugerida (pestaña <b>Producir hoy</b> de Stock "
+                "Cierre). Cada local puede tener un mes distinto según su comportamiento. Si un "
+                "local no tiene mes configurado, no se calculará su producción sugerida.</div>",
+                unsafe_allow_html=True)
+
+    _CFG_LOCALES = ["Vitacura","Las Condes","Macul","Los Trapenses","La Reina",
+                    "Quilin","Nueva Providencia","Providencia","La Dehesa","Chicureo"]
+    _CFG_MN = {1:"Enero",2:"Febrero",3:"Marzo",4:"Abril",5:"Mayo",6:"Junio",
+               7:"Julio",8:"Agosto",9:"Septiembre",10:"Octubre",11:"Noviembre",12:"Diciembre"}
+
+    # Meses con datos de ventas disponibles
+    _cfg_meses_q = run_query("""
+        SELECT DISTINCT TO_CHAR(fecha_venta, 'YYYY-MM') AS mes
+        FROM ventas WHERE fecha_venta IS NOT NULL ORDER BY mes DESC
+    """)
+    _cfg_meses = (_cfg_meses_q["mes"].tolist()
+                  if _cfg_meses_q is not None and not _cfg_meses_q.empty else [])
+    if not _cfg_meses:
+        st.warning("No hay meses con datos de ventas disponibles todavía.")
+        st.stop()
+
+    def _cfg_fmt(m):
+        _a, _mm = m.split("-")
+        return f"{_CFG_MN.get(int(_mm), _mm)} {_a}"
+
+    # Configuración actual
+    _cfg_act = run_query("SELECT local, anio, mes FROM config_mes_muestra")
+    _cfg_map = {}
+    if _cfg_act is not None and not _cfg_act.empty:
+        for _, _r in _cfg_act.iterrows():
+            _cfg_map[_r["local"]] = f"{int(_r['anio']):04d}-{int(_r['mes']):02d}"
+
+    st.markdown("#### Mes de muestra por local")
+    _cfg_sel = {}
+    with st.form("cfg_form_prod"):
+        for _loc in _CFG_LOCALES:
+            _c1, _c2 = st.columns([1, 2])
+            with _c1:
+                st.markdown(f"<div style='padding-top:8px;font-weight:600;color:#f0ede8'>{_loc}</div>",
+                            unsafe_allow_html=True)
+            with _c2:
+                _actual = _cfg_map.get(_loc)
+                _opts = ["— Sin configurar —"] + _cfg_meses
+                _idx = _opts.index(_actual) if _actual in _opts else 0
+                _cfg_sel[_loc] = st.selectbox(
+                    f"Mes muestra {_loc}", _opts, index=_idx,
+                    format_func=lambda m: m if m == "— Sin configurar —" else _cfg_fmt(m),
+                    key=f"cfg_mes_{_loc}", label_visibility="collapsed")
+        _cfg_submit = st.form_submit_button("💾 Guardar configuración",
+                                            type="primary", use_container_width=True)
+
+    if _cfg_submit:
+        try:
+            _eng_cfg = get_engine()
+            _cfg_user = st.session_state.get("current_user", "—")
+            _n_guard = 0; _n_borr = 0
+            with _eng_cfg.connect() as _c:
+                for _loc, _val in _cfg_sel.items():
+                    if _val == "— Sin configurar —":
+                        _r = _c.execute(text("DELETE FROM config_mes_muestra WHERE local=:l"),
+                                        {"l": _loc})
+                        if _r.rowcount: _n_borr += 1
+                    else:
+                        _a, _mm = _val.split("-")
+                        _c.execute(text("""
+                            INSERT INTO config_mes_muestra (local, anio, mes, actualizado_por, fecha_registro)
+                            VALUES (:l, :a, :m, :u, now())
+                            ON CONFLICT (local) DO UPDATE SET
+                                anio=EXCLUDED.anio, mes=EXCLUDED.mes,
+                                actualizado_por=EXCLUDED.actualizado_por, fecha_registro=now()
+                        """), {"l": _loc, "a": int(_a), "m": int(_mm), "u": _cfg_user})
+                        _n_guard += 1
+                _c.commit()
+            st.success(f"✅ Configuración guardada: {_n_guard} local(es) con mes de muestra"
+                       + (f", {_n_borr} sin configurar." if _n_borr else "."))
+            st.rerun()
+        except Exception as _e_cfg:
+            st.error(f"Error al guardar: {_e_cfg}")
+
+    # Resumen del estado actual
+    _cfg_now = run_query("""
+        SELECT local, anio, mes, actualizado_por, fecha_registro
+        FROM config_mes_muestra ORDER BY local
+    """)
+    if _cfg_now is not None and not _cfg_now.empty:
+        _cfg_disp = _cfg_now.copy()
+        _cfg_disp["Mes de muestra"] = _cfg_disp.apply(
+            lambda r: f"{_CFG_MN.get(int(r['mes']), r['mes'])} {int(r['anio'])}", axis=1)
+        _cfg_disp = _cfg_disp.rename(columns={
+            "local":"Local", "actualizado_por":"Actualizado por", "fecha_registro":"Fecha"})
+        st.markdown("#### Estado actual")
+        st.dataframe(_cfg_disp[["Local","Mes de muestra","Actualizado por","Fecha"]],
+                     use_container_width=True, hide_index=True)
+        _sin = [l for l in _CFG_LOCALES if l not in set(_cfg_now["local"])]
+        if _sin:
+            st.info("Locales sin configurar (no calcularán producción): " + ", ".join(_sin))
+    else:
+        st.caption("Aún no hay locales configurados.")
 
 
 elif modulo.startswith("👥"):
