@@ -22486,6 +22486,7 @@ elif modulo.startswith("📋 Notas de Crédito"):
     </div>
     """, unsafe_allow_html=True)
 
+    _user_local_nc = st.session_state.get("user_local")
     _nc_tab1, _nc_tab2 = st.tabs(["➕ Registrar NC", "📋 Historial"])
 
     # ── Registrar NC ──────────────────────────────────────────
@@ -22494,13 +22495,12 @@ elif modulo.startswith("📋 Notas de Crédito"):
 
         _locales_nc_vals = ["Todos","Vitacura","Las Condes","Chicureo","La Dehesa","Macul","La Reina","Quilin","Nueva Providencia","Providencia","Los Trapenses"]
         _locales_nc_list = _locales_nc_vals
-        _user_local_nc = st.session_state.get("user_local")
 
-        if _is_admin_nc or not _user_local_nc:
-            _nc_local = st.selectbox("Local", _locales_nc_list, key="nc_local")
-        else:
+        if _user_local_nc:
             _nc_local = _user_local_nc
             st.markdown(f"**Local:** `{_nc_local}`")
+        else:
+            _nc_local = st.selectbox("Local", _locales_nc_list, key="nc_local")
 
         # ── Catálogos ─────────────────────────────────────────
         _df_provs = run_query("""
@@ -22654,7 +22654,11 @@ elif modulo.startswith("📋 Notas de Crédito"):
             # Filtros
             _hf1, _hf2, _hf3 = st.columns(3)
             with _hf1:
-                _nc_f_local = st.selectbox("Local", ["Todos"] + sorted(_df_nc_hist['local'].dropna().unique().tolist()), key="nc_hist_local")
+                if _user_local_nc:
+                    _nc_f_local = _user_local_nc
+                    st.markdown(f"**Local:** `{_nc_f_local}`")
+                else:
+                    _nc_f_local = st.selectbox("Local", ["Todos"] + sorted(_df_nc_hist['local'].dropna().unique().tolist()), key="nc_hist_local")
             with _hf2:
                 _nc_f_estado = st.selectbox("Estado", ["Todos", "Pendiente", "Emitida", "Considerada"], key="nc_hist_estado")
             with _hf3:
@@ -22755,11 +22759,11 @@ elif modulo.startswith("📥 Stock Cierre"):
 
         _skc1, _skc2 = st.columns(2)
         with _skc1:
-            if _is_admin_sk or not _user_local_sk:
-                _sk_local = st.selectbox("Local", _SK_LOCALES, key="sk_local")
-            else:
+            if _user_local_sk:
                 _sk_local = _user_local_sk
                 st.markdown(f"**Local:** `{_sk_local}`")
+            else:
+                _sk_local = st.selectbox("Local", _SK_LOCALES, key="sk_local")
         with _skc2:
             _sk_fecha = st.date_input("Fecha del cierre", key="sk_fecha",
                                       value=_sk_dt.date.today())
@@ -22873,9 +22877,13 @@ elif modulo.startswith("📥 Stock Cierre"):
         else:
             _shf1, _shf2 = st.columns(2)
             with _shf1:
-                _sk_f_local = st.selectbox(
-                    "Local", ["Todos"] + sorted(_sk_hist["local"].dropna().unique().tolist()),
-                    key="sk_hist_local")
+                if _user_local_sk:
+                    _sk_f_local = _user_local_sk
+                    st.markdown(f"**Local:** `{_sk_f_local}`")
+                else:
+                    _sk_f_local = st.selectbox(
+                        "Local", ["Todos"] + sorted(_sk_hist["local"].dropna().unique().tolist()),
+                        key="sk_hist_local")
             with _shf2:
                 _sk_fechas = sorted(_sk_hist["fecha"].astype(str).unique().tolist(), reverse=True)
                 _sk_f_fecha = st.selectbox("Fecha", ["Todas"] + _sk_fechas, key="sk_hist_fecha")
@@ -22988,11 +22996,13 @@ elif modulo.startswith("📥 Stock Cierre"):
 
         _ph1, _ph2 = st.columns(2)
         with _ph1:
-            if _is_admin_sk or not _user_local_sk:
-                _ph_local = st.selectbox("Local", _SK_LOCALES, key="ph_local")
-            else:
+            if _user_local_sk:
+                # Usuario con local asignado (incl. admin): asume su local, sin selector.
                 _ph_local = _user_local_sk
                 st.markdown(f"**Local:** `{_ph_local}`")
+            else:
+                # Sin local asignado (admin general): puede revisar cualquier local.
+                _ph_local = st.selectbox("Local", _SK_LOCALES, key="ph_local")
         with _ph2:
             _ph_fecha = st.date_input("Día a producir", key="ph_fecha",
                                       value=_sk_dt.date.today())
