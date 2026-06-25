@@ -4776,7 +4776,7 @@ def generar_pdf_cumplimiento_metas(rows, tot, mes_label, meta_col_label="Meta Me
     se  = ParagraphStyle("e", fontName="Helvetica-Bold", fontSize=6.3, alignment=TA_CENTER, leading=7.6)
 
     def _fm(v): return f"{v:,.0f}".replace(",", ".")
-    def _fmeta(v): return f"{v:,.1f}".replace(",", "@").replace(".", ",").replace("@", ".")
+    def _fmeta(v): return f"{v:,.0f}".replace(",", ".")
     def _fp(v): return f"{v:.1f}%".replace(".", ",")
 
     PAG_W = landscape(letter)[0]; MX = 20
@@ -13504,18 +13504,18 @@ elif modulo.startswith("📊"):
         st.caption("Cafetería y Postres · unidades vendidas en Salón · meta fija mensual por local. "
                    "Para el mes en curso, la meta se proyecta a los días transcurridos (hasta ayer).")
 
-        # Metas fijas (fuente: Metas_Servicio_05-26.xlsx). Clave = local en ventas.
+        # Metas fijas mensuales (enteras) por local. Fuente: Metas de Ventas Junio.
         _CM_METAS = {
-            "Vitacura":          {"Cafetería": 2998.9, "Postres": 2637.6},
-            "Las Condes":        {"Cafetería": 2196.0, "Postres": 2152.6},
-            "Macul":             {"Cafetería": 1996.4, "Postres": 2415.2},
-            "Los Trapenses":     {"Cafetería": 2014.8, "Postres": 2128.8},
-            "La Reina":          {"Cafetería": 1626.4, "Postres": 1594.4},
-            "Quilin":            {"Cafetería": 1206.5, "Postres": 1532.0},
-            "Nueva Providencia": {"Cafetería": 1214.1, "Postres": 1285.5},
-            "Providencia":       {"Cafetería":  789.9, "Postres":  973.4},
-            "La Dehesa":         {"Cafetería": 1883.6, "Postres": 1713.3},
-            "Chicureo":          {"Cafetería": 1708.1, "Postres": 1990.2},
+            "Vitacura":          {"Cafetería": 2910, "Postres": 2011},
+            "Las Condes":        {"Cafetería": 2130, "Postres": 1497},
+            "Macul":             {"Cafetería": 1920, "Postres": 1983},
+            "Los Trapenses":     {"Cafetería": 1950, "Postres": 1912},
+            "La Reina":          {"Cafetería": 1560, "Postres": 1254},
+            "Quilin":            {"Cafetería": 1170, "Postres": 1320},
+            "Nueva Providencia": {"Cafetería": 1170, "Postres":  901},
+            "Providencia":       {"Cafetería":  750, "Postres":  511},
+            "La Dehesa":         {"Cafetería": 1373, "Postres": 1082},
+            "Chicureo":          {"Cafetería": 1320, "Postres": 1415},
         }
         _CM_ORDEN = ["Vitacura","Las Condes","Macul","Los Trapenses","La Reina",
                      "Quilin","Nueva Providencia","Providencia","La Dehesa","Chicureo"]
@@ -13577,8 +13577,8 @@ elif modulo.startswith("📊"):
                     _sub = _cm_real[_cm_real["local"] == _loc]
                     _rc = float(_sub[_sub["categoria_menu"].apply(_cm_es_cafe)]["uds"].sum())
                     _rp = float(_sub[_sub["categoria_menu"].apply(_cm_es_post)]["uds"].sum())
-                    _mc = _CM_METAS[_loc]["Cafetería"] * _cm_factor
-                    _mp = _CM_METAS[_loc]["Postres"] * _cm_factor
+                    _mc = round(_CM_METAS[_loc]["Cafetería"] * _cm_factor)
+                    _mp = round(_CM_METAS[_loc]["Postres"] * _cm_factor)
                     _cm_rows.append({"local": _loc, "mc": _mc, "rc": _rc, "mp": _mp, "rp": _rp})
                     _ct["mc"]+=_mc; _ct["rc"]+=_rc; _ct["mp"]+=_mp; _ct["rp"]+=_rp
                     # meta total (mensual completa) con el real acumulado
@@ -13606,11 +13606,11 @@ elif modulo.startswith("📊"):
                 _mt = _row["mc"]+_row["mp"]; _rt = _row["rc"]+_row["rp"]
                 _cm_disp.append({
                     "Local": _row["local"],
-                    "Meta Café": round(_row["mc"],1), "Real Café": int(round(_row["rc"])),
+                    "Meta Café": int(round(_row["mc"])), "Real Café": int(round(_row["rc"])),
                     "% Café": f"{_cm_pct(_row['mc'],_row['rc']):.1f}%",
-                    "Meta Postres": round(_row["mp"],1), "Real Postres": int(round(_row["rp"])),
+                    "Meta Postres": int(round(_row["mp"])), "Real Postres": int(round(_row["rp"])),
                     "% Postres": f"{_cm_pct(_row['mp'],_row['rp']):.1f}%",
-                    "Meta Total": round(_mt,1), "Real Total": int(round(_rt)),
+                    "Meta Total": int(round(_mt)), "Real Total": int(round(_rt)),
                     "% Total": f"{_cm_pct(_mt,_rt):.1f}%",
                 })
             st.dataframe(pd.DataFrame(_cm_disp), use_container_width=True, hide_index=True)
