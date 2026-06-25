@@ -22141,20 +22141,27 @@ elif modulo.startswith("📥 Stock Cierre"):
         st.markdown("<div style='font-family:\"DM Serif Display\",serif;font-size:1.15rem;"
                     "color:#f0ede8;margin:6px 0 10px 0'>Unidades sobrantes por categoría</div>",
                     unsafe_allow_html=True)
-        _sk_inputs = {}
-        _sk_cols = st.columns(3)
-        for _i, _cat in enumerate(_SK_CATS):
-            with _sk_cols[_i % 3]:
-                _sk_inputs[_cat] = st.number_input(
-                    _cat, min_value=0.0, step=1.0,
-                    value=float(_sk_prev_map.get(_cat, 0) or 0),
-                    key=f"sk_in_{_i}")
 
-        _sk_obs = st.text_area("Observación (opcional)", key="sk_obs",
-                               placeholder="Notas del cierre (ej. merma, traspaso a otro local...)")
+        # Form: los inputs no provocan rerun; solo se comunican al pulsar Guardar.
+        # Siempre parten en 0 (no se precargan valores previos para evitar errores).
+        with st.form("sk_form_cierre", clear_on_submit=True):
+            _sk_inputs = {}
+            _sk_cols = st.columns(3)
+            for _i, _cat in enumerate(_SK_CATS):
+                with _sk_cols[_i % 3]:
+                    _sk_inputs[_cat] = st.number_input(
+                        _cat, min_value=0.0, step=1.0, value=0.0,
+                        key=f"sk_in_{_i}")
 
-        if st.button("💾 Guardar cierre del día", type="primary", key="btn_sk_save"):
-            # Solo guardamos categorías con cantidad > 0 (más las que ya existían, para permitir poner en 0)
+            _sk_obs = st.text_area("Observación (opcional)", key="sk_obs",
+                                   placeholder="Notas del cierre (ej. merma, traspaso a otro local...)")
+
+            _sk_submit = st.form_submit_button("💾 Guardar cierre del día",
+                                               type="primary", use_container_width=True)
+
+        if _sk_submit:
+            # Guardamos toda categoría con cantidad > 0 (o que ya existía, para
+            # poder corregirla a 0 sobre un cierre previo del mismo local/fecha).
             _sk_rows = []
             for _cat, _val in _sk_inputs.items():
                 if (_val and _val > 0) or _cat in _sk_prev_map:
