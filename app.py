@@ -18,31 +18,38 @@ def _inject_mobile_css():
     .kpi-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:1.25rem; }
     .kpi-box { background:#1a1a1a; border-radius:10px; padding:14px 16px; }
     .kpi-box.alerta { background:#1e1010; }
-    .kpi-box .k-label { font-size:0.68rem; color:#666; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:5px; }
+    .kpi-box .k-label { font-size:0.68rem; color:#ffffff; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:5px; }
     .kpi-box .k-value { font-size:1.25rem; font-weight:600; color:#f0ede8; font-variant-numeric:tabular-nums; }
     .kpi-box.alerta .k-label { color:#944; }
     .kpi-box.alerta .k-value { color:#e84545; }
     .kpi-box .k-delta { font-size:0.75rem; color:#e84545; margin-top:2px; }
-    .section-label { font-size:0.68rem; text-transform:uppercase; letter-spacing:0.1em; color:#555; margin-bottom:8px; padding-bottom:6px; border-bottom:1px solid #1e1e1e; }
+    .section-label { font-size:0.68rem; text-transform:uppercase; letter-spacing:0.1em; color:#ffffff; margin-bottom:8px; padding-bottom:6px; border-bottom:1px solid #1e1e1e; }
     .ing-card { background:#111; border:1px solid #1e1e1e; border-radius:12px; padding:13px 15px; margin-bottom:7px; }
     .ing-card-top { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:10px; }
     .ing-nombre { font-size:0.88rem; font-weight:500; color:#f0ede8; line-height:1.3; }
-    .ing-sku { font-size:0.68rem; color:#555; font-family:monospace; margin-top:2px; }
+    .ing-sku { font-size:0.68rem; color:#ffffff; font-family:monospace; margin-top:2px; }
     .ing-badge { font-size:0.75rem; font-weight:600; padding:3px 9px; border-radius:20px; white-space:nowrap; margin-left:8px; flex-shrink:0; }
     .badge-up { background:#1e1010; color:#e84545; }
     .badge-down { background:#101e12; color:#4caf7d; }
     .badge-neu { background:#1a1a1a; color:#888; }
     .ing-grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:4px 8px; }
-    .ing-kv .ik { font-size:0.62rem; color:#555; text-transform:uppercase; letter-spacing:0.06em; }
+    .ing-kv .ik { font-size:0.62rem; color:#ffffff; text-transform:uppercase; letter-spacing:0.06em; }
     .ing-kv .iv { font-size:0.82rem; font-weight:500; color:#c8c4be; font-variant-numeric:tabular-nums; }
     .iv-up { color:#e84545 !important; }
     .iv-down { color:#4caf7d !important; }
-    .inf-footer { display:flex; justify-content:space-between; background:#1a1a1a; border-radius:8px; padding:10px 14px; margin-top:12px; font-size:0.75rem; color:#555; }
+    .inf-footer { display:flex; justify-content:space-between; background:#1a1a1a; border-radius:8px; padding:10px 14px; margin-top:12px; font-size:0.75rem; color:#ffffff; }
     [data-testid="stTabs"] > div:first-child { overflow-x:auto !important; -webkit-overflow-scrolling:touch !important; scrollbar-width:none !important; flex-wrap:nowrap !important; }
     [data-testid="stTabs"] > div:first-child::-webkit-scrollbar { display:none !important; }
     button[data-baseweb="tab"] { min-width:fit-content !important; white-space:nowrap !important; }
     [data-testid="stDownloadButton"] > button, [data-testid="stButton"] > button { width:100% !important; min-height:46px !important; border-radius:10px !important; }
     @media print { section[data-testid="stSidebar"] { display:none !important; } }
+    /* ── Texto chico en blanco (no afecta botones ni pestañas) ── */
+    [data-testid="stCaptionContainer"],
+    [data-testid="stCaptionContainer"] p,
+    [data-testid="stCaptionContainer"] span,
+    [data-testid="stCaptionContainer"] small { color:#ffffff !important; }
+    .main small,
+    .main [data-testid="stMarkdownContainer"] small { color:#ffffff !important; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -168,23 +175,24 @@ def _ensure_sessions_table():
 
 
 def _client_fingerprint():
-    """Huella del navegador/cliente: hash de User-Agent + IP aproximada.
-    Sirve para que un token robado desde otro equipo no sea válido."""
+    """Huella del navegador/cliente: hash del User-Agent.
+
+    Se ata SOLO al User-Agent (no a la IP): la IP es volátil en redes móviles
+    y detrás del proxy de Streamlit Cloud, y un cambio de IP al refrescar la
+    página invalidaba la sesión de forma indebida (botaba al usuario al login).
+    El User-Agent es estable por navegador, así que sigue protegiendo contra que
+    un token copiado a otro equipo/navegador (con otro User-Agent) sea válido,
+    sin romper la sesión al actualizar la página o cambiar de red."""
     import hashlib
-    ua, ip = "", ""
+    ua = ""
     try:
         _h = st.context.headers or {}
         ua = _h.get("User-Agent", "") or _h.get("user-agent", "")
-        # IP: detrás de proxy (Streamlit Cloud) suele venir en X-Forwarded-For
-        ip = (_h.get("X-Forwarded-For", "") or _h.get("x-forwarded-for", "")
-              or _h.get("Host", ""))
-        ip = ip.split(",")[0].strip()  # primer hop
     except Exception:
         pass
-    base = f"{ua}|{ip}"
-    if not base.strip("|"):
+    if not ua.strip():
         return None  # no se pudo determinar -> no atamos (evita falsos bloqueos)
-    return hashlib.sha256(base.encode("utf-8")).hexdigest()
+    return hashlib.sha256(ua.encode("utf-8")).hexdigest()
 
 def _create_session(username, role, permisos, local=None):
     """Crea sesión en BD y retorna token."""
@@ -420,7 +428,7 @@ def _user_puede(modulo_key):
 def _render_gestion_usuarios():
     st.markdown("""
     <div style="margin-bottom:1.5rem">
-        <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#555;margin-bottom:4px">Admin</div>
+        <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#ffffff;margin-bottom:4px">Admin</div>
         <div style="font-family:'DM Serif Display',serif;font-size:2rem;color:#f0ede8;letter-spacing:-0.02em">
             👥 Gestión de Usuarios
         </div>
@@ -3394,7 +3402,7 @@ with st.sidebar:
     # Usuario + logout
     _uname = st.session_state.get("current_user","")
     _role  = st.session_state.get("user_role","")
-    st.markdown(f"<div style='font-size:0.72rem;color:#888;margin-bottom:4px'>👤 {_uname} {'(Admin)' if _role=='admin' else ''}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div style='font-size:0.72rem;color:#ffffff;margin-bottom:4px'>👤 {_uname} {'(Admin)' if _role=='admin' else ''}</div>", unsafe_allow_html=True)
     if st.button("🚪 Cerrar sesión", use_container_width=True):
         _destroy_session(st.session_state.get("session_token"))
         for k in ["logged_in","current_user","user_role","user_permisos","modulo","session_token"]:
@@ -3479,7 +3487,7 @@ with st.sidebar:
     except Exception:
         locales = ["Todos"]
     if not es_informe_costos:
-        st.markdown("<div style='font-size:0.75rem; color:#666; text-transform:uppercase; letter-spacing:0.08em;'>Filtros globales</div>", unsafe_allow_html=True)
+        st.markdown("<div style='font-size:0.75rem; color:#ffffff; text-transform:uppercase; letter-spacing:0.08em;'>Filtros globales</div>", unsafe_allow_html=True)
         f_inicio = st.date_input("Desde", value=date(datetime.now().year, datetime.now().month, 1))
         f_fin    = st.date_input("Hasta", value=date.today())
         f_local  = st.selectbox("Local", locales)
@@ -6440,7 +6448,7 @@ informe_sel = ""  # default — se sobreescribe dentro del bloque 📊
 if modulo.startswith("📦"):
     st.markdown(f"""
     <div style="margin-bottom:1.5rem">
-        <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#555;margin-bottom:4px">Módulo</div>
+        <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#ffffff;margin-bottom:4px">Módulo</div>
         <div style="font-family:'DM Serif Display',serif;font-size:2rem;color:#f0ede8;letter-spacing:-0.02em;line-height:1.1">
             📦 Gestión de Datos
         </div>
@@ -6653,7 +6661,7 @@ if modulo.startswith("📦"):
                     _costo_str  = f'${_costo:,.2f}'  if _precio > 0 else '—'
                     _rows_e += (
                         f'<tr style="border-bottom:1px solid #1a1a1a">'
-                        f'<td style="padding:8px 10px;color:#666;font-family:monospace;font-size:0.72rem">{_sku_ing}</td>'
+                        f'<td style="padding:8px 10px;color:#ffffff;font-family:monospace;font-size:0.72rem">{_sku_ing}</td>'
                         f'<td style="padding:8px 10px;color:#e8e4de;font-size:0.8rem">{_r.get("nombre_ingrediente","")}</td>'
                         f'<td style="padding:8px 10px;text-align:right;color:#aaa">{_cant_r:,.4g}</td>'
                         f'<td style="padding:8px 10px;text-align:right;color:#666">{float(_r.get("cant_efic",0) or 0):,.4g}</td>'
@@ -6800,7 +6808,7 @@ if modulo.startswith("📦"):
     with tab2:
         st.markdown("""
         <div style="margin-bottom:1.5rem">
-            <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#555;margin-bottom:4px">Gestión de Datos</div>
+            <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#ffffff;margin-bottom:4px">Gestión de Datos</div>
             <div style="font-family:'DM Serif Display',serif;font-size:2rem;color:#f0ede8;letter-spacing:-0.02em;line-height:1.1">
                 🧾 Procesado de Compras
             </div>
@@ -7599,13 +7607,13 @@ if modulo.startswith("📦"):
                                 rows_i += (
                                     f'<tr style="{row_style}">'
                                     f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de;font-size:0.8rem">{r.get("nombre_producto","")}{emerg_badge}</td>'
-                                    f'<td style="padding:9px 12px;color:#666;font-size:0.75rem">{r.get("proveedor","")}</td>'
+                                    f'<td style="padding:9px 12px;color:#ffffff;font-size:0.75rem">{r.get("proveedor","")}</td>'
                                     f'<td style="padding:9px 12px;text-align:right;color:{conv_color};font-weight:600">{conv_i}</td>'
                                     f'<td style="padding:9px 12px;text-align:right;color:#888">{fmt_i}</td>'
                                     f'<td style="padding:9px 12px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">${precio_i:,.2f}</td>'
                                     f'<td style="padding:9px 12px;text-align:right;color:#aaa;font-variant-numeric:tabular-nums">{muc_i:.4f}</td>'
                                     f'<td style="padding:9px 12px;text-align:right;color:#666">{int(r["n_registros"])}</td>'
-                                    f'<td style="padding:9px 12px;text-align:center;color:#555;font-size:0.72rem">{fecha_rango_i}</td>'
+                                    f'<td style="padding:9px 12px;text-align:center;color:#ffffff;font-size:0.72rem">{fecha_rango_i}</td>'
                                     f'<td style="padding:9px 12px;text-align:center;color:{sc};font-weight:600">{sl}</td>'
                                     f'</tr>'
                                 )
@@ -7908,15 +7916,15 @@ if modulo.startswith("📦"):
 
                     rows_html += (
                         f'<tr style="border-bottom:1px solid #1e1e1e">'
-                        f'<td style="padding:9px 12px;color:#666;font-family:monospace;font-size:0.72rem;width:7%">{sku_r}</td>'
+                        f'<td style="padding:9px 12px;color:#ffffff;font-family:monospace;font-size:0.72rem;width:7%">{sku_r}</td>'
                         f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de;font-size:0.8rem;width:17%">{nombre_r}</td>'
-                        f'<td style="padding:9px 12px;color:#777;font-size:0.75rem;width:13%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{r.get("proveedor","")}</td>'
+                        f'<td style="padding:9px 12px;color:#ffffff;font-size:0.75rem;width:13%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{r.get("proveedor","")}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#888;width:5%">{r.get("conversion","")}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#888;width:5%">{r.get("formato","")}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#aaa;width:8%">${precio:,.2f}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:{mc};font-weight:{mw};width:8%">{muc:,.4f}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#666;width:4%">{n_reg}</td>'
-                        f'<td style="padding:9px 12px;text-align:center;color:#555;font-size:0.72rem;width:10%">{fecha_rango}</td>'
+                        f'<td style="padding:9px 12px;text-align:center;color:#ffffff;font-size:0.72rem;width:10%">{fecha_rango}</td>'
                         f'<td style="padding:9px 12px;text-align:center;color:{dc};font-weight:600;width:8%">{dl}</td>'
                         f'</tr>'
                     )
@@ -9386,8 +9394,8 @@ if modulo.startswith("📦"):
                     _rows_ac += (
                         f'<tr style="border-bottom:1px solid #1e1e1e">'
                         f'<td style="padding:9px 12px;font-weight:500;color:#e8e4de;font-size:0.8rem">{str(_r.get("nombre_producto",""))}</td>'
-                        f'<td style="padding:9px 12px;color:#666;font-family:monospace;font-size:0.72rem">{_r.get("sku","")}</td>'
-                        f'<td style="padding:9px 12px;color:#888;font-size:0.75rem">{_r.get("categoria","")}</td>'
+                        f'<td style="padding:9px 12px;color:#ffffff;font-family:monospace;font-size:0.72rem">{_r.get("sku","")}</td>'
+                        f'<td style="padding:9px 12px;color:#ffffff;font-size:0.75rem">{_r.get("categoria","")}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#888">{float(_r.get("conversion",1)):.3g}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#888">{float(_r.get("formato",1)):.3g}</td>'
                         f'<td style="padding:9px 12px;text-align:right;color:#aaa">{_muc_p:,.2f}</td>'
@@ -11182,7 +11190,7 @@ if modulo.startswith("📦"):
 elif modulo.startswith("🧮"):
     st.markdown(f"""
     <div style="margin-bottom:1.5rem">
-        <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#555;margin-bottom:4px">Módulo</div>
+        <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#ffffff;margin-bottom:4px">Módulo</div>
         <div style="font-family:'DM Serif Display',serif;font-size:2rem;color:#f0ede8;letter-spacing:-0.02em;line-height:1.1">
             🧮 Explosión MRP
         </div>
@@ -11271,7 +11279,7 @@ elif modulo.startswith("📊"):
     icono, titulo_txt = titulos.get(informe_sel, ("📊", "Informes"))
     st.markdown(f"""
     <div style="margin-bottom:1.5rem">
-        <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#555;margin-bottom:4px">Informes</div>
+        <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#ffffff;margin-bottom:4px">Informes</div>
         <div style="font-family:'DM Serif Display',serif;font-size:2rem;color:#f0ede8;letter-spacing:-0.02em;line-height:1.1">
             {icono} {titulo_txt}
         </div>
@@ -11303,7 +11311,7 @@ elif modulo.startswith("📊"):
 
         st.markdown("""
         <div style="margin-bottom:1.5rem">
-            <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#555;margin-bottom:4px">Informes</div>
+            <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#ffffff;margin-bottom:4px">Informes</div>
             <div style="font-family:'DM Serif Display',serif;font-size:2rem;color:#f0ede8;letter-spacing:-0.02em;line-height:1.1">
                 📈 Informe Venta Diaria
             </div>
@@ -14279,7 +14287,7 @@ elif modulo.startswith("📊"):
                 _cr_pdia, _cr_modo
             )
 
-            _cr_pb1, _cr_pb2 = st.columns(2)
+            _cr_pb1, _cr_pb2, _cr_pb3 = st.columns(3)
             with _cr_pb1:
                 if _cr_loc_sel == "Todos":
                     st.button("📄 PDF por local", use_container_width=True,
@@ -14343,6 +14351,98 @@ elif modulo.startswith("📊"):
                     )
                 except Exception as _e2:
                     st.warning(f"No se pudo generar el PDF empresa: {_e2}")
+            with _cr_pb3:
+                # ── PDF de los 10 locales en un ZIP (un PDF por local) ──
+                # Genera el mismo informe individual de cada local presente en el
+                # rango de fechas vigente, como si se descargara local por local,
+                # y los empaqueta en un único ZIP. Se usa un botón disparador +
+                # session_state para no regenerar los PDF en cada rerun.
+                if st.button("📦 PDF 10 locales (ZIP)",
+                             use_container_width=True, key="cr_pdf_zip_btn"):
+                    import zipfile as _zipf, io as _io_zip
+                    _cr_locs = sorted(_cr_tur["local"].unique().tolist())
+                    _zip_buf = _io_zip.BytesIO()
+                    _zip_errs = []
+                    _zip_ok = 0
+                    with st.spinner(f"Generando {len(_cr_locs)} PDF…"):
+                        with _zipf.ZipFile(_zip_buf, "w", _zipf.ZIP_DEFLATED) as _zf:
+                            for _loc_z in _cr_locs:
+                                try:
+                                    # Desglose diario del local (mismo cálculo que en pantalla)
+                                    _t_z = _cr_tur[_cr_tur["local"] == _loc_z]
+                                    _c_z = (_cr_col[_cr_col["local"] == _loc_z]
+                                            if not _cr_col.empty
+                                            else pd.DataFrame(columns=["local","fecha","colaciones"]))
+                                    _tdia_z = _t_z.groupby("fecha")["turnos"].sum().reset_index()
+                                    _cdia_z = (_c_z.groupby("fecha")["colaciones"].sum().reset_index()
+                                               if not _c_z.empty
+                                               else pd.DataFrame(columns=["fecha","colaciones"]))
+                                    _dia_z = _tdia_z.merge(_cdia_z, on="fecha", how="left")
+                                    _dia_z["colaciones"] = _dia_z["colaciones"].fillna(0)
+                                    _dia_z["ratio"] = (_dia_z["colaciones"] /
+                                                       _dia_z["turnos"].replace(0, pd.NA)).round(2)
+                                    _dia_z = _dia_z.sort_values("fecha")
+
+                                    # Personal del local (mismo criterio que el PDF individual)
+                                    _pers_z = run_query("""
+                                        SELECT TRIM(COALESCE(nombre,'') || ' ' || COALESCE(apellidos,'')) AS nombre,
+                                               MAX(cargo) AS cargo,
+                                               COUNT(*) FILTER (WHERE trabajo) AS turnos,
+                                               AVG(NULLIF(colacion_min,0)) FILTER (WHERE trabajo) AS colacion_min_prom
+                                        FROM asistencia_rrhh
+                                        WHERE fecha BETWEEN :fi AND :ff AND local = :loc
+                                        GROUP BY TRIM(COALESCE(nombre,'') || ' ' || COALESCE(apellidos,''))
+                                        HAVING COUNT(*) FILTER (WHERE trabajo) > 0
+                                    """, {"fi": _cr_meta["fi"], "ff": _cr_meta["ff"], "loc": _loc_z})
+                                    if _pers_z is None:
+                                        _pers_z = pd.DataFrame(columns=["nombre","cargo","turnos","colacion_min_prom"])
+
+                                    _adm_z = run_query("""
+                                        SELECT DISTINCT
+                                               TRIM(COALESCE(nombre,'') || ' ' || COALESCE(apellidos,'')) AS nombre,
+                                               cargo
+                                        FROM asistencia_rrhh
+                                        WHERE fecha BETWEEN :fi AND :ff AND local = :loc
+                                          AND cargo IN ('Administrador','Sub Administrador')
+                                    """, {"fi": _cr_meta["fi"], "ff": _cr_meta["ff"], "loc": _loc_z})
+                                    if _adm_z is not None and not _adm_z.empty:
+                                        _adm_z = _adm_z.copy()
+                                        _adm_z["turnos"] = None
+                                        _adm_z["colacion_min_prom"] = None
+                                        _pers_z = pd.concat([_pers_z, _adm_z], ignore_index=True)
+
+                                    _pdf_z = generar_pdf_colaciones_individual(
+                                        _loc_z, _cr_meta["fi"], _cr_meta["ff"],
+                                        _dia_z[["fecha","colaciones","turnos","ratio"]].copy(),
+                                        _pers_z, _cr_modo)
+                                    _safe = "".join(c if (c.isalnum() or c in " -_") else "_"
+                                                    for c in str(_loc_z)).strip().replace(" ", "_")
+                                    _zf.writestr(
+                                        f"colaciones_{_safe}_{_cr_meta['fi']}_{_cr_meta['ff']}.pdf",
+                                        _pdf_z)
+                                    _zip_ok += 1
+                                except Exception as _ez:
+                                    _zip_errs.append(f"{_loc_z}: {_ez}")
+                    st.session_state["_cr_zip_bytes"] = _zip_buf.getvalue()
+                    st.session_state["_cr_zip_name"]  = (
+                        f"colaciones_{_zip_ok}locales_{_cr_meta['fi']}_{_cr_meta['ff']}.zip")
+                    st.session_state["_cr_zip_errs"]  = _zip_errs
+                    st.session_state["_cr_zip_ok"]    = _zip_ok
+
+                _zip_sfx = f"{_cr_meta['fi']}_{_cr_meta['ff']}.zip"
+                if (st.session_state.get("_cr_zip_bytes")
+                        and str(st.session_state.get("_cr_zip_name", "")).endswith(_zip_sfx)):
+                    st.download_button(
+                        f"⬇️ Descargar ZIP ({st.session_state.get('_cr_zip_ok',0)} locales)",
+                        st.session_state["_cr_zip_bytes"],
+                        file_name=st.session_state.get("_cr_zip_name", "colaciones_locales.zip"),
+                        mime="application/zip", use_container_width=True, key="cr_pdf_zip_dl",
+                    )
+                    if st.session_state.get("_cr_zip_errs"):
+                        st.caption("⚠️ Locales omitidos: " +
+                                   "; ".join(st.session_state["_cr_zip_errs"]))
+                else:
+                    st.caption("Genera un PDF por cada local del rango, empaquetados en un ZIP.")
 
 
     elif informe_sel in ("CuentasCasa", "Auditor", "Bar"):
@@ -14618,7 +14718,7 @@ elif modulo.startswith("📊"):
                                         total_grp = df_g['cant'].sum()
                                         st.markdown(
                                             f'<div style="font-size:0.7rem;text-transform:uppercase;'
-                                            f'letter-spacing:0.1em;color:#666;margin:8px 0 4px;'
+                                            f'letter-spacing:0.1em;color:#ffffff;margin:8px 0 4px;'
                                             f'border-bottom:1px solid #222;padding-bottom:3px">'
                                             f'{grp_nombre} — {int(total_grp):,} uds</div>',
                                             unsafe_allow_html=True
@@ -14628,12 +14728,12 @@ elif modulo.startswith("📊"):
                                             bar_w = int(float(op['pct'] or 0))
                                             op_html += (
                                                 f'<div style="display:flex;align-items:center;gap:10px;padding:3px 0">'
-                                                f'<span style="color:#555;font-size:0.7rem;font-family:monospace;width:75px">{op["sku_producto"]}</span>'
-                                                f'<span style="color:#ccc;font-size:0.78rem;flex:1">{op["nombre_producto"]}</span>'
+                                                f'<span style="color:#ffffff;font-size:0.7rem;font-family:monospace;width:75px">{op["sku_producto"]}</span>'
+                                                f'<span style="color:#ffffff;font-size:0.78rem;flex:1">{op["nombre_producto"]}</span>'
                                                 f'<span style="color:#d4a853;font-weight:600;font-size:0.78rem;width:55px;text-align:right">{int(op["cant"]):,}</span>'
                                                 f'<div style="width:100px;background:#1a1a1a;border-radius:3px;height:5px">'
                                                 f'<div style="background:#d4a853;height:5px;border-radius:3px;width:{bar_w}%"></div></div>'
-                                                f'<span style="color:#666;font-size:0.73rem;width:40px;text-align:right">{op["pct"]}%</span>'
+                                                f'<span style="color:#ffffff;font-size:0.73rem;width:40px;text-align:right">{op["pct"]}%</span>'
                                                 f'</div>'
                                             )
                                         op_html += '</div>'
@@ -14703,11 +14803,11 @@ elif modulo.startswith("📊"):
                         row_html = (
                             f'<div style="background:{bg};border-bottom:1px solid #1e1e1e;padding:7px 12px;'
                             f'display:flex;align-items:center;gap:12px">'
-                            f'<span style="color:#666;font-size:0.74rem;font-family:monospace;width:80px">{r.get("sku_producto","")}</span>'
-                            f'<span style="color:#555;font-size:0.74rem;width:130px">{r.get("categoria_menu","")}</span>'
+                            f'<span style="color:#ffffff;font-size:0.74rem;font-family:monospace;width:80px">{r.get("sku_producto","")}</span>'
+                            f'<span style="color:#ffffff;font-size:0.74rem;width:130px">{r.get("categoria_menu","")}</span>'
                             f'<span style="font-weight:500;color:#e8e4de;flex:1">{r.get("nombre_producto","")} {"🔽" if tiene_opciones else ""}</span>'
-                            f'<span style="color:#aaa;font-size:0.78rem">{r.get("cant",0):,.0f} uds</span>'
-                            f'<span style="color:#ccc;font-size:0.78rem">${r.get("venta",0):,.0f}</span>'
+                            f'<span style="color:#ffffff;font-size:0.78rem">{r.get("cant",0):,.0f} uds</span>'
+                            f'<span style="color:#ffffff;font-size:0.78rem">${r.get("venta",0):,.0f}</span>'
                             f'{badge_margen(mg_per)}'
                             f'</div>'
                         )
@@ -14734,12 +14834,12 @@ elif modulo.startswith("📊"):
                                     bar_w   = int(pct_loc)
                                     loc_html += (
                                         f'<div style="display:flex;align-items:center;gap:12px;padding:4px 0">'
-                                        f'<span style="color:#888;font-size:0.78rem;width:160px">{lrow["local"]}</span>'
+                                        f'<span style="color:#ffffff;font-size:0.78rem;width:160px">{lrow["local"]}</span>'
                                         f'<span style="color:#d4a853;font-weight:600;width:60px">{int(lrow["cant"])}</span>'
-                                        f'<span style="color:#666;font-size:0.75rem;width:90px">${lrow["venta"]:,.0f}</span>'
+                                        f'<span style="color:#ffffff;font-size:0.75rem;width:90px">${lrow["venta"]:,.0f}</span>'
                                         f'<div style="flex:1;background:#1a1a1a;border-radius:3px;height:6px">'
                                         f'<div style="background:#4caf7d;height:6px;border-radius:3px;width:{bar_w}%"></div></div>'
-                                        f'<span style="color:#888;font-size:0.75rem;width:40px;text-align:right">{pct_loc:.2f}%</span>'
+                                        f'<span style="color:#ffffff;font-size:0.75rem;width:40px;text-align:right">{pct_loc:.2f}%</span>'
                                         f'</div>'
                                     )
                                 loc_html += '</div>'
@@ -14756,7 +14856,7 @@ elif modulo.startswith("📊"):
                                         df_grp = df_op_loc[df_op_loc['grupo']==grp]
                                         st.markdown(
                                             f'<div style="font-size:0.7rem;text-transform:uppercase;'
-                                            f'letter-spacing:0.1em;color:#666;margin:8px 0 4px;'
+                                            f'letter-spacing:0.1em;color:#ffffff;margin:8px 0 4px;'
                                             f'border-bottom:1px solid #222;padding-bottom:3px">{grp}</div>',
                                             unsafe_allow_html=True
                                         )
@@ -14886,8 +14986,8 @@ elif modulo.startswith("📊"):
                             f'<div style="margin:1.2rem 0 0.4rem;padding:10px 16px;border-radius:10px;'
                             f'background:{_bg};border-left:3px solid {_color}">'
                             f'<span style="font-size:1rem;font-weight:700;color:{_color}">{_cq}</span>'
-                            f'<span style="font-size:0.75rem;color:#666;margin-left:12px">{_desc}</span>'
-                            f'<span style="font-size:0.72rem;color:#555;float:right">{len(_df_cq)} producto(s)</span>'
+                            f'<span style="font-size:0.75rem;color:#ffffff;margin-left:12px">{_desc}</span>'
+                            f'<span style="font-size:0.72rem;color:#ffffff;float:right">{len(_df_cq)} producto(s)</span>'
                             f'</div>',
                             unsafe_allow_html=True
                         )
@@ -14903,9 +15003,9 @@ elif modulo.startswith("📊"):
                             _vt_color = '#4caf7d' if _vt >= _mean_venta else '#888'
                             _rows_cq += (
                                 f'<tr style="border-bottom:1px solid #1a1a1a">'
-                                f'<td style="padding:8px 10px;color:#555;font-size:0.72rem;text-align:right;width:28px">{_rk+1}</td>'
+                                f'<td style="padding:8px 10px;color:#ffffff;font-size:0.72rem;text-align:right;width:28px">{_rk+1}</td>'
                                 f'<td style="padding:8px 10px;font-weight:500;color:#e8e4de;font-size:0.8rem">{str(_rc.get("nombre_producto",""))[:40]}</td>'
-                                f'<td style="padding:8px 10px;color:#666;font-size:0.72rem">{_rc.get("categoria_menu","")}</td>'
+                                f'<td style="padding:8px 10px;color:#ffffff;font-size:0.72rem">{_rc.get("categoria_menu","")}</td>'
                                 f'<td style="padding:8px 10px;text-align:right;color:#aaa">{_cnt:,}</td>'
                                 f'<td style="padding:8px 10px;text-align:right;color:{_vt_color};font-weight:600">${_vt:,.0f}</td>'
                                 f'<td style="padding:8px 10px;text-align:right;color:#aaa">${_mgu:,.0f}</td>'
@@ -15249,7 +15349,7 @@ elif modulo.startswith("📊"):
                             return
 
                         # ── KPIs totales (siempre visibles) ──────────
-                        st.markdown('<div style="font-size:0.72rem;color:#555;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:4px">Red completa</div>', unsafe_allow_html=True)
+                        st.markdown('<div style="font-size:0.72rem;color:#ffffff;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:4px">Red completa</div>', unsafe_allow_html=True)
                         _tk1,_tk2,_tk3,_tk4 = st.columns(4)
                         _tk1.metric("Venta Total Red", f"${vt_total:,.0f}")
                         _tk2.metric("MC Total Red",    f"${mct_total:,.0f}")
@@ -15323,8 +15423,8 @@ elif modulo.startswith("📊"):
                             st.markdown(
                                 f'<div style="margin:1rem 0 0.3rem;padding:10px 16px;border-radius:10px;background:{_bg};border-left:3px solid {_color}">'
                                 f'<span style="font-size:1rem;font-weight:700;color:{_color}">{_cq}</span>'
-                                f'<span style="font-size:0.75rem;color:#666;margin-left:10px">{_desc}</span>'
-                                f'<span style="font-size:0.72rem;color:#555;float:right">{len(_df_cq)} plato(s)</span>'
+                                f'<span style="font-size:0.75rem;color:#ffffff;margin-left:10px">{_desc}</span>'
+                                f'<span style="font-size:0.72rem;color:#ffffff;float:right">{len(_df_cq)} plato(s)</span>'
                                 f'</div>', unsafe_allow_html=True
                             )
                             st.caption(_detalle)
@@ -15343,7 +15443,7 @@ elif modulo.startswith("📊"):
                                 _rows_me += (
                                     f'<tr style="border-bottom:1px solid #1a1a1a">'
                                     f'<td style="padding:7px 10px;font-weight:500;color:#e8e4de;font-size:0.8rem">{str(_mr["nombre_producto"])[:38]}</td>'
-                                    f'<td style="padding:7px 10px;color:#666;font-size:0.7rem">{_mr["categoria_menu"]}</td>'
+                                    f'<td style="padding:7px 10px;color:#ffffff;font-size:0.7rem">{_mr["categoria_menu"]}</td>'
                                     f'<td style="padding:7px 10px;text-align:right;color:#aaa">{int(_mr["cant"]):,}</td>'
                                     f'<td style="padding:7px 10px;text-align:right;color:#d4a853;font-weight:600">${_mr["venta"]:,.0f}</td>'
                                     f'<td style="padding:7px 10px;text-align:right;color:#aaa">${_mr["cmv_unitario"]:,.0f}</td>'
@@ -15404,7 +15504,7 @@ elif modulo.startswith("📊"):
                                 f'<div style="margin:0.5rem 0;padding:10px 16px;border-radius:8px;background:#0d0d0d;border:1px solid #2a2a2a">'
                                 f'<div style="font-weight:700;color:#e8e4de;margin-bottom:4px">{_title}</div>'
                                 f'<div style="color:#888;font-size:0.8rem;margin-bottom:4px">{_desc}</div>'
-                                f'<div style="color:#666;font-size:0.75rem">{" · ".join(_items)}</div>'
+                                f'<div style="color:#ffffff;font-size:0.75rem">{" · ".join(_items)}</div>'
                                 f'</div>', unsafe_allow_html=True
                             )
 
@@ -16211,7 +16311,7 @@ buildTree(data, 1, null);
                         return f'<span style="background:#3a2a1a;color:#e89c45;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:+.2f}%</span>'
                     elif val < -5:
                         return f'<span style="background:#1a3a2a;color:#4caf7d;padding:2px 8px;border-radius:12px;font-size:0.78rem;font-weight:600">{val:+.2f}%</span>'
-                    return f'<span style="color:#aaa;font-size:0.78rem">{val:+.2f}%</span>'
+                    return f'<span style="color:#ffffff;font-size:0.78rem">{val:+.2f}%</span>'
 
                 def fmt_dinero_html(val):
                     if val > 0:
@@ -16227,7 +16327,7 @@ buildTree(data, 1, null);
                     bg     = '#1e1212' if dinero > 0 else '#121e14' if dinero < 0 else ''
                     rows_html += (
                         f'<tr style="border-bottom:1px solid #1e1e1e;background:{bg};transition:background 0.15s">'
-                        f'<td style="padding:10px 14px;color:#666;font-size:0.76rem;font-family:monospace;white-space:nowrap">{r.get("sku_ingrediente","")}</td>'
+                        f'<td style="padding:10px 14px;color:#ffffff;font-size:0.76rem;font-family:monospace;white-space:nowrap">{r.get("sku_ingrediente","")}</td>'
                         f'<td style="padding:10px 14px;font-weight:500;color:#e8e4de">{r.get("nombre_ingrediente","")}</td>'
                         f'<td style="padding:10px 14px;color:#555;font-size:0.8rem">{r.get("subcat","")}</td>'
                         f'<td style="padding:10px 14px;text-align:right;color:#777;font-variant-numeric:tabular-nums">{r.get("consumo_teorico",0):,.2f}</td>'
@@ -16816,7 +16916,7 @@ buildTree(data, 1, null);
                     _delta_clp = row_pv.get('Δ $', 0)
                     _style_var = _color_var(_delta_pct)
                     _mes_cells = ''.join(
-                        f'<td style="padding:7px 12px;text-align:right;color:#aaa;font-size:0.78rem">'
+                        f'<td style="padding:7px 12px;text-align:right;color:#ffffff;font-size:0.78rem">'
                         f'${row_pv[c]:,.0f}</td>'
                         for c in _pv_pivot2.columns if c not in ('Δ $','Δ %')
                     )
@@ -16840,7 +16940,7 @@ buildTree(data, 1, null);
                     f'<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif">'
                     f'<thead><tr style="background:#111">{_th_pv}</tr></thead>'
                     f'<tbody>{_rows_pv}</tbody></table></div>'
-                    f'<div style="margin-top:6px;font-size:0.72rem;color:#555">'
+                    f'<div style="margin-top:6px;font-size:0.72rem;color:#ffffff">'
                     f'🔴 &gt;10%&nbsp;&nbsp;🟡 5-10%&nbsp;&nbsp;🟠 0-5%&nbsp;&nbsp;🟢 baja o estable</div>',
                     unsafe_allow_html=True
                 )
@@ -16912,14 +17012,14 @@ buildTree(data, 1, null);
                             _sc = _color_var(_dp)
                             _sem = '🔴' if _dp > 10 else '🟡' if _dp > 5 else '🟠' if _dp > 0 else '🟢'
                             _mes_d = ''.join(
-                                f'<td style="padding:6px 10px;text-align:right;color:#888;font-size:0.76rem">'
+                                f'<td style="padding:6px 10px;text-align:right;color:#ffffff;font-size:0.76rem">'
                                 f'{"—" if pd.isna(rd[c]) else f"${float(rd[c]):,.0f}"}</td>'
                                 for c in _det_cols
                             )
                             _rows_d += (
                                 f'<tr style="border-bottom:1px solid #1a1a1a">'
-                                f'<td style="padding:6px 10px;color:#666;font-size:0.72rem;font-family:monospace">{rd["sku"]}</td>'
-                                f'<td style="padding:6px 10px;color:#ccc;font-size:0.78rem">{str(rd["producto"])[:45]}</td>'
+                                f'<td style="padding:6px 10px;color:#ffffff;font-size:0.72rem;font-family:monospace">{rd["sku"]}</td>'
+                                f'<td style="padding:6px 10px;color:#ffffff;font-size:0.78rem">{str(rd["producto"])[:45]}</td>'
                                 f'{_mes_d}'
                                 f'<td style="padding:6px 10px;text-align:right;{_sc}">{"+" if _dd>=0 else ""}${_dd:,.0f}</td>'
                                 f'<td style="padding:6px 10px;text-align:right;{_sc}">{"+" if _dp>=0 else ""}{_dp:.1f}%</td>'
@@ -17084,9 +17184,9 @@ buildTree(data, 1, null);
                     _sem_ac = '🔴' if _dp_ac > 10 else '🟡' if _dp_ac > 5 else '🟠' if _dp_ac > 0 else '🟢' if _dp_ac <= 0 and not pd.isna(_pr_ac) else '⚪'
                     _rows_ac += (
                         f'<tr style="border-bottom:1px solid #1a1a1a">'
-                        f'<td style="padding:7px 12px;color:#666;font-size:0.72rem;font-family:monospace">{ra["sku"]}</td>'
-                        f'<td style="padding:7px 12px;color:#ccc;font-size:0.78rem">{str(ra["producto"])[:45]}</td>'
-                        f'<td style="padding:7px 12px;color:#888;font-size:0.75rem">{ra["nombre_proveedor"]}</td>'
+                        f'<td style="padding:7px 12px;color:#ffffff;font-size:0.72rem;font-family:monospace">{ra["sku"]}</td>'
+                        f'<td style="padding:7px 12px;color:#ffffff;font-size:0.78rem">{str(ra["producto"])[:45]}</td>'
+                        f'<td style="padding:7px 12px;color:#ffffff;font-size:0.75rem">{ra["nombre_proveedor"]}</td>'
                         f'<td style="padding:7px 12px;text-align:right;color:#aaa">${float(ra["precio_acuerdo"]):,.0f}</td>'
                         f'<td style="padding:7px 12px;text-align:right;color:#ccc">{"—" if pd.isna(_pr_ac) else f"${_pr_ac:,.0f}"}</td>'
                         f'<td style="padding:7px 12px;text-align:right;{_sc_ac}">{"—" if pd.isna(_pr_ac) else ("+" if _dd_ac>=0 else "")+f"${_dd_ac:,.0f}"}</td>'
@@ -17104,7 +17204,7 @@ buildTree(data, 1, null);
                     f'<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif">'
                     f'<thead><tr style="background:#111">{_th_ac}</tr></thead>'
                     f'<tbody>{_rows_ac}</tbody></table></div>'
-                    f'<div style="margin-top:6px;font-size:0.72rem;color:#555">'
+                    f'<div style="margin-top:6px;font-size:0.72rem;color:#ffffff">'
                     f'🔴 &gt;10% sobre acuerdo&nbsp;&nbsp;🟡 5-10%&nbsp;&nbsp;🟠 0-5%&nbsp;&nbsp;🟢 en/bajo acuerdo&nbsp;&nbsp;⚪ sin compra en período</div>',
                     unsafe_allow_html=True
                 )
@@ -17162,7 +17262,7 @@ buildTree(data, 1, null);
                       </div>
                       <div>
                         <div style="font-size:0.88rem;font-weight:500;color:#f0ede8;margin-bottom:4px;">80/20 compras</div>
-                        <div style="font-size:0.76rem;color:#666;line-height:1.5;">
+                        <div style="font-size:0.76rem;color:#ffffff;line-height:1.5;">
                           Los <span style="color:#d4a853;font-weight:600;">15 ingredientes</span> de mayor gasto.
                           Compara precios entre dos meses usando la
                           <span style="color:#c8c4be;font-weight:500;">cantidad del mes inicial</span>
@@ -17499,24 +17599,24 @@ buildTree(data, 1, null);
                         st.markdown(f"""
                         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:1.25rem">
                           <div style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:10px;padding:14px 16px;">
-                            <div style="font-size:0.68rem;color:#888;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:5px">Gasto total — {_titulo_local}</div>
+                            <div style="font-size:0.68rem;color:#ffffff;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:5px">Gasto total — {_titulo_local}</div>
                             <div style="font-size:1.25rem;font-weight:700;color:#d4a853;font-variant-numeric:tabular-nums">{_fmt_k(_gasto_cadena)}</div>
-                            <div style="font-size:0.72rem;color:#555;margin-top:4px">{_fmt_k(_gasto_ini_c)} {_ini_label} → {_fmt_k(_gasto_fin_c)} {_fin_label} <span style="color:{_c_var1};font-weight:600">{_arrow(_pct_mes)} {abs(_pct_mes):.2f}%</span></div>
+                            <div style="font-size:0.72rem;color:#ffffff;margin-top:4px">{_fmt_k(_gasto_ini_c)} {_ini_label} → {_fmt_k(_gasto_fin_c)} {_fin_label} <span style="color:{_c_var1};font-weight:600">{_arrow(_pct_mes)} {abs(_pct_mes):.2f}%</span></div>
                           </div>
                           <div style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:10px;padding:14px 16px;">
-                            <div style="font-size:0.68rem;color:#888;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:5px">Top 15 concentra</div>
+                            <div style="font-size:0.68rem;color:#ffffff;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:5px">Top 15 concentra</div>
                             <div style="font-size:1.25rem;font-weight:700;color:#f0ede8;font-variant-numeric:tabular-nums">{_top15_pct:.2f}% del gasto</div>
-                            <div style="font-size:0.72rem;color:#555;margin-top:4px">Impacto: <span style="color:{_c2_imp};font-weight:600">{("+" if _impacto_total >= 0 else "") + _fmt_k(_impacto_total)} ({_arrow(_imp_pct_top)}{abs(_imp_pct_top):.2f}%)</span></div>
+                            <div style="font-size:0.72rem;color:#ffffff;margin-top:4px">Impacto: <span style="color:{_c2_imp};font-weight:600">{("+" if _impacto_total >= 0 else "") + _fmt_k(_impacto_total)} ({_arrow(_imp_pct_top)}{abs(_imp_pct_top):.2f}%)</span></div>
                           </div>
                           <div style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:10px;padding:14px 16px;">
-                            <div style="font-size:0.68rem;color:#888;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:5px">Variación venta — {_titulo_local}</div>
+                            <div style="font-size:0.68rem;color:#ffffff;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:5px">Variación venta — {_titulo_local}</div>
                             <div style="font-size:1.25rem;font-weight:700;color:{_c3_val};font-variant-numeric:tabular-nums">{("+" if _var_venta >= 0 else "") + _fmt_k(_var_venta)}</div>
-                            <div style="font-size:0.72rem;color:#555;margin-top:4px"><span style="color:{_c3_val};font-weight:600">{_arrow(_var_venta_pct)} {abs(_var_venta_pct):.2f}%</span> · {_fmt_k(_venta_ini)} {_ini_label} → {_fmt_k(_venta_fin)} {_fin_label}</div>
+                            <div style="font-size:0.72rem;color:#ffffff;margin-top:4px"><span style="color:{_c3_val};font-weight:600">{_arrow(_var_venta_pct)} {abs(_var_venta_pct):.2f}%</span> · {_fmt_k(_venta_ini)} {_ini_label} → {_fmt_k(_venta_fin)} {_fin_label}</div>
                           </div>
                           <div style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:10px;padding:14px 16px;">
-                            <div style="font-size:0.68rem;color:#888;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:5px">Variación compra — {_titulo_local}</div>
+                            <div style="font-size:0.68rem;color:#ffffff;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:5px">Variación compra — {_titulo_local}</div>
                             <div style="font-size:1.25rem;font-weight:700;color:{_c4};font-variant-numeric:tabular-nums">{("+" if _var_compra >= 0 else "") + _fmt_k(_var_compra)}</div>
-                            <div style="font-size:0.72rem;color:#555;margin-top:4px"><span style="color:{_c4};font-weight:600">{_arrow(_var_compra_pct)} {abs(_var_compra_pct):.2f}%</span> vs {_ini_label}</div>
+                            <div style="font-size:0.72rem;color:#ffffff;margin-top:4px"><span style="color:{_c4};font-weight:600">{_arrow(_var_compra_pct)} {abs(_var_compra_pct):.2f}%</span> vs {_ini_label}</div>
                           </div>
                         </div>
                         """, unsafe_allow_html=True)
@@ -17552,7 +17652,7 @@ buildTree(data, 1, null);
                             else "🔀 Ver por volumen de compra"
                         )
                         _orden_tag = (
-                            '<span style="font-size:0.72rem;color:#555;margin-left:0.5rem">'
+                            '<span style="font-size:0.72rem;color:#ffffff;margin-left:0.5rem">'
                             f'Ordenado por: <b style="color:#d4a853">'
                             f'{"volumen de compra" if _orden_actual == "volumen" else "variación de precio (|Δ%|)"}'
                             '</b></span>'
@@ -17654,7 +17754,7 @@ buildTree(data, 1, null);
                             st.markdown("<br>", unsafe_allow_html=True)
                             st.markdown(
                                 "<div style='font-size:0.72rem;text-transform:uppercase;"
-                                "letter-spacing:0.09em;color:#555;margin-bottom:0.4rem'>"
+                                "letter-spacing:0.09em;color:#ffffff;margin-bottom:0.4rem'>"
                                 "📈 Evolución mensual — abre el producto para ver detalle</div>",
                                 unsafe_allow_html=True
                             )
@@ -17690,11 +17790,11 @@ buildTree(data, 1, null);
                                         'font-family:DM Sans,sans-serif;font-size:0.82rem;'
                                         'background:#111;border-radius:8px">'
                                         '<thead><tr style="background:#0d0d0d">'
-                                        '<th style="padding:6px 12px;text-align:left;color:#444;'
+                                        '<th style="padding:6px 12px;text-align:left;color:#ffffff;'
                                         'font-size:0.68rem;text-transform:uppercase">Mes</th>'
-                                        '<th style="padding:6px 12px;text-align:right;color:#444;'
+                                        '<th style="padding:6px 12px;text-align:right;color:#ffffff;'
                                         'font-size:0.68rem;text-transform:uppercase">P.Unit</th>'
-                                        '<th style="padding:6px 12px;text-align:center;color:#444;'
+                                        '<th style="padding:6px 12px;text-align:center;color:#ffffff;'
                                         'font-size:0.68rem;text-transform:uppercase">Δ% vs mes ant.</th>'
                                         f'</tr></thead><tbody>{_evo_rows}</tbody></table>',
                                         unsafe_allow_html=True
@@ -17702,7 +17802,7 @@ buildTree(data, 1, null);
 
                         # Nota fallback
                         st.markdown(
-                            "<div style='margin-top:0.6rem;font-size:0.74rem;color:#444'>"
+                            "<div style='margin-top:0.6rem;font-size:0.74rem;color:#ffffff'>"
                             "🔵 Sin compras en ese mes — se usó el último precio histórico disponible en BD."
                             "</div>",
                             unsafe_allow_html=True
@@ -18892,9 +18992,9 @@ buildTree(data, 1, null);
                     ]
                     r1_html = ''.join([
                         f'<tr style="border-bottom:1px solid #1a1a1a;{"background:#0a1a0a" if r[0]=="VENTA TOTAL" else "background:#111" if r[0]=="COMPRA TOTAL" else ""}">'
-                        f'<td style="padding:6px 10px;color:#888;font-size:0.75rem">{r[0]}</td>'
-                        f'<td style="padding:6px 10px;text-align:right;color:#ccc;font-size:0.78rem">{r[1]}</td>'
-                        f'<td style="padding:6px 10px;text-align:right;color:#666;font-size:0.75rem">{r[2]}</td>'
+                        f'<td style="padding:6px 10px;color:#ffffff;font-size:0.75rem">{r[0]}</td>'
+                        f'<td style="padding:6px 10px;text-align:right;color:#ffffff;font-size:0.78rem">{r[1]}</td>'
+                        f'<td style="padding:6px 10px;text-align:right;color:#ffffff;font-size:0.75rem">{r[2]}</td>'
                         f'</tr>'
                         for r in rows1 if r[0]
                     ])
@@ -18916,9 +19016,9 @@ buildTree(data, 1, null);
                         total_bv = bv_cat['venta'].sum()
                         r2_html = ''.join([
                             f'<tr style="border-bottom:1px solid #1a1a1a">'
-                            f'<td style="padding:5px 12px;color:#ccc;font-size:0.78rem">{r["producto"]}</td>'
+                            f'<td style="padding:5px 12px;color:#ffffff;font-size:0.78rem">{r["producto"]}</td>'
                             f'<td style="padding:5px 10px;text-align:right;color:#d4a853;font-size:0.78rem">{fmt_clp(r["venta"])}</td>'
-                            f'<td style="padding:5px 10px;text-align:right;color:#666;font-size:0.73rem">{r["venta"]/total_bv:.1%}</td>'
+                            f'<td style="padding:5px 10px;text-align:right;color:#ffffff;font-size:0.73rem">{r["venta"]/total_bv:.1%}</td>'
                             f'</tr>'
                             for _, r in bv_cat.iterrows()
                         ])
@@ -18929,10 +19029,10 @@ buildTree(data, 1, null);
                             f'<td style="padding:6px 10px;color:#4caf7d;font-size:0.75rem;font-weight:600">Total Venta</td>'
                             f'<td style="padding:6px 10px;text-align:right;color:#4caf7d;font-weight:600;font-size:0.78rem">{fmt_clp(total_bv)}</td>'
                             f'<td></td></tr>'
-                            f'<tr style="background:#0d1a0d"><td style="padding:4px 10px;color:#888;font-size:0.73rem">Total Compra Bar</td>'
-                            f'<td style="padding:4px 10px;text-align:right;color:#aaa;font-size:0.75rem">{fmt_clp(comp_bar)}</td>'
+                            f'<tr style="background:#0d1a0d"><td style="padding:4px 10px;color:#ffffff;font-size:0.73rem">Total Compra Bar</td>'
+                            f'<td style="padding:4px 10px;text-align:right;color:#ffffff;font-size:0.75rem">{fmt_clp(comp_bar)}</td>'
                             f'<td></td></tr>'
-                            f'<tr style="background:#0d1a0d"><td style="padding:4px 10px;color:#888;font-size:0.73rem">% Compra / Venta</td>'
+                            f'<tr style="background:#0d1a0d"><td style="padding:4px 10px;color:#ffffff;font-size:0.73rem">% Compra / Venta</td>'
                             f'<td style="padding:4px 10px;text-align:right;color:#d4a853;font-size:0.75rem">{fmt_pct(pct_bar)}</td>'
                             f'<td></td></tr>'
                         )
@@ -18959,10 +19059,10 @@ buildTree(data, 1, null);
                         pct_dsv = dsv / ut if ut > 0 else 0
                         r3_html += (
                             f'<tr style="border-bottom:1px solid #1a1a1a">'
-                            f'<td style="padding:5px 10px;color:#ccc;font-size:0.75rem">{cat}</td>'
-                            f'<td style="padding:5px 10px;text-align:right;color:#aaa;font-size:0.75rem">{fmt_clp(ut)}</td>'
+                            f'<td style="padding:5px 10px;color:#ffffff;font-size:0.75rem">{cat}</td>'
+                            f'<td style="padding:5px 10px;text-align:right;color:#ffffff;font-size:0.75rem">{fmt_clp(ut)}</td>'
                             f'<td style="padding:5px 10px;text-align:right;color:{"#e84545" if dsv>0 else "#4caf7d"};font-size:0.75rem">{fmt_clp(dsv)}</td>'
-                            f'<td style="padding:5px 10px;text-align:right;color:#888;font-size:0.73rem">{fmt_pct(pct_dsv)}</td>'
+                            f'<td style="padding:5px 10px;text-align:right;color:#ffffff;font-size:0.73rem">{fmt_pct(pct_dsv)}</td>'
                             f'</tr>'
                         )
                     r3_html += (
@@ -19019,7 +19119,7 @@ buildTree(data, 1, null);
                     f'<div style="border:1px solid #1e1e1e;border-radius:10px;overflow:auto;background:#0d0d0d;margin-top:0.5rem">'
                     f'<table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif">'
                     f'<thead><tr>{header_html4}</tr></thead><tbody><tr>{cols_html4}</tr></tbody></table></div>'
-                    f'<div style="margin-top:6px;font-size:0.72rem;color:#555">🟢 &lt;40%&nbsp;&nbsp;🟡 40–45%&nbsp;&nbsp;🔴 &gt;45%</div>',
+                    f'<div style="margin-top:6px;font-size:0.72rem;color:#ffffff">🟢 &lt;40%&nbsp;&nbsp;🟡 40–45%&nbsp;&nbsp;🔴 &gt;45%</div>',
                     unsafe_allow_html=True
                 )
 
@@ -19131,17 +19231,17 @@ buildTree(data, 1, null);
                         color_desv = '#e84545' if dp > 0.1 else '#e89c45' if dp > 0.05 else '#4caf7d'
                         ctrl_rows += (
                             f'<tr style="border-bottom:1px solid #1a1a1a">'
-                            f'<td style="padding:6px 10px;color:#ccc;font-size:0.75rem">{prod}</td>'
-                            f'<td style="padding:6px 10px;text-align:right;color:#888;font-size:0.73rem">{fmt_clp(ct)}</td>'
-                            f'<td style="padding:6px 10px;text-align:right;color:#777;font-size:0.73rem">{fmt_kg(ini_v)}</td>'
-                            f'<td style="padding:6px 10px;text-align:right;color:#777;font-size:0.73rem">{fmt_kg(fin_)}</td>'
-                            f'<td style="padding:6px 10px;text-align:right;color:#aaa;font-size:0.73rem">{fmt_kg(cp)}</td>'
-                            f'<td style="padding:6px 10px;text-align:right;color:#aaa;font-size:0.73rem">{fmt_kg(ru)}</td>'
-                            f'<td style="padding:6px 10px;text-align:right;color:#888;font-size:0.73rem">{fmt_kg(uc)}</td>'
+                            f'<td style="padding:6px 10px;color:#ffffff;font-size:0.75rem">{prod}</td>'
+                            f'<td style="padding:6px 10px;text-align:right;color:#ffffff;font-size:0.73rem">{fmt_clp(ct)}</td>'
+                            f'<td style="padding:6px 10px;text-align:right;color:#ffffff;font-size:0.73rem">{fmt_kg(ini_v)}</td>'
+                            f'<td style="padding:6px 10px;text-align:right;color:#ffffff;font-size:0.73rem">{fmt_kg(fin_)}</td>'
+                            f'<td style="padding:6px 10px;text-align:right;color:#ffffff;font-size:0.73rem">{fmt_kg(cp)}</td>'
+                            f'<td style="padding:6px 10px;text-align:right;color:#ffffff;font-size:0.73rem">{fmt_kg(ru)}</td>'
+                            f'<td style="padding:6px 10px;text-align:right;color:#ffffff;font-size:0.73rem">{fmt_kg(uc)}</td>'
                             f'<td style="padding:6px 10px;text-align:right;color:{color_desv};font-size:0.73rem">{fmt_kg(dk)}</td>'
                             f'<td style="padding:6px 10px;text-align:right;color:{color_desv};font-size:0.73rem">{fmt_pct(dp)}</td>'
                             f'<td style="padding:6px 10px;text-align:right;color:{"#e84545" if cd>0 else "#4caf7d"};font-size:0.73rem">{fmt_clp(cd)}</td>'
-                            f'<td style="padding:6px 10px;text-align:right;color:#555;font-size:0.73rem">0</td>'
+                            f'<td style="padding:6px 10px;text-align:right;color:#ffffff;font-size:0.73rem">0</td>'
                             f'</tr>'
                         )
                     # Fila total
@@ -19163,15 +19263,15 @@ buildTree(data, 1, null);
                         f'<tr style="background:#111;border-top:1px solid #2a2a2a">'
                         f'<td style="padding:6px 10px;color:#d4a853;font-weight:600;font-size:0.75rem">TOTAL</td>'
                         f'<td style="padding:6px 10px;text-align:right;color:#d4a853;font-weight:600;font-size:0.73rem">{fmt_clp(tot_ct)}</td>'
-                        f'<td style="padding:6px 10px;text-align:right;color:#888;font-size:0.73rem">{fmt_kg(tot_ini)}</td>'
-                        f'<td style="padding:6px 10px;text-align:right;color:#888;font-size:0.73rem">{fmt_kg(tot_fin)}</td>'
-                        f'<td style="padding:6px 10px;text-align:right;color:#aaa;font-size:0.73rem">{fmt_kg(tot_cp)}</td>'
-                        f'<td style="padding:6px 10px;text-align:right;color:#aaa;font-size:0.73rem">{fmt_kg(tot_ru)}</td>'
-                        f'<td style="padding:6px 10px;text-align:right;color:#888;font-size:0.73rem">{fmt_kg(tot_uc)}</td>'
+                        f'<td style="padding:6px 10px;text-align:right;color:#ffffff;font-size:0.73rem">{fmt_kg(tot_ini)}</td>'
+                        f'<td style="padding:6px 10px;text-align:right;color:#ffffff;font-size:0.73rem">{fmt_kg(tot_fin)}</td>'
+                        f'<td style="padding:6px 10px;text-align:right;color:#ffffff;font-size:0.73rem">{fmt_kg(tot_cp)}</td>'
+                        f'<td style="padding:6px 10px;text-align:right;color:#ffffff;font-size:0.73rem">{fmt_kg(tot_ru)}</td>'
+                        f'<td style="padding:6px 10px;text-align:right;color:#ffffff;font-size:0.73rem">{fmt_kg(tot_uc)}</td>'
                         f'<td style="padding:6px 10px;text-align:right;color:#d4a853;font-weight:600;font-size:0.73rem">{fmt_kg(_disp_dk)}</td>'
                         f'<td style="padding:6px 10px;text-align:right;color:#d4a853;font-weight:600;font-size:0.73rem">{fmt_pct(_disp_dp)}</td>'
                         f'<td style="padding:6px 10px;text-align:right;color:#d4a853;font-weight:600;font-size:0.73rem">{fmt_clp(_disp_cd)}</td>'
-                        f'<td style="padding:6px 10px;text-align:right;color:#555;font-size:0.73rem">0</td></tr>'
+                        f'<td style="padding:6px 10px;text-align:right;color:#ffffff;font-size:0.73rem">0</td></tr>'
                     )
                     st.markdown(
                         f'<div style="margin-top:0.8rem;border:1px solid #1e1e1e;border-radius:10px;overflow:hidden;background:#0d0d0d">'
@@ -19205,12 +19305,12 @@ buildTree(data, 1, null);
                     _est_c = {'Pendiente':'#d4a853','Emitida':'#5b8dd9','Considerada':'#4caf7d'}.get(str(_ncr['estado']),'#888')
                     _rows_nc += (
                         f'<tr style="border-bottom:1px solid #1a1a1a">'
-                        f'<td style="padding:6px 10px;color:#666;font-family:monospace;font-size:0.72rem">{_ncr["folio_factura"]}</td>'
+                        f'<td style="padding:6px 10px;color:#ffffff;font-family:monospace;font-size:0.72rem">{_ncr["folio_factura"]}</td>'
                         f'<td style="padding:6px 10px;color:#e8e4de;font-size:0.8rem">{_ncr["nombre_producto"]}</td>'
-                        f'<td style="padding:6px 10px;color:#666;font-size:0.75rem">{_ncr["sku"] or "—"}</td>'
+                        f'<td style="padding:6px 10px;color:#ffffff;font-size:0.75rem">{_ncr["sku"] or "—"}</td>'
                         f'<td style="padding:6px 10px;text-align:right;color:#e84545;font-weight:600">-${float(_ncr["monto"]):,.0f}</td>'
                         f'<td style="padding:6px 10px;text-align:center"><span style="background:#111;color:{_est_c};padding:2px 8px;border-radius:8px;font-size:0.7rem;border:1px solid {_est_c}44">{_ncr["estado"]}</span></td>'
-                        f'<td style="padding:6px 10px;color:#555;font-size:0.72rem">{_ncr["registrado_por"] or "—"}</td>'
+                        f'<td style="padding:6px 10px;color:#ffffff;font-size:0.72rem">{_ncr["registrado_por"] or "—"}</td>'
                         f'</tr>'
                     )
                 _rows_nc += (
@@ -19461,7 +19561,7 @@ buildTree(data, 1, null);
                         for _, _cr in _df_col_out.iterrows():
                             _rows_col += (
                                 f'<tr style="border-bottom:1px solid #1a1a1a">'
-                                f'<td style="padding:7px 10px;color:#666;font-family:monospace;font-size:0.72rem">{_cr["SKU"]}</td>'
+                                f'<td style="padding:7px 10px;color:#ffffff;font-family:monospace;font-size:0.72rem">{_cr["SKU"]}</td>'
                                 f'<td style="padding:7px 10px;color:#e8e4de;font-size:0.8rem">{_cr["Nombre"]}</td>'
                                 f'<td style="padding:7px 10px;text-align:right;color:#aaa">{_cr["Cantidad"]:,}</td>'
                                 f'<td style="padding:7px 10px;text-align:right;color:#d4a853">${float(_cr["Costo por receta"]):,.0f}</td>'
@@ -20683,7 +20783,7 @@ elif informe_sel == "Auditor":
 
     st.markdown("""
     <div style="margin-bottom:1.5rem">
-        <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#555;margin-bottom:4px">Herramientas</div>
+        <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#ffffff;margin-bottom:4px">Herramientas</div>
         <div style="font-family:'DM Serif Display',serif;font-size:2rem;color:#f0ede8;letter-spacing:-0.02em;line-height:1.1">
             🔬 Auditor de Categorías
         </div>
@@ -20875,15 +20975,15 @@ elif informe_sel == "Auditor":
                 cant_f  = f"{float(r.get('cant_total',0) or 0):,.2f}"
                 rows_ac += (
                     f'<tr style="border-bottom:1px solid #1a1a1a;background:{bg}">'
-                    f'<td style="padding:8px 12px;color:#666;font-family:monospace;font-size:0.72rem">{r.get("sku","")}</td>'
+                    f'<td style="padding:8px 12px;color:#ffffff;font-family:monospace;font-size:0.72rem">{r.get("sku","")}</td>'
                     f'<td style="padding:8px 12px;color:#e8e4de;font-size:0.8rem;font-weight:500">{r.get("nombre_producto","")}</td>'
-                    f'<td style="padding:8px 12px;color:#888;font-size:0.75rem">{r.get("categoria_producto","")}</td>'
-                    f'<td style="padding:8px 12px;color:#666;font-size:0.75rem">{r.get("subcat","")}</td>'
+                    f'<td style="padding:8px 12px;color:#ffffff;font-size:0.75rem">{r.get("categoria_producto","")}</td>'
+                    f'<td style="padding:8px 12px;color:#ffffff;font-size:0.75rem">{r.get("subcat","")}</td>'
                     f'<td style="padding:8px 12px">{badge_ctrl}</td>'
-                    f'<td style="padding:8px 12px;text-align:right;color:#aaa;font-size:0.75rem">{r.get("n_registros",0):,}</td>'
-                    f'<td style="padding:8px 12px;text-align:right;color:#888;font-size:0.75rem">{cant_f}</td>'
+                    f'<td style="padding:8px 12px;text-align:right;color:#ffffff;font-size:0.75rem">{r.get("n_registros",0):,}</td>'
+                    f'<td style="padding:8px 12px;text-align:right;color:#ffffff;font-size:0.75rem">{cant_f}</td>'
                     f'<td style="padding:8px 12px;text-align:right;color:#d4a853;font-size:0.75rem">{costo_f}</td>'
-                    f'<td style="padding:8px 12px;text-align:center;color:#555;font-size:0.71rem">{str(r.get("ultima_compra",""))[:10]}</td>'
+                    f'<td style="padding:8px 12px;text-align:center;color:#ffffff;font-size:0.71rem">{str(r.get("ultima_compra",""))[:10]}</td>'
                     f'</tr>'
                 )
 
@@ -20926,7 +21026,7 @@ elif informe_sel == "Auditor":
 elif informe_sel == "Bar":
     st.markdown("""
     <div style="margin-bottom:1.5rem">
-        <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#555;margin-bottom:4px">Módulo</div>
+        <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#ffffff;margin-bottom:4px">Módulo</div>
         <div style="font-family:'DM Serif Display',serif;font-size:2rem;color:#f0ede8;letter-spacing:-0.02em;line-height:1.1">
             🍹 Tendencias Bar
         </div>
@@ -21273,14 +21373,14 @@ elif informe_sel == "Bar":
 
             def urgencia_cell(dias_sin, ciclo):
                 if pd.isna(ciclo) or pd.isna(dias_sin):
-                    return f'<span style="color:#555;font-size:0.78rem">{int(dias_sin) if not pd.isna(dias_sin) else "—"}d</span>'
+                    return f'<span style="color:#ffffff;font-size:0.78rem">{int(dias_sin) if not pd.isna(dias_sin) else "—"}d</span>'
                 ratio = dias_sin / ciclo
                 if ratio >= 0.9:
                     return f'<span style="background:#3a1a1a;color:#ff6b6b;padding:2px 8px;border-radius:10px;font-size:0.74rem;font-weight:700">🔴 {int(dias_sin)}d</span>'
                 elif ratio >= 0.6:
                     return f'<span style="background:#2a2a1a;color:#e8c14a;padding:2px 8px;border-radius:10px;font-size:0.74rem">🟡 {int(dias_sin)}d</span>'
                 else:
-                    return f'<span style="color:#555;font-size:0.78rem">{int(dias_sin)}d</span>'
+                    return f'<span style="color:#ffffff;font-size:0.78rem">{int(dias_sin)}d</span>'
 
             hs = 'padding:10px 12px;font-size:0.67rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #1e1e1e;white-space:nowrap'
             hdrs_r = ['SKU','Producto','Proveedor','Meses','Vol.Prom/mes','CV%','Tendencia','MUC actual','Ciclo(d)','Sin comprar','Stock Seg.','Gasto Prom/mes']
@@ -21294,9 +21394,9 @@ elif informe_sel == "Bar":
             for _, r in df_res_f.iterrows():
                 rows_r += (
                     f'<tr style="border-bottom:1px solid #161616">'
-                    f'<td style="padding:9px 12px;color:#666;font-family:monospace;font-size:0.74rem;white-space:nowrap">{r["sku"]}</td>'
+                    f'<td style="padding:9px 12px;color:#ffffff;font-family:monospace;font-size:0.74rem;white-space:nowrap">{r["sku"]}</td>'
                     f'<td style="padding:9px 12px;color:#ccc;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{r["nombre"]}">{str(r["nombre"])[:38]}</td>'
-                    f'<td style="padding:9px 12px;color:#777;font-size:0.78rem;white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis">{str(r["proveedor"])[:22]}</td>'
+                    f'<td style="padding:9px 12px;color:#ffffff;font-size:0.78rem;white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis">{str(r["proveedor"])[:22]}</td>'
                     f'<td style="padding:9px 12px;text-align:right;color:#aaa">{int(r["n_meses"])}</td>'
                     f'<td style="padding:9px 12px;text-align:right;color:#7ab8e8;font-variant-numeric:tabular-nums">{r["vol_prom_mes"]:,.2f}</td>'
                     f'<td style="padding:9px 12px;text-align:right">{cv_badge(r["cv_pct"])}</td>'
@@ -21321,7 +21421,7 @@ elif informe_sel == "Bar":
             st.markdown(tabla_r, unsafe_allow_html=True)
 
             st.markdown("""
-            <div style='margin-top:0.75rem;font-size:0.75rem;color:#555'>
+            <div style='margin-top:0.75rem;font-size:0.75rem;color:#ffffff'>
             <b style='color:#666'>CV%</b>: Coeficiente de variación mensual — 
             <span style='color:#4cdd8a'>≤20% estable</span> · 
             <span style='color:#e8c14a'>21-50% variable</span> · 
@@ -21389,7 +21489,7 @@ elif informe_sel == "Bar":
                 rmx,rmn = (max(vnum),min(vnum)) if vnum else (1,0)
                 rows_v += (
                     f'<tr style="border-bottom:1px solid #161616">'
-                    f'<td style="padding:9px 12px;color:#666;font-family:monospace;font-size:0.74rem">{r["sku"]}</td>'
+                    f'<td style="padding:9px 12px;color:#ffffff;font-family:monospace;font-size:0.74rem">{r["sku"]}</td>'
                     f'<td style="padding:9px 12px;color:#ccc;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{str(r["nombre"])[:44]}</td>'
                     + ''.join([hm(v,rmx,rmn) for v in vals])
                     + f'<td style="padding:9px 12px;text-align:right;color:#7ab8e8;font-variant-numeric:tabular-nums">{r["_prom"]:,.2f}</td>'
@@ -21455,7 +21555,7 @@ elif informe_sel == "Bar":
                 rmx,rmn = (max(vnum),min(vnum)) if vnum else (1,0)
                 rows_g += (
                     f'<tr style="border-bottom:1px solid #161616">'
-                    f'<td style="padding:9px 12px;color:#666;font-family:monospace;font-size:0.74rem">{r["sku"]}</td>'
+                    f'<td style="padding:9px 12px;color:#ffffff;font-family:monospace;font-size:0.74rem">{r["sku"]}</td>'
                     f'<td style="padding:9px 12px;color:#ccc;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{str(r["nombre"])[:44]}</td>'
                     + ''.join([hmg(v,rmx,rmn) for v in vals])
                     + f'<td style="padding:9px 12px;text-align:right;color:#c87ae8;font-variant-numeric:tabular-nums">${r["_prom"]:,.0f}</td>'
@@ -21493,7 +21593,7 @@ elif informe_sel == "Bar":
 
             def badge_c(dias):
                 if pd.isna(dias):
-                    return '<span style="color:#444;font-size:0.75rem">1 compra</span>'
+                    return '<span style="color:#ffffff;font-size:0.75rem">1 compra</span>'
                 if dias<=7:
                     return f'<span style="background:#1a3a2a;color:#4cdd8a;padding:2px 9px;border-radius:12px;font-size:0.75rem;font-weight:600">cada {dias:.0f}d</span>'
                 elif dias<=15:
@@ -21506,7 +21606,7 @@ elif informe_sel == "Bar":
                 ratio = dias_sin/ciclo
                 if ratio>=0.9: return f'<span style="background:#3a1a1a;color:#ff6b6b;padding:2px 8px;border-radius:10px;font-size:0.74rem;font-weight:700">🔴 {int(dias_sin)}d</span>'
                 elif ratio>=0.6: return f'<span style="background:#2a2a1a;color:#e8c14a;padding:2px 8px;border-radius:10px;font-size:0.74rem">🟡 {int(dias_sin)}d</span>'
-                return f'<span style="color:#555;font-size:0.78rem">{int(dias_sin)}d</span>'
+                return f'<span style="color:#ffffff;font-size:0.78rem">{int(dias_sin)}d</span>'
 
             hs = 'padding:10px 12px;font-size:0.67rem;text-transform:uppercase;letter-spacing:0.09em;font-weight:600;color:#444;border-bottom:1px solid #1e1e1e;white-space:nowrap'
             hdrs_f = ['SKU','Producto','Local','# Compras','Ciclo','Sin comprar','Vol.Prom(kg/lt)','Gasto Prom $','Primera','Última']
@@ -21517,7 +21617,7 @@ elif informe_sel == "Bar":
             for _, r in df_freq_f.iterrows():
                 rows_f += (
                     f'<tr style="border-bottom:1px solid #161616">'
-                    f'<td style="padding:9px 12px;color:#666;font-family:monospace;font-size:0.74rem">{r["sku"]}</td>'
+                    f'<td style="padding:9px 12px;color:#ffffff;font-family:monospace;font-size:0.74rem">{r["sku"]}</td>'
                     f'<td style="padding:9px 12px;color:#ccc;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{str(r["nombre"])[:42]}</td>'
                     f'<td style="padding:9px 12px;color:#888;font-size:0.8rem">{r["local"]}</td>'
                     f'<td style="padding:9px 12px;text-align:right;color:#aaa">{int(r["n_compras"])}</td>'
@@ -21525,8 +21625,8 @@ elif informe_sel == "Bar":
                     f'<td style="padding:9px 12px;text-align:right">{urg_b(r["dias_sin_comprar"], r["dias_entre_compras"])}</td>'
                     f'<td style="padding:9px 12px;text-align:right;color:#7ab8e8;font-variant-numeric:tabular-nums">{r["vol_promedio"]:,.2f}</td>'
                     f'<td style="padding:9px 12px;text-align:right;color:#d4a853;font-variant-numeric:tabular-nums">${r["gasto_promedio"]:,.0f}</td>'
-                    f'<td style="padding:9px 12px;text-align:right;color:#555;font-size:0.78rem">{str(r["primera_compra"])[:10]}</td>'
-                    f'<td style="padding:9px 12px;text-align:right;color:#888;font-size:0.78rem">{str(r["ultima_compra"])[:10]}</td>'
+                    f'<td style="padding:9px 12px;text-align:right;color:#ffffff;font-size:0.78rem">{str(r["primera_compra"])[:10]}</td>'
+                    f'<td style="padding:9px 12px;text-align:right;color:#ffffff;font-size:0.78rem">{str(r["ultima_compra"])[:10]}</td>'
                     f'</tr>'
                 )
             st.markdown(
@@ -21551,7 +21651,7 @@ elif informe_sel == "Bar":
 elif informe_sel == "CuentasCasa":
     st.markdown("""
     <div style="margin-bottom:1.5rem">
-        <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#555;margin-bottom:4px">Informes</div>
+        <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#ffffff;margin-bottom:4px">Informes</div>
         <div style="font-family:'DM Serif Display',serif;font-size:2rem;color:#f0ede8;letter-spacing:-0.02em;line-height:1.1">
             🏠 Cuentas Casa
         </div>
@@ -21627,10 +21727,10 @@ elif informe_sel == "CuentasCasa":
                 rows1_html = ''
                 for cat in cats_p1:
                     if cat not in pivot1.index: continue
-                    row_html = f'<td style="padding:5px 10px;color:#ccc;font-size:0.75rem">{cat.title()}</td>'
+                    row_html = f'<td style="padding:5px 10px;color:#ffffff;font-size:0.75rem">{cat.title()}</td>'
                     for loc in locales_presentes:
                         v = pivot1.loc[cat, loc] if loc in pivot1.columns else 0
-                        row_html += f'<td style="padding:5px 10px;text-align:right;color:#aaa;font-size:0.73rem">{fclp(v) if v else "—"}</td>'
+                        row_html += f'<td style="padding:5px 10px;text-align:right;color:#ffffff;font-size:0.73rem">{fclp(v) if v else "—"}</td>'
                     total_cat = pivot1.loc[cat].sum()
                     row_html += f'<td style="padding:5px 10px;text-align:right;color:#d4a853;font-size:0.73rem;border-left:2px solid #333;font-weight:600">{fclp(total_cat)}</td>'
                     rows1_html += f'<tr style="border-bottom:1px solid #1a1a1a">{row_html}</tr>'
@@ -21645,11 +21745,11 @@ elif informe_sel == "CuentasCasa":
 
                 # % fila
                 total_global = df_cc_data['cuenta_casa'].sum()
-                pct_html = f'<td style="padding:5px 10px;color:#666;font-size:0.71rem">%</td>'
+                pct_html = f'<td style="padding:5px 10px;color:#ffffff;font-size:0.71rem">%</td>'
                 for loc in locales_presentes:
                     tot_loc = df_cc_data[df_cc_data['local']==loc]['cuenta_casa'].sum()
-                    pct_html += f'<td style="padding:5px 10px;text-align:right;color:#666;font-size:0.71rem">{fpct(tot_loc/total_global if total_global else 0)}</td>'
-                pct_html += f'<td style="padding:5px 10px;text-align:right;color:#666;font-size:0.71rem;border-left:2px solid #333">100%</td>'
+                    pct_html += f'<td style="padding:5px 10px;text-align:right;color:#ffffff;font-size:0.71rem">{fpct(tot_loc/total_global if total_global else 0)}</td>'
+                pct_html += f'<td style="padding:5px 10px;text-align:right;color:#ffffff;font-size:0.71rem;border-left:2px solid #333">100%</td>'
                 rows1_html += f'<tr style="background:#0d0d0d">{pct_html}</tr>'
 
                 st.markdown(
@@ -21674,9 +21774,9 @@ elif informe_sel == "CuentasCasa":
                     bar_w = int(pct_v * 100)
                     cat_rows_html += (
                         f'<tr style="border-bottom:1px solid #1a1a1a">'
-                        f'<td style="padding:7px 12px;color:#ccc;font-size:0.75rem;width:200px">{row["categoria"].title()}</td>'
+                        f'<td style="padding:7px 12px;color:#ffffff;font-size:0.75rem;width:200px">{row["categoria"].title()}</td>'
                         f'<td style="padding:7px 12px;text-align:right;color:#d4a853;font-size:0.78rem;font-weight:600;width:120px">{fclp(row["cuenta_casa"])}</td>'
-                        f'<td style="padding:7px 12px;color:#666;font-size:0.72rem;width:60px;text-align:right">{fpct(pct_v)}</td>'
+                        f'<td style="padding:7px 12px;color:#ffffff;font-size:0.72rem;width:60px;text-align:right">{fpct(pct_v)}</td>'
                         f'<td style="padding:7px 12px"><div style="background:#1a3a2a;border-radius:3px;height:6px;width:100%">'
                         f'<div style="background:#4caf7d;height:6px;border-radius:3px;width:{bar_w}%"></div></div></td>'
                         f'</tr>'
@@ -21740,10 +21840,10 @@ elif informe_sel == "CuentasCasa":
                         rows3_html = ''
                         for menu_cat in cats_menu:
                             if menu_cat not in pivot3.index: continue
-                            rh = f'<td style="padding:5px 10px;color:#ccc;font-size:0.75rem">{menu_cat}</td>'
+                            rh = f'<td style="padding:5px 10px;color:#ffffff;font-size:0.75rem">{menu_cat}</td>'
                             for cat in cats_cc_u:
                                 v3 = pivot3.loc[menu_cat, cat] if cat in pivot3.columns else 0
-                                rh += f'<td style="padding:5px 10px;text-align:right;color:#aaa;font-size:0.73rem">{fclp(v3) if v3 else "—"}</td>'
+                                rh += f'<td style="padding:5px 10px;text-align:right;color:#ffffff;font-size:0.73rem">{fclp(v3) if v3 else "—"}</td>'
                             tot3 = pivot3.loc[menu_cat].sum()
                             rh += f'<td style="padding:5px 10px;text-align:right;color:#d4a853;font-size:0.73rem;font-weight:600;border-left:2px solid #333">{fclp(tot3)}</td>'
                             rows3_html += f'<tr style="border-bottom:1px solid #1a1a1a">{rh}</tr>'
@@ -21804,10 +21904,10 @@ elif informe_sel == "CuentasCasa":
                     rows4_html = ''
                     for loc in locales_orden:
                         if loc not in pivot4.index: continue
-                        rh4 = f'<td style="padding:6px 10px;color:#ccc;font-size:0.75rem">{loc.title()}</td>'
+                        rh4 = f'<td style="padding:6px 10px;color:#ffffff;font-size:0.75rem">{loc.title()}</td>'
                         for m in meses_cols:
                             v4 = pivot4.loc[loc, m] if m in pivot4.columns else 0
-                            rh4 += f'<td style="padding:6px 10px;text-align:right;color:#aaa;font-size:0.73rem">{fclp(v4) if v4 else "—"}</td>'
+                            rh4 += f'<td style="padding:6px 10px;text-align:right;color:#ffffff;font-size:0.73rem">{fclp(v4) if v4 else "—"}</td>'
                         tot4 = pivot4.loc[loc].sum()
                         rh4 += f'<td style="padding:6px 10px;text-align:right;color:#d4a853;font-size:0.73rem;font-weight:600;border-left:2px solid #333">{fclp(tot4)}</td>'
                         rows4_html += f'<tr style="border-bottom:1px solid #1a1a1a">{rh4}</tr>'
@@ -21844,7 +21944,7 @@ elif informe_sel == "CuentasCasa":
 
     st.markdown("""
     <div style="margin-bottom:1.5rem">
-        <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#555;margin-bottom:4px">Informes</div>
+        <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#ffffff;margin-bottom:4px">Informes</div>
         <div style="font-family:'DM Serif Display',serif;font-size:2rem;color:#f0ede8;letter-spacing:-0.02em;line-height:1.1">
             📈 Informe Venta Diaria
         </div>
@@ -22792,7 +22892,7 @@ elif modulo.startswith("📥 Stock Cierre"):
               <div>
                 <div style="font-size:0.92rem;font-weight:600;color:#f0ede8">
                   Cierre existente · {_sk_local} · {_sk_fecha.strftime('%d-%m-%Y')}</div>
-                <div style="font-size:0.75rem;color:#888;margin-top:2px">
+                <div style="font-size:0.75rem;color:#ffffff;margin-top:2px">
                   {len(_sk_prev_map)} categoría(s) · {_sk_prev_tot:,} unidades. Los valores se actualizarán al guardar.</div>
               </div>
             </div>
@@ -22806,7 +22906,7 @@ elif modulo.startswith("📥 Stock Cierre"):
               <div>
                 <div style="font-size:0.92rem;font-weight:600;color:#f0ede8">
                   Nuevo cierre · {_sk_local} · {_sk_fecha.strftime('%d-%m-%Y')}</div>
-                <div style="font-size:0.75rem;color:#888;margin-top:2px">
+                <div style="font-size:0.75rem;color:#ffffff;margin-top:2px">
                   Aún no hay registro para este local y fecha.</div>
               </div>
             </div>
@@ -22906,17 +23006,17 @@ elif modulo.startswith("📥 Stock Cierre"):
             <div style="display:flex;flex-wrap:wrap;gap:8px;margin:4px 0 14px 0">
               <div style="flex:1 1 90px;min-width:90px;background:#0e1116;border:1px solid #1f242c;
                           border-radius:12px;padding:12px 14px">
-                <div style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;color:#888">Registros</div>
+                <div style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;color:#ffffff">Registros</div>
                 <div style="font-family:'DM Serif Display',serif;font-size:1.8rem;color:#f0ede8;line-height:1.1">{_sk_reg:,}</div>
               </div>
               <div style="flex:1 1 90px;min-width:90px;background:#0e1116;border:1px solid #1f242c;
                           border-radius:12px;padding:12px 14px">
-                <div style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;color:#888">Unidades</div>
+                <div style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;color:#ffffff">Unidades</div>
                 <div style="font-family:'DM Serif Display',serif;font-size:1.8rem;color:#d4a853;line-height:1.1">{_sk_un:,}</div>
               </div>
               <div style="flex:1 1 90px;min-width:90px;background:#0e1116;border:1px solid #1f242c;
                           border-radius:12px;padding:12px 14px">
-                <div style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;color:#888">Cierres</div>
+                <div style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;color:#ffffff">Cierres</div>
                 <div style="font-family:'DM Serif Display',serif;font-size:1.8rem;color:#f0ede8;line-height:1.1">{_sk_cierres:,}</div>
               </div>
             </div>
@@ -22931,7 +23031,7 @@ elif modulo.startswith("📥 Stock Cierre"):
                     _q = int(_r["cantidad"] or 0)
                     _obs = (str(_r["observacion"]).strip()
                             if _r["observacion"] not in (None, "", "None") else "")
-                    _obs_html = (f"<div style='font-size:0.7rem;color:#777;margin-top:3px;"
+                    _obs_html = (f"<div style='font-size:0.7rem;color:#ffffff;margin-top:3px;"
                                  f"font-style:italic'>“{_obs}”</div>") if _obs else ""
                     _fecha_str = str(_r["fecha"])[:10]
                     _sk_cards.append(f"""
@@ -22941,7 +23041,7 @@ elif modulo.startswith("📥 Stock Cierre"):
                       <div style="flex:1;padding:11px 14px;min-width:0">
                         <div style="font-size:0.95rem;font-weight:600;color:#f0ede8;
                                     white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{_r['categoria']}</div>
-                        <div style="font-size:0.72rem;color:#888;margin-top:3px">
+                        <div style="font-size:0.72rem;color:#ffffff;margin-top:3px">
                           📍 {_r['local']} &nbsp;·&nbsp; 📅 {_fecha_str}
                           &nbsp;·&nbsp; 👤 {_r['registrado_por'] or '—'}</div>
                         {_obs_html}
@@ -22952,7 +23052,7 @@ elif modulo.startswith("📥 Stock Cierre"):
                         <div style="font-family:'DM Serif Display',serif;font-size:1.5rem;
                                     color:#d4a853;line-height:1">{_q:,}</div>
                         <div style="font-size:0.6rem;text-transform:uppercase;
-                                    letter-spacing:0.06em;color:#777;margin-top:2px">unidades</div>
+                                    letter-spacing:0.06em;color:#ffffff;margin-top:2px">unidades</div>
                       </div>
                     </div>
                     """)
@@ -23112,17 +23212,17 @@ elif modulo.startswith("📥 Stock Cierre"):
             <div style="display:flex;flex-wrap:wrap;gap:8px;margin:4px 0 14px 0">
               <div style="flex:1 1 90px;min-width:90px;background:#0e1116;border:1px solid #1f242c;
                           border-radius:12px;padding:12px 14px">
-                <div style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;color:#888">A producir</div>
+                <div style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;color:#ffffff">A producir</div>
                 <div style="font-family:'DM Serif Display',serif;font-size:1.8rem;color:#d4a853;line-height:1.1">{_prod_tot:,}</div>
               </div>
               <div style="flex:1 1 90px;min-width:90px;background:#0e1116;border:1px solid #1f242c;
                           border-radius:12px;padding:12px 14px">
-                <div style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;color:#888">Meta</div>
+                <div style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;color:#ffffff">Meta</div>
                 <div style="font-family:'DM Serif Display',serif;font-size:1.8rem;color:#f0ede8;line-height:1.1">{_meta_tot:,}</div>
               </div>
               <div style="flex:1 1 90px;min-width:90px;background:#0e1116;border:1px solid #1f242c;
                           border-radius:12px;padding:12px 14px">
-                <div style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;color:#888">Saldo</div>
+                <div style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;color:#ffffff">Saldo</div>
                 <div style="font-family:'DM Serif Display',serif;font-size:1.8rem;color:#f0ede8;line-height:1.1">{_saldo_tot:,}</div>
               </div>
             </div>
@@ -23151,7 +23251,7 @@ elif modulo.startswith("📥 Stock Cierre"):
                   <div style="flex:1;padding:11px 14px;min-width:0">
                     <div style="font-size:0.95rem;font-weight:600;color:#f0ede8;
                                 white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{_r['Categoría']}</div>
-                    <div style="font-size:0.72rem;color:#888;margin-top:3px">
+                    <div style="font-size:0.72rem;color:#ffffff;margin-top:3px">
                       Meta <b style="color:#cfcabf">{_meta_v:,}</b>
                       &nbsp;·&nbsp; Saldo <b style="color:#cfcabf">{_saldo_v:,}</b>
                       &nbsp;·&nbsp; <span style="color:{_col};font-weight:600">{_lbl}</span>
@@ -23163,7 +23263,7 @@ elif modulo.startswith("📥 Stock Cierre"):
                     <div style="font-family:'DM Serif Display',serif;font-size:1.5rem;
                                 color:{_big_col};line-height:1">{_big}</div>
                     <div style="font-size:0.6rem;text-transform:uppercase;
-                                letter-spacing:0.06em;color:#777;margin-top:2px">producir</div>
+                                letter-spacing:0.06em;color:#ffffff;margin-top:2px">producir</div>
                   </div>
                 </div>
                 """)
@@ -23188,7 +23288,7 @@ elif modulo.startswith("📥 Stock Cierre"):
 elif modulo.startswith("🎯 Config Producción"):
     st.markdown(f"""
     <div style="margin-bottom:1.5rem">
-        <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#555;margin-bottom:4px">Módulo</div>
+        <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#ffffff;margin-bottom:4px">Módulo</div>
         <div style="font-family:'DM Serif Display',serif;font-size:2rem;color:#f0ede8;letter-spacing:-0.02em;line-height:1.1">
             🎯 Configuración de Producción
         </div>
