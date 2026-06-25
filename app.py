@@ -10504,267 +10504,630 @@ if modulo.startswith("📦"):
 
     with tab13:
         import re
-        st.markdown("#### 👥 Asistencia RRHH — Hora Hombre")
-        st.markdown(
-            "<div class='info-box'>Carga el Excel de <b>Gestión de Asistencia</b> "
-            "(hoja <b>Días</b>) a nivel persona-día. Sirve de denominador para la métrica "
-            "<b>colaciones servidas ÷ turnos trabajados</b> por local. Recargar la misma "
-            "quincena <b>no duplica</b> (clave única RUT + fecha).</div>",
-            unsafe_allow_html=True
-        )
+        st.markdown("#### 👥 Asistencia y Remuneraciones RRHH")
+        _rrhh_t1, _rrhh_t2 = st.tabs(["📅 Asistencia (turnos)", "💵 Remuneraciones / Estructura"])
 
-        # Equivalencia de locales del archivo de asistencia → locales canónicos
-        _AS_LOCAL_MAP = {
-            "Bilbao": "Providencia",
-        }
-        _AS_LOCALES_OK = {
-            "La Reina","Quilin","La Dehesa","Las Condes","Los Trapenses",
-            "Nueva Providencia","Vitacura","Providencia","Macul","Chicureo",
-        }
+        # ─────────────────────── SUB-TAB ASISTENCIA ───────────────────────
+        with _rrhh_t1:
+            st.markdown(
+                "<div class='info-box'>Carga el Excel de <b>Gestión de Asistencia</b> "
+                "(hoja <b>Días</b>) a nivel persona-día. Sirve de denominador para la métrica "
+                "<b>colaciones servidas ÷ turnos trabajados</b> por local. Recargar la misma "
+                "quincena <b>no duplica</b> (clave única RUT + fecha).</div>",
+                unsafe_allow_html=True
+            )
 
-        f_as = st.file_uploader("Archivo de Asistencia (.xlsx)", type=["xlsx"], key="as_file")
+            # Equivalencia de locales del archivo de asistencia → locales canónicos
+            _AS_LOCAL_MAP = {
+                "Bilbao": "Providencia",
+            }
+            _AS_LOCALES_OK = {
+                "La Reina","Quilin","La Dehesa","Las Condes","Los Trapenses",
+                "Nueva Providencia","Vitacura","Providencia","Macul","Chicureo",
+            }
 
-        # ── Helpers de parseo robusto (tolerantes a excepciones) ──────────
-        def _as_parse_fecha(v):
-            import datetime as _dt
-            if isinstance(v, (_dt.date, _dt.datetime)):
-                return _dt.date(v.year, v.month, v.day)
-            m = re.search(r'(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})', str(v))
-            if m:
-                d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
-                if y < 100:
-                    y += 2000
-                try:
-                    return _dt.date(y, mo, d)
-                except ValueError:
-                    return None
-            return None
+            f_as = st.file_uploader("Archivo de Asistencia (.xlsx)", type=["xlsx"], key="as_file")
 
-        def _as_to_horas(v):
-            import datetime as _dt
-            if v is None:
-                return 0.0
-            if isinstance(v, _dt.timedelta):
-                return round(v.total_seconds() / 3600, 3)
-            if isinstance(v, (int, float)):
-                # fracción de día (0.46 = 11h) o ya horas
-                return round(float(v) * 24, 3) if 0 < float(v) <= 1 else round(float(v), 3)
-            # texto "HH:MM" o "HH:MM:SS"
-            m = re.match(r'(\d+):(\d{2})(?::(\d{2}))?', str(v).strip())
-            if m:
-                h = int(m.group(1)) + int(m.group(2)) / 60 + (int(m.group(3) or 0)) / 3600
-                return round(h, 3)
-            return 0.0
-
-        def _as_colacion_min(s):
-            s = str(s)
-            if 'Sin Colaci' in s:
-                return 0
-            m = re.search(r'\((\d+)\s*mins?\)', s)
-            return int(m.group(1)) if m else None
-
-        def _as_tipo_jornada(s):
-            s = str(s)
-            if 'Descanso' in s:
-                return 'Descanso'
-            if 'No Planificado' in s:
-                return 'No Planificado'
-            if s.strip() in ('', 'nan', 'None'):
-                return 'Sin Turno'
-            return 'Turno'
-
-        def _as_norm_rut(v):
-            s = str(v).strip().upper().replace(' ', '')
-            return s if s and s not in ('NAN', 'NONE') else None
-
-        if f_as is not None:
-            if st.button("💾 Procesar y cargar asistencia", key="btn_as", type="primary"):
-                _as_report = {"leidas": 0, "validas": 0, "descartadas": 0,
-                              "motivos": {}, "locales_no_map": set()}
-                try:
-                    import io as _io_as
-                    from openpyxl import load_workbook as _lw_as
-
-                    _wb_as = _lw_as(_io_as.BytesIO(f_as.read()), data_only=True, read_only=True)
-
-                    # 1) Localizar hoja 'Días' (tolera variantes con/ sin tilde)
-                    _sheet = None
-                    for _sn in _wb_as.sheetnames:
-                        if _sn.strip().lower().startswith("d"):  # Días / Dias
-                            _sheet = _sn
-                            break
-                    if _sheet is None:
-                        _sheet = _wb_as.sheetnames[0]
-                    _ws_as = _wb_as[_sheet]
-
-                    # 2) Detectar fila de encabezados (busca 'Apellidos')
-                    _all_rows = list(_ws_as.iter_rows(values_only=True))
-                    _hdr_idx = None
-                    for _i, _r in enumerate(_all_rows[:10]):
-                        if _r and any('apellido' in str(c).lower() for c in _r if c):
-                            _hdr_idx = _i
-                            break
-                    if _hdr_idx is None:
-                        st.error("No se encontró la fila de encabezados (con 'Apellidos').")
-                        st.stop()
-
-                    _hdr = [str(c).strip() if c is not None else "" for c in _all_rows[_hdr_idx]]
-                    _data_rows = _all_rows[_hdr_idx + 1:]
-
-                    # 3) Mapear índices de columnas por nombre (tolerante a duplicados)
-                    def _idx_of(*names):
-                        for _ix, _h in enumerate(_hdr):
-                            for _n in names:
-                                if _h.lower() == _n.lower():
-                                    return _ix
+            # ── Helpers de parseo robusto (tolerantes a excepciones) ──────────
+            def _as_parse_fecha(v):
+                import datetime as _dt
+                if isinstance(v, (_dt.date, _dt.datetime)):
+                    return _dt.date(v.year, v.month, v.day)
+                m = re.search(r'(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})', str(v))
+                if m:
+                    d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                    if y < 100:
+                        y += 2000
+                    try:
+                        return _dt.date(y, mo, d)
+                    except ValueError:
                         return None
-                    _ix_ape  = _idx_of("Apellidos")
-                    _ix_nom  = _idx_of("Nombre")
-                    _ix_rut  = _idx_of("Identificador", "RUT", "Rut")
-                    _ix_grp  = _idx_of("Grupo", "Local")
-                    _ix_fec  = _idx_of("Fecha")
-                    _ix_per  = _idx_of("Permiso")
-                    _ix_tur  = _idx_of("Turno")
-                    _ix_hor  = _idx_of("Horas Totales", "Horas")
-                    _ix_car  = _idx_of("Cargo")
+                return None
 
-                    if None in (_ix_rut, _ix_grp, _ix_fec):
-                        st.error("Faltan columnas esenciales (Identificador, Grupo o Fecha).")
-                        st.stop()
+            def _as_to_horas(v):
+                import datetime as _dt
+                if v is None:
+                    return 0.0
+                if isinstance(v, _dt.timedelta):
+                    return round(v.total_seconds() / 3600, 3)
+                if isinstance(v, (int, float)):
+                    # fracción de día (0.46 = 11h) o ya horas
+                    return round(float(v) * 24, 3) if 0 < float(v) <= 1 else round(float(v), 3)
+                # texto "HH:MM" o "HH:MM:SS"
+                m = re.match(r'(\d+):(\d{2})(?::(\d{2}))?', str(v).strip())
+                if m:
+                    h = int(m.group(1)) + int(m.group(2)) / 60 + (int(m.group(3) or 0)) / 3600
+                    return round(h, 3)
+                return 0.0
 
-                    # 4) Procesar fila a fila con manejo de excepciones
-                    _regs = {}
-                    for _r in _data_rows:
-                        _as_report["leidas"] += 1
-                        if not _r or all(c is None for c in _r):
-                            _as_report["descartadas"] += 1
-                            _as_report["motivos"]["fila vacía"] = _as_report["motivos"].get("fila vacía", 0) + 1
-                            continue
+            def _as_colacion_min(s):
+                s = str(s)
+                if 'Sin Colaci' in s:
+                    return 0
+                m = re.search(r'\((\d+)\s*mins?\)', s)
+                return int(m.group(1)) if m else None
 
-                        def _g(ix):
-                            return _r[ix] if (ix is not None and ix < len(_r)) else None
+            def _as_tipo_jornada(s):
+                s = str(s)
+                if 'Descanso' in s:
+                    return 'Descanso'
+                if 'No Planificado' in s:
+                    return 'No Planificado'
+                if s.strip() in ('', 'nan', 'None'):
+                    return 'Sin Turno'
+                return 'Turno'
 
-                        _rut = _as_norm_rut(_g(_ix_rut))
-                        if not _rut:
-                            _as_report["descartadas"] += 1
-                            _as_report["motivos"]["RUT inválido"] = _as_report["motivos"].get("RUT inválido", 0) + 1
-                            continue
+            def _as_norm_rut(v):
+                s = str(v).strip().upper().replace(' ', '')
+                return s if s and s not in ('NAN', 'NONE') else None
 
-                        _fecha = _as_parse_fecha(_g(_ix_fec))
-                        if _fecha is None:
-                            _as_report["descartadas"] += 1
-                            _as_report["motivos"]["fecha no parseable"] = _as_report["motivos"].get("fecha no parseable", 0) + 1
-                            continue
+            if f_as is not None:
+                if st.button("💾 Procesar y cargar asistencia", key="btn_as", type="primary"):
+                    _as_report = {"leidas": 0, "validas": 0, "descartadas": 0,
+                                  "motivos": {}, "locales_no_map": set()}
+                    try:
+                        import io as _io_as
+                        from openpyxl import load_workbook as _lw_as
 
-                        _grp_raw = str(_g(_ix_grp) or "").strip()
-                        _local = _AS_LOCAL_MAP.get(_grp_raw, _grp_raw)
-                        if _local not in _AS_LOCALES_OK:
-                            _as_report["locales_no_map"].add(_grp_raw)
-                            # se carga igual con el nombre tal cual, pero se avisa
+                        _wb_as = _lw_as(_io_as.BytesIO(f_as.read()), data_only=True, read_only=True)
 
-                        _turno = str(_g(_ix_tur) or "").strip()
-                        _horas = _as_to_horas(_g(_ix_hor))
+                        # 1) Localizar hoja 'Días' (tolera variantes con/ sin tilde)
+                        _sheet = None
+                        for _sn in _wb_as.sheetnames:
+                            if _sn.strip().lower().startswith("d"):  # Días / Dias
+                                _sheet = _sn
+                                break
+                        if _sheet is None:
+                            _sheet = _wb_as.sheetnames[0]
+                        _ws_as = _wb_as[_sheet]
 
-                        _rec = {
-                            "rut": _rut,
-                            "apellidos": str(_g(_ix_ape) or "").strip() or None,
-                            "nombre": str(_g(_ix_nom) or "").strip() or None,
-                            "local": _local,
-                            "fecha": _fecha,
-                            "tipo_jornada": _as_tipo_jornada(_turno),
-                            "turno_raw": _turno or None,
-                            "colacion_min": _as_colacion_min(_turno),
-                            "horas_totales": _horas,
-                            "trabajo": _horas > 0,
-                            "cargo": str(_g(_ix_car) or "").strip() or None,
-                            "permiso": str(_g(_ix_per) or "").strip() or None,
-                        }
-                        # Dedupe interno por (rut, fecha): se queda con la de más horas
-                        _k = (_rut, _fecha)
-                        if _k in _regs and _regs[_k]["horas_totales"] >= _horas:
-                            continue
-                        _regs[_k] = _rec
+                        # 2) Detectar fila de encabezados (busca 'Apellidos')
+                        _all_rows = list(_ws_as.iter_rows(values_only=True))
+                        _hdr_idx = None
+                        for _i, _r in enumerate(_all_rows[:10]):
+                            if _r and any('apellido' in str(c).lower() for c in _r if c):
+                                _hdr_idx = _i
+                                break
+                        if _hdr_idx is None:
+                            st.error("No se encontró la fila de encabezados (con 'Apellidos').")
+                            st.stop()
 
-                    _registros = list(_regs.values())
-                    _as_report["validas"] = len(_registros)
+                        _hdr = [str(c).strip() if c is not None else "" for c in _all_rows[_hdr_idx]]
+                        _data_rows = _all_rows[_hdr_idx + 1:]
 
-                    if not _registros:
-                        st.error("No quedaron registros válidos tras el filtrado.")
-                    else:
-                        # 5) UPSERT idempotente
-                        _engine_as = get_engine()
-                        _UPSERT_AS = text("""
-                            INSERT INTO asistencia_rrhh
-                                (rut, apellidos, nombre, local, fecha, tipo_jornada, turno_raw,
-                                 colacion_min, horas_totales, trabajo, cargo, permiso)
-                            VALUES
-                                (:rut, :apellidos, :nombre, :local, :fecha, :tipo_jornada, :turno_raw,
-                                 :colacion_min, :horas_totales, :trabajo, :cargo, :permiso)
-                            ON CONFLICT (rut, fecha) DO UPDATE SET
-                                apellidos=EXCLUDED.apellidos, nombre=EXCLUDED.nombre,
-                                local=EXCLUDED.local, tipo_jornada=EXCLUDED.tipo_jornada,
-                                turno_raw=EXCLUDED.turno_raw, colacion_min=EXCLUDED.colacion_min,
-                                horas_totales=EXCLUDED.horas_totales, trabajo=EXCLUDED.trabajo,
-                                cargo=EXCLUDED.cargo, permiso=EXCLUDED.permiso, fecha_carga=NOW()
-                        """)
-                        # Insertar por lotes con commit por lote: una sentencia masiva
-                        # con ON CONFLICT sobre miles de filas excede el statement_timeout
-                        # de la base. Cada lote en su propia transacción mantiene las
-                        # sentencias rápidas y evita el timeout.
-                        _CHUNK_AS = 500
-                        _total_as = len(_registros)
-                        _prog_as = st.progress(0.0, text="Cargando asistencia…")
-                        for _ini in range(0, _total_as, _CHUNK_AS):
-                            _lote = _registros[_ini:_ini + _CHUNK_AS]
-                            with _engine_as.begin() as _conn_as:
-                                _conn_as.execute(_UPSERT_AS, _lote)
-                            _prog_as.progress(
-                                min((_ini + _CHUNK_AS) / _total_as, 1.0),
-                                text=f"Cargando asistencia… {min(_ini + _CHUNK_AS, _total_as)}/{_total_as}"
-                            )
-                        _prog_as.empty()
+                        # 3) Mapear índices de columnas por nombre (tolerante a duplicados)
+                        def _idx_of(*names):
+                            for _ix, _h in enumerate(_hdr):
+                                for _n in names:
+                                    if _h.lower() == _n.lower():
+                                        return _ix
+                            return None
+                        _ix_ape  = _idx_of("Apellidos")
+                        _ix_nom  = _idx_of("Nombre")
+                        _ix_rut  = _idx_of("Identificador", "RUT", "Rut")
+                        _ix_grp  = _idx_of("Grupo", "Local")
+                        _ix_fec  = _idx_of("Fecha")
+                        _ix_per  = _idx_of("Permiso")
+                        _ix_tur  = _idx_of("Turno")
+                        _ix_hor  = _idx_of("Horas Totales", "Horas")
+                        _ix_car  = _idx_of("Cargo")
 
-                        _fmin = min(r["fecha"] for r in _registros)
-                        _fmax = max(r["fecha"] for r in _registros)
-                        st.success(
-                            f"✅ {len(_registros)} registros cargados/actualizados "
-                            f"({_fmin} → {_fmax})."
-                        )
+                        if None in (_ix_rut, _ix_grp, _ix_fec):
+                            st.error("Faltan columnas esenciales (Identificador, Grupo o Fecha).")
+                            st.stop()
 
-                        # Reporte de excepciones
-                        with st.expander("📋 Reporte de carga (excepciones manejadas)"):
-                            st.write(f"Filas leídas: **{_as_report['leidas']}**")
-                            st.write(f"Registros válidos: **{_as_report['validas']}**")
-                            st.write(f"Descartadas: **{_as_report['descartadas']}**")
-                            if _as_report["motivos"]:
-                                st.write("Motivos de descarte:")
-                                st.json(_as_report["motivos"])
-                            if _as_report["locales_no_map"]:
-                                st.warning(
-                                    "⚠️ Locales no reconocidos (se cargaron con su nombre original, "
-                                    "revisa la equivalencia): "
-                                    + ", ".join(sorted(_as_report["locales_no_map"]))
+                        # 4) Procesar fila a fila con manejo de excepciones
+                        _regs = {}
+                        for _r in _data_rows:
+                            _as_report["leidas"] += 1
+                            if not _r or all(c is None for c in _r):
+                                _as_report["descartadas"] += 1
+                                _as_report["motivos"]["fila vacía"] = _as_report["motivos"].get("fila vacía", 0) + 1
+                                continue
+
+                            def _g(ix):
+                                return _r[ix] if (ix is not None and ix < len(_r)) else None
+
+                            _rut = _as_norm_rut(_g(_ix_rut))
+                            if not _rut:
+                                _as_report["descartadas"] += 1
+                                _as_report["motivos"]["RUT inválido"] = _as_report["motivos"].get("RUT inválido", 0) + 1
+                                continue
+
+                            _fecha = _as_parse_fecha(_g(_ix_fec))
+                            if _fecha is None:
+                                _as_report["descartadas"] += 1
+                                _as_report["motivos"]["fecha no parseable"] = _as_report["motivos"].get("fecha no parseable", 0) + 1
+                                continue
+
+                            _grp_raw = str(_g(_ix_grp) or "").strip()
+                            _local = _AS_LOCAL_MAP.get(_grp_raw, _grp_raw)
+                            if _local not in _AS_LOCALES_OK:
+                                _as_report["locales_no_map"].add(_grp_raw)
+                                # se carga igual con el nombre tal cual, pero se avisa
+
+                            _turno = str(_g(_ix_tur) or "").strip()
+                            _horas = _as_to_horas(_g(_ix_hor))
+
+                            _rec = {
+                                "rut": _rut,
+                                "apellidos": str(_g(_ix_ape) or "").strip() or None,
+                                "nombre": str(_g(_ix_nom) or "").strip() or None,
+                                "local": _local,
+                                "fecha": _fecha,
+                                "tipo_jornada": _as_tipo_jornada(_turno),
+                                "turno_raw": _turno or None,
+                                "colacion_min": _as_colacion_min(_turno),
+                                "horas_totales": _horas,
+                                "trabajo": _horas > 0,
+                                "cargo": str(_g(_ix_car) or "").strip() or None,
+                                "permiso": str(_g(_ix_per) or "").strip() or None,
+                            }
+                            # Dedupe interno por (rut, fecha): se queda con la de más horas
+                            _k = (_rut, _fecha)
+                            if _k in _regs and _regs[_k]["horas_totales"] >= _horas:
+                                continue
+                            _regs[_k] = _rec
+
+                        _registros = list(_regs.values())
+                        _as_report["validas"] = len(_registros)
+
+                        if not _registros:
+                            st.error("No quedaron registros válidos tras el filtrado.")
+                        else:
+                            # 5) UPSERT idempotente
+                            _engine_as = get_engine()
+                            _UPSERT_AS = text("""
+                                INSERT INTO asistencia_rrhh
+                                    (rut, apellidos, nombre, local, fecha, tipo_jornada, turno_raw,
+                                     colacion_min, horas_totales, trabajo, cargo, permiso)
+                                VALUES
+                                    (:rut, :apellidos, :nombre, :local, :fecha, :tipo_jornada, :turno_raw,
+                                     :colacion_min, :horas_totales, :trabajo, :cargo, :permiso)
+                                ON CONFLICT (rut, fecha) DO UPDATE SET
+                                    apellidos=EXCLUDED.apellidos, nombre=EXCLUDED.nombre,
+                                    local=EXCLUDED.local, tipo_jornada=EXCLUDED.tipo_jornada,
+                                    turno_raw=EXCLUDED.turno_raw, colacion_min=EXCLUDED.colacion_min,
+                                    horas_totales=EXCLUDED.horas_totales, trabajo=EXCLUDED.trabajo,
+                                    cargo=EXCLUDED.cargo, permiso=EXCLUDED.permiso, fecha_carga=NOW()
+                            """)
+                            # Insertar por lotes con commit por lote: una sentencia masiva
+                            # con ON CONFLICT sobre miles de filas excede el statement_timeout
+                            # de la base. Cada lote en su propia transacción mantiene las
+                            # sentencias rápidas y evita el timeout.
+                            _CHUNK_AS = 500
+                            _total_as = len(_registros)
+                            _prog_as = st.progress(0.0, text="Cargando asistencia…")
+                            for _ini in range(0, _total_as, _CHUNK_AS):
+                                _lote = _registros[_ini:_ini + _CHUNK_AS]
+                                with _engine_as.begin() as _conn_as:
+                                    _conn_as.execute(_UPSERT_AS, _lote)
+                                _prog_as.progress(
+                                    min((_ini + _CHUNK_AS) / _total_as, 1.0),
+                                    text=f"Cargando asistencia… {min(_ini + _CHUNK_AS, _total_as)}/{_total_as}"
                                 )
-                except Exception as _e_as:
-                    st.error(f"Error al procesar: {_e_as}")
-                    st.exception(_e_as)
+                            _prog_as.empty()
 
-        # ── Vista de lo cargado + métrica rápida ──────────────────────────
-        _as_bd = run_query("""
-            SELECT local,
-                   MIN(fecha) AS desde, MAX(fecha) AS hasta,
-                   COUNT(*) FILTER (WHERE trabajo) AS turnos_trabajados,
-                   COUNT(DISTINCT rut) FILTER (WHERE trabajo) AS personas,
-                   COUNT(*) AS registros_totales
-            FROM asistencia_rrhh
-            GROUP BY local
-            ORDER BY local
-        """)
-        if _as_bd is not None and not _as_bd.empty:
-            st.markdown("**Asistencia en BD (por local):**")
-            st.dataframe(_as_bd, use_container_width=True, hide_index=True)
-        else:
-            st.caption("Aún no hay datos de asistencia cargados.")
+                            _fmin = min(r["fecha"] for r in _registros)
+                            _fmax = max(r["fecha"] for r in _registros)
+                            st.success(
+                                f"✅ {len(_registros)} registros cargados/actualizados "
+                                f"({_fmin} → {_fmax})."
+                            )
+
+                            # Reporte de excepciones
+                            with st.expander("📋 Reporte de carga (excepciones manejadas)"):
+                                st.write(f"Filas leídas: **{_as_report['leidas']}**")
+                                st.write(f"Registros válidos: **{_as_report['validas']}**")
+                                st.write(f"Descartadas: **{_as_report['descartadas']}**")
+                                if _as_report["motivos"]:
+                                    st.write("Motivos de descarte:")
+                                    st.json(_as_report["motivos"])
+                                if _as_report["locales_no_map"]:
+                                    st.warning(
+                                        "⚠️ Locales no reconocidos (se cargaron con su nombre original, "
+                                        "revisa la equivalencia): "
+                                        + ", ".join(sorted(_as_report["locales_no_map"]))
+                                    )
+                    except Exception as _e_as:
+                        st.error(f"Error al procesar: {_e_as}")
+                        st.exception(_e_as)
+
+            # ── Vista de lo cargado + métrica rápida ──────────────────────────
+            _as_bd = run_query("""
+                SELECT local,
+                       MIN(fecha) AS desde, MAX(fecha) AS hasta,
+                       COUNT(*) FILTER (WHERE trabajo) AS turnos_trabajados,
+                       COUNT(DISTINCT rut) FILTER (WHERE trabajo) AS personas,
+                       COUNT(*) AS registros_totales
+                FROM asistencia_rrhh
+                GROUP BY local
+                ORDER BY local
+            """)
+            if _as_bd is not None and not _as_bd.empty:
+                st.markdown("**Asistencia en BD (por local):**")
+                st.dataframe(_as_bd, use_container_width=True, hide_index=True)
+            else:
+                st.caption("Aún no hay datos de asistencia cargados.")
+
+        # ─────────────────────── SUB-TAB REMUNERACIONES ───────────────────────
+        with _rrhh_t2:
+            st.markdown(
+                "<div class='info-box'>Carga el Excel de <b>Estructura de Remuneraciones</b> "
+                "(hoja <b>Estructura de Remun</b>). Aquí está la estructura real de cada local "
+                "(incluye <b>Administrador</b> y <b>Sub Administrador</b>, que no marcan turno por "
+                "Art. 22). El <b>RUT</b> se guarda en el mismo formato que Asistencia para poder "
+                "cruzar ambas fuentes. Las columnas calculadas (Gratif. Tope, Costo Empresa, "
+                "Valor Día/Feriado/Domingo) se <b>recalculan</b> con las fórmulas del Excel si el "
+                "archivo no las trae. Recargar <b>no duplica</b> (clave única RUT + período).</div>",
+                unsafe_allow_html=True
+            )
+
+            try:
+                _eng_rm = get_engine()
+                with _eng_rm.connect() as _c_rm:
+                    _c_rm.execute(text("""
+                        CREATE TABLE IF NOT EXISTS remuneraciones_rrhh (
+                            rut                 TEXT NOT NULL,
+                            periodo             DATE NOT NULL,
+                            estado              TEXT,
+                            nombre              TEXT,
+                            cargo               TEXT,
+                            familia_cargo       TEXT,
+                            empresa             TEXT,
+                            local               TEXT,
+                            sueldo_base         NUMERIC,
+                            bono_produccion     NUMERIC,
+                            bono_gestion        NUMERIC,
+                            bono_formacion      NUMERIC,
+                            horas_extras_50     NUMERIC,
+                            bono_delivery       NUMERIC,
+                            bono_reserva        NUMERIC,
+                            gratificacion       NUMERIC,
+                            colacion_haber      NUMERIC,
+                            movilizacion        NUMERIC,
+                            total_haberes       NUMERIC,
+                            aportes_patronales  NUMERIC,
+                            costo_empresa       NUMERIC,
+                            valor_dia           NUMERIC,
+                            valor_feriado       NUMERIC,
+                            valor_domingo_cocina NUMERIC,
+                            valor_domingo_salon NUMERIC,
+                            gratif_tope         NUMERIC,
+                            fecha_carga         TIMESTAMP NOT NULL DEFAULT NOW(),
+                            PRIMARY KEY (rut, periodo)
+                        )
+                    """))
+                    _c_rm.commit()
+            except Exception as _e_rmt:
+                st.error(f"No se pudo preparar la tabla de remuneraciones: {_e_rmt}")
+
+            _RM_LOCALES_OK = {
+                "La Reina","Quilin","La Dehesa","Las Condes","Los Trapenses",
+                "Nueva Providencia","Vitacura","Providencia","Macul","Chicureo",
+            }
+            _RM_LOCAL_MAP = {"Bilbao": "Providencia"}
+
+            def _rm_norm_local(div_raw):
+                s = str(div_raw or "").strip()
+                if s.lower().startswith("local "):
+                    s = s[6:].strip()
+                return _RM_LOCAL_MAP.get(s, s)
+
+            def _rm_norm_rut(v):
+                s = str(v).strip().upper().replace(' ', '')
+                return s if s and s not in ('NAN', 'NONE') else None
+
+            def _rm_num(v):
+                if v is None:
+                    return None
+                try:
+                    return float(v)
+                except (ValueError, TypeError):
+                    return None
+
+            f_rm = st.file_uploader("Archivo de Remuneraciones (.xlsx)", type=["xlsx"], key="rm_file")
+
+            if f_rm is not None:
+                if st.button("💾 Procesar y cargar remuneraciones", key="btn_rm", type="primary"):
+                    _rm_report = {"leidas": 0, "validas": 0, "descartadas": 0,
+                                  "motivos": {}, "locales_no_map": set()}
+                    try:
+                        import io as _io_rm
+                        import datetime as _dt_rm
+                        from openpyxl import load_workbook as _lw_rm
+
+                        _wb_rm = _lw_rm(_io_rm.BytesIO(f_rm.read()), data_only=True, read_only=True)
+                        _sh_rm = None
+                        for _sn in _wb_rm.sheetnames:
+                            if "remun" in _sn.lower():
+                                _sh_rm = _sn; break
+                        if _sh_rm is None:
+                            _sh_rm = _wb_rm.sheetnames[0]
+                        _ws_rm = _wb_rm[_sh_rm]
+                        _rows_rm = list(_ws_rm.iter_rows(values_only=True))
+
+                        _periodo = None
+                        for _r in _rows_rm[:6]:
+                            for _c in (_r or []):
+                                _m = re.search(r'Desde:\s*(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})', str(_c))
+                                if _m:
+                                    _d, _mo, _y = int(_m.group(1)), int(_m.group(2)), int(_m.group(3))
+                                    if _y < 100: _y += 2000
+                                    try: _periodo = _dt_rm.date(_y, _mo, 1)
+                                    except ValueError: _periodo = None
+                                    break
+                            if _periodo: break
+                        if _periodo is None:
+                            _periodo = _dt_rm.date.today().replace(day=1)
+
+                        _hdr_idx = None
+                        for _i, _r in enumerate(_rows_rm[:12]):
+                            if _r and any('cargo' in str(c).lower() for c in _r if c):
+                                _hdr_idx = _i; break
+                        if _hdr_idx is None:
+                            st.error("No se encontró la fila de encabezados (con 'Cargo').")
+                            st.stop()
+                        _hdr_rm = [str(c).strip() if c is not None else "" for c in _rows_rm[_hdr_idx]]
+                        _data_rm = _rows_rm[_hdr_idx + 1:]
+
+                        def _ix_rm(*names):
+                            for _ix, _h in enumerate(_hdr_rm):
+                                for _n in names:
+                                    if _n.lower() in _h.lower():
+                                        return _ix
+                            return None
+                        _i_est = _ix_rm("Estado")
+                        _i_rut = _ix_rm("Número de Documento", "Documento", "RUT")
+                        _i_nom = _ix_rm("Nombre Completo", "Nombre")
+                        _i_car = _ix_rm("Cargo")
+                        _i_fam = _ix_rm("Familia de Cargo")
+                        _i_emp = _ix_rm("Nombre Empresa", "Empresa")
+                        _i_div = _ix_rm("Nombre División", "División", "Division")
+                        _i_sue = _ix_rm("Sueldo Base")
+                        _i_bpr = _ix_rm("Bono Producción", "Bono Produccion")
+                        _i_bge = _ix_rm("Bono Gestion", "Bono Gestión")
+                        _i_bfo = _ix_rm("Bono Formación", "Bono Formacion")
+                        _i_hex = _ix_rm("Horas Extras 50")
+                        _i_bde = _ix_rm("Bono Delivery")
+                        _i_bre = _ix_rm("Bono Reserva")
+                        _i_gra = _ix_rm("Gratificación", "Gratificacion")
+                        _i_col = _ix_rm("Colación", "Colacion")
+                        _i_mov = _ix_rm("Movilización", "Movilizacion")
+                        _i_tot = _ix_rm("Total Haberes")
+                        _i_apo = _ix_rm("Aportes Patronales")
+                        _i_cos = _ix_rm("Costo Empresa")
+                        _i_vdi = _ix_rm("Valor Día", "Valor Dia")
+                        _i_vfe = _ix_rm("Valor Feriado")
+                        _i_vdc = _ix_rm("Valor Domingo Cocina")
+                        _i_vds = _ix_rm("Valor Domingo Salon", "Valor Domingo Salón")
+                        _i_gto = _ix_rm("Gratif. Tope", "Gratif Tope", "Gratificación Tope")
+
+                        if None in (_i_rut, _i_car, _i_div):
+                            st.error("Faltan columnas esenciales (Documento, Cargo o División).")
+                            st.stop()
+
+                        _GRATIF_TOPE_MAX = 213354.0  # $Y$5: tope legal gratificación
+                        _N_HN = 7                      # H:N = 7 celdas (suma de array Excel)
+                        _gto_existe = _i_gto is not None
+
+                        _recs_rm = {}
+                        for _r in _data_rm:
+                            _rm_report["leidas"] += 1
+                            if not _r or all(c is None for c in _r):
+                                _rm_report["descartadas"] += 1
+                                _rm_report["motivos"]["fila vacía"] = _rm_report["motivos"].get("fila vacía", 0) + 1
+                                continue
+
+                            def _g(ix):
+                                return _r[ix] if (ix is not None and ix < len(_r)) else None
+
+                            _rut = _rm_norm_rut(_g(_i_rut))
+                            if not _rut:
+                                _rm_report["descartadas"] += 1
+                                _rm_report["motivos"]["RUT inválido"] = _rm_report["motivos"].get("RUT inválido", 0) + 1
+                                continue
+
+                            _div_raw = str(_g(_i_div) or "").strip()
+                            _local = _rm_norm_local(_div_raw)
+                            if _local not in _RM_LOCALES_OK:
+                                _rm_report["locales_no_map"].add(_div_raw)
+
+                            _familia = str(_g(_i_fam) or "").strip()
+
+                            # Valores base
+                            _v_sue = _rm_num(_g(_i_sue)) or 0
+                            _v_bpr = _rm_num(_g(_i_bpr)) or 0
+                            _v_bge = _rm_num(_g(_i_bge)) or 0
+                            _v_bfo = _rm_num(_g(_i_bfo)) or 0
+                            _v_hex = _rm_num(_g(_i_hex)) or 0
+                            _v_bde = _rm_num(_g(_i_bde)) or 0
+                            _v_bre = _rm_num(_g(_i_bre)) or 0
+                            _v_gra = _rm_num(_g(_i_gra)) or 0
+                            _v_tot = _rm_num(_g(_i_tot))
+                            _v_apo = _rm_num(_g(_i_apo))
+
+                            # ══ Réplica exacta de fórmulas Excel ══
+                            # Valor Feriado (V) = (Sueldo Base + Aportes)/30 * 50%
+                            _v_vfe = _rm_num(_g(_i_vfe))
+                            if _v_vfe is None and _v_apo is not None:
+                                _v_vfe = ((_v_sue + _v_apo) / 30.0) * 0.5
+
+                            # Valor Domingo por familia de cargo:
+                            #   Cocina (W) = ((SueldoBase/30*28)/168)*1.5*9
+                            #   Salón  (X) = ((SueldoBase/30*28)/168)*0.5*9
+                            _fam_l = _familia.lower()
+                            _base_dom = (((_v_sue / 30.0) * 28) / 168)
+                            _v_vdc = _rm_num(_g(_i_vdc))
+                            _v_vds = _rm_num(_g(_i_vds))
+                            if "cocina" in _fam_l:
+                                if _v_vdc is None:
+                                    _v_vdc = _base_dom * 1.5 * 9
+                            elif "salón" in _fam_l or "salon" in _fam_l:
+                                if _v_vds is None:
+                                    _v_vds = _base_dom * 0.5 * 9
+
+                            # Gratif. Tope (Y): si la columna existe, respetar celda
+                            # (vacía = 0); si no existe, calcular con la fórmula.
+                            # Detalle Excel: SUM(H:N + V+W+X) es suma de array → el
+                            # término (V+W+X) se suma a CADA una de las 7 celdas H:N.
+                            if _gto_existe:
+                                _v_gto = _rm_num(_g(_i_gto)) or 0
+                            else:
+                                _sum_hn = (_v_sue + _v_bpr + _v_bge + _v_bfo
+                                           + _v_hex + _v_bde + _v_bre)
+                                _sum_arr = _sum_hn + _N_HN * ((_v_vfe or 0) + (_v_vdc or 0) + (_v_vds or 0))
+                                _v_gto = (_GRATIF_TOPE_MAX if _sum_arr * 0.25 > _GRATIF_TOPE_MAX
+                                          else _sum_hn * 0.25)
+
+                            # Costo Empresa (T) = Total Haberes + Aportes + Gratif.Tope − Gratificación
+                            _v_cos = _rm_num(_g(_i_cos))
+                            if _v_cos is None and _v_tot is not None and _v_apo is not None:
+                                _v_cos = _v_tot + _v_apo + (_v_gto or 0) - _v_gra
+
+                            # Valor Día (U) = Costo Empresa / 30
+                            _v_vdi = _rm_num(_g(_i_vdi))
+                            if _v_vdi is None and _v_cos is not None:
+                                _v_vdi = _v_cos / 30.0
+
+                            _rec = {
+                                "rut": _rut, "periodo": _periodo,
+                                "estado": str(_g(_i_est) or "").strip() or None,
+                                "nombre": str(_g(_i_nom) or "").strip() or None,
+                                "cargo": str(_g(_i_car) or "").strip() or None,
+                                "familia_cargo": _familia or None,
+                                "empresa": str(_g(_i_emp) or "").strip() or None,
+                                "local": _local,
+                                "sueldo_base": _v_sue, "bono_produccion": _v_bpr,
+                                "bono_gestion": _v_bge, "bono_formacion": _v_bfo,
+                                "horas_extras_50": _v_hex, "bono_delivery": _v_bde,
+                                "bono_reserva": _v_bre, "gratificacion": _v_gra,
+                                "colacion_haber": _rm_num(_g(_i_col)),
+                                "movilizacion": _rm_num(_g(_i_mov)),
+                                "total_haberes": _v_tot, "aportes_patronales": _v_apo,
+                                "costo_empresa": _v_cos, "valor_dia": _v_vdi,
+                                "valor_feriado": _v_vfe, "valor_domingo_cocina": _v_vdc,
+                                "valor_domingo_salon": _v_vds, "gratif_tope": _v_gto,
+                            }
+                            _recs_rm[(_rut, _periodo)] = _rec
+
+                        _regs_rm = list(_recs_rm.values())
+                        _rm_report["validas"] = len(_regs_rm)
+                        if not _regs_rm:
+                            st.warning("No quedaron registros válidos tras el filtrado.")
+                        else:
+                            _UPSERT_RM = text("""
+                                INSERT INTO remuneraciones_rrhh
+                                    (rut, periodo, estado, nombre, cargo, familia_cargo,
+                                     empresa, local, sueldo_base, bono_produccion,
+                                     bono_gestion, bono_formacion, horas_extras_50,
+                                     bono_delivery, bono_reserva, gratificacion,
+                                     colacion_haber, movilizacion, total_haberes,
+                                     aportes_patronales, costo_empresa, valor_dia,
+                                     valor_feriado, valor_domingo_cocina,
+                                     valor_domingo_salon, gratif_tope)
+                                VALUES
+                                    (:rut, :periodo, :estado, :nombre, :cargo, :familia_cargo,
+                                     :empresa, :local, :sueldo_base, :bono_produccion,
+                                     :bono_gestion, :bono_formacion, :horas_extras_50,
+                                     :bono_delivery, :bono_reserva, :gratificacion,
+                                     :colacion_haber, :movilizacion, :total_haberes,
+                                     :aportes_patronales, :costo_empresa, :valor_dia,
+                                     :valor_feriado, :valor_domingo_cocina,
+                                     :valor_domingo_salon, :gratif_tope)
+                                ON CONFLICT (rut, periodo) DO UPDATE SET
+                                    estado=EXCLUDED.estado, nombre=EXCLUDED.nombre,
+                                    cargo=EXCLUDED.cargo, familia_cargo=EXCLUDED.familia_cargo,
+                                    empresa=EXCLUDED.empresa, local=EXCLUDED.local,
+                                    sueldo_base=EXCLUDED.sueldo_base,
+                                    bono_produccion=EXCLUDED.bono_produccion,
+                                    bono_gestion=EXCLUDED.bono_gestion,
+                                    bono_formacion=EXCLUDED.bono_formacion,
+                                    horas_extras_50=EXCLUDED.horas_extras_50,
+                                    bono_delivery=EXCLUDED.bono_delivery,
+                                    bono_reserva=EXCLUDED.bono_reserva,
+                                    gratificacion=EXCLUDED.gratificacion,
+                                    colacion_haber=EXCLUDED.colacion_haber,
+                                    movilizacion=EXCLUDED.movilizacion,
+                                    total_haberes=EXCLUDED.total_haberes,
+                                    aportes_patronales=EXCLUDED.aportes_patronales,
+                                    costo_empresa=EXCLUDED.costo_empresa,
+                                    valor_dia=EXCLUDED.valor_dia,
+                                    valor_feriado=EXCLUDED.valor_feriado,
+                                    valor_domingo_cocina=EXCLUDED.valor_domingo_cocina,
+                                    valor_domingo_salon=EXCLUDED.valor_domingo_salon,
+                                    gratif_tope=EXCLUDED.gratif_tope,
+                                    fecha_carga=NOW()
+                            """)
+                            _eng_rm2 = get_engine()
+                            _CHUNK_RM = 500
+                            _tot_rm = len(_regs_rm)
+                            _prog_rm = st.progress(0.0, text="Cargando remuneraciones…")
+                            for _ini in range(0, _tot_rm, _CHUNK_RM):
+                                _lote = _regs_rm[_ini:_ini + _CHUNK_RM]
+                                with _eng_rm2.connect() as _c2:
+                                    _c2.execute(_UPSERT_RM, _lote)
+                                    _c2.commit()
+                                _prog_rm.progress(min((_ini + _CHUNK_RM) / _tot_rm, 1.0),
+                                    text=f"Cargando… {min(_ini + _CHUNK_RM, _tot_rm)}/{_tot_rm}")
+                            _prog_rm.empty()
+
+                            st.success(f"✅ {len(_regs_rm)} registros de remuneraciones "
+                                       f"cargados/actualizados (período {_periodo}).")
+                            with st.expander("📋 Reporte de carga (excepciones manejadas)"):
+                                st.write(f"Filas leídas: **{_rm_report['leidas']}**")
+                                st.write(f"Registros válidos: **{_rm_report['validas']}**")
+                                st.write(f"Descartadas: **{_rm_report['descartadas']}**")
+                                if _gto_existe:
+                                    st.caption("Gratif. Tope venía en el Excel: se respetó su valor.")
+                                else:
+                                    st.caption("Gratif. Tope NO venía: se calculó con la fórmula legal.")
+                                if _rm_report["motivos"]:
+                                    st.json(_rm_report["motivos"])
+                                if _rm_report["locales_no_map"]:
+                                    st.warning("⚠️ Divisiones no reconocidas (cargadas tal cual): "
+                                               + ", ".join(sorted(_rm_report["locales_no_map"])))
+                    except Exception as _e_rm:
+                        st.error(f"Error al procesar: {_e_rm}")
+                        st.exception(_e_rm)
+
+            _rm_bd = run_query("""
+                SELECT local,
+                       COUNT(*) AS personas,
+                       COUNT(*) FILTER (WHERE cargo ILIKE 'Administrador') AS admin,
+                       COUNT(*) FILTER (WHERE cargo ILIKE 'Sub Administrador') AS subadmin,
+                       SUM(costo_empresa) AS costo_total,
+                       MAX(periodo) AS ultimo_periodo
+                FROM remuneraciones_rrhh
+                GROUP BY local
+                ORDER BY local
+            """)
+            if _rm_bd is not None and not _rm_bd.empty:
+                st.markdown("**Remuneraciones en BD (por local):**")
+                st.dataframe(_rm_bd, use_container_width=True, hide_index=True)
+            else:
+                st.caption("Aún no hay datos de remuneraciones cargados.")
+
 
 elif modulo.startswith("🧮"):
     st.markdown(f"""
