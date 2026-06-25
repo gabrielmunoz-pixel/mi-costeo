@@ -4413,21 +4413,61 @@ def generar_pdf_colaciones_individual(loc, fi, ff, df_dia, df_pers, modo):
     if df_pers is None or df_pers.empty:
         story += [Paragraph("Sin personal con asistencia en el período.", s(9, pal["CM"]))]
     else:
-        pp = df_pers.sort_values("turnos", ascending=False).copy()
+        # Orden jerárquico de cargos (de mayor a menor responsabilidad)
+        _JERARQUIA = [
+            "Administrador", "Sub Administrador",
+            "Jefe de Producción", "Subjefe de Producción", "Sub Jefe de Producción",
+            "Jefe de Cocina", "Sub Jefe de Cocina",
+            "Jefe de Salón", "Sub Jefe de Salón",
+            "Jefe de Barra", "Sub Jefe de Barra",
+            "Parrillero", "Bartender",
+            "Cajero (a)", "Anfitrión (a)", "Anfitriona de reservas",
+            "Anfitriona de delivery", "Encargado de delivery",
+            "Garzón", "Runner", "Ayudante de Cocina", "Copero",
+            "Bodeguero (a)", "Conserje", "Chofer", "Sin Cargo",
+        ]
+        def _rango(cargo):
+            c = str(cargo or "Sin Cargo")
+            return _JERARQUIA.index(c) if c in _JERARQUIA else len(_JERARQUIA)
+
+        pp = df_pers.copy()
+        pp["_rango"] = pp["cargo"].apply(_rango)
+        # dentro de cada cargo: por turnos desc (nulos al final), luego nombre
+        pp["_turnos_sort"] = pd.to_numeric(pp["turnos"], errors="coerce").fillna(-1)
+        pp = pp.sort_values(["_rango", "_turnos_sort", "nombre"],
+                            ascending=[True, False, True])
+
         head = [Paragraph(h, s(8, pal["CHdT"], bold=True, align=a)) for h, a in
                 [("#", TA_CENTER), ("Colaborador", TA_LEFT), ("Cargo", TA_LEFT),
                  ("Turnos", TA_RIGHT), ("Colación prom.", TA_RIGHT)]]
         rows = [head]
-        for i, (_, r) in enumerate(pp.iterrows(), start=1):
+        _cargo_rows = []   # filas que son subtítulo de grupo de cargo (para estilo)
+        _alt_rows = []     # filas de datos para sombreado alterno
+        _cargo_actual = None
+        _idx = 0
+        for _, r in pp.iterrows():
+            _cargo = str(r.get("cargo") or "Sin Cargo")
+            if _cargo != _cargo_actual:
+                _cargo_actual = _cargo
+                rows.append([Paragraph(_cargo.upper(),
+                            s(7.5, pal["CB"], bold=True)), "", "", "", ""])
+                _cargo_rows.append(len(rows) - 1)
+            _idx += 1
             cmin = r.get("colacion_min_prom")
-            cmin_txt = (f"{int(round(cmin))} min" if not _pd.isna(cmin) and cmin else "—")
+            cmin_txt = (f"{int(round(cmin))} min"
+                        if cmin is not None and not _pd.isna(cmin) and cmin else "—")
+            turnos = r.get("turnos")
+            turnos_txt = (f"{int(turnos):,}"
+                          if turnos is not None and not _pd.isna(turnos) else "—")
             rows.append([
-                Paragraph(str(i), s(8, pal["CM"], align=TA_CENTER)),
+                Paragraph(str(_idx), s(8, pal["CM"], align=TA_CENTER)),
                 Paragraph(str(r["nombre"]), s(8, pal["CT"])),
-                Paragraph(str(r.get("cargo") or "—"), s(7.5, pal["CM"])),
-                Paragraph(f"{int(r['turnos']):,}", s(8, pal["CT"], align=TA_RIGHT)),
+                Paragraph(_cargo, s(7.5, pal["CM"])),
+                Paragraph(turnos_txt, s(8, pal["CT"], align=TA_RIGHT)),
                 Paragraph(cmin_txt, s(8, pal["CT"], align=TA_RIGHT)),
             ])
+            if (len(rows) - 1) % 2 == 0:
+                _alt_rows.append(len(rows) - 1)
         t2 = Table(rows, colWidths=[10*mm, 66*mm, 44*mm, 24*mm, 34*mm], repeatRows=1)
         ts2 = [('BACKGROUND',(0,0),(-1,0),pal["CHd"]),
                ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
@@ -4435,9 +4475,11 @@ def generar_pdf_colaciones_individual(loc, fi, ff, df_dia, df_pers, modo):
                ('LEFTPADDING',(0,0),(-1,-1),5),('RIGHTPADDING',(0,0),(-1,-1),5),
                ('LINEBELOW',(0,0),(-1,0),0.8,pal["CG"]),
                ('GRID',(0,1),(-1,-1),0.3,pal["CBo"])]
-        for i in range(1, len(rows)):
-            if i % 2 == 0:
-                ts2.append(('BACKGROUND',(0,i),(-1,i),pal["CRowAlt"]))
+        # subtítulos de cargo: fondo destacado y celda fusionada
+        for _cr in _cargo_rows:
+            ts2.append(('SPAN',(0,_cr),(-1,_cr)))
+            ts2.append(('BACKGROUND',(0,_cr),(-1,_cr),pal["CRowAlt"]))
+            ts2.append(('LINEBELOW',(0,_cr),(-1,_cr),0.4,pal["CG"]))
         t2.setStyle(TableStyle(ts2))
         story += [t2]
 
@@ -13325,13 +13367,17 @@ elif modulo.startswith("📊"):
             """, _cr_params)
 
             # ── Denominador: turnos trabajados por local (y por día) ──
+            # 2ª capa (provisional): se suma +1 turno y +1 persona por cada
+            # local/día con actividad, para representar al administrador que come
+            # en el local pero no marca turno (Art. 22). Pendiente: lógica robusta.
             _cr_tur = run_query("""
                 SELECT local, fecha,
-                       COUNT(*) FILTER (WHERE trabajo) AS turnos,
-                       COUNT(DISTINCT rut) FILTER (WHERE trabajo) AS personas
+                       COUNT(*) FILTER (WHERE trabajo) + 1 AS turnos,
+                       COUNT(DISTINCT rut) FILTER (WHERE trabajo) + 1 AS personas
                 FROM asistencia_rrhh
                 WHERE fecha BETWEEN :fi AND :ff
                 GROUP BY local, fecha
+                HAVING COUNT(*) FILTER (WHERE trabajo) > 0
             """, _cr_params)
 
             if (_cr_tur is None or _cr_tur.empty):
@@ -13535,6 +13581,14 @@ elif modulo.startswith("📊"):
             if _cr_pdia is None:
                 _cr_pdia = pd.DataFrame(columns=["local", "fecha", "rut"])
 
+            # 2ª capa (provisional): +1 persona por local/día con actividad
+            # (administrador Art. 22). Se inyecta un RUT sintético; al contar
+            # RUTs distintos por período aporta exactamente +1 persona.
+            if not _cr_pdia.empty:
+                _adm = _cr_pdia[["local", "fecha"]].drop_duplicates().copy()
+                _adm["rut"] = "__ADMIN_ART22__"
+                _cr_pdia = pd.concat([_cr_pdia, _adm], ignore_index=True)
+
             _cr_comp = _cr_armar_comparativo(
                 _cr_col if not _cr_col.empty else pd.DataFrame(columns=["local","fecha","colaciones"]),
                 _cr_tur[["local", "fecha", "turnos"]],
@@ -13548,7 +13602,8 @@ elif modulo.startswith("📊"):
                               disabled=True, key="cr_pdf_loc_off")
                     st.caption("Selecciona un local en **Desglose diario** para generar su PDF.")
                 else:
-                    # Personal del local en el período (turnos y colación promedio)
+                    # Personal del local en el período (turnos y colación promedio).
+                    # Personal que marca turno (todos menos admin/subadmin Art. 22).
                     _cr_pers = run_query("""
                         SELECT TRIM(COALESCE(nombre,'') || ' ' || COALESCE(apellidos,'')) AS nombre,
                                MAX(cargo) AS cargo,
@@ -13561,6 +13616,24 @@ elif modulo.startswith("📊"):
                     """, {"fi": _cr_meta["fi"], "ff": _cr_meta["ff"], "loc": _cr_loc_sel})
                     if _cr_pers is None:
                         _cr_pers = pd.DataFrame(columns=["nombre","cargo","turnos","colacion_min_prom"])
+
+                    # Administrador / Sub Administrador (Art. 22): aparecen en la
+                    # lista solo de forma informativa (nombre y cargo). NO se les
+                    # cuenta turnos ni colación aquí: su aporte a la métrica ya está
+                    # aplicado aparte (+1 persona y +1 turno por día activo).
+                    _cr_adm = run_query("""
+                        SELECT DISTINCT
+                               TRIM(COALESCE(nombre,'') || ' ' || COALESCE(apellidos,'')) AS nombre,
+                               cargo
+                        FROM asistencia_rrhh
+                        WHERE fecha BETWEEN :fi AND :ff AND local = :loc
+                          AND cargo IN ('Administrador','Sub Administrador')
+                    """, {"fi": _cr_meta["fi"], "ff": _cr_meta["ff"], "loc": _cr_loc_sel})
+                    if _cr_adm is not None and not _cr_adm.empty:
+                        _cr_adm = _cr_adm.copy()
+                        _cr_adm["turnos"] = None
+                        _cr_adm["colacion_min_prom"] = None
+                        _cr_pers = pd.concat([_cr_pers, _cr_adm], ignore_index=True)
                     try:
                         _pdf_loc = generar_pdf_colaciones_individual(
                             _cr_loc_sel, _cr_meta["fi"], _cr_meta["ff"],
