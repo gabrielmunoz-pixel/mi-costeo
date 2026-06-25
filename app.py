@@ -586,6 +586,31 @@ st.markdown("""
         color: #f0ede8 !important;
     }
 
+    /* Number inputs y textareas — coherencia estética oscura */
+    div[data-testid="stNumberInput"] input,
+    div[data-testid="stTextArea"] textarea,
+    div[data-testid="stTextInput"] input {
+        background: #14171c !important;
+        border: 1px solid #2a2f38 !important;
+        color: #f0ede8 !important;
+        border-radius: 8px !important;
+    }
+    div[data-testid="stNumberInput"] input:focus,
+    div[data-testid="stTextArea"] textarea:focus {
+        border-color: #d4a853 !important;
+        box-shadow: 0 0 0 1px rgba(212,168,83,0.35) !important;
+    }
+    div[data-testid="stNumberInput"] button {
+        background: #1a1f2e !important;
+        border-color: #2a2f38 !important;
+        color: #d4a853 !important;
+    }
+    div[data-testid="stNumberInput"] label,
+    div[data-testid="stTextArea"] label {
+        color: #cfcabf !important;
+        font-size: 0.82rem !important;
+    }
+
     .section-title {
         font-family: 'DM Serif Display', serif;
         font-size: 1.6rem;
@@ -21803,11 +21828,41 @@ elif modulo.startswith("📥 Stock Cierre"):
         """, {"l": _sk_local, "f": str(_sk_fecha)})
         _sk_prev_map = (dict(zip(_sk_prev["categoria"], _sk_prev["cantidad"]))
                         if _sk_prev is not None and not _sk_prev.empty else {})
-        if _sk_prev_map:
-            st.caption(f"✏️ Ya hay un cierre para **{_sk_local}** el **{_sk_fecha.strftime('%d-%m-%Y')}** "
-                       f"({len(_sk_prev_map)} ítem(s)). Los valores se muestran abajo y se actualizarán al guardar.")
 
-        st.markdown("**Unidades sobrantes por categoría**")
+        # Banner de estado del cierre (estética app)
+        if _sk_prev_map:
+            _sk_prev_tot = int(sum(v or 0 for v in _sk_prev_map.values()))
+            st.markdown(f"""
+            <div style="display:flex;align-items:center;gap:12px;background:rgba(212,168,83,0.10);
+                        border:1px solid #1f242c;border-left:4px solid #d4a853;
+                        border-radius:12px;padding:12px 16px;margin:4px 0 14px 0">
+              <div style="font-size:1.4rem">✏️</div>
+              <div>
+                <div style="font-size:0.92rem;font-weight:600;color:#f0ede8">
+                  Cierre existente · {_sk_local} · {_sk_fecha.strftime('%d-%m-%Y')}</div>
+                <div style="font-size:0.75rem;color:#888;margin-top:2px">
+                  {len(_sk_prev_map)} categoría(s) · {_sk_prev_tot:,} unidades. Los valores se actualizarán al guardar.</div>
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div style="display:flex;align-items:center;gap:12px;background:#0e1116;
+                        border:1px solid #1f242c;border-left:4px solid #4caf7d;
+                        border-radius:12px;padding:12px 16px;margin:4px 0 14px 0">
+              <div style="font-size:1.4rem">🆕</div>
+              <div>
+                <div style="font-size:0.92rem;font-weight:600;color:#f0ede8">
+                  Nuevo cierre · {_sk_local} · {_sk_fecha.strftime('%d-%m-%Y')}</div>
+                <div style="font-size:0.75rem;color:#888;margin-top:2px">
+                  Aún no hay registro para este local y fecha.</div>
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown("<div style='font-family:\"DM Serif Display\",serif;font-size:1.15rem;"
+                    "color:#f0ede8;margin:6px 0 10px 0'>Unidades sobrantes por categoría</div>",
+                    unsafe_allow_html=True)
         _sk_inputs = {}
         _sk_cols = st.columns(3)
         for _i, _cat in enumerate(_SK_CATS):
@@ -21880,29 +21935,78 @@ elif modulo.startswith("📥 Stock Cierre"):
             if _sk_f_fecha != "Todas":
                 _sk_v = _sk_v[_sk_v["fecha"].astype(str) == _sk_f_fecha]
 
-            _sk_k1, _sk_k2, _sk_k3 = st.columns(3)
-            _sk_k1.metric("Registros", len(_sk_v))
-            _sk_k2.metric("Unidades totales", f"{_sk_v['cantidad'].sum():,.0f}")
-            _sk_k3.metric("Cierres (local·día)",
-                          _sk_v.groupby(["local","fecha"]).ngroups if not _sk_v.empty else 0)
+            # ── KPIs como chips (estética app) ──
+            _sk_reg = len(_sk_v)
+            _sk_un = int(_sk_v['cantidad'].sum()) if not _sk_v.empty else 0
+            _sk_cierres = _sk_v.groupby(["local","fecha"]).ngroups if not _sk_v.empty else 0
+            st.markdown(f"""
+            <div style="display:flex;flex-wrap:wrap;gap:8px;margin:4px 0 14px 0">
+              <div style="flex:1 1 90px;min-width:90px;background:#0e1116;border:1px solid #1f242c;
+                          border-radius:12px;padding:12px 14px">
+                <div style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;color:#888">Registros</div>
+                <div style="font-family:'DM Serif Display',serif;font-size:1.8rem;color:#f0ede8;line-height:1.1">{_sk_reg:,}</div>
+              </div>
+              <div style="flex:1 1 90px;min-width:90px;background:#0e1116;border:1px solid #1f242c;
+                          border-radius:12px;padding:12px 14px">
+                <div style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;color:#888">Unidades</div>
+                <div style="font-family:'DM Serif Display',serif;font-size:1.8rem;color:#d4a853;line-height:1.1">{_sk_un:,}</div>
+              </div>
+              <div style="flex:1 1 90px;min-width:90px;background:#0e1116;border:1px solid #1f242c;
+                          border-radius:12px;padding:12px 14px">
+                <div style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;color:#888">Cierres</div>
+                <div style="font-family:'DM Serif Display',serif;font-size:1.8rem;color:#f0ede8;line-height:1.1">{_sk_cierres:,}</div>
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
 
-            # Vista pivote: filas=categoría, columnas=fecha (para un local) o resumen
-            if _sk_f_local != "Todos" and not _sk_v.empty:
-                _sk_piv = _sk_v.pivot_table(index="categoria", columns="fecha",
-                                            values="cantidad", aggfunc="sum", fill_value=0)
-                _sk_piv = _sk_piv.round(0).astype(int)
-                _sk_piv.index.name = "Categoría"
-                st.markdown(f"**Sobrante por día — {_sk_f_local}**")
-                st.dataframe(_sk_piv, use_container_width=True)
-            else:
-                _sk_show = _sk_v.rename(columns={
-                    "fecha":"Fecha","local":"Local","categoria":"Categoría",
-                    "cantidad":"Unidades","registrado_por":"Por","observacion":"Obs.",
-                }).copy()
-                _sk_show["Unidades"] = _sk_show["Unidades"].round(0).astype(int)
-                st.dataframe(
-                    _sk_show[["Fecha","Local","Categoría","Unidades","Por","Obs."]],
-                    use_container_width=True, hide_index=True)
+            # ── Listado como tarjetas (1 columna, móvil-friendly) ──
+            if not _sk_v.empty:
+                _sk_disp = _sk_v.sort_values(
+                    ["fecha", "local", "cantidad"], ascending=[False, True, False])
+                _sk_cards = []
+                for _, _r in _sk_disp.iterrows():
+                    _q = int(_r["cantidad"] or 0)
+                    _obs = (str(_r["observacion"]).strip()
+                            if _r["observacion"] not in (None, "", "None") else "")
+                    _obs_html = (f"<div style='font-size:0.7rem;color:#777;margin-top:3px;"
+                                 f"font-style:italic'>“{_obs}”</div>") if _obs else ""
+                    _fecha_str = str(_r["fecha"])[:10]
+                    _sk_cards.append(f"""
+                    <div style="display:flex;align-items:stretch;background:#0e1116;
+                                border:1px solid #1f242c;border-left:4px solid #d4a853;
+                                border-radius:12px;margin-bottom:8px;overflow:hidden">
+                      <div style="flex:1;padding:11px 14px;min-width:0">
+                        <div style="font-size:0.95rem;font-weight:600;color:#f0ede8;
+                                    white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{_r['categoria']}</div>
+                        <div style="font-size:0.72rem;color:#888;margin-top:3px">
+                          📍 {_r['local']} &nbsp;·&nbsp; 📅 {_fecha_str}
+                          &nbsp;·&nbsp; 👤 {_r['registrado_por'] or '—'}</div>
+                        {_obs_html}
+                      </div>
+                      <div style="flex:0 0 80px;display:flex;flex-direction:column;
+                                  align-items:center;justify-content:center;
+                                  background:rgba(0,0,0,0.18);padding:6px 4px">
+                        <div style="font-family:'DM Serif Display',serif;font-size:1.5rem;
+                                    color:#d4a853;line-height:1">{_q:,}</div>
+                        <div style="font-size:0.6rem;text-transform:uppercase;
+                                    letter-spacing:0.06em;color:#777;margin-top:2px">unidades</div>
+                      </div>
+                    </div>
+                    """)
+                # Si se filtró por un local, además mostrar el pivote día×categoría
+                if _sk_f_local != "Todos":
+                    _sk_piv = _sk_v.pivot_table(index="categoria", columns="fecha",
+                                                values="cantidad", aggfunc="sum", fill_value=0)
+                    _sk_piv = _sk_piv.round(0).astype(int)
+                    _sk_piv.index.name = "Categoría"
+                    st.markdown(f"<div style='font-family:\"DM Serif Display\",serif;"
+                                f"font-size:1.1rem;color:#f0ede8;margin:6px 0 8px 0'>"
+                                f"Sobrante por día — {_sk_f_local}</div>", unsafe_allow_html=True)
+                    st.dataframe(_sk_piv, use_container_width=True)
+                    st.markdown("<div style='font-family:\"DM Serif Display\",serif;"
+                                "font-size:1.1rem;color:#f0ede8;margin:14px 0 8px 0'>"
+                                "Detalle de registros</div>", unsafe_allow_html=True)
+                st.markdown("".join(_sk_cards), unsafe_allow_html=True)
 
             st.download_button(
                 "📥 Descargar (CSV)",
