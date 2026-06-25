@@ -4268,6 +4268,191 @@ def generar_pdf_colaciones_local(comp, modo, fi, ff):
     return buf.getvalue()
 
 
+def generar_pdf_colaciones_individual(loc, fi, ff, df_dia, df_pers, modo):
+    """PDF ejecutivo de UN local: resumen + desglose diario + lista de personal.
+    df_dia : DataFrame [fecha, colaciones, turnos, ratio]
+    df_pers: DataFrame [nombre, cargo, turnos, colacion_min_prom]  (personal del local)
+    """
+    R = _cr_pdf_base()
+    mm = R["mm"]; pal = R["pal"]; PS = R["ParagraphStyle"]; rc = R["rc"]
+    TA_LEFT, TA_CENTER, TA_RIGHT = R["TA_LEFT"], R["TA_CENTER"], R["TA_RIGHT"]
+    Paragraph, Spacer, Table, TableStyle = R["Paragraph"], R["Spacer"], R["Table"], R["TableStyle"]
+    HRFlowable, RLImage = R["HRFlowable"], R["RLImage"]
+    import io as _io, pandas as _pd
+
+    def s(sz, col, bold=False, align=TA_LEFT, lead=None):
+        return PS('_', fontSize=sz, textColor=col,
+                  fontName='Helvetica-Bold' if bold else 'Helvetica',
+                  alignment=align, leading=lead or sz*1.3)
+
+    # ── Semáforo (mismos criterios que la app: <2,5 Normal / 2,5–3 Atención / >3 Alto) ──
+    def _sem(r):
+        if _pd.isna(r): return ("s/d", pal["CM"])
+        if r > 3.0:     return ("Alto", pal["CR"])
+        if r >= 2.5:    return ("Atención", pal["CY"])
+        return ("Normal", pal["CGr"])
+
+    buf = _io.BytesIO()
+    doc = R["SimpleDocTemplate"](buf, pagesize=R["A4"],
+        leftMargin=16*mm, rightMargin=16*mm, topMargin=13*mm, bottomMargin=14*mm)
+    story = []
+
+    # ════════ CABECERA ════════
+    logo = Spacer(22*mm, 18*mm)
+    if R["os"].path.exists(LOGO_PATH):
+        logo = RLImage(LOGO_PATH, width=20*mm, height=20*mm)
+    hdr = Table([[logo,
+        [Paragraph("COLACIONES RRHH", s(16, pal["CG"], bold=True)),
+         Paragraph(f"{loc}", s(12, pal["CB"], bold=True)),
+         Paragraph(f"{fi} &nbsp;→&nbsp; {ff}", s(9, pal["CM"]))]]],
+        colWidths=[24*mm, 154*mm])
+    hdr.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+        ('LINEBELOW',(0,0),(-1,0),1.5,pal["CG"]), ('BOTTOMPADDING',(0,0),(-1,-1),6)]))
+    story += [hdr, Spacer(1, 5*mm)]
+
+    # ════════ 1) RESUMEN POR LOCAL (KPI cards) ════════
+    tot_col = float(df_dia["colaciones"].sum()) if not df_dia.empty else 0.0
+    tot_tur = float(df_dia["turnos"].sum()) if not df_dia.empty else 0.0
+    n_pers  = int(len(df_pers)) if df_pers is not None else 0
+    ratio   = (tot_col / tot_tur) if tot_tur > 0 else float("nan")
+    estado, est_col = _sem(ratio)
+    ratio_txt = (f"{ratio:.2f}".replace(".", ",")) if tot_tur > 0 else "s/d"
+
+    story += [Paragraph("📍 RESUMEN POR LOCAL", s(11, pal["CG"], bold=True)),
+              Spacer(1, 3*mm)]
+
+    def _kpi(titulo, valor, color=pal["CB"], sub=""):
+        return Table([
+            [Paragraph(titulo.upper(), s(7, pal["CM"], bold=True, align=TA_CENTER))],
+            [Paragraph(str(valor), s(17, color, bold=True, align=TA_CENTER))],
+            [Paragraph(sub, s(6.5, pal["CM"], align=TA_CENTER))],
+        ], colWidths=[40*mm], rowHeights=[5*mm, 9*mm, 4*mm])
+
+    def _kpi_style(bg=pal["CRowAlt"], bd=pal["CBo"]):
+        return TableStyle([
+            ('BACKGROUND',(0,0),(-1,-1),bg), ('BOX',(0,0),(-1,-1),0.5,bd),
+            ('VALIGN',(0,0),(-1,-1),'MIDDLE'), ('TOPPADDING',(0,0),(-1,-1),2),
+            ('BOTTOMPADDING',(0,0),(-1,-1),2),
+        ])
+
+    k1 = _kpi("Colaciones", f"{int(tot_col):,}")
+    k1.setStyle(_kpi_style())
+    k2 = _kpi("Turnos", f"{int(tot_tur):,}")
+    k2.setStyle(_kpi_style())
+    k3 = _kpi("Personas", f"{n_pers:,}")
+    k3.setStyle(_kpi_style())
+    k4 = _kpi("Colac./Turno", ratio_txt, color=est_col, sub=estado.upper())
+    k4.setStyle(TableStyle([
+        ('BACKGROUND',(0,0),(-1,-1),rc.HexColor('#faf6ee')),
+        ('BOX',(0,0),(-1,-1),1.2,est_col),
+        ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+        ('TOPPADDING',(0,0),(-1,-1),2),('BOTTOMPADDING',(0,0),(-1,-1),2),
+    ]))
+    kpis = Table([[k1, k2, k3, k4]], colWidths=[42*mm]*4)
+    kpis.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+        ('LEFTPADDING',(0,0),(-1,-1),3),('RIGHTPADDING',(0,0),(-1,-1),3)]))
+    story += [kpis, Spacer(1, 3*mm)]
+    story += [Paragraph(
+        "Ratio = colaciones servidas ÷ turnos trabajados. "
+        "Referencia: &lt; 2,5 Normal · 2,5–3,0 Atención · &gt; 3,0 Alto.",
+        s(7.5, pal["CM"])), Spacer(1, 6*mm)]
+
+    # ════════ 2) DESGLOSE DIARIO ════════
+    story += [Paragraph("📅 DESGLOSE DIARIO", s(11, pal["CG"], bold=True)),
+              Spacer(1, 3*mm)]
+    _DOW = {0:"Lun",1:"Mar",2:"Mié",3:"Jue",4:"Vie",5:"Sáb",6:"Dom"}
+    if df_dia is None or df_dia.empty:
+        story += [Paragraph("Sin movimiento diario en el período.", s(9, pal["CM"]))]
+    else:
+        dd = df_dia.sort_values("fecha").copy()
+        head = [Paragraph(h, s(8, pal["CHdT"], bold=True, align=a)) for h, a in
+                [("Fecha", TA_LEFT), ("Día", TA_LEFT), ("Colaciones", TA_RIGHT),
+                 ("Turnos", TA_RIGHT), ("Col./Turno", TA_RIGHT), ("Estado", TA_CENTER)]]
+        rows = [head]
+        for _, r in dd.iterrows():
+            f = _pd.Timestamp(r["fecha"])
+            rr = r.get("ratio")
+            est, ecol = _sem(rr)
+            rtxt = (f"{rr:.2f}".replace(".", ",")) if not _pd.isna(rr) else "—"
+            rows.append([
+                Paragraph(f.strftime("%d-%m-%Y"), s(8, pal["CT"])),
+                Paragraph(_DOW[f.weekday()], s(8, pal["CT"])),
+                Paragraph(f"{int(r['colaciones']):,}", s(8, pal["CT"], align=TA_RIGHT)),
+                Paragraph(f"{int(r['turnos']):,}", s(8, pal["CT"], align=TA_RIGHT)),
+                Paragraph(rtxt, s(8, ecol, bold=True, align=TA_RIGHT)),
+                Paragraph(est, s(7.5, ecol, bold=True, align=TA_CENTER)),
+            ])
+        # fila total
+        rows.append([
+            Paragraph("TOTAL", s(8, pal["CB"], bold=True)),
+            Paragraph("", s(8, pal["CT"])),
+            Paragraph(f"{int(tot_col):,}", s(8, pal["CB"], bold=True, align=TA_RIGHT)),
+            Paragraph(f"{int(tot_tur):,}", s(8, pal["CB"], bold=True, align=TA_RIGHT)),
+            Paragraph(ratio_txt, s(8, est_col, bold=True, align=TA_RIGHT)),
+            Paragraph(estado, s(7.5, est_col, bold=True, align=TA_CENTER)),
+        ])
+        t = Table(rows, colWidths=[30*mm, 18*mm, 32*mm, 28*mm, 30*mm, 30*mm], repeatRows=1)
+        ts = [('BACKGROUND',(0,0),(-1,0),pal["CHd"]),
+              ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+              ('TOPPADDING',(0,0),(-1,-1),3),('BOTTOMPADDING',(0,0),(-1,-1),3),
+              ('LEFTPADDING',(0,0),(-1,-1),5),('RIGHTPADDING',(0,0),(-1,-1),5),
+              ('LINEBELOW',(0,0),(-1,0),0.8,pal["CG"]),
+              ('LINEABOVE',(0,-1),(-1,-1),0.8,pal["CB"]),
+              ('BACKGROUND',(0,-1),(-1,-1),pal["CRowAlt"]),
+              ('GRID',(0,1),(-1,-2),0.3,pal["CBo"])]
+        for i in range(1, len(rows)-1):
+            if i % 2 == 0:
+                ts.append(('BACKGROUND',(0,i),(-1,i),pal["CRowAlt"]))
+        t.setStyle(TableStyle(ts))
+        story += [t]
+    story += [Spacer(1, 6*mm)]
+
+    # ════════ 3) LISTA DEL PERSONAL ════════
+    story += [Paragraph("👥 PERSONAL DEL LOCAL", s(11, pal["CG"], bold=True)),
+              Spacer(1, 3*mm)]
+    if df_pers is None or df_pers.empty:
+        story += [Paragraph("Sin personal con asistencia en el período.", s(9, pal["CM"]))]
+    else:
+        pp = df_pers.sort_values("turnos", ascending=False).copy()
+        head = [Paragraph(h, s(8, pal["CHdT"], bold=True, align=a)) for h, a in
+                [("#", TA_CENTER), ("Colaborador", TA_LEFT), ("Cargo", TA_LEFT),
+                 ("Turnos", TA_RIGHT), ("Colación prom.", TA_RIGHT)]]
+        rows = [head]
+        for i, (_, r) in enumerate(pp.iterrows(), start=1):
+            cmin = r.get("colacion_min_prom")
+            cmin_txt = (f"{int(round(cmin))} min" if not _pd.isna(cmin) and cmin else "—")
+            rows.append([
+                Paragraph(str(i), s(8, pal["CM"], align=TA_CENTER)),
+                Paragraph(str(r["nombre"]), s(8, pal["CT"])),
+                Paragraph(str(r.get("cargo") or "—"), s(7.5, pal["CM"])),
+                Paragraph(f"{int(r['turnos']):,}", s(8, pal["CT"], align=TA_RIGHT)),
+                Paragraph(cmin_txt, s(8, pal["CT"], align=TA_RIGHT)),
+            ])
+        t2 = Table(rows, colWidths=[10*mm, 66*mm, 44*mm, 24*mm, 34*mm], repeatRows=1)
+        ts2 = [('BACKGROUND',(0,0),(-1,0),pal["CHd"]),
+               ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+               ('TOPPADDING',(0,0),(-1,-1),3),('BOTTOMPADDING',(0,0),(-1,-1),3),
+               ('LEFTPADDING',(0,0),(-1,-1),5),('RIGHTPADDING',(0,0),(-1,-1),5),
+               ('LINEBELOW',(0,0),(-1,0),0.8,pal["CG"]),
+               ('GRID',(0,1),(-1,-1),0.3,pal["CBo"])]
+        for i in range(1, len(rows)):
+            if i % 2 == 0:
+                ts2.append(('BACKGROUND',(0,i),(-1,i),pal["CRowAlt"]))
+        t2.setStyle(TableStyle(ts2))
+        story += [t2]
+
+    # ── Pie ──
+    story += [Spacer(1, 8*mm),
+              HRFlowable(width="100%", color=pal["CBo"], thickness=0.5),
+              Spacer(1, 2*mm),
+              Paragraph("Alemán Experto · Control de Gestión — documento interno.",
+                        s(7, pal["CM"], align=TA_CENTER))]
+
+    doc.build(story)
+    buf.seek(0)
+    return buf.getvalue()
+
+
 def _cr_conclusion_local(sub, periodos, modo, cp_red, caso):
     """Conclusión específica: tendencia real + diagnóstico de caso + recomendación graduada."""
     import pandas as _pd
@@ -13193,7 +13378,7 @@ elif modulo.startswith("📊"):
             _cr_res = _cr_res.sort_values("ratio", ascending=False, na_position="last")
 
             # Semáforo (criterios definidos por negocio):
-            #   🟢 Bajo     : ratio < 2,5
+            #   🟢 Normal   : ratio < 2,5
             #   🟡 Atención : 2,5 ≤ ratio ≤ 3,0
             #   🔴 Alto     : ratio > 3,0
             def _cr_sem(r):
@@ -13203,7 +13388,7 @@ elif modulo.startswith("📊"):
                     return "🔴 Alto"
                 if r >= 2.5:
                     return "🟡 Atención"
-                return "🟢 Bajo"
+                return "🟢 Normal"
             _cr_res["alerta"] = _cr_res["ratio"].apply(_cr_sem)
 
             st.markdown(f"### 📍 Resumen por local · {_cr_meta['fi']} → {_cr_meta['ff']}")
@@ -13327,6 +13512,42 @@ elif modulo.startswith("📊"):
                         f"en el rango (hay {len(_cr_trend)}). Amplía el rango de fechas "
                         "para visualizar la evolución."
                     )
+
+                # ── PDF ejecutivo del local seleccionado ──
+                if _cr_loc_sel != "Todos":
+                    st.markdown("#### 📄 Informe del local")
+                    st.caption(f"Genera un PDF ejecutivo de **{_cr_loc_sel}** con resumen, "
+                               "desglose diario y lista del personal del período.")
+                    # Personal del local en el período (turnos y colación promedio)
+                    _cr_pers = run_query("""
+                        SELECT TRIM(COALESCE(nombre,'') || ' ' || COALESCE(apellidos,'')) AS nombre,
+                               MAX(cargo) AS cargo,
+                               COUNT(*) FILTER (WHERE trabajo) AS turnos,
+                               AVG(NULLIF(colacion_min,0)) FILTER (WHERE trabajo) AS colacion_min_prom
+                        FROM asistencia_rrhh
+                        WHERE fecha BETWEEN :fi AND :ff AND local = :loc
+                        GROUP BY TRIM(COALESCE(nombre,'') || ' ' || COALESCE(apellidos,''))
+                        HAVING COUNT(*) FILTER (WHERE trabajo) > 0
+                    """, {"fi": _cr_meta["fi"], "ff": _cr_meta["ff"], "loc": _cr_loc_sel})
+                    if _cr_pers is None:
+                        _cr_pers = pd.DataFrame(columns=["nombre","cargo","turnos","colacion_min_prom"])
+                    try:
+                        _modo_ind = _cr_detectar_modo(
+                            _cr_dt.date.fromisoformat(_cr_meta["fi"]),
+                            _cr_dt.date.fromisoformat(_cr_meta["ff"]))
+                        _pdf_ind = generar_pdf_colaciones_individual(
+                            _cr_loc_sel, _cr_meta["fi"], _cr_meta["ff"],
+                            _cr_dia[["fecha","colaciones","turnos","ratio"]].copy(),
+                            _cr_pers, _modo_ind)
+                        st.download_button(
+                            f"📄 Descargar PDF · {_cr_loc_sel}",
+                            _pdf_ind,
+                            file_name=f"colaciones_{_cr_loc_sel}_{_cr_meta['fi']}_{_cr_meta['ff']}.pdf",
+                            mime="application/pdf", use_container_width=True,
+                            key="cr_pdf_individual",
+                        )
+                    except Exception as _eind:
+                        st.warning(f"No se pudo generar el PDF del local: {_eind}")
 
             # ════════ 4) INFORME COMPLETO (PDF) ════════
             st.markdown("### 📄 Informe completo")
