@@ -445,7 +445,7 @@ def _render_gestion_usuarios():
             for _, row in df_users.iterrows():
                 with st.expander(f"👤 {row['username']} {('· ' + str(row.get('local','')) ) if row.get('local') else ''}"):
                     permisos_act = row['permisos'] if row['permisos'] else ""
-                    opciones_mod = ["📦 Gestión de Datos", "📊 Informes", "📋 Notas de Crédito", "📥 Stock Cierre", "🧾 Facturas y Stock", "🎯 Config Producción"]
+                    opciones_mod = ["📦 Gestión de Datos", "📊 Informes", "📋 Notas de Crédito", "📥 Stock Cierre", "🧾 Facturas y Stock", "👷 Costo de Personal", "🎯 Config Producción"]
                     sel = st.multiselect(
                         "Módulos habilitados",
                         opciones_mod,
@@ -504,7 +504,7 @@ def _render_gestion_usuarios():
             st.success(_msg_nu)
         nu_user = st.text_input("Usuario", key="nu_user")
         nu_pw   = st.text_input("Contraseña", type="password", key="nu_pw")
-        opciones_mod2 = ["📦 Gestión de Datos", "📊 Informes", "📋 Notas de Crédito", "📥 Stock Cierre", "🧾 Facturas y Stock", "🎯 Config Producción"]
+        opciones_mod2 = ["📦 Gestión de Datos", "📊 Informes", "📋 Notas de Crédito", "📥 Stock Cierre", "🧾 Facturas y Stock", "👷 Costo de Personal", "🎯 Config Producción"]
         nu_perm = st.multiselect("Módulos habilitados", opciones_mod2, key="nu_perm")
         _locales_nu_list = ["— Sin restricción —", "Vitacura", "Las Condes", "Chicureo", "La Dehesa", "Macul", "La Reina", "Quilin", "Nueva Providencia", "Providencia", "Los Trapenses"]
         nu_local = st.selectbox("Local asignado", _locales_nu_list, key="nu_local")
@@ -3458,6 +3458,8 @@ with st.sidebar:
         menu_items["📥 Stock Cierre"] = []
     if _is_admin or _user_puede("🧾 Facturas y Stock"):
         menu_items["🧾 Facturas y Stock"] = []
+    if _is_admin or _user_puede("👷 Costo de Personal"):
+        menu_items["👷 Costo de Personal"] = []
     if _is_admin or _user_puede("🎯 Config Producción"):
         menu_items["🎯 Config Producción"] = []
     if _is_admin:
@@ -23439,6 +23441,260 @@ elif modulo.startswith("🧾 Facturas y Stock"):
                             else:
                                 st.warning("Indica un ID válido.")
 
+
+elif modulo.startswith("👷 Costo de Personal"):
+    import datetime as _cp_dt
+    import calendar as _cp_cal
+    _is_admin_cp   = st.session_state.get("user_role") == "admin"
+    _user_local_cp = st.session_state.get("user_local")
+    _CP_META = 0.23  # meta de costo de mano de obra (23% sobre la venta)
+
+    st.markdown("# 👷 Costo de Personal")
+    st.caption("Evaluación del costo de mano de obra (Costo Empresa) sobre la venta, contra la "
+               "meta de 23% por local y cadena. Fuentes: remuneraciones y asistencia RRHH + ventas.")
+
+    # ── Períodos disponibles (remuneraciones es mensual: primer día de mes) ──
+    _cp_per = run_query("""
+        SELECT DISTINCT periodo FROM remuneraciones_rrhh
+        WHERE periodo IS NOT NULL ORDER BY periodo DESC
+    """)
+    if _cp_per is None or _cp_per.empty:
+        st.info("Aún no hay remuneraciones cargadas. Cárgalas en Gestión de Datos → RRHH.")
+        st.stop()
+
+    _MESES_CP = {1:'Ene',2:'Feb',3:'Mar',4:'Abr',5:'May',6:'Jun',
+                 7:'Jul',8:'Ago',9:'Sep',10:'Oct',11:'Nov',12:'Dic'}
+    _per_list = pd.to_datetime(_cp_per["periodo"]).dt.date.tolist()
+    def _cp_fmt_per(d):
+        return f"{_MESES_CP.get(d.month, d.month)} {d.year}"
+    _per_sel = st.selectbox("Período", _per_list, format_func=_cp_fmt_per, key="cp_periodo")
+    _y, _m = _per_sel.year, _per_sel.month
+    _ini = _cp_dt.date(_y, _m, 1)
+    _fin = _cp_dt.date(_y, _m, _cp_cal.monthrange(_y, _m)[1])
+
+    # ── Datos base del período ──
+    _cp_costo = run_query("""
+        SELECT local,
+               COUNT(DISTINCT rut)               AS dotacion,
+               SUM(COALESCE(costo_empresa,0))    AS costo_mo,
+               SUM(COALESCE(total_haberes,0))    AS total_haberes,
+               SUM(COALESCE(aportes_patronales,0)) AS aportes,
+               SUM(COALESCE(gratif_tope,0))      AS gratif_tope,
+               SUM(COALESCE(gratificacion,0))    AS gratificacion,
+               SUM(COALESCE(sueldo_base,0))      AS sueldo_base,
+               SUM(COALESCE(bono_produccion,0)+COALESCE(bono_gestion,0)
+                   +COALESCE(bono_formacion,0)+COALESCE(bono_delivery,0)
+                   +COALESCE(bono_reserva,0))    AS bonos,
+               SUM(COALESCE(horas_extras_50,0))  AS horas_extras,
+               SUM(COALESCE(colacion_haber,0))   AS colacion,
+               SUM(COALESCE(movilizacion,0))     AS movilizacion
+        FROM remuneraciones_rrhh
+        WHERE periodo = :p
+        GROUP BY local
+    """, {"p": str(_ini)})
+    _cp_venta = run_query("""
+        SELECT local, SUM(monto_venta_real) AS venta
+        FROM ventas
+        WHERE fecha_venta BETWEEN :i AND :f
+          AND (es_opcion = false OR sku_producto IN (
+                SELECT DISTINCT codigo_venta FROM recetas WHERE codigo_venta IS NOT NULL))
+          AND sku_producto NOT LIKE 'CP%'
+        GROUP BY local
+    """, {"i": str(_ini), "f": str(_fin)})
+    _cp_hrs = run_query("""
+        SELECT local,
+               SUM(horas_totales) FILTER (WHERE trabajo) AS horas,
+               COUNT(*) FILTER (WHERE trabajo)           AS turnos
+        FROM asistencia_rrhh
+        WHERE fecha BETWEEN :i AND :f
+        GROUP BY local
+    """, {"i": str(_ini), "f": str(_fin)})
+
+    if _cp_costo is None or _cp_costo.empty:
+        st.warning(f"No hay remuneraciones para {_cp_fmt_per(_per_sel)}.")
+        st.stop()
+    if _cp_venta is None: _cp_venta = pd.DataFrame(columns=["local", "venta"])
+    if _cp_hrs   is None: _cp_hrs   = pd.DataFrame(columns=["local", "horas", "turnos"])
+
+    _cp = _cp_costo.merge(_cp_venta, on="local", how="outer").merge(_cp_hrs, on="local", how="outer")
+    _cp_num = ["dotacion","costo_mo","total_haberes","aportes","gratif_tope","gratificacion",
+               "sueldo_base","bonos","horas_extras","colacion","movilizacion",
+               "venta","horas","turnos"]
+    for _c in _cp_num:
+        _cp[_c] = pd.to_numeric(_cp[_c], errors="coerce").fillna(0.0) if _c in _cp.columns else 0.0
+    _cp["pct_mo"]        = _cp.apply(lambda r: (r["costo_mo"]/r["venta"]) if r["venta"] > 0 else float("nan"), axis=1)
+    _cp["brecha_pesos"]  = _cp["costo_mo"] - _cp["venta"] * _CP_META
+    _cp["costo_persona"] = _cp.apply(lambda r: r["costo_mo"]/r["dotacion"] if r["dotacion"] > 0 else float("nan"), axis=1)
+    _cp["costo_hora"]    = _cp.apply(lambda r: r["costo_mo"]/r["horas"] if r["horas"] > 0 else float("nan"), axis=1)
+    _cp["venta_hora"]    = _cp.apply(lambda r: r["venta"]/r["horas"] if r["horas"] > 0 else float("nan"), axis=1)
+
+    def _cp_sem(p):
+        if pd.isna(p):          return "⚪"
+        if p <= _CP_META:       return "🟢"
+        if p <= _CP_META + 0.02: return "🟡"
+        return "🔴"
+
+    def _cp_money(x):
+        return f"${x:,.0f}" if pd.notna(x) else "—"
+    def _cp_pct(x):
+        return f"{x*100:,.1f}%" if pd.notna(x) else "s/d"
+
+    _tab_emp, _tab_loc = st.tabs(["🏢 Vista cadena", "📍 Vista por local"])
+
+    # ════════════ VISTA CADENA ════════════
+    with _tab_emp:
+        _v_tot = _cp["venta"].sum()
+        _c_tot = _cp["costo_mo"].sum()
+        _pct_tot = (_c_tot / _v_tot) if _v_tot > 0 else float("nan")
+        _brecha_tot = _c_tot - _v_tot * _CP_META
+
+        _k1, _k2, _k3, _k4 = st.columns(4)
+        _k1.metric("Venta cadena", _cp_money(_v_tot))
+        _k2.metric("Costo MO", _cp_money(_c_tot))
+        _k3.metric("% Costo MO", _cp_pct(_pct_tot),
+                   (f"{(_pct_tot-_CP_META)*100:+.1f} pp vs meta" if pd.notna(_pct_tot) else None),
+                   delta_color="inverse")
+        _k4.metric("Brecha vs meta", _cp_money(_brecha_tot),
+                   help="Costo MO − 23% de la venta. Positivo = sobre la meta (gasto de más).")
+
+        _sem_tot = _cp_sem(_pct_tot)
+        _msg_tot = ("dentro de la meta" if pd.notna(_pct_tot) and _pct_tot <= _CP_META
+                    else ("levemente sobre la meta" if pd.notna(_pct_tot) and _pct_tot <= _CP_META+0.02
+                          else "sobre la meta"))
+        st.markdown(
+            f"<div style='background:#1a1a1a;border-left:4px solid #d4a853;border-radius:10px;"
+            f"padding:12px 16px;margin:6px 0 14px 0'>"
+            f"<span style='font-size:1.05rem'>{_sem_tot} La cadena está <b>{_msg_tot}</b> "
+            f"({_cp_pct(_pct_tot)} vs 23%).</span></div>", unsafe_allow_html=True)
+
+        # Ranking de locales por % MO
+        _rank = _cp.sort_values("pct_mo", ascending=False, na_position="last")
+        _disp = pd.DataFrame({
+            "": _rank["pct_mo"].map(_cp_sem),
+            "Local": _rank["local"],
+            "Venta": _rank["venta"].map(_cp_money),
+            "Costo MO": _rank["costo_mo"].map(_cp_money),
+            "% MO": _rank["pct_mo"].map(_cp_pct),
+            "vs Meta": _rank["pct_mo"].map(lambda x: f"{(x-_CP_META)*100:+.1f} pp" if pd.notna(x) else "—"),
+            "Brecha $": _rank["brecha_pesos"].map(_cp_money),
+            "Dotación": _rank["dotacion"].map(lambda x: f"{int(x)}"),
+        })
+        st.dataframe(_disp, use_container_width=True, hide_index=True)
+
+        _chart = _rank.dropna(subset=["pct_mo"]).copy()
+        if not _chart.empty:
+            _chart_df = _chart.set_index("local")[["pct_mo"]] * 100
+            _chart_df = _chart_df.rename(columns={"pct_mo": "% Costo MO"})
+            st.bar_chart(_chart_df)
+        st.caption("Meta de costo MO: 23%. Semáforo: 🟢 ≤23% · 🟡 ≤25% · 🔴 >25%. "
+                   "Locales sin venta o sin costo en el período aparecen como s/d.")
+
+        # Desglose del costo (descomposición aditiva del Costo Empresa)
+        st.markdown("**Desglose del costo de la cadena**")
+        _hab_sin_grat = _cp["total_haberes"].sum() - _cp["gratificacion"].sum()
+        _apo_tot = _cp["aportes"].sum()
+        _gto_tot = _cp["gratif_tope"].sum()
+        _comp = pd.DataFrame({
+            "Componente": ["Haberes (sin gratificación)", "Aportes patronales",
+                           "Gratificación (tope)", "TOTAL Costo Empresa"],
+            "_monto": [_hab_sin_grat, _apo_tot, _gto_tot, _c_tot],
+        })
+        _comp_disp = pd.DataFrame({
+            "Componente": _comp["Componente"],
+            "Monto": _comp["_monto"].map(_cp_money),
+            "% del costo": _comp["_monto"].map(lambda x: f"{(x/_c_tot)*100:,.1f}%" if _c_tot else "—"),
+        })
+        st.dataframe(_comp_disp, use_container_width=True, hide_index=True)
+        st.caption("Costo Empresa = Haberes (sin gratificación) + Aportes patronales + Gratificación (tope).")
+
+    # ════════════ VISTA POR LOCAL ════════════
+    with _tab_loc:
+        if _user_local_cp:
+            _loc_v = _user_local_cp
+            st.markdown(f"**Local:** `{_loc_v}`")
+        else:
+            _loc_v = st.selectbox("Local", sorted(_cp["local"].dropna().unique().tolist()),
+                                  key="cp_loc_sel")
+        _row = _cp[_cp["local"] == _loc_v]
+        if _row.empty:
+            st.info("Sin datos para este local en el período.")
+        else:
+            r = _row.iloc[0]
+            _k1, _k2, _k3 = st.columns(3)
+            _k1.metric("Venta", _cp_money(r["venta"]))
+            _k2.metric("Costo MO", _cp_money(r["costo_mo"]))
+            _k3.metric("% Costo MO", _cp_pct(r["pct_mo"]),
+                       (f"{(r['pct_mo']-_CP_META)*100:+.1f} pp vs meta" if pd.notna(r["pct_mo"]) else None),
+                       delta_color="inverse")
+            _k4, _k5, _k6 = st.columns(3)
+            _k4.metric("Dotación", f"{int(r['dotacion'])}")
+            _k5.metric("Costo / persona", _cp_money(r["costo_persona"]))
+            _k6.metric("Brecha vs meta", _cp_money(r["brecha_pesos"]),
+                       help="Costo MO − 23% de la venta. Positivo = sobre la meta.")
+            _k7, _k8, _k9 = st.columns(3)
+            _k7.metric("Horas trabajadas", f"{r['horas']:,.0f}")
+            _k8.metric("Costo / hora", _cp_money(r["costo_hora"]))
+            _k9.metric("Venta / hora", _cp_money(r["venta_hora"]))
+
+            # Desglose del costo del local
+            st.markdown("**Desglose del costo del local**")
+            _hab_l = r["total_haberes"] - r["gratificacion"]
+            _comp_l = pd.DataFrame({
+                "Componente": ["Sueldo base", "Bonos", "Horas extras 50%", "Colación",
+                               "Movilización", "Aportes patronales", "Gratificación (tope)"],
+                "_monto": [r["sueldo_base"], r["bonos"], r["horas_extras"], r["colacion"],
+                           r["movilizacion"], r["aportes"], r["gratif_tope"]],
+            })
+            _tot_l = r["costo_mo"] if r["costo_mo"] else 0
+            _comp_l_disp = pd.DataFrame({
+                "Componente": _comp_l["Componente"],
+                "Monto": _comp_l["_monto"].map(_cp_money),
+                "% del costo": _comp_l["_monto"].map(
+                    lambda x: f"{(x/_tot_l)*100:,.1f}%" if _tot_l else "—"),
+            })
+            st.dataframe(_comp_l_disp, use_container_width=True, hide_index=True)
+
+            # Desglose por familia de cargo
+            _cp_fam = run_query("""
+                SELECT COALESCE(familia_cargo,'(sin familia)') AS familia,
+                       COUNT(DISTINCT rut) AS dotacion,
+                       SUM(COALESCE(costo_empresa,0)) AS costo
+                FROM remuneraciones_rrhh
+                WHERE periodo = :p AND local = :l
+                GROUP BY familia_cargo
+                ORDER BY costo DESC
+            """, {"p": str(_ini), "l": _loc_v})
+            if _cp_fam is not None and not _cp_fam.empty:
+                st.markdown("**Costo por familia de cargo**")
+                _cp_fam["costo"] = pd.to_numeric(_cp_fam["costo"], errors="coerce").fillna(0.0)
+                _fam_disp = pd.DataFrame({
+                    "Familia": _cp_fam["familia"],
+                    "Dotación": _cp_fam["dotacion"].map(lambda x: f"{int(x)}"),
+                    "Costo": _cp_fam["costo"].map(_cp_money),
+                    "% del costo": _cp_fam["costo"].map(
+                        lambda x: f"{(x/_tot_l)*100:,.1f}%" if _tot_l else "—"),
+                })
+                st.dataframe(_fam_disp, use_container_width=True, hide_index=True)
+
+            # Detalle por persona (sensible: en expander)
+            with st.expander("Detalle por persona"):
+                _cp_pers = run_query("""
+                    SELECT nombre, cargo, familia_cargo,
+                           COALESCE(costo_empresa,0) AS costo_empresa
+                    FROM remuneraciones_rrhh
+                    WHERE periodo = :p AND local = :l
+                    ORDER BY costo_empresa DESC
+                """, {"p": str(_ini), "l": _loc_v})
+                if _cp_pers is None or _cp_pers.empty:
+                    st.info("Sin detalle de personas.")
+                else:
+                    _cp_pers["costo_empresa"] = pd.to_numeric(
+                        _cp_pers["costo_empresa"], errors="coerce").fillna(0.0)
+                    _pers_disp = _cp_pers.rename(columns={
+                        "nombre": "Nombre", "cargo": "Cargo",
+                        "familia_cargo": "Familia", "costo_empresa": "Costo Empresa"})
+                    _pers_disp["Costo Empresa"] = _pers_disp["Costo Empresa"].map(_cp_money)
+                    st.dataframe(_pers_disp, use_container_width=True, hide_index=True)
 
 elif modulo.startswith("📥 Stock Cierre"):
     import datetime as _sk_dt
