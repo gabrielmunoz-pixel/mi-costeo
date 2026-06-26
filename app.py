@@ -23244,71 +23244,98 @@ elif modulo.startswith("🧾 Facturas y Stock"):
                 except Exception as _evt:
                     st.error(f"Error: {_evt}")
 
-    # ══════════ TAB 4: STOCK POR LOCAL (ENTRADAS − SALIDAS) ══════════
+    # ══════════ TAB 4: STOCK TEÓRICO AL CORTE (AUDITORÍA) ══════════
     with _fs_tab4:
+        _ctrl_nom = {_s: _n for _n, _s in _FS_CTRL}
+
+        _fc1, _fc2 = st.columns(2)
+        with _fc1:
+            _fs_corte = st.date_input("Stock teórico al día (fecha de corte)",
+                                      key="fs_stk_corte", value=_fs_dt.date.today())
+        with _fc2:
+            _fs_solo_ctrl = st.checkbox("Solo insumos controlados (4 proteínas)",
+                                        value=True, key="fs_stk_solo_ctrl")
+
+        # Compras y uso ACUMULADOS hasta la fecha de corte (incluye traspasos internos).
         _fs_ent = run_query("""
             SELECT local, sku,
                    MAX(nombre_producto) AS nombre_producto,
                    SUM(cantidad_kg)     AS ingresado_kg
             FROM facturas_insumos
+            WHERE COALESCE(fecha_factura, fecha_registro::date) <= :corte
             GROUP BY local, sku
-        """)
+        """, {"corte": str(_fs_corte)})
         _fs_sal = run_query("""
             SELECT local, sku, SUM(cantidad_kg) AS salido_kg
             FROM salidas_insumos
+            WHERE COALESCE(fecha_salida, fecha_registro::date) <= :corte
             GROUP BY local, sku
-        """)
+        """, {"corte": str(_fs_corte)})
         if _fs_ent is None:
             _fs_ent = pd.DataFrame(columns=["local", "sku", "nombre_producto", "ingresado_kg"])
         if _fs_sal is None:
             _fs_sal = pd.DataFrame(columns=["local", "sku", "salido_kg"])
 
-        if _fs_ent.empty and _fs_sal.empty:
-            st.info("Aún no hay movimientos de inventario registrados.")
+        _fs_stk = _fs_ent.merge(_fs_sal, on=["local", "sku"], how="outer")
+
+        # Selector de local
+        _locs_data = sorted(set(_fs_stk["local"].dropna().unique().tolist()))
+        if _user_local_fs:
+            _fs_loc_v = _user_local_fs
+            st.markdown(f"**Local:** `{_fs_loc_v}`")
         else:
-            _fs_stk = _fs_ent.merge(_fs_sal, on=["local", "sku"], how="outer")
-            _fs_stk["ingresado_kg"] = pd.to_numeric(_fs_stk["ingresado_kg"], errors="coerce").fillna(0.0)
-            _fs_stk["salido_kg"]    = pd.to_numeric(_fs_stk["salido_kg"], errors="coerce").fillna(0.0)
-            _fs_stk["nombre_producto"] = _fs_stk["nombre_producto"].fillna("(sin nombre)")
-            _fs_stk["disponible_kg"] = (_fs_stk["ingresado_kg"] - _fs_stk["salido_kg"]).round(2)
+            _fs_loc_v = st.selectbox("Local", ["Todos"] + _locs_data, key="fs_stk_local")
 
-            # Filtro de local
-            if _user_local_fs:
-                _fs_loc_v = _user_local_fs
-                st.markdown(f"**Local:** `{_fs_loc_v}`")
+        if _fs_solo_ctrl:
+            # Grilla completa: (locales en alcance) × (4 insumos controlados),
+            # para que en la hoja de auditoría aparezcan los 4 aunque estén en 0.
+            if _fs_loc_v != "Todos":
+                _locs_scope = [_fs_loc_v]
             else:
-                _fs_loc_v = st.selectbox(
-                    "Local", ["Todos"] + sorted(_fs_stk["local"].dropna().unique().tolist()),
-                    key="fs_stk_local")
-
+                _locs_scope = sorted(set(_locs_data).union(_FS_LOCALES))
+            _grid = pd.DataFrame([(_l, _s) for _l in _locs_scope for _s in _FS_CTRL_SKUS],
+                                 columns=["local", "sku"])
+            _fs_stk_v = _grid.merge(_fs_stk, on=["local", "sku"], how="left")
+            _fs_stk_v["nombre_producto"] = _fs_stk_v["sku"].map(_ctrl_nom)
+        else:
             _fs_stk_v = _fs_stk.copy()
             if _fs_loc_v != "Todos":
                 _fs_stk_v = _fs_stk_v[_fs_stk_v["local"] == _fs_loc_v]
 
-            _fs_solo_disp = st.checkbox("Mostrar solo con stock disponible (> 0)",
-                                        value=False, key="fs_stk_solo")
-            if _fs_solo_disp:
-                _fs_stk_v = _fs_stk_v[_fs_stk_v["disponible_kg"] > 0]
+        if _fs_stk_v.empty:
+            st.info("Aún no hay movimientos de inventario hasta la fecha seleccionada.")
+        else:
+            _fs_stk_v["ingresado_kg"] = pd.to_numeric(_fs_stk_v["ingresado_kg"],
+                                                      errors="coerce").fillna(0.0)
+            _fs_stk_v["salido_kg"]    = pd.to_numeric(_fs_stk_v["salido_kg"],
+                                                      errors="coerce").fillna(0.0)
+            _fs_stk_v["nombre_producto"] = _fs_stk_v["nombre_producto"].fillna("(sin nombre)")
+            _fs_stk_v["disponible_kg"] = (_fs_stk_v["ingresado_kg"]
+                                          - _fs_stk_v["salido_kg"]).round(2)
 
-            # KPIs
+            st.markdown(f"<div style='font-family:\"DM Serif Display\",serif;font-size:1.15rem;"
+                        f"color:#f0ede8;margin:8px 0 6px 0'>Stock teórico al "
+                        f"{_fs_corte.strftime('%d-%m-%Y')}</div>", unsafe_allow_html=True)
+
             _k1, _k2, _k3 = st.columns(3)
-            _k1.metric("Productos con stock", int((_fs_stk_v["disponible_kg"] > 0).sum()))
-            _k2.metric("Kg disponibles", f"{_fs_stk_v['disponible_kg'].clip(lower=0).sum():,.1f}")
+            _k1.metric("Líneas", len(_fs_stk_v))
+            _k2.metric("Kg teóricos", f"{_fs_stk_v['disponible_kg'].clip(lower=0).sum():,.1f}")
             _neg = int((_fs_stk_v["disponible_kg"] < 0).sum())
-            _k3.metric("Productos en negativo", _neg)
+            _k3.metric("En negativo", _neg)
             if _neg:
-                st.warning("⚠️ Hay productos con saldo negativo (salidas mayores a entradas). "
-                           "Revisa que las facturas estén ingresadas o corrige las salidas.")
+                st.warning("⚠️ Hay saldos negativos (uso mayor que compras). Revisa que las "
+                           "facturas estén ingresadas o corrige la carga de uso.")
 
-            _fs_show = _fs_stk_v.sort_values(["local", "disponible_kg"],
-                                             ascending=[True, False]).rename(columns={
+            _fs_show = _fs_stk_v.sort_values(["local", "nombre_producto"]).rename(columns={
                 "local": "Local", "nombre_producto": "Producto", "sku": "SKU",
-                "ingresado_kg": "Ingresado (kg)", "salido_kg": "Salidas (kg)",
-                "disponible_kg": "Disponible (kg)",
-            })[["Local", "Producto", "SKU", "Ingresado (kg)", "Salidas (kg)", "Disponible (kg)"]]
+                "ingresado_kg": "Comprado (kg)", "salido_kg": "Usado (kg)",
+                "disponible_kg": "Teórico (kg)",
+            })[["Local", "Producto", "SKU", "Comprado (kg)", "Usado (kg)", "Teórico (kg)"]]
             st.dataframe(_fs_show, use_container_width=True, hide_index=True)
-            st.caption("Disponible = Ingresado (facturas) − Salidas (consumo/merma/traspaso). "
-                       "Solo refleja movimientos cargados en este módulo.")
+            st.caption(
+                f"Teórico (kg) = Comprado − Usado acumulado hasta el {_fs_corte.strftime('%d-%m-%Y')} "
+                "(incluye traspasos entre locales). Es el stock que deberías encontrar en el local: "
+                "la diferencia contra el conteo físico revela desvíos de receta o mal uso del producto.")
 
     # ══════════ TAB 5: HISTORIAL ══════════
     with _fs_tab5:
