@@ -445,7 +445,7 @@ def _render_gestion_usuarios():
             for _, row in df_users.iterrows():
                 with st.expander(f"👤 {row['username']} {('· ' + str(row.get('local','')) ) if row.get('local') else ''}"):
                     permisos_act = row['permisos'] if row['permisos'] else ""
-                    opciones_mod = ["📦 Gestión de Datos", "📊 Informes", "📋 Notas de Crédito", "📥 Stock Cierre", "🎯 Config Producción"]
+                    opciones_mod = ["📦 Gestión de Datos", "📊 Informes", "📋 Notas de Crédito", "📥 Stock Cierre", "🧾 Facturas y Stock", "🎯 Config Producción"]
                     sel = st.multiselect(
                         "Módulos habilitados",
                         opciones_mod,
@@ -504,7 +504,7 @@ def _render_gestion_usuarios():
             st.success(_msg_nu)
         nu_user = st.text_input("Usuario", key="nu_user")
         nu_pw   = st.text_input("Contraseña", type="password", key="nu_pw")
-        opciones_mod2 = ["📦 Gestión de Datos", "📊 Informes", "📋 Notas de Crédito", "📥 Stock Cierre", "🎯 Config Producción"]
+        opciones_mod2 = ["📦 Gestión de Datos", "📊 Informes", "📋 Notas de Crédito", "📥 Stock Cierre", "🧾 Facturas y Stock", "🎯 Config Producción"]
         nu_perm = st.multiselect("Módulos habilitados", opciones_mod2, key="nu_perm")
         _locales_nu_list = ["— Sin restricción —", "Vitacura", "Las Condes", "Chicureo", "La Dehesa", "Macul", "La Reina", "Quilin", "Nueva Providencia", "Providencia", "Los Trapenses"]
         nu_local = st.selectbox("Local asignado", _locales_nu_list, key="nu_local")
@@ -1030,6 +1030,39 @@ def _init_db():
             actualizado_por text,
             fecha_registro  timestamp  NOT NULL DEFAULT now()
         )""",
+        # --- Inventario de insumos (independiente, NO afecta CMV) ---
+        # Entradas: facturas con detalle por producto (kilos y precio).
+        """CREATE TABLE IF NOT EXISTS facturas_insumos (
+            id               bigserial         PRIMARY KEY,
+            fecha_registro   timestamp         NOT NULL DEFAULT now(),
+            local            text              NOT NULL,
+            folio_factura    text,
+            rut_proveedor    text,
+            nombre_proveedor text,
+            fecha_factura    date,
+            nombre_producto  text              NOT NULL,
+            sku              text,
+            cantidad_kg      double precision  NOT NULL DEFAULT 0,
+            precio_unitario  double precision  NOT NULL DEFAULT 0,
+            total            double precision  NOT NULL DEFAULT 0,
+            observacion      text,
+            registrado_por   text
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_facturas_insumos_local ON facturas_insumos (local, sku)",
+        # Salidas: consumo / merma / traspaso (para calcular saldo real).
+        """CREATE TABLE IF NOT EXISTS salidas_insumos (
+            id               bigserial         PRIMARY KEY,
+            fecha_registro   timestamp         NOT NULL DEFAULT now(),
+            local            text              NOT NULL,
+            fecha_salida     date,
+            nombre_producto  text              NOT NULL,
+            sku              text,
+            cantidad_kg      double precision  NOT NULL DEFAULT 0,
+            motivo           text,
+            observacion      text,
+            registrado_por   text
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_salidas_insumos_local ON salidas_insumos (local, sku)",
     ]
     try:
         with engine.begin() as conn:
@@ -3423,6 +3456,8 @@ with st.sidebar:
         menu_items["📋 Notas de Crédito"] = []
     if _is_admin or _user_puede("📥 Stock Cierre"):
         menu_items["📥 Stock Cierre"] = []
+    if _is_admin or _user_puede("🧾 Facturas y Stock"):
+        menu_items["🧾 Facturas y Stock"] = []
     if _is_admin or _user_puede("🎯 Config Producción"):
         menu_items["🎯 Config Producción"] = []
     if _is_admin:
@@ -22833,6 +22868,441 @@ elif modulo.startswith("📋 Notas de Crédito"):
                                 except Exception as _eu:
                                     st.error(f"Error: {_eu}")
 
+
+
+elif modulo.startswith("🧾 Facturas y Stock"):
+    import datetime as _fs_dt
+    _is_admin_fs   = st.session_state.get("user_role") == "admin"
+    _uname_fs      = st.session_state.get("current_user", "")
+    _user_local_fs = st.session_state.get("user_local")
+
+    st.markdown("# 🧾 Facturas y Stock de Insumos")
+    st.caption(
+        "Registro de facturas de compra con detalle por producto (kilos y precio) "
+        "y de las salidas (consumo / merma / traspaso). El stock disponible por local "
+        "se calcula como entradas − salidas. Este módulo es independiente: no afecta "
+        "los costos ni el CMV."
+    )
+
+    _FS_LOCALES = ["Vitacura", "Las Condes", "Chicureo", "La Dehesa", "Macul",
+                   "La Reina", "Quilin", "Nueva Providencia", "Providencia", "Los Trapenses"]
+    _FS_MOTIVOS = ["Consumo", "Merma", "Traspaso", "Ajuste"]
+
+    # ── Catálogos cacheados desde el maestro de compras (proveedores y productos) ──
+    if "_fs_cat_provs" not in st.session_state:
+        _df_provs_fs = run_query("""
+            SELECT DISTINCT rut_proveedor, nombre_proveedor
+            FROM compras
+            WHERE rut_proveedor IS NOT NULL AND nombre_proveedor IS NOT NULL
+            ORDER BY nombre_proveedor
+        """)
+        st.session_state["_fs_cat_provs"] = (
+            [f"{r['nombre_proveedor']} | {r['rut_proveedor']}"
+             for _, r in _df_provs_fs.iterrows()]
+            if _df_provs_fs is not None and not _df_provs_fs.empty else [])
+    if "_fs_cat_prods" not in st.session_state:
+        _df_prods_fs = run_query("""
+            SELECT DISTINCT nombre_producto, sku
+            FROM compras
+            WHERE nombre_producto IS NOT NULL AND sku IS NOT NULL
+              AND LOWER(COALESCE(subcat,'')) NOT LIKE '%admin%'
+              AND LOWER(COALESCE(categoria_producto,'')) NOT LIKE '%admin%'
+              AND sku NOT LIKE 'ADM%'
+            ORDER BY nombre_producto
+        """)
+        st.session_state["_fs_cat_prods"] = (
+            [f"{r['nombre_producto']} | {r['sku']}"
+             for _, r in _df_prods_fs.iterrows()]
+            if _df_prods_fs is not None and not _df_prods_fs.empty else [])
+    _fs_prov_opts = st.session_state["_fs_cat_provs"]
+    _fs_prod_opts = st.session_state["_fs_cat_prods"]
+
+    # Proveedor por defecto: Aliva (proveedor principal) si aparece en el catálogo
+    _fs_prov_def = None
+    for _ix, _op in enumerate(_fs_prov_opts):
+        if "aliva" in _op.lower():
+            _fs_prov_def = _ix
+            break
+
+    _fs_tab1, _fs_tab2, _fs_tab3, _fs_tab4 = st.tabs(
+        ["➕ Ingresar factura", "➖ Registrar salida", "📦 Stock por local", "📋 Historial"])
+
+    # ══════════ TAB 1: INGRESAR FACTURA (ENTRADAS) ══════════
+    with _fs_tab1:
+        _msg_fac = st.session_state.pop("_fs_fac_msg", None)
+        if _msg_fac:
+            st.success(_msg_fac)
+
+        if _user_local_fs:
+            _fs_local = _user_local_fs
+            st.markdown(f"**Local:** `{_fs_local}`")
+        else:
+            _fs_local = st.selectbox("Local", _FS_LOCALES, key="fs_fac_local")
+
+        st.markdown("**Detalle de productos de la factura**")
+        st.caption("Agrega una línea por cada producto comprado. Todas comparten el mismo "
+                   "proveedor, folio y fecha de factura.")
+
+        if "fs_fac_n_lineas" not in st.session_state:
+            st.session_state["fs_fac_n_lineas"] = 1
+        _fb1, _fb2, _fb3 = st.columns([2, 2, 6])
+        with _fb1:
+            if st.button("➕ Agregar producto", key="fs_fac_add", use_container_width=True):
+                st.session_state["fs_fac_n_lineas"] += 1
+                st.rerun()
+        with _fb2:
+            if (st.session_state["fs_fac_n_lineas"] > 1
+                    and st.button("➖ Quitar última", key="fs_fac_del", use_container_width=True)):
+                _li = st.session_state["fs_fac_n_lineas"] - 1
+                for _k in (f"fs_fac_prod_{_li}", f"fs_fac_kg_{_li}", f"fs_fac_precio_{_li}"):
+                    st.session_state.pop(_k, None)
+                st.session_state["fs_fac_n_lineas"] -= 1
+                st.rerun()
+
+        with st.form("fs_fac_form"):
+            _ff1, _ff2, _ff3 = st.columns(3)
+            with _ff1:
+                _fs_folio = st.text_input("Folio factura", key="fs_fac_folio",
+                                          placeholder="Ej: 12345")
+            with _ff2:
+                _fs_prov_sel = st.selectbox("Proveedor", _fs_prov_opts, key="fs_fac_prov",
+                                            index=_fs_prov_def,
+                                            placeholder="Escribe para buscar...")
+            with _ff3:
+                _fs_fecha = st.date_input("Fecha factura", key="fs_fac_fecha",
+                                          value=_fs_dt.date.today())
+
+            for _i in range(st.session_state["fs_fac_n_lineas"]):
+                _l1, _l2, _l3 = st.columns([6, 2, 2])
+                with _l1:
+                    st.selectbox(f"Producto {_i+1}", _fs_prod_opts, key=f"fs_fac_prod_{_i}",
+                                 index=None, placeholder="Escribe para buscar...")
+                with _l2:
+                    st.number_input(f"Kg {_i+1}", min_value=0.0, step=0.5,
+                                    key=f"fs_fac_kg_{_i}", value=None, placeholder="Kilos")
+                with _l3:
+                    st.number_input(f"Precio/kg {_i+1} ($)", min_value=0.0, step=100.0,
+                                    key=f"fs_fac_precio_{_i}", value=None, placeholder="Precio")
+
+            _fs_fac_obs = st.text_area("Observación (opcional)", key="fs_fac_obs")
+            _fs_fac_submit = st.form_submit_button("💾 Registrar factura",
+                                                   type="primary", use_container_width=True)
+
+        if _fs_fac_submit:
+            _fs_prov, _fs_rut = "", ""
+            if _fs_prov_sel:
+                _fs_prov = _fs_prov_sel.split(" | ")[0]
+                _fs_rut  = _fs_prov_sel.split(" | ")[1] if " | " in _fs_prov_sel else ""
+            _fs_lineas = []
+            for _i in range(st.session_state.get("fs_fac_n_lineas", 1)):
+                _ps = st.session_state.get(f"fs_fac_prod_{_i}")
+                _kg = st.session_state.get(f"fs_fac_kg_{_i}")
+                _pr = st.session_state.get(f"fs_fac_precio_{_i}")
+                if _ps and _kg:
+                    _pn  = _ps.split(" | ")[0].strip()
+                    _sk  = (_ps.split(" | ")[1].strip() if " | " in _ps else "") or None
+                    _kgf = float(_kg)
+                    _prf = float(_pr or 0)
+                    _fs_lineas.append((_pn, _sk, _kgf, _prf, _kgf * _prf))
+            if not _fs_local or not _fs_folio or not _fs_lineas:
+                st.error("Local, folio y al menos un producto con kilos son obligatorios.")
+            elif not _fs_prov:
+                st.error("Selecciona un proveedor de la lista.")
+            else:
+                try:
+                    _eng_fs = get_engine()
+                    with _eng_fs.connect() as _c_fs:
+                        for _pn, _sk, _kgf, _prf, _tot in _fs_lineas:
+                            _c_fs.execute(text("""
+                                INSERT INTO facturas_insumos
+                                    (local, folio_factura, rut_proveedor, nombre_proveedor,
+                                     fecha_factura, nombre_producto, sku, cantidad_kg,
+                                     precio_unitario, total, observacion, registrado_por)
+                                VALUES
+                                    (:local, :folio, :rut, :prov, :fecha, :prod, :sku,
+                                     :kg, :precio, :total, :obs, :reg)
+                            """), {
+                                "local":  _fs_local,
+                                "folio":  _fs_folio.strip(),
+                                "rut":    _fs_rut.strip(),
+                                "prov":   _fs_prov.strip(),
+                                "fecha":  str(_fs_fecha) if _fs_fecha else None,
+                                "prod":   _pn,
+                                "sku":    _sk,
+                                "kg":     _kgf,
+                                "precio": _prf,
+                                "total":  _tot,
+                                "obs":    (_fs_fac_obs.strip() or None),
+                                "reg":    _uname_fs,
+                            })
+                        _c_fs.commit()
+                    st.session_state["_fs_fac_msg"] = (
+                        f"✅ Factura registrada: {len(_fs_lineas)} producto(s) en {_fs_local}.")
+                    st.session_state["fs_fac_n_lineas"] = 1
+                    st.rerun()
+                except Exception as _e_fs:
+                    st.error(f"Error: {_e_fs}")
+
+    # ══════════ TAB 2: REGISTRAR SALIDA (CONSUMO / MERMA / TRASPASO) ══════════
+    with _fs_tab2:
+        _msg_sal = st.session_state.pop("_fs_sal_msg", None)
+        if _msg_sal:
+            st.success(_msg_sal)
+
+        _sc1, _sc2 = st.columns(2)
+        with _sc1:
+            if _user_local_fs:
+                _fs_local_s = _user_local_fs
+                st.markdown(f"**Local:** `{_fs_local_s}`")
+            else:
+                _fs_local_s = st.selectbox("Local", _FS_LOCALES, key="fs_sal_local")
+        with _sc2:
+            _fs_fecha_s = st.date_input("Fecha de la salida", key="fs_sal_fecha",
+                                        value=_fs_dt.date.today())
+
+        _fs_motivo = st.selectbox("Motivo", _FS_MOTIVOS, key="fs_sal_motivo")
+
+        st.markdown("**Productos que salen**")
+        st.caption("Agrega una línea por cada producto que sale de stock (todas con el mismo "
+                   "motivo y fecha).")
+
+        if "fs_sal_n_lineas" not in st.session_state:
+            st.session_state["fs_sal_n_lineas"] = 1
+        _sb1, _sb2, _sb3 = st.columns([2, 2, 6])
+        with _sb1:
+            if st.button("➕ Agregar producto", key="fs_sal_add", use_container_width=True):
+                st.session_state["fs_sal_n_lineas"] += 1
+                st.rerun()
+        with _sb2:
+            if (st.session_state["fs_sal_n_lineas"] > 1
+                    and st.button("➖ Quitar última", key="fs_sal_del", use_container_width=True)):
+                _li = st.session_state["fs_sal_n_lineas"] - 1
+                for _k in (f"fs_sal_prod_{_li}", f"fs_sal_kg_{_li}"):
+                    st.session_state.pop(_k, None)
+                st.session_state["fs_sal_n_lineas"] -= 1
+                st.rerun()
+
+        with st.form("fs_sal_form"):
+            for _i in range(st.session_state["fs_sal_n_lineas"]):
+                _s1, _s2 = st.columns([7, 3])
+                with _s1:
+                    st.selectbox(f"Producto {_i+1}", _fs_prod_opts, key=f"fs_sal_prod_{_i}",
+                                 index=None, placeholder="Escribe para buscar...")
+                with _s2:
+                    st.number_input(f"Kg {_i+1}", min_value=0.0, step=0.5,
+                                    key=f"fs_sal_kg_{_i}", value=None, placeholder="Kilos")
+            _fs_sal_obs = st.text_area("Observación (opcional)", key="fs_sal_obs")
+            _fs_sal_submit = st.form_submit_button("💾 Registrar salida",
+                                                   type="primary", use_container_width=True)
+
+        if _fs_sal_submit:
+            _fs_sal_lineas = []
+            for _i in range(st.session_state.get("fs_sal_n_lineas", 1)):
+                _ps = st.session_state.get(f"fs_sal_prod_{_i}")
+                _kg = st.session_state.get(f"fs_sal_kg_{_i}")
+                if _ps and _kg:
+                    _pn = _ps.split(" | ")[0].strip()
+                    _sk = (_ps.split(" | ")[1].strip() if " | " in _ps else "") or None
+                    _fs_sal_lineas.append((_pn, _sk, float(_kg)))
+            if not _fs_local_s or not _fs_sal_lineas:
+                st.error("Local y al menos un producto con kilos son obligatorios.")
+            else:
+                try:
+                    _eng_fs2 = get_engine()
+                    with _eng_fs2.connect() as _c_s:
+                        for _pn, _sk, _kgf in _fs_sal_lineas:
+                            _c_s.execute(text("""
+                                INSERT INTO salidas_insumos
+                                    (local, fecha_salida, nombre_producto, sku,
+                                     cantidad_kg, motivo, observacion, registrado_por)
+                                VALUES
+                                    (:local, :fecha, :prod, :sku, :kg, :motivo, :obs, :reg)
+                            """), {
+                                "local":  _fs_local_s,
+                                "fecha":  str(_fs_fecha_s) if _fs_fecha_s else None,
+                                "prod":   _pn,
+                                "sku":    _sk,
+                                "kg":     _kgf,
+                                "motivo": _fs_motivo,
+                                "obs":    (_fs_sal_obs.strip() or None),
+                                "reg":    _uname_fs,
+                            })
+                        _c_s.commit()
+                    st.session_state["_fs_sal_msg"] = (
+                        f"✅ Salida registrada: {len(_fs_sal_lineas)} producto(s) "
+                        f"({_fs_motivo}) en {_fs_local_s}.")
+                    st.session_state["fs_sal_n_lineas"] = 1
+                    st.rerun()
+                except Exception as _e_s:
+                    st.error(f"Error: {_e_s}")
+
+    # ══════════ TAB 3: STOCK POR LOCAL (ENTRADAS − SALIDAS) ══════════
+    with _fs_tab3:
+        _fs_ent = run_query("""
+            SELECT local, sku,
+                   MAX(nombre_producto) AS nombre_producto,
+                   SUM(cantidad_kg)     AS ingresado_kg
+            FROM facturas_insumos
+            GROUP BY local, sku
+        """)
+        _fs_sal = run_query("""
+            SELECT local, sku, SUM(cantidad_kg) AS salido_kg
+            FROM salidas_insumos
+            GROUP BY local, sku
+        """)
+        if _fs_ent is None:
+            _fs_ent = pd.DataFrame(columns=["local", "sku", "nombre_producto", "ingresado_kg"])
+        if _fs_sal is None:
+            _fs_sal = pd.DataFrame(columns=["local", "sku", "salido_kg"])
+
+        if _fs_ent.empty and _fs_sal.empty:
+            st.info("Aún no hay movimientos de inventario registrados.")
+        else:
+            _fs_stk = _fs_ent.merge(_fs_sal, on=["local", "sku"], how="outer")
+            _fs_stk["ingresado_kg"] = pd.to_numeric(_fs_stk["ingresado_kg"], errors="coerce").fillna(0.0)
+            _fs_stk["salido_kg"]    = pd.to_numeric(_fs_stk["salido_kg"], errors="coerce").fillna(0.0)
+            _fs_stk["nombre_producto"] = _fs_stk["nombre_producto"].fillna("(sin nombre)")
+            _fs_stk["disponible_kg"] = (_fs_stk["ingresado_kg"] - _fs_stk["salido_kg"]).round(2)
+
+            # Filtro de local
+            if _user_local_fs:
+                _fs_loc_v = _user_local_fs
+                st.markdown(f"**Local:** `{_fs_loc_v}`")
+            else:
+                _fs_loc_v = st.selectbox(
+                    "Local", ["Todos"] + sorted(_fs_stk["local"].dropna().unique().tolist()),
+                    key="fs_stk_local")
+
+            _fs_stk_v = _fs_stk.copy()
+            if _fs_loc_v != "Todos":
+                _fs_stk_v = _fs_stk_v[_fs_stk_v["local"] == _fs_loc_v]
+
+            _fs_solo_disp = st.checkbox("Mostrar solo con stock disponible (> 0)",
+                                        value=False, key="fs_stk_solo")
+            if _fs_solo_disp:
+                _fs_stk_v = _fs_stk_v[_fs_stk_v["disponible_kg"] > 0]
+
+            # KPIs
+            _k1, _k2, _k3 = st.columns(3)
+            _k1.metric("Productos con stock", int((_fs_stk_v["disponible_kg"] > 0).sum()))
+            _k2.metric("Kg disponibles", f"{_fs_stk_v['disponible_kg'].clip(lower=0).sum():,.1f}")
+            _neg = int((_fs_stk_v["disponible_kg"] < 0).sum())
+            _k3.metric("Productos en negativo", _neg)
+            if _neg:
+                st.warning("⚠️ Hay productos con saldo negativo (salidas mayores a entradas). "
+                           "Revisa que las facturas estén ingresadas o corrige las salidas.")
+
+            _fs_show = _fs_stk_v.sort_values(["local", "disponible_kg"],
+                                             ascending=[True, False]).rename(columns={
+                "local": "Local", "nombre_producto": "Producto", "sku": "SKU",
+                "ingresado_kg": "Ingresado (kg)", "salido_kg": "Salidas (kg)",
+                "disponible_kg": "Disponible (kg)",
+            })[["Local", "Producto", "SKU", "Ingresado (kg)", "Salidas (kg)", "Disponible (kg)"]]
+            st.dataframe(_fs_show, use_container_width=True, hide_index=True)
+            st.caption("Disponible = Ingresado (facturas) − Salidas (consumo/merma/traspaso). "
+                       "Solo refleja movimientos cargados en este módulo.")
+
+    # ══════════ TAB 4: HISTORIAL ══════════
+    with _fs_tab4:
+        _fs_hist_tipo = st.radio("Ver", ["Facturas (entradas)", "Salidas"],
+                                 horizontal=True, key="fs_hist_tipo")
+
+        if _fs_hist_tipo == "Facturas (entradas)":
+            _fs_h = run_query("""
+                SELECT id, fecha_registro, local, folio_factura, nombre_proveedor,
+                       fecha_factura, nombre_producto, sku, cantidad_kg, precio_unitario,
+                       total, observacion, registrado_por
+                FROM facturas_insumos
+                ORDER BY fecha_registro DESC
+                LIMIT 500
+            """)
+            if _fs_h is None or _fs_h.empty:
+                st.info("Sin facturas registradas.")
+            else:
+                if _user_local_fs:
+                    _fs_h = _fs_h[_fs_h["local"] == _user_local_fs]
+                _fs_h_show = _fs_h.rename(columns={
+                    "fecha_registro": "Registrado", "local": "Local",
+                    "folio_factura": "Folio", "nombre_proveedor": "Proveedor",
+                    "fecha_factura": "Fecha factura", "nombre_producto": "Producto",
+                    "sku": "SKU", "cantidad_kg": "Kg", "precio_unitario": "Precio/kg",
+                    "total": "Total", "observacion": "Obs.", "registrado_por": "Por",
+                })
+                _fs_h_show["Registrado"] = _fs_h_show["Registrado"].astype(str).str[:16]
+                st.dataframe(
+                    _fs_h_show[["Registrado", "Local", "Folio", "Proveedor", "Fecha factura",
+                                "Producto", "SKU", "Kg", "Precio/kg", "Total", "Por"]],
+                    use_container_width=True, hide_index=True)
+                if _is_admin_fs:
+                    st.markdown("**Eliminar registro (corrección)**")
+                    _del_c1, _del_c2 = st.columns([3, 2])
+                    with _del_c1:
+                        _fs_del_id = st.number_input("ID a eliminar", min_value=0, step=1,
+                                                     value=0, key="fs_fac_del_id")
+                    with _del_c2:
+                        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                        if st.button("🗑️ Eliminar factura", key="fs_fac_del_btn"):
+                            if _fs_del_id and int(_fs_del_id) > 0:
+                                try:
+                                    _eng_d = get_engine()
+                                    with _eng_d.connect() as _cd:
+                                        _cd.execute(text(
+                                            "DELETE FROM facturas_insumos WHERE id=:id"),
+                                            {"id": int(_fs_del_id)})
+                                        _cd.commit()
+                                    st.success(f"✅ Registro {int(_fs_del_id)} eliminado.")
+                                    st.rerun()
+                                except Exception as _ed:
+                                    st.error(f"Error: {_ed}")
+                            else:
+                                st.warning("Indica un ID válido.")
+        else:
+            _fs_s = run_query("""
+                SELECT id, fecha_registro, local, fecha_salida, nombre_producto, sku,
+                       cantidad_kg, motivo, observacion, registrado_por
+                FROM salidas_insumos
+                ORDER BY fecha_registro DESC
+                LIMIT 500
+            """)
+            if _fs_s is None or _fs_s.empty:
+                st.info("Sin salidas registradas.")
+            else:
+                if _user_local_fs:
+                    _fs_s = _fs_s[_fs_s["local"] == _user_local_fs]
+                _fs_s_show = _fs_s.rename(columns={
+                    "fecha_registro": "Registrado", "local": "Local",
+                    "fecha_salida": "Fecha salida", "nombre_producto": "Producto",
+                    "sku": "SKU", "cantidad_kg": "Kg", "motivo": "Motivo",
+                    "observacion": "Obs.", "registrado_por": "Por",
+                })
+                _fs_s_show["Registrado"] = _fs_s_show["Registrado"].astype(str).str[:16]
+                st.dataframe(
+                    _fs_s_show[["Registrado", "Local", "Fecha salida", "Producto", "SKU",
+                                "Kg", "Motivo", "Por"]],
+                    use_container_width=True, hide_index=True)
+                if _is_admin_fs:
+                    st.markdown("**Eliminar registro (corrección)**")
+                    _del_s1, _del_s2 = st.columns([3, 2])
+                    with _del_s1:
+                        _fs_sdel_id = st.number_input("ID a eliminar", min_value=0, step=1,
+                                                      value=0, key="fs_sal_del_id")
+                    with _del_s2:
+                        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                        if st.button("🗑️ Eliminar salida", key="fs_sal_del_btn"):
+                            if _fs_sdel_id and int(_fs_sdel_id) > 0:
+                                try:
+                                    _eng_ds = get_engine()
+                                    with _eng_ds.connect() as _cds:
+                                        _cds.execute(text(
+                                            "DELETE FROM salidas_insumos WHERE id=:id"),
+                                            {"id": int(_fs_sdel_id)})
+                                        _cds.commit()
+                                    st.success(f"✅ Registro {int(_fs_sdel_id)} eliminado.")
+                                    st.rerun()
+                                except Exception as _eds:
+                                    st.error(f"Error: {_eds}")
+                            else:
+                                st.warning("Indica un ID válido.")
 
 
 elif modulo.startswith("📥 Stock Cierre"):
