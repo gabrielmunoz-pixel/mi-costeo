@@ -23448,12 +23448,32 @@ elif modulo.startswith("👷 Costo de Personal"):
     _is_admin_cp   = st.session_state.get("user_role") == "admin"
     _user_local_cp = st.session_state.get("user_local")
     _CP_META = 0.23  # meta de costo de mano de obra (23% sobre la venta)
+    _CP_JORNADA_SEM = 42  # horas semanales; sobre esto es hora extra
+
+    # ── Feriados legales de Chile (lista fija). Verificar/actualizar por año. ──
+    _CP_FERIADOS = {
+        _cp_dt.date(2025, 1, 1), _cp_dt.date(2025, 4, 18), _cp_dt.date(2025, 4, 19),
+        _cp_dt.date(2025, 5, 1), _cp_dt.date(2025, 5, 21), _cp_dt.date(2025, 6, 20),
+        _cp_dt.date(2025, 6, 29), _cp_dt.date(2025, 7, 16), _cp_dt.date(2025, 8, 15),
+        _cp_dt.date(2025, 9, 18), _cp_dt.date(2025, 9, 19), _cp_dt.date(2025, 10, 12),
+        _cp_dt.date(2025, 10, 31), _cp_dt.date(2025, 11, 1), _cp_dt.date(2025, 11, 16),
+        _cp_dt.date(2025, 11, 23), _cp_dt.date(2025, 12, 8), _cp_dt.date(2025, 12, 14),
+        _cp_dt.date(2025, 12, 25),
+        _cp_dt.date(2026, 1, 1), _cp_dt.date(2026, 4, 3), _cp_dt.date(2026, 4, 4),
+        _cp_dt.date(2026, 5, 1), _cp_dt.date(2026, 5, 21), _cp_dt.date(2026, 6, 20),
+        _cp_dt.date(2026, 6, 29), _cp_dt.date(2026, 7, 16), _cp_dt.date(2026, 8, 15),
+        _cp_dt.date(2026, 9, 18), _cp_dt.date(2026, 9, 19), _cp_dt.date(2026, 10, 12),
+        _cp_dt.date(2026, 10, 31), _cp_dt.date(2026, 11, 1), _cp_dt.date(2026, 11, 16),
+        _cp_dt.date(2026, 12, 8), _cp_dt.date(2026, 12, 25),
+    }
 
     st.markdown("# 👷 Costo de Personal")
-    st.caption("Evaluación del costo de mano de obra (Costo Empresa) sobre la venta, contra la "
-               "meta de 23% por local y cadena. Fuentes: remuneraciones y asistencia RRHH + ventas.")
+    st.caption("Costo de mano de obra = cantidades de asistencia × precios de la planilla. "
+               "Días normales × valor día, domingos × valor domingo (cocina/salón), "
+               "feriados × valor feriado, y horas sobre 42h/semana × valor hora extra. "
+               "Se evalúa contra la meta de 23% sobre la venta, por local y cadena.")
 
-    # ── Períodos disponibles (remuneraciones es mensual: primer día de mes) ──
+    # ── Planilla de precios disponible ──
     _cp_per = run_query("""
         SELECT DISTINCT periodo FROM remuneraciones_rrhh
         WHERE periodo IS NOT NULL ORDER BY periodo DESC
@@ -23467,31 +23487,64 @@ elif modulo.startswith("👷 Costo de Personal"):
     _per_list = pd.to_datetime(_cp_per["periodo"]).dt.date.tolist()
     def _cp_fmt_per(d):
         return f"{_MESES_CP.get(d.month, d.month)} {d.year}"
-    _per_sel = st.selectbox("Período", _per_list, format_func=_cp_fmt_per, key="cp_periodo")
-    _y, _m = _per_sel.year, _per_sel.month
-    _ini = _cp_dt.date(_y, _m, 1)
-    _fin = _cp_dt.date(_y, _m, _cp_cal.monthrange(_y, _m)[1])
 
-    # ── Datos base del período ──
-    _cp_costo = run_query("""
-        SELECT local,
-               COUNT(DISTINCT rut)               AS dotacion,
-               SUM(COALESCE(costo_empresa,0))    AS costo_mo,
-               SUM(COALESCE(total_haberes,0))    AS total_haberes,
-               SUM(COALESCE(aportes_patronales,0)) AS aportes,
-               SUM(COALESCE(gratif_tope,0))      AS gratif_tope,
-               SUM(COALESCE(gratificacion,0))    AS gratificacion,
-               SUM(COALESCE(sueldo_base,0))      AS sueldo_base,
-               SUM(COALESCE(bono_produccion,0)+COALESCE(bono_gestion,0)
-                   +COALESCE(bono_formacion,0)+COALESCE(bono_delivery,0)
-                   +COALESCE(bono_reserva,0))    AS bonos,
-               SUM(COALESCE(horas_extras_50,0))  AS horas_extras,
-               SUM(COALESCE(colacion_haber,0))   AS colacion,
-               SUM(COALESCE(movilizacion,0))     AS movilizacion
+    # ── Selección: planilla de precios + rango de fechas a evaluar ──
+    _c_sel1, _c_sel2, _c_sel3 = st.columns([1.2, 1, 1])
+    with _c_sel1:
+        _per_sel = st.selectbox("Planilla de precios (remuneraciones)", _per_list,
+                                format_func=_cp_fmt_per, key="cp_periodo",
+                                help="Tabla de precios por concepto que se usa para valorizar.")
+    _def_ini = _per_sel
+    _def_fin = _cp_dt.date(_per_sel.year, _per_sel.month,
+                           _cp_cal.monthrange(_per_sel.year, _per_sel.month)[1])
+    with _c_sel2:
+        _ini = st.date_input("Desde", value=_def_ini, key="cp_desde", format="DD/MM/YYYY")
+    with _c_sel3:
+        _fin = st.date_input("Hasta", value=_def_fin, key="cp_hasta", format="DD/MM/YYYY")
+
+    if _ini > _fin:
+        st.error("La fecha 'Desde' no puede ser posterior a 'Hasta'.")
+        st.stop()
+
+    _dias_rango = (_fin - _ini).days + 1
+    st.caption(f"Rango evaluado: **{_ini.strftime('%d/%m/%Y')} → {_fin.strftime('%d/%m/%Y')}** "
+               f"({_dias_rango} días).")
+
+    if st.button("📊 Generar informe", type="primary", key="cp_generar"):
+        st.session_state["cp_run"] = True
+        st.session_state["cp_run_params"] = (str(_per_sel), str(_ini), str(_fin), _dias_rango)
+
+    if not st.session_state.get("cp_run"):
+        st.info("Elige la planilla y el rango de fechas, luego presiona **Generar informe**.")
+        st.stop()
+
+    _p_per, _p_ini, _p_fin, _dias_rango = st.session_state["cp_run_params"]
+    _per_base = _cp_dt.date.fromisoformat(_p_per)
+
+    # ── PRECIOS por persona (de la planilla) ──
+    _rm_val = run_query("""
+        SELECT rut, local, nombre, cargo, familia_cargo,
+               COALESCE(valor_dia,0)            AS valor_dia,
+               COALESCE(valor_feriado,0)        AS valor_feriado,
+               COALESCE(valor_domingo_cocina,0) AS vdom_cocina,
+               COALESCE(valor_domingo_salon,0)  AS vdom_salon,
+               COALESCE(horas_extras_50,0)      AS valor_he
         FROM remuneraciones_rrhh
         WHERE periodo = :p
-        GROUP BY local
-    """, {"p": str(_ini)})
+    """, {"p": _p_per})
+    if _rm_val is None or _rm_val.empty:
+        st.warning(f"No hay precios en la planilla {_cp_fmt_per(_per_base)}.")
+        st.stop()
+
+    # ── CANTIDADES de asistencia en el rango (un registro por rut/fecha) ──
+    _as = run_query("""
+        SELECT rut, local, fecha, horas_totales, tipo_jornada, trabajo
+        FROM asistencia_rrhh
+        WHERE fecha BETWEEN :i AND :f AND trabajo = true
+    """, {"i": _p_ini, "f": _p_fin})
+    if _as is None: _as = pd.DataFrame(columns=["rut","local","fecha","horas_totales","tipo_jornada","trabajo"])
+
+    # ── VENTA del rango ──
     _cp_venta = run_query("""
         SELECT local, SUM(monto_venta_real) AS venta
         FROM ventas
@@ -23500,40 +23553,92 @@ elif modulo.startswith("👷 Costo de Personal"):
                 SELECT DISTINCT codigo_venta FROM recetas WHERE codigo_venta IS NOT NULL))
           AND sku_producto NOT LIKE 'CP%'
         GROUP BY local
-    """, {"i": str(_ini), "f": str(_fin)})
-    _cp_hrs = run_query("""
-        SELECT local,
-               SUM(horas_totales) FILTER (WHERE trabajo) AS horas,
-               COUNT(*) FILTER (WHERE trabajo)           AS turnos
-        FROM asistencia_rrhh
-        WHERE fecha BETWEEN :i AND :f
-        GROUP BY local
-    """, {"i": str(_ini), "f": str(_fin)})
-
-    if _cp_costo is None or _cp_costo.empty:
-        st.warning(f"No hay remuneraciones para {_cp_fmt_per(_per_sel)}.")
-        st.stop()
+    """, {"i": _p_ini, "f": _p_fin})
     if _cp_venta is None: _cp_venta = pd.DataFrame(columns=["local", "venta"])
-    if _cp_hrs   is None: _cp_hrs   = pd.DataFrame(columns=["local", "horas", "turnos"])
 
-    _cp = _cp_costo.merge(_cp_venta, on="local", how="outer").merge(_cp_hrs, on="local", how="outer")
-    _cp_num = ["dotacion","costo_mo","total_haberes","aportes","gratif_tope","gratificacion",
-               "sueldo_base","bonos","horas_extras","colacion","movilizacion",
-               "venta","horas","turnos"]
-    for _c in _cp_num:
+    # ── Cálculo: cantidades × precios, por persona ──
+    _val_idx = {r["rut"]: r for _, r in _rm_val.iterrows()}
+    _por_persona = {}  # rut -> dict acumulador
+
+    if not _as.empty:
+        _as["fecha"] = pd.to_datetime(_as["fecha"]).dt.date
+        _as["horas_totales"] = pd.to_numeric(_as["horas_totales"], errors="coerce").fillna(0.0)
+
+        # 1) Días valorizados (normal / feriado / domingo) y horas por semana
+        _horas_semana = {}  # (rut, año_iso, semana_iso) -> horas
+        for _, _row in _as.iterrows():
+            _rut = _row["rut"]
+            _v = _val_idx.get(_rut)
+            if _v is None:
+                continue
+            _acc = _por_persona.setdefault(_rut, {
+                "local": _v["local"], "familia": str(_v.get("familia_cargo") or "").lower(),
+                "dias_normal": 0, "dias_feriado": 0, "dias_domingo": 0,
+                "costo_dias": 0.0, "horas_extra": 0.0, "costo_he": 0.0,
+            })
+            _fch = _row["fecha"]
+            _fam = _acc["familia"]
+            if _fch in _CP_FERIADOS:
+                _acc["dias_feriado"] += 1
+                _acc["costo_dias"] += float(_v["valor_feriado"])
+            elif _fch.weekday() == 6:  # domingo
+                _acc["dias_domingo"] += 1
+                _acc["costo_dias"] += (float(_v["vdom_cocina"]) if "cocina" in _fam
+                                       else float(_v["vdom_salon"]))
+            else:
+                _acc["dias_normal"] += 1
+                _acc["costo_dias"] += float(_v["valor_dia"])
+
+            # acumular horas de la semana ISO (lunes-domingo)
+            _iso = _fch.isocalendar()
+            _key = (_rut, _iso[0], _iso[1])
+            _horas_semana[_key] = _horas_semana.get(_key, 0.0) + float(_row["horas_totales"])
+
+        # 2) Horas extra: por semana, lo que exceda 42h × valor hora extra
+        for (_rut, _yiso, _wiso), _horas in _horas_semana.items():
+            _v = _val_idx.get(_rut)
+            _acc = _por_persona.get(_rut)
+            if _v is None or _acc is None:
+                continue
+            _he = _horas - _CP_JORNADA_SEM
+            if _he > 0:
+                _acc["horas_extra"] += _he
+                _acc["costo_he"]    += _he * float(_v["valor_he"])
+
+    # ── Consolidar por local ──
+    _rows_loc = {}
+    for _rut, _acc in _por_persona.items():
+        _loc = _acc["local"]
+        _r = _rows_loc.setdefault(_loc, {
+            "local": _loc, "dotacion": 0, "costo_dias": 0.0, "costo_he": 0.0,
+            "horas_extra": 0.0, "dias_normal": 0, "dias_domingo": 0, "dias_feriado": 0,
+        })
+        _r["dotacion"]    += 1
+        _r["costo_dias"]  += _acc["costo_dias"]
+        _r["costo_he"]    += _acc["costo_he"]
+        _r["horas_extra"] += _acc["horas_extra"]
+        _r["dias_normal"] += _acc["dias_normal"]
+        _r["dias_domingo"]+= _acc["dias_domingo"]
+        _r["dias_feriado"]+= _acc["dias_feriado"]
+
+    _cp = pd.DataFrame(list(_rows_loc.values())) if _rows_loc else pd.DataFrame(
+        columns=["local","dotacion","costo_dias","costo_he","horas_extra",
+                 "dias_normal","dias_domingo","dias_feriado"])
+    _cp = _cp.merge(_cp_venta, on="local", how="outer")
+    for _c in ["dotacion","costo_dias","costo_he","horas_extra","dias_normal",
+               "dias_domingo","dias_feriado","venta"]:
         _cp[_c] = pd.to_numeric(_cp[_c], errors="coerce").fillna(0.0) if _c in _cp.columns else 0.0
+
+    _cp["costo_mo"]      = _cp["costo_dias"] + _cp["costo_he"]
     _cp["pct_mo"]        = _cp.apply(lambda r: (r["costo_mo"]/r["venta"]) if r["venta"] > 0 else float("nan"), axis=1)
     _cp["brecha_pesos"]  = _cp["costo_mo"] - _cp["venta"] * _CP_META
     _cp["costo_persona"] = _cp.apply(lambda r: r["costo_mo"]/r["dotacion"] if r["dotacion"] > 0 else float("nan"), axis=1)
-    _cp["costo_hora"]    = _cp.apply(lambda r: r["costo_mo"]/r["horas"] if r["horas"] > 0 else float("nan"), axis=1)
-    _cp["venta_hora"]    = _cp.apply(lambda r: r["venta"]/r["horas"] if r["horas"] > 0 else float("nan"), axis=1)
 
     def _cp_sem(p):
-        if pd.isna(p):          return "⚪"
-        if p <= _CP_META:       return "🟢"
+        if pd.isna(p):           return "⚪"
+        if p <= _CP_META:        return "🟢"
         if p <= _CP_META + 0.02: return "🟡"
         return "🔴"
-
     def _cp_money(x):
         return f"${x:,.0f}" if pd.notna(x) else "—"
     def _cp_pct(x):
@@ -23550,12 +23655,13 @@ elif modulo.startswith("👷 Costo de Personal"):
 
         _k1, _k2, _k3, _k4 = st.columns(4)
         _k1.metric("Venta cadena", _cp_money(_v_tot))
-        _k2.metric("Costo MO", _cp_money(_c_tot))
+        _k2.metric("Costo MO", _cp_money(_c_tot),
+                   help="Suma de días valorizados + horas extra, sobre el rango.")
         _k3.metric("% Costo MO", _cp_pct(_pct_tot),
                    (f"{(_pct_tot-_CP_META)*100:+.1f} pp vs meta" if pd.notna(_pct_tot) else None),
                    delta_color="inverse")
         _k4.metric("Brecha vs meta", _cp_money(_brecha_tot),
-                   help="Costo MO − 23% de la venta. Positivo = sobre la meta (gasto de más).")
+                   help="Costo MO − 23% de la venta. Positivo = sobre la meta.")
 
         _sem_tot = _cp_sem(_pct_tot)
         _msg_tot = ("dentro de la meta" if pd.notna(_pct_tot) and _pct_tot <= _CP_META
@@ -23567,7 +23673,6 @@ elif modulo.startswith("👷 Costo de Personal"):
             f"<span style='font-size:1.05rem'>{_sem_tot} La cadena está <b>{_msg_tot}</b> "
             f"({_cp_pct(_pct_tot)} vs 23%).</span></div>", unsafe_allow_html=True)
 
-        # Ranking de locales por % MO
         _rank = _cp.sort_values("pct_mo", ascending=False, na_position="last")
         _disp = pd.DataFrame({
             "": _rank["pct_mo"].map(_cp_sem),
@@ -23586,18 +23691,15 @@ elif modulo.startswith("👷 Costo de Personal"):
             _chart_df = _chart.set_index("local")[["pct_mo"]] * 100
             _chart_df = _chart_df.rename(columns={"pct_mo": "% Costo MO"})
             st.bar_chart(_chart_df)
-        st.caption("Meta de costo MO: 23%. Semáforo: 🟢 ≤23% · 🟡 ≤25% · 🔴 >25%. "
-                   "Locales sin venta o sin costo en el período aparecen como s/d.")
+        st.caption("Meta de costo MO: 23%. Semáforo: 🟢 ≤23% · 🟡 ≤25% · 🔴 >25%.")
 
-        # Desglose del costo (descomposición aditiva del Costo Empresa)
         st.markdown("**Desglose del costo de la cadena**")
-        _hab_sin_grat = _cp["total_haberes"].sum() - _cp["gratificacion"].sum()
-        _apo_tot = _cp["aportes"].sum()
-        _gto_tot = _cp["gratif_tope"].sum()
+        _cdias_tot = _cp["costo_dias"].sum()
+        _che_tot   = _cp["costo_he"].sum()
         _comp = pd.DataFrame({
-            "Componente": ["Haberes (sin gratificación)", "Aportes patronales",
-                           "Gratificación (tope)", "TOTAL Costo Empresa"],
-            "_monto": [_hab_sin_grat, _apo_tot, _gto_tot, _c_tot],
+            "Componente": ["Días valorizados (normal+domingo+feriado)", "Horas extra (>42h/sem)",
+                           "TOTAL Costo MO"],
+            "_monto": [_cdias_tot, _che_tot, _c_tot],
         })
         _comp_disp = pd.DataFrame({
             "Componente": _comp["Componente"],
@@ -23605,7 +23707,6 @@ elif modulo.startswith("👷 Costo de Personal"):
             "% del costo": _comp["_monto"].map(lambda x: f"{(x/_c_tot)*100:,.1f}%" if _c_tot else "—"),
         })
         st.dataframe(_comp_disp, use_container_width=True, hide_index=True)
-        st.caption("Costo Empresa = Haberes (sin gratificación) + Aportes patronales + Gratificación (tope).")
 
     # ════════════ VISTA POR LOCAL ════════════
     with _tab_loc:
@@ -23630,20 +23731,16 @@ elif modulo.startswith("👷 Costo de Personal"):
             _k4.metric("Dotación", f"{int(r['dotacion'])}")
             _k5.metric("Costo / persona", _cp_money(r["costo_persona"]))
             _k6.metric("Brecha vs meta", _cp_money(r["brecha_pesos"]),
-                       help="Costo MO − 23% de la venta. Positivo = sobre la meta.")
+                       help="Costo MO − 23% de la venta.")
             _k7, _k8, _k9 = st.columns(3)
-            _k7.metric("Horas trabajadas", f"{r['horas']:,.0f}")
-            _k8.metric("Costo / hora", _cp_money(r["costo_hora"]))
-            _k9.metric("Venta / hora", _cp_money(r["venta_hora"]))
+            _k7.metric("Días normales", f"{int(r['dias_normal'])}")
+            _k8.metric("Domingos / feriados", f"{int(r['dias_domingo'])} / {int(r['dias_feriado'])}")
+            _k9.metric("Horas extra", f"{r['horas_extra']:,.1f}")
 
-            # Desglose del costo del local
             st.markdown("**Desglose del costo del local**")
-            _hab_l = r["total_haberes"] - r["gratificacion"]
             _comp_l = pd.DataFrame({
-                "Componente": ["Sueldo base", "Bonos", "Horas extras 50%", "Colación",
-                               "Movilización", "Aportes patronales", "Gratificación (tope)"],
-                "_monto": [r["sueldo_base"], r["bonos"], r["horas_extras"], r["colacion"],
-                           r["movilizacion"], r["aportes"], r["gratif_tope"]],
+                "Componente": ["Días valorizados", "Horas extra (>42h/sem)"],
+                "_monto": [r["costo_dias"], r["costo_he"]],
             })
             _tot_l = r["costo_mo"] if r["costo_mo"] else 0
             _comp_l_disp = pd.DataFrame({
@@ -23654,48 +23751,31 @@ elif modulo.startswith("👷 Costo de Personal"):
             })
             st.dataframe(_comp_l_disp, use_container_width=True, hide_index=True)
 
-            # Desglose por familia de cargo
-            _cp_fam = run_query("""
-                SELECT COALESCE(familia_cargo,'(sin familia)') AS familia,
-                       COUNT(DISTINCT rut) AS dotacion,
-                       SUM(COALESCE(costo_empresa,0)) AS costo
-                FROM remuneraciones_rrhh
-                WHERE periodo = :p AND local = :l
-                GROUP BY familia_cargo
-                ORDER BY costo DESC
-            """, {"p": str(_ini), "l": _loc_v})
-            if _cp_fam is not None and not _cp_fam.empty:
-                st.markdown("**Costo por familia de cargo**")
-                _cp_fam["costo"] = pd.to_numeric(_cp_fam["costo"], errors="coerce").fillna(0.0)
-                _fam_disp = pd.DataFrame({
-                    "Familia": _cp_fam["familia"],
-                    "Dotación": _cp_fam["dotacion"].map(lambda x: f"{int(x)}"),
-                    "Costo": _cp_fam["costo"].map(_cp_money),
-                    "% del costo": _cp_fam["costo"].map(
-                        lambda x: f"{(x/_tot_l)*100:,.1f}%" if _tot_l else "—"),
-                })
-                st.dataframe(_fam_disp, use_container_width=True, hide_index=True)
-
-            # Detalle por persona (sensible: en expander)
+            # Detalle por persona (cantidades × precios)
             with st.expander("Detalle por persona"):
-                _cp_pers = run_query("""
-                    SELECT nombre, cargo, familia_cargo,
-                           COALESCE(costo_empresa,0) AS costo_empresa
-                    FROM remuneraciones_rrhh
-                    WHERE periodo = :p AND local = :l
-                    ORDER BY costo_empresa DESC
-                """, {"p": str(_ini), "l": _loc_v})
-                if _cp_pers is None or _cp_pers.empty:
-                    st.info("Sin detalle de personas.")
+                _det = []
+                for _rut, _acc in _por_persona.items():
+                    if _acc["local"] != _loc_v:
+                        continue
+                    _v = _val_idx.get(_rut, {})
+                    _det.append({
+                        "Nombre": _v.get("nombre", _rut),
+                        "Cargo": _v.get("cargo", ""),
+                        "Días norm.": _acc["dias_normal"],
+                        "Dom.": _acc["dias_domingo"],
+                        "Fer.": _acc["dias_feriado"],
+                        "Hrs extra": round(_acc["horas_extra"], 1),
+                        "Costo días": _acc["costo_dias"],
+                        "Costo HE": _acc["costo_he"],
+                        "Costo total": _acc["costo_dias"] + _acc["costo_he"],
+                    })
+                if not _det:
+                    st.info("Sin asistencia para este local en el rango.")
                 else:
-                    _cp_pers["costo_empresa"] = pd.to_numeric(
-                        _cp_pers["costo_empresa"], errors="coerce").fillna(0.0)
-                    _pers_disp = _cp_pers.rename(columns={
-                        "nombre": "Nombre", "cargo": "Cargo",
-                        "familia_cargo": "Familia", "costo_empresa": "Costo Empresa"})
-                    _pers_disp["Costo Empresa"] = _pers_disp["Costo Empresa"].map(_cp_money)
-                    st.dataframe(_pers_disp, use_container_width=True, hide_index=True)
-
+                    _ddf = pd.DataFrame(_det).sort_values("Costo total", ascending=False)
+                    for _c in ["Costo días", "Costo HE", "Costo total"]:
+                        _ddf[_c] = _ddf[_c].map(_cp_money)
+                    st.dataframe(_ddf, use_container_width=True, hide_index=True)
 elif modulo.startswith("📥 Stock Cierre"):
     import datetime as _sk_dt
     _is_admin_sk = st.session_state.get("user_role") == "admin"
