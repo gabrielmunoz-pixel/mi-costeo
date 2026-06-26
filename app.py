@@ -22886,7 +22886,15 @@ elif modulo.startswith("🧾 Facturas y Stock"):
 
     _FS_LOCALES = ["Vitacura", "Las Condes", "Chicureo", "La Dehesa", "Macul",
                    "La Reina", "Quilin", "Nueva Providencia", "Providencia", "Los Trapenses"]
-    _FS_MOTIVOS = ["Consumo", "Merma", "Traspaso", "Ajuste"]
+    # Productos controlados por stock fino (descuento por uso y venta interlocal).
+    # SKU = Código Ingrediente del archivo de uso (mismo SKU que las facturas).
+    _FS_CTRL = [
+        ("POSTA",       "AL-CA-010"),
+        ("FILETE",      "AL-CA-002"),
+        ("LOMO LISO",   "AL-CA-006"),
+        ("LOMO VETADO", "AL-CA-027"),
+    ]
+    _FS_CTRL_SKUS = {_s for _n, _s in _FS_CTRL}
 
     # ── Catálogos cacheados desde el maestro de compras (proveedores y productos) ──
     if "_fs_cat_provs" not in st.session_state:
@@ -22924,8 +22932,9 @@ elif modulo.startswith("🧾 Facturas y Stock"):
             _fs_prov_def = _ix
             break
 
-    _fs_tab1, _fs_tab2, _fs_tab3, _fs_tab4 = st.tabs(
-        ["➕ Ingresar factura", "➖ Registrar salida", "📦 Stock por local", "📋 Historial"])
+    _fs_tab1, _fs_tab2, _fs_tab3, _fs_tab4, _fs_tab5 = st.tabs(
+        ["➕ Ingresar factura", "📥 Ingresar uso", "🔁 Venta entre locales",
+         "📦 Stock por local", "📋 Historial"])
 
     # ══════════ TAB 1: INGRESAR FACTURA (ENTRADAS) ══════════
     with _fs_tab1:
@@ -23043,101 +23052,200 @@ elif modulo.startswith("🧾 Facturas y Stock"):
                 except Exception as _e_fs:
                     st.error(f"Error: {_e_fs}")
 
-    # ══════════ TAB 2: REGISTRAR SALIDA (CONSUMO / MERMA / TRASPASO) ══════════
+    # ══════════ TAB 2: INGRESAR USO (DESCUENTO POR CONSUMO DIARIO) ══════════
     with _fs_tab2:
-        _msg_sal = st.session_state.pop("_fs_sal_msg", None)
-        if _msg_sal:
-            st.success(_msg_sal)
+        _msg_uso = st.session_state.pop("_fs_uso_msg", None)
+        if _msg_uso:
+            st.success(_msg_uso)
 
-        _sc1, _sc2 = st.columns(2)
-        with _sc1:
-            if _user_local_fs:
-                _fs_local_s = _user_local_fs
-                st.markdown(f"**Local:** `{_fs_local_s}`")
-            else:
-                _fs_local_s = st.selectbox("Local", _FS_LOCALES, key="fs_sal_local")
-        with _sc2:
-            _fs_fecha_s = st.date_input("Fecha de la salida", key="fs_sal_fecha",
-                                        value=_fs_dt.date.today())
+        st.markdown("**Carga del uso diario (descuenta del stock)**")
+        st.caption("Sube el archivo de uso (IngredientesRecetas_Consolidado). Se consideran solo "
+                   "los productos controlados: POSTA, FILETE, LOMO LISO y LOMO VETADO, y se "
+                   "descuenta su uso por local. Si vuelves a subir el mismo día, se reemplaza.")
 
-        _fs_motivo = st.selectbox("Motivo", _FS_MOTIVOS, key="fs_sal_motivo")
+        _fs_uso_fecha = st.date_input(
+            "Día del uso (se descuenta como salida de esa fecha)",
+            key="fs_uso_fecha",
+            value=_fs_dt.date.today() - _fs_dt.timedelta(days=1))
 
-        st.markdown("**Productos que salen**")
-        st.caption("Agrega una línea por cada producto que sale de stock (todas con el mismo "
-                   "motivo y fecha).")
+        _fs_uso_file = st.file_uploader("Archivo de uso (.xlsx)", type=["xlsx"],
+                                        key="fs_uso_file")
 
-        if "fs_sal_n_lineas" not in st.session_state:
-            st.session_state["fs_sal_n_lineas"] = 1
-        _sb1, _sb2, _sb3 = st.columns([2, 2, 6])
-        with _sb1:
-            if st.button("➕ Agregar producto", key="fs_sal_add", use_container_width=True):
-                st.session_state["fs_sal_n_lineas"] += 1
-                st.rerun()
-        with _sb2:
-            if (st.session_state["fs_sal_n_lineas"] > 1
-                    and st.button("➖ Quitar última", key="fs_sal_del", use_container_width=True)):
-                _li = st.session_state["fs_sal_n_lineas"] - 1
-                for _k in (f"fs_sal_prod_{_li}", f"fs_sal_kg_{_li}"):
-                    st.session_state.pop(_k, None)
-                st.session_state["fs_sal_n_lineas"] -= 1
-                st.rerun()
+        if _fs_uso_file is not None:
+            try:
+                _df_uso = pd.read_excel(_fs_uso_file, engine="openpyxl")
+                _df_uso.columns = [str(c).strip() for c in _df_uso.columns]
+                _col_cod  = next((c for c in _df_uso.columns
+                                  if c.lower().startswith("código")
+                                  or c.lower().startswith("codigo")), None)
+                _col_ing  = next((c for c in _df_uso.columns
+                                  if c.lower().startswith("ingred")), None)
+                _col_cant = next((c for c in _df_uso.columns
+                                  if c.lower().startswith("cantidad")), None)
+                _col_loc  = next((c for c in _df_uso.columns
+                                  if c.lower() == "local"), None)
+                if not all([_col_cod, _col_cant, _col_loc]):
+                    st.error("El archivo no tiene las columnas esperadas "
+                             "(Código Ingrediente, Cantidad, Local).")
+                else:
+                    _df_f = _df_uso[_df_uso[_col_cod].astype(str).str.strip()
+                                    .isin(_FS_CTRL_SKUS)].copy()
+                    if _df_f.empty:
+                        st.warning("El archivo no contiene los productos controlados.")
+                    else:
+                        _df_f["__sku"]   = _df_f[_col_cod].astype(str).str.strip()
+                        _df_f["__prod"]  = (_df_f[_col_ing].astype(str).str.strip()
+                                            if _col_ing else _df_f["__sku"])
+                        _df_f["__local"] = _df_f[_col_loc].astype(str).str.strip()
+                        _df_f["__kg"]    = pd.to_numeric(_df_f[_col_cant],
+                                                         errors="coerce").fillna(0.0)
+                        _df_f = _df_f[_df_f["__kg"] > 0]
+                        # Normalizar nombre de local a la lista oficial
+                        _loc_map = {l.lower(): l for l in _FS_LOCALES}
+                        _df_f["__local"] = _df_f["__local"].apply(
+                            lambda x: _loc_map.get(str(x).lower(), x))
+                        if _user_local_fs:
+                            _df_f = _df_f[_df_f["__local"] == _user_local_fs]
 
-        with st.form("fs_sal_form"):
-            for _i in range(st.session_state["fs_sal_n_lineas"]):
-                _s1, _s2 = st.columns([7, 3])
-                with _s1:
-                    st.selectbox(f"Producto {_i+1}", _fs_prod_opts, key=f"fs_sal_prod_{_i}",
-                                 index=None, placeholder="Escribe para buscar...")
-                with _s2:
-                    st.number_input(f"Kg {_i+1}", min_value=0.0, step=0.5,
-                                    key=f"fs_sal_kg_{_i}", value=None, placeholder="Kilos")
-            _fs_sal_obs = st.text_area("Observación (opcional)", key="fs_sal_obs")
-            _fs_sal_submit = st.form_submit_button("💾 Registrar salida",
-                                                   type="primary", use_container_width=True)
+                        _prev = (_df_f.groupby(["__local", "__sku", "__prod"])["__kg"]
+                                 .sum().reset_index()
+                                 .rename(columns={"__local": "Local", "__prod": "Producto",
+                                                  "__sku": "SKU", "__kg": "Kg a descontar"}))
+                        _prev["Kg a descontar"] = _prev["Kg a descontar"].round(2)
+                        st.markdown(f"**Vista previa — {len(_prev)} línea(s) · "
+                                    f"{_prev['Kg a descontar'].sum():,.1f} kg**")
+                        st.dataframe(_prev[["Local", "Producto", "SKU", "Kg a descontar"]],
+                                     use_container_width=True, hide_index=True)
 
-        if _fs_sal_submit:
-            _fs_sal_lineas = []
-            for _i in range(st.session_state.get("fs_sal_n_lineas", 1)):
-                _ps = st.session_state.get(f"fs_sal_prod_{_i}")
-                _kg = st.session_state.get(f"fs_sal_kg_{_i}")
-                if _ps and _kg:
-                    _pn = _ps.split(" | ")[0].strip()
-                    _sk = (_ps.split(" | ")[1].strip() if " | " in _ps else "") or None
-                    _fs_sal_lineas.append((_pn, _sk, float(_kg)))
-            if not _fs_local_s or not _fs_sal_lineas:
-                st.error("Local y al menos un producto con kilos son obligatorios.")
-            else:
-                try:
-                    _eng_fs2 = get_engine()
-                    with _eng_fs2.connect() as _c_s:
-                        for _pn, _sk, _kgf in _fs_sal_lineas:
-                            _c_s.execute(text("""
-                                INSERT INTO salidas_insumos
-                                    (local, fecha_salida, nombre_producto, sku,
-                                     cantidad_kg, motivo, observacion, registrado_por)
-                                VALUES
-                                    (:local, :fecha, :prod, :sku, :kg, :motivo, :obs, :reg)
-                            """), {
-                                "local":  _fs_local_s,
-                                "fecha":  str(_fs_fecha_s) if _fs_fecha_s else None,
-                                "prod":   _pn,
-                                "sku":    _sk,
-                                "kg":     _kgf,
-                                "motivo": _fs_motivo,
-                                "obs":    (_fs_sal_obs.strip() or None),
-                                "reg":    _uname_fs,
-                            })
-                        _c_s.commit()
-                    st.session_state["_fs_sal_msg"] = (
-                        f"✅ Salida registrada: {len(_fs_sal_lineas)} producto(s) "
-                        f"({_fs_motivo}) en {_fs_local_s}.")
-                    st.session_state["fs_sal_n_lineas"] = 1
-                    st.rerun()
-                except Exception as _e_s:
-                    st.error(f"Error: {_e_s}")
+                        if st.button("💾 Registrar uso y descontar del stock",
+                                     type="primary", use_container_width=True,
+                                     key="fs_uso_btn"):
+                            try:
+                                _eng_u = get_engine()
+                                with _eng_u.connect() as _cu:
+                                    # Reemplaza el uso previo del mismo día y locales
+                                    # (evita doble descuento si se sube dos veces)
+                                    for _lp in sorted(_prev["Local"].unique().tolist()):
+                                        _cu.execute(text("""
+                                            DELETE FROM salidas_insumos
+                                            WHERE motivo = 'Uso' AND fecha_salida = :f
+                                              AND local = :l
+                                        """), {"f": str(_fs_uso_fecha), "l": _lp})
+                                    for _, _r in _prev.iterrows():
+                                        _cu.execute(text("""
+                                            INSERT INTO salidas_insumos
+                                                (local, fecha_salida, nombre_producto, sku,
+                                                 cantidad_kg, motivo, observacion, registrado_por)
+                                            VALUES
+                                                (:local, :fecha, :prod, :sku, :kg, 'Uso',
+                                                 :obs, :reg)
+                                        """), {
+                                            "local": _r["Local"], "fecha": str(_fs_uso_fecha),
+                                            "prod": _r["Producto"], "sku": _r["SKU"],
+                                            "kg": float(_r["Kg a descontar"]),
+                                            "obs": f"Uso del {_fs_uso_fecha}",
+                                            "reg": _uname_fs,
+                                        })
+                                    _cu.commit()
+                                st.session_state["_fs_uso_msg"] = (
+                                    f"✅ Uso registrado: {len(_prev)} línea(s) descontadas "
+                                    f"del {_fs_uso_fecha}.")
+                                st.rerun()
+                            except Exception as _eu2:
+                                st.error(f"Error al registrar: {_eu2}")
+            except Exception as _euf:
+                st.error(f"No se pudo leer el archivo: {_euf}")
 
-    # ══════════ TAB 3: STOCK POR LOCAL (ENTRADAS − SALIDAS) ══════════
+    # ══════════ TAB 3: VENTA ENTRE LOCALES (DOBLE EFECTO: ORIGEN − / DESTINO +) ══════════
     with _fs_tab3:
+        _msg_vt = st.session_state.pop("_fs_vt_msg", None)
+        if _msg_vt:
+            st.success(_msg_vt)
+
+        st.markdown("**Venta / traslado de producto entre locales**")
+        st.caption("Descuenta del local de origen y suma al local de destino. Solo productos "
+                   "controlados: POSTA, FILETE, LOMO LISO y LOMO VETADO.")
+
+        _vt1, _vt2 = st.columns(2)
+        with _vt1:
+            if _user_local_fs:
+                _vt_origen = _user_local_fs
+                st.markdown(f"**Local origen:** `{_vt_origen}`")
+            else:
+                _vt_origen = st.selectbox("Local origen", _FS_LOCALES, key="fs_vt_origen")
+        with _vt2:
+            _vt_dest_opts = [l for l in _FS_LOCALES if l != _vt_origen]
+            _vt_destino = st.selectbox("Local destino", _vt_dest_opts, key="fs_vt_destino",
+                                       index=None, placeholder="Selecciona destino...")
+
+        _vt_prod_opts = [f"{_n} | {_s}" for _n, _s in _FS_CTRL]
+        with st.form("fs_vt_form"):
+            _vf1, _vf2, _vf3 = st.columns([5, 2, 2])
+            with _vf1:
+                _vt_prod = st.selectbox("Producto", _vt_prod_opts, key="fs_vt_prod",
+                                        index=None, placeholder="Selecciona...")
+            with _vf2:
+                _vt_kg = st.number_input("Kg", min_value=0.0, step=0.5, key="fs_vt_kg",
+                                         value=None, placeholder="Kilos")
+            with _vf3:
+                _vt_precio = st.number_input("Precio/kg ($)", min_value=0.0, step=100.0,
+                                             key="fs_vt_precio", value=None,
+                                             placeholder="Opcional")
+            _vt_fecha = st.date_input("Fecha", key="fs_vt_fecha", value=_fs_dt.date.today())
+            _vt_obs = st.text_area("Observación (opcional)", key="fs_vt_obs")
+            _vt_submit = st.form_submit_button("💾 Registrar venta entre locales",
+                                               type="primary", use_container_width=True)
+
+        if _vt_submit:
+            if not _vt_prod or not _vt_kg:
+                st.error("Producto y kilos son obligatorios.")
+            elif not _vt_destino:
+                st.error("Selecciona el local de destino.")
+            elif _vt_origen == _vt_destino:
+                st.error("El origen y el destino deben ser distintos.")
+            else:
+                _vt_pn  = _vt_prod.split(" | ")[0].strip()
+                _vt_sk  = _vt_prod.split(" | ")[1].strip()
+                _vt_kgf = float(_vt_kg)
+                _vt_prf = float(_vt_precio or 0)
+                _vt_extra = f" · {_vt_obs.strip()}" if _vt_obs.strip() else ""
+                try:
+                    _eng_vt = get_engine()
+                    with _eng_vt.connect() as _cv:
+                        # Origen: salida (descuenta)
+                        _cv.execute(text("""
+                            INSERT INTO salidas_insumos
+                                (local, fecha_salida, nombre_producto, sku,
+                                 cantidad_kg, motivo, observacion, registrado_por)
+                            VALUES
+                                (:local, :fecha, :prod, :sku, :kg, 'Venta interlocal',
+                                 :obs, :reg)
+                        """), {"local": _vt_origen, "fecha": str(_vt_fecha),
+                               "prod": _vt_pn, "sku": _vt_sk, "kg": _vt_kgf,
+                               "obs": f"Venta a {_vt_destino}{_vt_extra}", "reg": _uname_fs})
+                        # Destino: entrada (traspaso interno, NO es compra a proveedor)
+                        _cv.execute(text("""
+                            INSERT INTO facturas_insumos
+                                (local, folio_factura, rut_proveedor, nombre_proveedor,
+                                 fecha_factura, nombre_producto, sku, cantidad_kg,
+                                 precio_unitario, total, observacion, registrado_por)
+                            VALUES
+                                (:local, NULL, NULL, 'TRASPASO INTERNO', :fecha, :prod, :sku,
+                                 :kg, :precio, :total, :obs, :reg)
+                        """), {"local": _vt_destino, "fecha": str(_vt_fecha),
+                               "prod": _vt_pn, "sku": _vt_sk, "kg": _vt_kgf,
+                               "precio": _vt_prf, "total": _vt_kgf * _vt_prf,
+                               "obs": f"Recibido de {_vt_origen}{_vt_extra}", "reg": _uname_fs})
+                        _cv.commit()
+                    st.session_state["_fs_vt_msg"] = (
+                        f"✅ Venta registrada: {_vt_kgf:,.1f} kg de {_vt_pn} · "
+                        f"{_vt_origen} → {_vt_destino}.")
+                    st.rerun()
+                except Exception as _evt:
+                    st.error(f"Error: {_evt}")
+
+    # ══════════ TAB 4: STOCK POR LOCAL (ENTRADAS − SALIDAS) ══════════
+    with _fs_tab4:
         _fs_ent = run_query("""
             SELECT local, sku,
                    MAX(nombre_producto) AS nombre_producto,
@@ -23202,8 +23310,8 @@ elif modulo.startswith("🧾 Facturas y Stock"):
             st.caption("Disponible = Ingresado (facturas) − Salidas (consumo/merma/traspaso). "
                        "Solo refleja movimientos cargados en este módulo.")
 
-    # ══════════ TAB 4: HISTORIAL ══════════
-    with _fs_tab4:
+    # ══════════ TAB 5: HISTORIAL ══════════
+    with _fs_tab5:
         _fs_hist_tipo = st.radio("Ver", ["Facturas (entradas)", "Salidas"],
                                  horizontal=True, key="fs_hist_tipo")
 
