@@ -11228,22 +11228,53 @@ if modulo.startswith("📦"):
     #  Universo: garzones distintos de la tabla `ventas` (agrupados por local).
     #  Marca: columna `activo` en la tabla `garzones_whitelist` (true/false).
     #  Quitar = desmarcar (activo=false). No borra filas.
+    #  Vista: locales colapsables (st.expander) + checkboxes nativos (paleta oscura).
     # ════════════════════════════════════════════════════════════════
     with tab14:
+        st.markdown("<div class='section-title'>✅ Whitelist de Garzones</div>", unsafe_allow_html=True)
+
+        # CSS local: expanders y pills alineados a la paleta oscura (oro #d4a853)
+        st.markdown("""
+        <style>
+        div[data-testid="stExpander"], details[data-testid="stExpander"] {
+            background:#141414; border:1px solid #2a2a2a; border-radius:12px;
+            margin-bottom:10px; overflow:hidden;
+        }
+        div[data-testid="stExpander"] summary, details[data-testid="stExpander"] summary,
+        .streamlit-expanderHeader {
+            font-family:'DM Sans',sans-serif !important; font-weight:600 !important;
+            color:#f0ede8 !important; background:#1a1a1a !important;
+        }
+        div[data-testid="stExpander"] summary:hover,
+        .streamlit-expanderHeader:hover { color:#d4a853 !important; }
+        .wlg-pill { display:inline-block; padding:2px 11px; border-radius:20px;
+            font-size:0.72rem; font-weight:600; letter-spacing:0.02em; }
+        .wlg-pill.on  { background:#1a3a2a; color:#4caf7d; }
+        .wlg-pill.off { background:#2a2a2a; color:#9a958c; }
+        .wlg-hint { color:#888; font-size:0.78rem; margin:2px 0 10px 0; }
+        </style>
+        """, unsafe_allow_html=True)
+
         st.markdown(
-            "<div class='info-box'>Marca qué garzones entran al informe <b>Seguimiento Garzones</b>. "
-            "El universo se arma con los garzones que aparecen en <b>ventas</b> (agrupados por local). "
-            "Marcar la casilla = <b>en whitelist</b> (<code>activo = true</code>); desmarcar = fuera "
-            "(<code>activo = false</code>, no se borra la fila). "
-            "La marca es por <b>nombre de garzón</b> (global), tal como la usa el informe.</div>",
+            "<div class='info-box'>Marca qué garzones entran al informe <b>Seguimiento Garzones</b> "
+            "(único lugar donde se usa esta whitelist). El universo se arma con los garzones de "
+            "<b>ventas</b>, agrupados por local. Marcar = <b>en whitelist</b> "
+            "(<code>activo = true</code>); desmarcar = fuera (<code>activo = false</code>, no borra la fila). "
+            "La marca es por <b>nombre de garzón</b> (global). Recuerda <b>Guardar</b> al final.</div>",
             unsafe_allow_html=True,
         )
 
-        _wlg_solo_salon = st.checkbox(
-            "Solo salón (origen IS NULL)", value=False, key="wlg_solo_salon",
-            help="El informe Seguimiento Garzones evalúa ventas de salón. Actívalo para ocultar "
-                 "garzones que solo aparecen en ventas con origen (delivery).",
-        )
+        _wlg_c1, _wlg_c2 = st.columns([2, 1])
+        with _wlg_c1:
+            _wlg_buscar = st.text_input(
+                "🔎 Buscar garzón", key="wlg_buscar",
+                placeholder="Filtra por nombre en todos los locales…",
+            ).strip()
+        with _wlg_c2:
+            _wlg_solo_salon = st.checkbox(
+                "Solo salón (origen IS NULL)", value=False, key="wlg_solo_salon",
+                help="Oculta garzones que solo aparecen en ventas con origen (delivery).",
+            )
         _wlg_filtro_salon = "AND origen IS NULL" if _wlg_solo_salon else ""
 
         _wlg_univ = run_query(f"""
@@ -11262,122 +11293,129 @@ if modulo.startswith("📦"):
         if _wlg_univ is None or _wlg_univ.empty:
             st.warning("No se encontraron garzones en la tabla de ventas con los filtros actuales.")
         else:
+            _wlg_univ = _wlg_univ.copy()
+            _wlg_univ["garzon"] = _wlg_univ["garzon"].astype(str)
+            _wlg_univ["local"] = _wlg_univ["local"].astype(str)
+
             # ── Marcas actuales desde garzones_whitelist ──
             try:
                 _wlg_marks_df = run_query("SELECT garzon, activo FROM garzones_whitelist")
             except Exception:
                 _wlg_marks_df = pd.DataFrame(columns=["garzon", "activo"])
-
             _wlg_marks = {}
             if _wlg_marks_df is not None and not _wlg_marks_df.empty:
                 for _g, _a in zip(_wlg_marks_df["garzon"], _wlg_marks_df["activo"]):
                     _wlg_marks[str(_g)] = bool(_a) if _a is not None else False
 
-            _wlg_df = _wlg_univ.copy()
-            _wlg_df["En whitelist"] = _wlg_df["garzon"].map(lambda g: _wlg_marks.get(str(g), False)).astype(bool)
+            # Estado original por garzón (global) — base del diff al guardar
+            _wlg_orig = {_g: _wlg_marks.get(_g, False) for _g in _wlg_univ["garzon"].unique()}
 
-            # Estado original por nombre de garzón (global) → para diff al guardar
-            _wlg_orig = {}
-            for _g, _v in zip(_wlg_df["garzon"], _wlg_df["En whitelist"]):
-                _gk = str(_g)
-                _wlg_orig[_gk] = bool(_v) or _wlg_orig.get(_gk, False)
+            def _wlg_state(_loc, _g):
+                """Estado actual del checkbox (sesión) o el original si aún no se tocó."""
+                return bool(st.session_state.get(f"wlg_chk::{_loc}::{_g}", _wlg_orig.get(_g, False)))
 
             # ── Métricas (por garzón único) ──
-            _wlg_uniq = _wlg_df.drop_duplicates(subset=["garzon"])
+            _wlg_uniq_names = _wlg_univ["garzon"].unique().tolist()
+            _wlg_tot = len(_wlg_uniq_names)
+            _wlg_on = sum(1 for _g in _wlg_uniq_names if _wlg_orig.get(_g, False))
             _m1, _m2, _m3 = st.columns(3)
-            with _m1:
-                st.metric("Garzones (únicos)", f"{_wlg_uniq['garzon'].nunique():,}")
-            with _m2:
-                st.metric("En whitelist", f"{int(_wlg_uniq['En whitelist'].sum()):,}")
-            with _m3:
-                st.metric("Fuera", f"{int((~_wlg_uniq['En whitelist']).sum()):,}")
+            _m1.metric("Garzones (únicos)", f"{_wlg_tot:,}")
+            _m2.metric("En whitelist", f"{_wlg_on:,}")
+            _m3.metric("Fuera", f"{_wlg_tot - _wlg_on:,}")
 
-            # ── Filtros de vista ──
-            _f1, _f2, _f3 = st.columns([1.2, 1.2, 1.6])
-            with _f1:
-                _wlg_locales = ["Todos"] + sorted(_wlg_df["local"].dropna().astype(str).unique().tolist())
-                _wlg_loc_sel = st.selectbox("Local", _wlg_locales, key="wlg_loc")
-            with _f2:
-                _wlg_estado = st.selectbox("Estado", ["Todos", "Solo en whitelist", "Solo fuera"], key="wlg_estado")
-            with _f3:
-                _wlg_buscar = st.text_input("Buscar garzón", key="wlg_buscar").strip()
-
-            _wlg_view = _wlg_df.copy()
-            if _wlg_loc_sel != "Todos":
-                _wlg_view = _wlg_view[_wlg_view["local"].astype(str) == _wlg_loc_sel]
-            if _wlg_estado == "Solo en whitelist":
-                _wlg_view = _wlg_view[_wlg_view["En whitelist"] == True]
-            elif _wlg_estado == "Solo fuera":
-                _wlg_view = _wlg_view[_wlg_view["En whitelist"] == False]
-            if _wlg_buscar:
-                _wlg_view = _wlg_view[_wlg_view["garzon"].astype(str).str.contains(_wlg_buscar, case=False, na=False)]
-
-            _wlg_view = _wlg_view[["local", "garzon", "En whitelist", "registros", "ultima_venta"]].reset_index(drop=True)
-
-            st.caption(f"Mostrando {len(_wlg_view)} fila(s). Edita la casilla **En whitelist** y luego guarda.")
-
-            _wlg_edited = st.data_editor(
-                _wlg_view,
-                use_container_width=True,
-                hide_index=True,
-                disabled=["local", "garzon", "registros", "ultima_venta"],
-                column_config={
-                    "local":        st.column_config.TextColumn("Local"),
-                    "garzon":       st.column_config.TextColumn("Garzón"),
-                    "En whitelist": st.column_config.CheckboxColumn("✅ En whitelist", default=False),
-                    "registros":    st.column_config.NumberColumn("N° ventas", format="%d"),
-                    "ultima_venta": st.column_config.DateColumn("Última venta"),
-                },
-                key="wlg_editor",
+            st.markdown(
+                "<div class='wlg-hint'>Abre un local para ver y seleccionar sus garzones.</div>",
+                unsafe_allow_html=True,
             )
 
-            if st.button("💾 Guardar marcadores", type="primary", key="wlg_save"):
-                # Estado deseado por garzón (global): True si cualquier fila visible quedó marcada
-                _wlg_deseado = {}
-                for _g, _v in zip(_wlg_edited["garzon"], _wlg_edited["En whitelist"]):
-                    _gk = str(_g)
-                    _wlg_deseado[_gk] = bool(_v) or _wlg_deseado.get(_gk, False)
+            # ── Búsqueda ──
+            _wlg_data = _wlg_univ
+            if _wlg_buscar:
+                _wlg_data = _wlg_data[_wlg_data["garzon"].str.contains(_wlg_buscar, case=False, na=False)]
 
-                # Solo los garzones (visibles) cuyo estado cambió respecto al original
-                _wlg_cambios = {
-                    _g: _v for _g, _v in _wlg_deseado.items()
-                    if bool(_v) != bool(_wlg_orig.get(_g, False))
-                }
+            if _wlg_data.empty:
+                st.info("Ningún garzón coincide con la búsqueda.")
+            else:
+                # ── Un expander por local ──
+                for _loc in sorted(_wlg_data["local"].unique().tolist()):
+                    _sub = _wlg_data[_wlg_data["local"] == _loc]
+                    _loc_names = _sub["garzon"].tolist()
+                    _loc_on = sum(1 for _g in _loc_names if _wlg_state(_loc, _g))
+                    with st.expander(f"🏢  {_loc}", expanded=bool(_wlg_buscar)):
+                        st.markdown(
+                            f"<span class='wlg-pill on'>{_loc_on} en whitelist</span>&nbsp;"
+                            f"<span class='wlg-pill off'>{len(_loc_names)} garzones</span>",
+                            unsafe_allow_html=True,
+                        )
+                        st.write("")
+                        _cols = st.columns(3)
+                        for _idx, (_, _row) in enumerate(_sub.iterrows()):
+                            _g = _row["garzon"]
+                            _reg = int(_row["registros"]) if pd.notna(_row["registros"]) else 0
+                            with _cols[_idx % 3]:
+                                st.checkbox(
+                                    f"{_g}",
+                                    value=_wlg_orig.get(_g, False),
+                                    key=f"wlg_chk::{_loc}::{_g}",
+                                    help=f"{_reg} venta(s) registradas",
+                                )
 
-                if not _wlg_cambios:
-                    st.info("No hay cambios que guardar.")
+            st.divider()
+
+            # ── Estado deseado por garzón (global): True si está marcado en cualquier local ──
+            _wlg_deseado = {_g: False for _g in _wlg_uniq_names}
+            for _, _row in _wlg_univ.iterrows():
+                _g = _row["garzon"]; _loc = _row["local"]
+                if _wlg_state(_loc, _g):
+                    _wlg_deseado[_g] = True
+            _wlg_cambios = {_g: _v for _g, _v in _wlg_deseado.items() if _v != bool(_wlg_orig.get(_g, False))}
+
+            _b1, _b2 = st.columns([1, 2])
+            with _b1:
+                _wlg_guardar = st.button(
+                    "💾 Guardar marcadores", type="primary", key="wlg_save",
+                    disabled=(len(_wlg_cambios) == 0),
+                )
+            with _b2:
+                if _wlg_cambios:
+                    st.markdown(
+                        f"<div class='wlg-hint'>✏️ {len(_wlg_cambios)} cambio(s) sin guardar.</div>",
+                        unsafe_allow_html=True,
+                    )
                 else:
-                    _eng_wlg = get_engine()
-                    _ok_wlg, _err_wlg = 0, []
-                    if _eng_wlg is None:
-                        st.error("Sin conexión a la base de datos.")
-                    else:
-                        for _g, _v in _wlg_cambios.items():
-                            try:
-                                with _eng_wlg.begin() as _c_wlg:
-                                    _res_wlg = _c_wlg.execute(
-                                        text("UPDATE garzones_whitelist SET activo = :a WHERE garzon = :g"),
-                                        {"a": bool(_v), "g": _g},
-                                    )
-                                    if _res_wlg.rowcount == 0:
-                                        _c_wlg.execute(
-                                            text("INSERT INTO garzones_whitelist (garzon, activo) VALUES (:g, :a)"),
-                                            {"g": _g, "a": bool(_v)},
-                                        )
-                                _ok_wlg += 1
-                            except Exception as _e_wlg:
-                                _err_wlg.append(f"{_g}: {_e_wlg}")
+                    st.markdown("<div class='wlg-hint'>Sin cambios pendientes.</div>", unsafe_allow_html=True)
 
-                        if _ok_wlg:
-                            st.success(f"✅ {_ok_wlg} garzón(es) actualizado(s) en la whitelist.")
-                        if _err_wlg:
-                            st.error("No se pudieron guardar algunos:\n- " + "\n- ".join(_err_wlg[:8]))
-                            if len(_err_wlg) > 8:
-                                st.caption(f"(+{len(_err_wlg) - 8} más)")
-                        if _ok_wlg:
-                            st.cache_data.clear()
-                        if _ok_wlg and not _err_wlg:
-                            st.rerun()
+            if _wlg_guardar and _wlg_cambios:
+                _eng_wlg = get_engine()
+                _ok_wlg, _err_wlg = 0, []
+                if _eng_wlg is None:
+                    st.error("Sin conexión a la base de datos.")
+                else:
+                    for _g, _v in _wlg_cambios.items():
+                        try:
+                            with _eng_wlg.begin() as _c_wlg:
+                                _res_wlg = _c_wlg.execute(
+                                    text("UPDATE garzones_whitelist SET activo = :a WHERE garzon = :g"),
+                                    {"a": bool(_v), "g": _g},
+                                )
+                                if _res_wlg.rowcount == 0:
+                                    _c_wlg.execute(
+                                        text("INSERT INTO garzones_whitelist (garzon, activo) VALUES (:g, :a)"),
+                                        {"g": _g, "a": bool(_v)},
+                                    )
+                            _ok_wlg += 1
+                        except Exception as _e_wlg:
+                            _err_wlg.append(f"{_g}: {_e_wlg}")
+                    if _ok_wlg:
+                        st.success(f"✅ {_ok_wlg} garzón(es) actualizado(s) en la whitelist.")
+                    if _err_wlg:
+                        st.error("No se pudieron guardar algunos:\n- " + "\n- ".join(_err_wlg[:8]))
+                        if len(_err_wlg) > 8:
+                            st.caption(f"(+{len(_err_wlg) - 8} más)")
+                    if _ok_wlg:
+                        st.cache_data.clear()
+                    if _ok_wlg and not _err_wlg:
+                        st.rerun()
 
 
 elif modulo.startswith("🧮"):
