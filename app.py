@@ -445,7 +445,7 @@ def _render_gestion_usuarios():
             for _, row in df_users.iterrows():
                 with st.expander(f"👤 {row['username']} {('· ' + str(row.get('local','')) ) if row.get('local') else ''}"):
                     permisos_act = row['permisos'] if row['permisos'] else ""
-                    opciones_mod = ["📦 Gestión de Datos", "📊 Informes", "📋 Notas de Crédito", "📥 Stock Cierre", "🧾 Facturas y Stock", "👷 Costo de Personal", "🎯 Config Producción"]
+                    opciones_mod = ["📦 Gestión de Datos", "📊 Informes", "📋 Notas de Crédito", "📥 Stock Cierre", "🧾 Facturas y Stock", "👷 Costo de Personal", "🎯 Config Producción", "🏅 Panel Garzones"]
                     sel = st.multiselect(
                         "Módulos habilitados",
                         opciones_mod,
@@ -3462,6 +3462,8 @@ with st.sidebar:
         menu_items["👷 Costo de Personal"] = []
     if _is_admin or _user_puede("🎯 Config Producción"):
         menu_items["🎯 Config Producción"] = []
+    if _is_admin or _user_puede("🏅 Panel Garzones"):
+        menu_items["🏅 Panel Garzones"] = []
     if _is_admin:
         menu_items["👥 Gestión de Usuarios"] = []
 
@@ -4807,6 +4809,336 @@ def _cr_conclusiones_empresa(comp, red, periodos, modo, cp_red):
 #  Ranking triple (DAX): (rankVdp + rankPctTotal - venta/1e10)/2, ascendente.
 #  Colores por posición de ranking: verde (mejores) / amarillo (medio) / rojo.
 # ===========================================================================
+# ===========================================================================
+#  PANEL DE SEGUIMIENTO DE GARZONES — HTML autocontenido (módulo asignable)
+# ===========================================================================
+import base64 as _pg_b64
+# Plantilla HTML verbatim del preview revisado (15,9 KB, sin CDN). Solo se
+# reemplaza el marcador __PAYLOAD__ por el JSON del payload.
+_PG_TEMPLATE = _pg_b64.b64decode(
+    "PCFET0NUWVBFIGh0bWw+PGh0bWwgbGFuZz0iZXMiPjxoZWFkPjxtZXRhIGNoYXJzZXQ9InV0Zi04Ii8+CjxtZXRhIG5hbWU9InZpZXdwb3J0IiBjb250ZW50PSJ3aWR0aD1kZXZpY2Utd2lkdGgsIGluaXRpYWwtc2NhbGU9MSIvPgo8dGl0bGU+U2VndWltaWVudG8gZGUgR2Fyem9uZXMgLSBBbGVtXHUwMGUxbiBFeHBlcnRvPC90aXRsZT4KPHN0eWxlPgo6cm9vdHstLW5hdnk6IzFGMzg2NDstLW5hdnkyOiMxNjI4NGE7LS1nb2xkOiNENEE4NTM7LS1pbms6IzFkMjQzMzstLW11dGVkOiM2YjcyODA7LS1saW5lOiNlNGU3ZWU7LS1iZzojZjRmNmZhOy0tb2s6IzJFN0QzMjstLWJhZDojQjcxQzFDOy0td2FybjojQzlBMjI3O30KKntib3gtc2l6aW5nOmJvcmRlci1ib3h9Ym9keXttYXJnaW46MDtiYWNrZ3JvdW5kOnZhcigtLWJnKTtjb2xvcjp2YXIoLS1pbmspO2ZvbnQtZmFtaWx5OiJTZWdvZSBVSSIsUm9ib3RvLC1hcHBsZS1zeXN0ZW0sSGVsdmV0aWNhLEFyaWFsLHNhbnMtc2VyaWY7Zm9udC1zaXplOjE0cHh9CmhlYWRlci5hcHB7YmFja2dyb3VuZDpsaW5lYXItZ3JhZGllbnQoMTgwZGVnLHZhcigtLW5hdnkpLHZhcigtLW5hdnkyKSk7Y29sb3I6I2ZmZjtwYWRkaW5nOjE2cHggMjZweDtkaXNwbGF5OmZsZXg7YWxpZ24taXRlbXM6Y2VudGVyO2dhcDoxNnB4O2JvcmRlci1ib3R0b206M3B4IHNvbGlkIHZhcigtLWdvbGQpfQpoZWFkZXIuYXBwIC5sb2dve3dpZHRoOjQ0cHg7aGVpZ2h0OjQ0cHg7Ym9yZGVyLXJhZGl1czo4cHg7YmFja2dyb3VuZDp2YXIoLS1nb2xkKTtjb2xvcjp2YXIoLS1uYXZ5KTtkaXNwbGF5OmZsZXg7YWxpZ24taXRlbXM6Y2VudGVyO2p1c3RpZnktY29udGVudDpjZW50ZXI7Zm9udC13ZWlnaHQ6ODAwO2ZvbnQtc2l6ZToxN3B4fQpoZWFkZXIuYXBwIGgxe2ZvbnQtc2l6ZToxN3B4O21hcmdpbjowfWhlYWRlci5hcHAgLnN1Yntmb250LXNpemU6MTFweDtjb2xvcjojYzdkMGU0O2xldHRlci1zcGFjaW5nOi4wOGVtO3RleHQtdHJhbnNmb3JtOnVwcGVyY2FzZTttYXJnaW4tdG9wOjJweH0KLndyYXB7bWF4LXdpZHRoOjEyNDBweDttYXJnaW46MCBhdXRvO3BhZGRpbmc6MjBweCAyNnB4IDgwcHh9Ci5iYXJ7ZGlzcGxheTpmbGV4O2dhcDoxNnB4O2FsaWduLWl0ZW1zOmNlbnRlcjtmbGV4LXdyYXA6d3JhcDttYXJnaW4tYm90dG9tOjE4cHh9Ci5iYXIgbGFiZWx7Zm9udC1zaXplOjExcHg7dGV4dC10cmFuc2Zvcm06dXBwZXJjYXNlO2xldHRlci1zcGFjaW5nOi4wOGVtO2NvbG9yOnZhcigtLW11dGVkKTtmb250LXdlaWdodDo2MDA7bWFyZ2luLXJpZ2h0OjZweH0Kc2VsZWN0e3BhZGRpbmc6OXB4IDEycHg7Ym9yZGVyOjFweCBzb2xpZCB2YXIoLS1saW5lKTtib3JkZXItcmFkaXVzOjlweDtmb250LXNpemU6MTVweDtiYWNrZ3JvdW5kOiNmZmY7Y29sb3I6dmFyKC0tbmF2eSk7Zm9udC13ZWlnaHQ6NjAwfQoubWV0YXtjb2xvcjp2YXIoLS1tdXRlZCk7Zm9udC1zaXplOjEzcHh9Ci5jYXJke2JhY2tncm91bmQ6I2ZmZjtib3JkZXI6MXB4IHNvbGlkIHZhcigtLWxpbmUpO2JvcmRlci1yYWRpdXM6MTRweDtwYWRkaW5nOjE4cHggMjBweDttYXJnaW4tYm90dG9tOjE4cHg7Ym94LXNoYWRvdzowIDFweCAycHggcmdiYSgyMCw0MCw3NCwuMDQpfQoua3Bpc3tkaXNwbGF5OmdyaWQ7Z3JpZC10ZW1wbGF0ZS1jb2x1bW5zOnJlcGVhdChhdXRvLWZpdCxtaW5tYXgoMTY1cHgsMWZyKSk7Z2FwOjEycHh9Ci5rcGl7Ym9yZGVyOjFweCBzb2xpZCB2YXIoLS1saW5lKTtib3JkZXItcmFkaXVzOjEycHg7cGFkZGluZzoxM3B4IDE1cHg7YmFja2dyb3VuZDojZmJmY2ZlfQoua3BpIC5se2ZvbnQtc2l6ZToxMXB4O3RleHQtdHJhbnNmb3JtOnVwcGVyY2FzZTtsZXR0ZXItc3BhY2luZzouMDZlbTtjb2xvcjp2YXIoLS1tdXRlZCl9Ci5rcGkgLnZ7Zm9udC1zaXplOjIxcHg7Zm9udC13ZWlnaHQ6ODAwO2NvbG9yOnZhcigtLW5hdnkpO21hcmdpbi10b3A6M3B4fQoua3BpIC5ze2ZvbnQtc2l6ZToxMnB4O2NvbG9yOnZhcigtLW11dGVkKTttYXJnaW4tdG9wOjJweH0KLmtwaS5obHtiYWNrZ3JvdW5kOnZhcigtLW5hdnkpO2JvcmRlci1jb2xvcjp2YXIoLS1uYXZ5KX0ua3BpLmhsIC5se2NvbG9yOiNjN2QwZTR9LmtwaS5obCAudntjb2xvcjojZmZmfS5rcGkuaGwgLnN7Y29sb3I6dmFyKC0tZ29sZCl9Cmgye2ZvbnQtc2l6ZToxM3B4O3RleHQtdHJhbnNmb3JtOnVwcGVyY2FzZTtsZXR0ZXItc3BhY2luZzouMWVtO2NvbG9yOnZhcigtLW5hdnkpO2JvcmRlci1sZWZ0OjRweCBzb2xpZCB2YXIoLS1nb2xkKTtwYWRkaW5nOjJweCAwIDJweCAxMHB4O21hcmdpbjo0cHggMCAxMnB4fQoucHJvdntkaXNwbGF5OmlubGluZS1ibG9jaztmb250LXNpemU6MTBweDtiYWNrZ3JvdW5kOiNmZmYzZDY7Y29sb3I6IzhhNmIxNDtib3JkZXI6MXB4IHNvbGlkICNlY2Q5YTM7Ym9yZGVyLXJhZGl1czo2cHg7cGFkZGluZzoxcHggNnB4O21hcmdpbi1sZWZ0OjZweDt2ZXJ0aWNhbC1hbGlnbjptaWRkbGU7dGV4dC10cmFuc2Zvcm06bm9uZTtsZXR0ZXItc3BhY2luZzowfQoudHd7b3ZlcmZsb3cteDphdXRvO2JvcmRlcjoxcHggc29saWQgdmFyKC0tbGluZSk7Ym9yZGVyLXJhZGl1czoxMHB4fQp0YWJsZXt3aWR0aDoxMDAlO2JvcmRlci1jb2xsYXBzZTpjb2xsYXBzZTtmb250LXNpemU6MTNweDt3aGl0ZS1zcGFjZTpub3dyYXB9CnRoZWFkIHRoe2JhY2tncm91bmQ6dmFyKC0tbmF2eSk7Y29sb3I6I2ZmZjtmb250LXdlaWdodDo2MDA7cGFkZGluZzo4cHggMTBweDt0ZXh0LWFsaWduOnJpZ2h0O2ZvbnQtc2l6ZToxMS41cHg7cG9zaXRpb246c3RpY2t5O3RvcDowfQp0aGVhZCB0aC5se3RleHQtYWxpZ246bGVmdH0KdGJvZHkgdGR7cGFkZGluZzo3cHggMTBweDt0ZXh0LWFsaWduOnJpZ2h0fXRib2R5IHRkLmx7dGV4dC1hbGlnbjpsZWZ0fQp0Ym9keSB0cjpudGgtY2hpbGQob2RkKSB0ZHtiYWNrZ3JvdW5kOiNmN2Y4ZmJ9CnRyLnRvcCB0ZHtiYWNrZ3JvdW5kOiNmYmYzZGYhaW1wb3J0YW50O2ZvbnQtd2VpZ2h0OjYwMH0KLnN1YjJ7Y29sb3I6dmFyKC0tbXV0ZWQpO2ZvbnQtc2l6ZToxMXB4fQouY2hhcnQtYm94e2hlaWdodDozMDBweH0KLm14e2JvcmRlci1jb2xsYXBzZTpzZXBhcmF0ZTtib3JkZXItc3BhY2luZzozcHh9Ci5teCB0aHtiYWNrZ3JvdW5kOnRyYW5zcGFyZW50O2NvbG9yOnZhcigtLW5hdnkpO3Bvc2l0aW9uOnN0YXRpYztmb250LXNpemU6MTFweDtwYWRkaW5nOjRweCA4cHh9Ci5teCB0aC5nent0ZXh0LWFsaWduOmxlZnQ7Y29sb3I6dmFyKC0taW5rKX0KLm14IHRkLmd6e3RleHQtYWxpZ246bGVmdDtmb250LXdlaWdodDo2MDA7Y29sb3I6dmFyKC0taW5rKTtwYWRkaW5nLXJpZ2h0OjEwcHg7d2hpdGUtc3BhY2U6bm93cmFwfQoubXggdGQuY2VsbHt0ZXh0LWFsaWduOmNlbnRlcjtib3JkZXItcmFkaXVzOjhweDtwYWRkaW5nOjdweCAxMHB4O2N1cnNvcjpwb2ludGVyO21pbi13aWR0aDo3NHB4O2JvcmRlcjoxcHggc29saWQgcmdiYSgwLDAsMCwuMDQpfQoubXggdGQuY2VsbCAuYmlne2ZvbnQtd2VpZ2h0OjcwMDtmb250LXNpemU6MTNweH0KLm14IHRkLmNlbGwgLmFyd3tmb250LXNpemU6MTBweDttYXJnaW4tbGVmdDozcHh9Ci5teCB0ZC5jZWxsOmhvdmVye291dGxpbmU6MnB4IHNvbGlkIHZhcigtLW5hdnkpfQoucG9we3Bvc2l0aW9uOmZpeGVkO3otaW5kZXg6NTA7YmFja2dyb3VuZDojZmZmO2JvcmRlcjoxcHggc29saWQgdmFyKC0tbmF2eSk7Ym9yZGVyLXJhZGl1czoxMHB4O2JveC1zaGFkb3c6MCA4cHggMjhweCByZ2JhKDIwLDQwLDc0LC4yMik7cGFkZGluZzoxMXB4IDEzcHg7d2lkdGg6MjQ4cHg7cG9pbnRlci1ldmVudHM6bm9uZTtkaXNwbGF5Om5vbmV9Ci5wb3AgLnB0e2ZvbnQtd2VpZ2h0OjcwMDtjb2xvcjp2YXIoLS1uYXZ5KTtmb250LXNpemU6MTNweH0KLnBvcCAucHN7Zm9udC1zaXplOjExcHg7Y29sb3I6dmFyKC0tbXV0ZWQpO21hcmdpbi1ib3R0b206NnB4fQoucG9wIHRhYmxle2ZvbnQtc2l6ZToxMS41cHg7d2hpdGUtc3BhY2U6bm93cmFwO21hcmdpbi10b3A6NnB4fQoucG9wIHRkLC5wb3AgdGh7cGFkZGluZzoycHggNnB4O3RleHQtYWxpZ246cmlnaHQ7YmFja2dyb3VuZDp0cmFuc3BhcmVudCFpbXBvcnRhbnR9Ci5wb3AgdGh7Y29sb3I6dmFyKC0tbXV0ZWQpO2ZvbnQtd2VpZ2h0OjYwMH0KLm14LWxlZ2VuZHtmb250LXNpemU6MTFweDtjb2xvcjp2YXIoLS1tdXRlZCk7bWFyZ2luLXRvcDoxMHB4fQouYWxlcnR7ZGlzcGxheTpmbGV4O2dhcDoxMHB4O2FsaWduLWl0ZW1zOmZsZXgtc3RhcnQ7cGFkZGluZzo5cHggMTJweDtib3JkZXItcmFkaXVzOjlweDttYXJnaW4tYm90dG9tOjhweDtmb250LXNpemU6MTNweDtib3JkZXI6MXB4IHNvbGlkfQouYWxlcnQucXtiYWNrZ3JvdW5kOiNmZGVjZWM7Ym9yZGVyLWNvbG9yOiNmM2M5Yzk7Y29sb3I6IzdhMWMxY30KLmFsZXJ0LnB7YmFja2dyb3VuZDojZmZmNmU2O2JvcmRlci1jb2xvcjojZWNkOWEzO2NvbG9yOiM3YTViMTJ9Ci5hbGVydCBie2ZvbnQtd2VpZ2h0OjcwMH0KLmVtcHR5e2NvbG9yOnZhcigtLW11dGVkKTtmb250LXNpemU6MTNweDtwYWRkaW5nOjZweCAycHh9Ci5mb290e3RleHQtYWxpZ246Y2VudGVyO2NvbG9yOnZhcigtLW11dGVkKTtmb250LXNpemU6MTJweDttYXJnaW4tdG9wOjI2cHh9Ci5jaGlwc3tkaXNwbGF5OmZsZXg7Z2FwOjhweDtmbGV4LXdyYXA6d3JhcDttYXJnaW4tdG9wOjhweH0KLmNoaXB7YmFja2dyb3VuZDp2YXIoLS1uYXZ5KTtjb2xvcjojZmZmO3BhZGRpbmc6NHB4IDExcHg7Ym9yZGVyLXJhZGl1czo3cHg7Zm9udC1zaXplOjEycHh9LmNoaXAgYntjb2xvcjp2YXIoLS1nb2xkKX0KPC9zdHlsZT48L2hlYWQ+PGJvZHk+CjxoZWFkZXIgY2xhc3M9ImFwcCI+PGRpdiBjbGFzcz0ibG9nbyI+QUU8L2Rpdj48ZGl2PjxoMT5TZWd1aW1pZW50byBkZSBHYXJ6b25lczwvaDE+PGRpdiBjbGFzcz0ic3ViIj5BbGVtXHUwMGUxbiBFeHBlcnRvIFx1MDBiNyBDb250cm9sIGRlIHZlbnRhcyBzYWxcdTAwZjNuPC9kaXY+PC9kaXY+PC9oZWFkZXI+CjxkaXYgY2xhc3M9IndyYXAiPgogIDxkaXYgY2xhc3M9ImJhciI+PGRpdj48bGFiZWw+TG9jYWw8L2xhYmVsPjxzZWxlY3QgaWQ9InNlbCI+PC9zZWxlY3Q+PC9kaXY+PGRpdiBjbGFzcz0ibWV0YSIgaWQ9Im1ldGEiPjwvZGl2PjwvZGl2PgogIDxkaXYgaWQ9ImFwcCI+PC9kaXY+CiAgPGRpdiBjbGFzcz0iZm9vdCI+QWxlbVx1MDBlMW4gRXhwZXJ0byBcdTAwYjcgZ2VuZXJhZG8gcG9yIGluZm9ybWVfZ2Fyem9uZXMucHk8L2Rpdj4KPC9kaXY+CjxkaXYgY2xhc3M9InBvcCIgaWQ9InBvcCI+PC9kaXY+CjxzY3JpcHQ+CmNvbnN0IFAgPSBfX1BBWUxPQURfXzsKY29uc3QgZj17Y2xwOnY9PickJytNYXRoLnJvdW5kKHZ8fDApLnRvTG9jYWxlU3RyaW5nKCdlcy1DTCcpLHE6dj0+TWF0aC5yb3VuZCh2fHwwKS50b0xvY2FsZVN0cmluZygnZXMtQ0wnKSwKICBwY3Q6dj0+KHY9PW51bGx8fGlzTmFOKHYpPyctJzooTnVtYmVyKHYpLnRvRml4ZWQoMSkpLnJlcGxhY2UoJy4nLCcsJykrJyUnKSwKICBudW06KHYsZCk9Pih2PT1udWxsfHxpc05hTih2KT8nLSc6KE51bWJlcih2KS50b0ZpeGVkKGQpKS5yZXBsYWNlKCcuJywnLCcpKX07CmZ1bmN0aW9uIGVzYyhzKXtyZXR1cm4gU3RyaW5nKHM9PW51bGw/Jyc6cykucmVwbGFjZSgvWyY8Pl0vZyxjPT4oeycmJzonJmFtcDsnLCc8JzonJmx0OycsJz4nOicmZ3Q7J31bY10pKTt9CmZ1bmN0aW9uIGFycm93KHQpe3JldHVybiB0PT09J3VwJz8nPHNwYW4gc3R5bGU9ImNvbG9yOnZhcigtLW9rKSIgdGl0bGU9InN1YmUgdnMgNSBzZW0gcHJldmlhcyI+JiM5NjUwOzwvc3Bhbj4nOnQ9PT0nZG93bic/JzxzcGFuIHN0eWxlPSJjb2xvcjp2YXIoLS1iYWQpIiB0aXRsZT0iYmFqYSB2cyA1IHNlbSBwcmV2aWFzIj4mIzk2NjA7PC9zcGFuPic6JzxzcGFuIHN0eWxlPSJjb2xvcjojYmJiIj4mIzk2NDQ7PC9zcGFuPic7fQpmdW5jdGlvbiBhcnJvd01pbmkodCl7cmV0dXJuIHQ9PT0ndXAnPyc8c3BhbiBzdHlsZT0iY29sb3I6dmFyKC0tb2spIj4mIzk2NTA7PC9zcGFuPic6dD09PSdkb3duJz8nPHNwYW4gc3R5bGU9ImNvbG9yOnZhcigtLWJhZCkiPiYjOTY2MDs8L3NwYW4+JzonJzt9CmZ1bmN0aW9uIGlzUShjKXtyZXR1cm4gYz09PSdDYWZldGVyXHUwMGVkYSd8fGM9PT0nUG9zdHJlcyc7fQpmdW5jdGlvbiBoZWF0KHYsbW4sbXgpewogIGlmKCFpc0Zpbml0ZSh2KXx8bXg8PW1uKSByZXR1cm4gJyNlZWYxZjcnOwogIGNvbnN0IHQ9TWF0aC5tYXgoMCxNYXRoLm1pbigxLCh2LW1uKS8obXgtbW4pKSk7CiAgY29uc3QgbG89WzI0NiwyMDEsMjAxXSxtaWQ9WzI0NSwyMzQsMTc2XSxoaT1bMjAwLDIyNCwxOTZdLGxwPShhLGIsdSk9Pk1hdGgucm91bmQoYSsoYi1hKSp1KTsKICBsZXQgYzsgaWYodDwwLjUpe2NvbnN0IHU9dC8wLjU7Yz1bbHAobG9bMF0sbWlkWzBdLHUpLGxwKGxvWzFdLG1pZFsxXSx1KSxscChsb1syXSxtaWRbMl0sdSldO30KICBlbHNle2NvbnN0IHU9KHQtMC41KS8wLjU7Yz1bbHAobWlkWzBdLGhpWzBdLHUpLGxwKG1pZFsxXSxoaVsxXSx1KSxscChtaWRbMl0saGlbMl0sdSldO30KICByZXR1cm4gJ3JnYignK2NbMF0rJywnK2NbMV0rJywnK2NbMl0rJyknOwp9CmZ1bmN0aW9uIHNwYXJrbGluZSh2YWxzLHcsaGd0LGNvbG9yKXsKICBpZighdmFsc3x8IXZhbHMubGVuZ3RoKSByZXR1cm4gJyc7CiAgY29uc3QgbW49TWF0aC5taW4uYXBwbHkobnVsbCx2YWxzKSxteD1NYXRoLm1heC5hcHBseShudWxsLHZhbHMuY29uY2F0KFttbisxXSkpLHJuZz0obXgtbW4pfHwxOwogIGNvbnN0IHB0cz12YWxzLm1hcCgodixpKT0+e2NvbnN0IHg9KGkvKCh2YWxzLmxlbmd0aC0xKXx8MSkpKih3LTYpKzM7Y29uc3QgeT1oZ3QtMy0oKHYtbW4pL3JuZykqKGhndC04KTtyZXR1cm4geC50b0ZpeGVkKDEpKycsJyt5LnRvRml4ZWQoMSk7fSkuam9pbignICcpOwogIGxldCBkb3RzPXZhbHMubWFwKCh2LGkpPT57Y29uc3QgeD0oaS8oKHZhbHMubGVuZ3RoLTEpfHwxKSkqKHctNikrMztjb25zdCB5PWhndC0zLSgodi1tbikvcm5nKSooaGd0LTgpO3JldHVybiAnPGNpcmNsZSBjeD0iJyt4LnRvRml4ZWQoMSkrJyIgY3k9IicreS50b0ZpeGVkKDEpKyciIHI9IjIiIGZpbGw9IicrY29sb3IrJyIvPic7fSkuam9pbignJyk7CiAgcmV0dXJuICc8c3ZnIHdpZHRoPSInK3crJyIgaGVpZ2h0PSInK2hndCsnIiBzdHlsZT0iZGlzcGxheTpibG9jazttYXJnaW46NHB4IDAiPicKICAgICAgICArJzxwb2x5bGluZSBwb2ludHM9IicrcHRzKyciIGZpbGw9Im5vbmUiIHN0cm9rZT0iJytjb2xvcisnIiBzdHJva2Utd2lkdGg9IjIiLz4nK2RvdHMrJzwvc3ZnPic7Cn0KZnVuY3Rpb24gbWF0cml6SFRNTChtKXsKICBpZighbSB8fCAhbS5nYXJ6b25lcy5sZW5ndGgpIHJldHVybiAnPGRpdiBjbGFzcz0iZW1wdHkiPlNpbiBkYXRvcyBkZSBldm9sdWNpXHUwMGYzbi48L2Rpdj4nOwogIGNvbnN0IGNhdHM9bS5jYXRlZ29yaWFzLCBjb2xtbj17fSwgY29sbXg9e307CiAgY2F0cy5mb3JFYWNoKGM9Pntjb25zdCB2YWxzPW0uZ2Fyem9uZXMubWFwKGc9Pntjb25zdCBjbD1nLmNlbGRhc1tjXTtyZXR1cm4gaXNRKGMpP2NsLmFjdHVhbF9xOmNsLmFjdHVhbF9wY3Q7fSk7CiAgICBjb2xteFtjXT1NYXRoLm1heC5hcHBseShudWxsLHZhbHMuY29uY2F0KFsxXSkpOyBjb2xtbltjXT1NYXRoLm1pbi5hcHBseShudWxsLHZhbHMuY29uY2F0KFswXSkpO30pOwogIGxldCBzPSc8dGFibGUgY2xhc3M9Im14Ij48dGhlYWQ+PHRyPjx0aCBjbGFzcz0iZ3oiPkdhcnpcdTAwZjNuPC90aD4nOwogIGNhdHMuZm9yRWFjaChjPT5zKz0nPHRoPicrZXNjKGMpKyhpc1EoYyk/JyAoUSknOicgKCUpJykrJzwvdGg+Jyk7IHMrPSc8L3RyPjwvdGhlYWQ+PHRib2R5Pic7CiAgbS5nYXJ6b25lcy5mb3JFYWNoKChnLGdpKT0+ewogICAgcys9Jzx0cj48dGQgY2xhc3M9Imd6Ij4nK2VzYyhnLm5vbWJyZSkrJzwvdGQ+JzsKICAgIGNhdHMuZm9yRWFjaChjPT57Y29uc3QgY2w9Zy5jZWxkYXNbY107IGNvbnN0IHZhbD1pc1EoYyk/Y2wuYWN0dWFsX3E6Y2wuYWN0dWFsX3BjdDsKICAgICAgY29uc3QgZGlzcD1pc1EoYyk/Zi5xKHZhbCk6Zi5wY3QodmFsKTsgY29uc3QgYmc9aGVhdCh2YWwsY29sbW5bY10sY29sbXhbY10pOwogICAgICBzKz0nPHRkIGNsYXNzPSJjZWxsIiBkYXRhLWc9IicrZ2krJyIgZGF0YS1jPSInK2VzYyhjKSsnIiBzdHlsZT0iYmFja2dyb3VuZDonK2JnKyciPicKICAgICAgICArJzxzcGFuIGNsYXNzPSJiaWciPicrZGlzcCsnPC9zcGFuPjxzcGFuIGNsYXNzPSJhcnciPicrYXJyb3dNaW5pKGNsLnRlbmRlbmNpYSkrJzwvc3Bhbj48L3RkPic7fSk7CiAgICBzKz0nPC90cj4nOwogIH0pOwogIHJldHVybiBzKyc8L3Rib2R5PjwvdGFibGU+JzsKfQpmdW5jdGlvbiB3aXJlTWF0cml4KCl7CiAgY29uc3QgcG9wPWRvY3VtZW50LmdldEVsZW1lbnRCeUlkKCdwb3AnKTsgY29uc3QgbT13aW5kb3cuX214OyBpZighbSkgcmV0dXJuOwogIGNvbnN0IHNlbT1tLnNlbWFuYXMubWFwKHM9PidTJytTdHJpbmcocykuc3BsaXQoJy0nKS5wb3AoKSk7CiAgZG9jdW1lbnQucXVlcnlTZWxlY3RvckFsbCgnLm14IHRkLmNlbGwnKS5mb3JFYWNoKHRkPT57CiAgICB0ZC5hZGRFdmVudExpc3RlbmVyKCdtb3VzZWVudGVyJywoKT0+ewogICAgICBjb25zdCBnPW0uZ2Fyem9uZXNbK3RkLmRhdGFzZXQuZ107IGNvbnN0IGNsPWcuY2VsZGFzW3RkLmRhdGFzZXQuY107CiAgICAgIGxldCBodG1sPSc8ZGl2IGNsYXNzPSJwdCI+Jytlc2MoZy5ub21icmUpKyc8L2Rpdj48ZGl2IGNsYXNzPSJwcyI+Jytlc2ModGQuZGF0YXNldC5jKSsnIFx1MDBiNyBldm9sdWNpXHUwMGYzbiA2IHNlbWFuYXM8L2Rpdj4nOwogICAgICBodG1sKz1zcGFya2xpbmUoY2wuc2VyaWVfcGN0LDIyMiw0MiwnIzFGMzg2NCcpOwogICAgICBodG1sKz0nPHRhYmxlPjx0aGVhZD48dHI+PHRoPjwvdGg+JytzZW0ubWFwKHg9Pic8dGg+Jyt4Kyc8L3RoPicpLmpvaW4oJycpKyc8L3RyPjwvdGhlYWQ+PHRib2R5Pic7CiAgICAgIGh0bWwrPSc8dHI+PHRoPiU8L3RoPicrY2wuc2VyaWVfcGN0Lm1hcCh2PT4nPHRkPicrZi5wY3QodikrJzwvdGQ+Jykuam9pbignJykrJzwvdHI+JzsKICAgICAgaHRtbCs9Jzx0cj48dGg+UTwvdGg+JytjbC5zZXJpZV9xLm1hcCh2PT4nPHRkPicrZi5xKHYpKyc8L3RkPicpLmpvaW4oJycpKyc8L3RyPic7CiAgICAgIGh0bWwrPSc8L3Rib2R5PjwvdGFibGU+JzsKICAgICAgcG9wLmlubmVySFRNTD1odG1sOyBwb3Auc3R5bGUuZGlzcGxheT0nYmxvY2snOwogICAgfSk7CiAgICB0ZC5hZGRFdmVudExpc3RlbmVyKCdtb3VzZW1vdmUnLGU9Pntjb25zdCBwYWQ9MTQscj1wb3AuZ2V0Qm91bmRpbmdDbGllbnRSZWN0KCk7CiAgICAgIGxldCB4PWUuY2xpZW50WCtwYWQseT1lLmNsaWVudFkrcGFkOwogICAgICBpZih4K3Iud2lkdGg+d2luZG93LmlubmVyV2lkdGgpeD1lLmNsaWVudFgtci53aWR0aC1wYWQ7CiAgICAgIGlmKHkrci5oZWlnaHQ+d2luZG93LmlubmVySGVpZ2h0KXk9ZS5jbGllbnRZLXIuaGVpZ2h0LXBhZDsKICAgICAgcG9wLnN0eWxlLmxlZnQ9eCsncHgnO3BvcC5zdHlsZS50b3A9eSsncHgnO30pOwogICAgdGQuYWRkRXZlbnRMaXN0ZW5lcignbW91c2VsZWF2ZScsKCk9Pntwb3Auc3R5bGUuZGlzcGxheT0nbm9uZSc7fSk7CiAgfSk7Cn0KCmZ1bmN0aW9uIGN1bXBsQmFkZ2UocCl7aWYocD09bnVsbClyZXR1cm4gJzxzcGFuIGNsYXNzPSJwcm92Ij5tZXRhIHByb3Zpc2lvbmFsPC9zcGFuPic7CiAgY29uc3QgY29sPXA+PTEwMD8ndmFyKC0tb2spJzpwPj04MD8ndmFyKC0td2FybiknOid2YXIoLS1iYWQpJzsKICByZXR1cm4gJzxzcGFuIHN0eWxlPSJjb2xvcjonK2NvbCsnO2ZvbnQtd2VpZ2h0OjcwMCI+JytmLnBjdChwKSsnPC9zcGFuPiA8c3BhbiBjbGFzcz0icHJvdiI+bWV0YSBwcm92aXNpb25hbDwvc3Bhbj4nO30KCmZ1bmN0aW9uIHJlbmRlcihsb2MpewogIGNvbnN0IGQ9UC5kYXRhW2xvY107IGlmKCFkKXtkb2N1bWVudC5nZXRFbGVtZW50QnlJZCgnYXBwJykuaW5uZXJIVE1MPScnO3JldHVybjt9CiAgY29uc3Qgaz1kLmtwaXMsIGo9ZC5qZWZhdHVyYXx8e307CiAgbGV0IGg9Jyc7CiAgLy8gQ2FiZWNlcmEgKyBLUElzCiAgaCs9JzxkaXYgY2xhc3M9ImNhcmQiPjxoMj4nK2VzYyhsb2MpKycgXHUwMGI3IFJlc3VtZW48L2gyPic7CiAgaCs9JzxkaXYgY2xhc3M9ImNoaXBzIj4nCiAgICArJzxzcGFuIGNsYXNzPSJjaGlwIj5TdXBlcnZpc29yOiA8Yj4nK2VzYyhqLnN1cGVydmlzb3J8fCctJykrJzwvYj48L3NwYW4+JwogICAgKyc8c3BhbiBjbGFzcz0iY2hpcCI+SmVmZTogPGI+Jytlc2Moai5qZWZlfHwnLScpKyc8L2I+PC9zcGFuPicKICAgICsnPHNwYW4gY2xhc3M9ImNoaXAiPlN1YiBKZWZlOiA8Yj4nK2VzYyhqLnN1YmplZmV8fCctJykrJzwvYj48L3NwYW4+PC9kaXY+JzsKICBoKz0nPGRpdiBjbGFzcz0ia3BpcyIgc3R5bGU9Im1hcmdpbi10b3A6MTJweCI+JwogICAgKyc8ZGl2IGNsYXNzPSJrcGkiPjxkaXYgY2xhc3M9ImwiPlZlbnRhIHNhbFx1MDBmM24gc2VtYW5hPC9kaXY+PGRpdiBjbGFzcz0idiI+JytmLmNscChrLnZlbnRhX2xvY2FsKSsnPC9kaXY+PC9kaXY+JwogICAgKyc8ZGl2IGNsYXNzPSJrcGkiPjxkaXYgY2xhc3M9ImwiPkdhcnpvbmVzIGFjdGl2b3M8L2Rpdj48ZGl2IGNsYXNzPSJ2Ij4nK2subl9nYXJ6b25lcysnPC9kaXY+PC9kaXY+JwogICAgKyc8ZGl2IGNsYXNzPSJrcGkiPjxkaXYgY2xhc3M9ImwiPlZlbnRhIHByb20uIHggZ2Fyelx1MDBmM248L2Rpdj48ZGl2IGNsYXNzPSJ2Ij4nK2YuY2xwKGsudmVudGFfcHJvbSkrJzwvZGl2PjwvZGl2PicKICAgICsnPGRpdiBjbGFzcz0ia3BpIGhsIj48ZGl2IGNsYXNzPSJsIj4lIEFkaWNpb25hbGVzPC9kaXY+PGRpdiBjbGFzcz0idiI+JytmLnBjdChrLnBjdF9hZGljKSsnPC9kaXY+PGRpdiBjbGFzcz0icyI+UmFua2luZyAnK2sucmFua2luZysnLycray5uX2xvY2FsZXMrJyBkZSBsYSBjYWRlbmE8L2Rpdj48L2Rpdj4nCiAgICArJzxkaXYgY2xhc3M9ImtwaSI+PGRpdiBjbGFzcz0ibCI+Q2FmZXRlclx1MDBlZGEgKFEpPC9kaXY+PGRpdiBjbGFzcz0idiI+JytmLnEoay5jYWZlX3EpKyc8L2Rpdj48ZGl2IGNsYXNzPSJzIj4nK2N1bXBsQmFkZ2Uoay5jYWZlX2N1bXBsKSsnPC9kaXY+PC9kaXY+JwogICAgKyc8ZGl2IGNsYXNzPSJrcGkiPjxkaXYgY2xhc3M9ImwiPlBvc3RyZXMgKFEpPC9kaXY+PGRpdiBjbGFzcz0idiI+JytmLnEoay5wb3N0cmVzX3EpKyc8L2Rpdj48ZGl2IGNsYXNzPSJzIj4nK2N1bXBsQmFkZ2Uoay5wb3N0cmVzX2N1bXBsKSsnPC9kaXY+PC9kaXY+JwogICAgKyc8L2Rpdj48L2Rpdj4nOwoKICAvLyBUYWJsYSBkZSBnYXJ6b25lcwogIGgrPSc8ZGl2IGNsYXNzPSJjYXJkIj48aDI+U2VndWltaWVudG8gcG9yIGdhcnpcdTAwZjNuIFx1MDBiNyBzZW1hbmE8L2gyPjxkaXYgY2xhc3M9InR3Ij48dGFibGU+PHRoZWFkPjx0cj4nCiAgICArJzx0aCBjbGFzcz0ibCI+IzwvdGg+PHRoIGNsYXNzPSJsIj5HYXJ6XHUwMGYzbjwvdGg+PHRoPlZlbnRhPC90aD48dGg+RFx1MDBlZGFzPC90aD48dGg+XHUwMGQzcmRlbmVzPC90aD48dGg+T3JkZW4gcHJvbS48L3RoPjx0aD5WZW50YS9kXHUwMGVkYTwvdGg+JwogICAgKyc8dGg+JSBBZGljLjwvdGg+PHRoPkFsaW0uPC90aD48dGg+QmFyPC90aD48dGg+Q2FmXHUwMGU5K1Bvc3QuPC90aD48dGg+Q2FmXHUwMGU5IFE8L3RoPjx0aD5DYWZcdTAwZTkgJTwvdGg+PHRoPlBvc3RyZSBRPC90aD48dGg+UG9zdHJlICU8L3RoPjwvdHI+PC90aGVhZD48dGJvZHk+JzsKICBkLmdhcnpvbmVzLmZvckVhY2goKGcsaSk9PnsKICAgIGNvbnN0IGNscz1pPT09MD8nIGNsYXNzPSJ0b3AiJzonJzsKICAgIGgrPSc8dHInK2NscysnPjx0ZCBjbGFzcz0ibCI+JysoaSsxKSsnPC90ZD48dGQgY2xhc3M9ImwiPicrZXNjKGcubm9tYnJlKSsnPC90ZD4nCiAgICAgICsnPHRkPicrZi5jbHAoZy52ZW50YSkrJzwvdGQ+PHRkPicrZy5kaWFzKyc8L3RkPjx0ZD4nK2YucShnLm5fb3JkZW5lcykrJzwvdGQ+PHRkPicrZi5jbHAoZy5vcmRlbl9wcm9tKSsnPC90ZD48dGQ+JytmLmNscChnLnZlbnRhX2RpYXJpYSkrJzwvdGQ+JwogICAgICArJzx0ZD48Yj4nK2YucGN0KGcucGN0X2FkaWMpKyc8L2I+ICcrYXJyb3coZy50ZW5kZW5jaWEpKyc8L3RkPicKICAgICAgKyc8dGQ+JytmLnBjdChnLnBjdF9hbGltKSsnPC90ZD48dGQ+JytmLnBjdChnLnBjdF9iYXIpKyc8L3RkPjx0ZD4nK2YucGN0KGcucGN0X2NhZnBvcykrJzwvdGQ+JwogICAgICArJzx0ZD4nK2YucShnLmNhZmVfcSkrJzwvdGQ+PHRkIGNsYXNzPSJzdWIyIj4nK2YucGN0KGcuY2FmZV9wY3QpKyc8L3RkPicKICAgICAgKyc8dGQ+JytmLnEoZy5wb3N0cmVzX3EpKyc8L3RkPjx0ZCBjbGFzcz0ic3ViMiI+JytmLnBjdChnLnBvc3RyZXNfcGN0KSsnPC90ZD48L3RyPic7CiAgfSk7CiAgaWYoIWQuZ2Fyem9uZXMubGVuZ3RoKSBoKz0nPHRyPjx0ZCBjb2xzcGFuPSIxNSIgY2xhc3M9ImVtcHR5Ij5TaW4gdmVudGFzIGRlIGdhcnpvbmVzIGV2YWx1YWRvcyBlc3RhIHNlbWFuYS48L3RkPjwvdHI+JzsKICBoKz0nPC90Ym9keT48L3RhYmxlPjwvZGl2PjxkaXYgY2xhc3M9InN1YjIiIHN0eWxlPSJtYXJnaW4tdG9wOjhweCI+RmlsYSBkZXN0YWNhZGEgPSBtYXlvciB2ZW50YS4gTGEgZmxlY2hhIGNvbXBhcmEgZWwgJSBhZGljaW9uYWxlcyBkZWwgZ2Fyelx1MDBmM24gY29uIHN1IHByb21lZGlvIGRlIGxhcyA1IHNlbWFuYXMgcHJldmlhcy4gT3JkZW4gcHJvbS4gPSB2ZW50YSBcdTAwZjcgblx1MDBiYSBkZSBcdTAwZjNyZGVuZXMgKGlkX29yZGVuKS48L2Rpdj48L2Rpdj4nOwoKICAvLyBNYXRyaXogZ2Fyem9uIHggY2F0ZWdvcmlhIChldm9sdWNpb24gNiBzZW0gZW4gaG92ZXIpCiAgaCs9JzxkaXYgY2xhc3M9ImNhcmQiPjxoMj5Db21wb3J0YW1pZW50byBwb3IgY2F0ZWdvclx1MDBlZGEgXHUwMGI3IGdhcnpcdTAwZjNuIFx1MDBkNyBncnVwbzwvaDI+PGRpdiBjbGFzcz0idHciPicrbWF0cml6SFRNTChkLm1hdHJpel9ldm9sKSsnPC9kaXY+JwogICAgKyc8ZGl2IGNsYXNzPSJteC1sZWdlbmQiPkNhZGEgY2VsZGEgPSB2YWxvciBkZSBsYSBzZW1hbmEgKCcrJzxiPkNhZlx1MDBlOSB5IFBvc3RyZXMgZW4gUTwvYj4sIGVsIHJlc3RvIGVuICUpLiBDb2xvciA9IHBvc2ljaVx1MDBmM24gZGVsIGdhcnpcdTAwZjNuIGRlbnRybyBkZSBlc2EgY2F0ZWdvclx1MDBlZGEgKHZlcmRlIGFsdG8sIHJvam8gYmFqbykuICcKICAgICsnPGI+UGFzYSBlbCBtb3VzZTwvYj4gc29icmUgdW5hIGNlbGRhIHBhcmEgdmVyIGxhIGV2b2x1Y2lcdTAwZjNuIGRlIDYgc2VtYW5hcyBkZSBlc2UgZ2Fyelx1MDBmM24gZW4gZXNlIGdydXBvLjwvZGl2PjwvZGl2Pic7CgogIC8vIENvbXBhcmF0aXZhIGVudHJlIGxvY2FsZXMgKHRvZG9zIGxvcyBncnVwb3MpCiAgY29uc3QgQ0FUUz0oUC5jb21wYXJhdGl2YVswXSYmUC5jb21wYXJhdGl2YVswXS5jYXRzKT9PYmplY3Qua2V5cyhQLmNvbXBhcmF0aXZhWzBdLmNhdHMpOltdOwogIGgrPSc8ZGl2IGNsYXNzPSJjYXJkIj48aDI+Q29tcGFyYXRpdmEgZW50cmUgbG9jYWxlcyBcdTAwYjcgJSBwb3IgZ3J1cG88L2gyPjxkaXYgY2xhc3M9InR3Ij48dGFibGU+PHRoZWFkPjx0cj4nCiAgICArJzx0aCBjbGFzcz0ibCI+IzwvdGg+PHRoIGNsYXNzPSJsIj5Mb2NhbDwvdGg+PHRoPlZlbnRhIHNhbFx1MDBmM248L3RoPjx0aD5HYXJ6LjwvdGg+PHRoPlZlbnRhIHggZ2Fyelx1MDBmM248L3RoPic7CiAgQ0FUUy5mb3JFYWNoKGM9PmgrPSc8dGg+Jytlc2MoYykrJzwvdGg+Jyk7CiAgaCs9Jzx0aD4lIFRvdGFsPC90aD48L3RyPjwvdGhlYWQ+PHRib2R5Pic7CiAgUC5jb21wYXJhdGl2YS5mb3JFYWNoKChyLGkpPT57Y29uc3QgbWU9ci5sb2NhbD09PWxvYz8nIHN0eWxlPSJiYWNrZ3JvdW5kOiNmYmYzZGY7Zm9udC13ZWlnaHQ6NzAwIic6Jyc7CiAgICBoKz0nPHRyJyttZSsnPjx0ZCBjbGFzcz0ibCI+JysoaSsxKSsnPC90ZD48dGQgY2xhc3M9ImwiPicrZXNjKHIubG9jYWwpKyc8L3RkPjx0ZD4nK2YuY2xwKHIudmVudGEpKyc8L3RkPjx0ZD4nK3Iubl9nYXJ6b25lcysnPC90ZD48dGQ+JytmLmNscChyLnZlbnRhX3Byb20pKyc8L3RkPic7CiAgICBDQVRTLmZvckVhY2goYz0+aCs9Jzx0ZD4nK2YucGN0KHIuY2F0c1tjXSkrJzwvdGQ+Jyk7CiAgICBoKz0nPHRkPjxiPicrZi5wY3Qoci5wY3RfYWRpYykrJzwvYj48L3RkPjwvdHI+Jzt9KTsKICBoKz0nPC90Ym9keT48L3RhYmxlPjwvZGl2PjxkaXYgY2xhc3M9InN1YjIiIHN0eWxlPSJtYXJnaW4tdG9wOjhweCI+JSBkZSBjYWRhIGdydXBvIHNvYnJlIGxhIHZlbnRhIHNhbFx1MDBmM24gZGVsIGxvY2FsIChnYXJ6b25lcyBldmFsdWFkb3MpLiBSYW5xdWVhZG8gcG9yICUgdG90YWwuIFR1IGxvY2FsIHJlc2FsdGFkby48L2Rpdj48L2Rpdj4nOwogIC8vIEFsZXJ0YXMKICBoKz0nPGRpdiBjbGFzcz0iY2FyZCI+PGgyPkFsZXJ0YXMgYWNjaW9uYWJsZXM8L2gyPic7CiAgaWYoZC5hbGVydGFzICYmIGQuYWxlcnRhcy5sZW5ndGgpewogICAgZC5hbGVydGFzLmZvckVhY2goYT0+e2NvbnN0IGM9YS50aXBvLmluZGV4T2YoJ1JlbmRpbWllbnRvJyk+PTA/J3EnOidwJzsKICAgICAgaCs9JzxkaXYgY2xhc3M9ImFsZXJ0ICcrYysnIj48Yj4nK2VzYyhhLmdhcnpvbikrJzwvYj4gXHUyMDE0ICcrZXNjKGEudGlwbykrJzogJytlc2MoYS5kZXRhbGxlKSsnPC9kaXY+Jzt9KTsKICB9IGVsc2UgeyBoKz0nPGRpdiBjbGFzcz0iZW1wdHkiPlNpbiBhbGVydGFzOiB0b2RvcyBzb2JyZSBzdSBwcm9tZWRpbyB5IHNvYnJlIGxhIG1lZGlhbmEgZGVsIGxvY2FsLjwvZGl2Pic7IH0KICBoKz0nPC9kaXY+JzsKCiAgLy8gUHJvZHVjdG9zIGVzdHJhdGVnaWNvcwogIGNvbnN0IGV0cz1PYmplY3Qua2V5cyhQLmVzdHJhdGVnaWNvc3x8e30pOwogIGlmKGQuZ2Fyem9uZXMubGVuZ3RoICYmIGV0cy5sZW5ndGgpewogICAgaCs9JzxkaXYgY2xhc3M9ImNhcmQiPjxoMj5Qcm9kdWN0b3MgZXN0cmF0XHUwMGU5Z2ljb3MgXHUwMGI3IHVuaWRhZGVzIHBvciBnYXJ6XHUwMGYzbjwvaDI+PGRpdiBjbGFzcz0idHciPjx0YWJsZT48dGhlYWQ+PHRyPjx0aCBjbGFzcz0ibCI+R2Fyelx1MDBmM248L3RoPic7CiAgICBldHMuZm9yRWFjaChlPT5oKz0nPHRoPicrZXNjKGUpKyc8L3RoPicpOyBoKz0nPC90cj48L3RoZWFkPjx0Ym9keT4nOwogICAgZC5nYXJ6b25lcy5mb3JFYWNoKGc9PntoKz0nPHRyPjx0ZCBjbGFzcz0ibCI+Jytlc2MoZy5ub21icmUpKyc8L3RkPic7ZXRzLmZvckVhY2goZT0+aCs9Jzx0ZD4nK2YucSgoZy5lc3RyYXRlZ2ljb3N8fHt9KVtlXXx8MCkrJzwvdGQ+Jyk7aCs9JzwvdHI+Jzt9KTsKICAgIGgrPSc8L3Rib2R5PjwvdGFibGU+PC9kaXY+JzsKICAgIGlmKGQuZXN0cmF0ZWdpY29zX3RvdGFsKXtoKz0nPGRpdiBjbGFzcz0ic3ViMiIgc3R5bGU9Im1hcmdpbi10b3A6OHB4Ij5Ub3RhbCB2ZW5kaWRvOiAnK2YucShkLmVzdHJhdGVnaWNvc190b3RhbC5xKSsnIHUgXHUwMGI3ICcrZi5jbHAoZC5lc3RyYXRlZ2ljb3NfdG90YWwudmVudGEpKycgXHUwMGI3ICcrZi5wY3QoZC5lc3RyYXRlZ2ljb3NfdG90YWwucGN0KSsnIGRlIGxhIHZlbnRhIGRlbCBsb2NhbDwvZGl2Pic7fQogICAgaCs9JzwvZGl2Pic7CiAgfQoKCiAgd2luZG93Ll9teD1kLm1hdHJpel9ldm9sOwogIGRvY3VtZW50LmdldEVsZW1lbnRCeUlkKCdhcHAnKS5pbm5lckhUTUw9aDsKICB3aXJlTWF0cml4KCk7Cn0KLy8gaW5pdAooZnVuY3Rpb24oKXsKICBjb25zdCBzZWw9ZG9jdW1lbnQuZ2V0RWxlbWVudEJ5SWQoJ3NlbCcpOwogIFAubG9jYWxlcy5mb3JFYWNoKGw9Pntjb25zdCBvPWRvY3VtZW50LmNyZWF0ZUVsZW1lbnQoJ29wdGlvbicpO28udmFsdWU9bDtvLnRleHRDb250ZW50PWw7c2VsLmFwcGVuZENoaWxkKG8pO30pOwogIGRvY3VtZW50LmdldEVsZW1lbnRCeUlkKCdtZXRhJykudGV4dENvbnRlbnQ9UC5tZXRhLnNlbWFuYSsnICBcdTAwYjcgIGdlbmVyYWRvICcrUC5tZXRhLmdlbmVyYWRvOwogIGlmKFAudW5pY28pe3NlbC52YWx1ZT1QLnVuaWNvO30KICBzZWwuYWRkRXZlbnRMaXN0ZW5lcignY2hhbmdlJywoKT0+cmVuZGVyKHNlbC52YWx1ZSkpOwogIHJlbmRlcihzZWwudmFsdWV8fFAubG9jYWxlc1swXSk7Cn0pKCk7Cjwvc2NyaXB0PjwvYm9keT48L2h0bWw+"
+).decode("utf-8")
+
+_PG_JEFATURAS = {
+    'La Reina': ('Cristian Ramirez','Jose Mendoza Escalante','Gerardo Delgado Villalobos'),
+    'Quilin': ('Cristian Ramirez','Jose Gil Romero','Giovanni Rojas'),
+    'La Dehesa': ('Cristian Ramirez','Miguel Quintero Rodriguez','Oscar Barrera Valdebenito'),
+    'Macul': ('Cristian Ramirez','Alexander Marin Torrealba','Nathaly Papa Colmenares'),
+    'Los Trapenses': ('Cristian Ramirez','Elicmer Uzcategui Rondon','Rodrigo Montt Creixell'),
+    'Providencia': ('Luis Mendoza','Jose Mora Carrero','Oscar Loyola Sepulveda'),
+    'Nueva Providencia': ('Luis Mendoza','Rodrigo Calderon Villaseca','Angel Seidel Caldero'),
+    'Chicureo': ('Luis Mendoza','Angel Molina Contreras','Maria Espina Cairasco'),
+    'Vitacura': ('Luis Mendoza','Sergio Salas Cazorla','Michelle Maleville Muñoz'),
+    'Las Condes': ('Luis Mendoza','Yuleidi Zambrano Hernandez','Johelvi Pineda Salas'),
+}
+# Metas Café/Postres (diaria por local) — de _METAS del informe. meta_semana = diaria*7.
+_PG_METAS_CP = {
+    "La Reina":{"cafe":50,"post":51},"Quilin":{"cafe":37,"post":47},"Macul":{"cafe":61,"post":74},
+    "Chicureo":{"cafe":55,"post":64},"La Dehesa":{"cafe":58,"post":55},"Las Condes":{"cafe":67,"post":66},
+    "Los Trapenses":{"cafe":62,"post":65},"Nueva Providencia":{"cafe":37,"post":41},
+    "Providencia":{"cafe":24,"post":31},"Vitacura":{"cafe":92,"post":81},
+}
+_PG_ESTRAT = [("ALCAPARRAS","Alcaparra"),("AJI VERDE","Aji Verde"),
+              ("MAYONESA TRUFADA","Mayonesa Trufada"),("SALSA A LA PIMIENTA","Salsa a la pimienta"),
+              ("SALSA DE QUESO AZUL","Salsa Queso Azul")]
+_PG_ORDEN = ["Vitacura","Las Condes","Chicureo","La Dehesa","Macul","La Reina",
+             "Quilin","Nueva Providencia","Providencia","Los Trapenses"]
+_PG_CATS = ["Agregados","Cafetería","Postres","Líquidos S/A","Líquidos C/A"]
+
+def _pg_clp(v):
+    try: return "$" + f"{int(round(float(v))):,}".replace(",", ".")
+    except: return "$0"
+def _pg_pct1(v):
+    try: return f"{float(v):.1f}".replace(".", ",") + "%"
+    except: return "0,0%"
+def _pg_limpia(n):
+    import re as _re
+    return _re.sub(r'^\S+_', '', str(n or '')).strip()
+
+def _pg_tend(serie):
+    """Tendencia comparando el último valor vs promedio de los previos."""
+    s = [x for x in serie if x is not None]
+    if len(s) < 2: return "flat"
+    cur = s[-1]; prev = sum(s[:-1]) / len(s[:-1])
+    if cur > prev + 1: return "up"
+    if cur < prev - 1: return "down"
+    return "flat"
+
+def _pg_cat_montos(row):
+    """Devuelve dict categoria -> (venta, q) desde una fila con v_*/q_*."""
+    return {
+        "Agregados":     (float(row["v_agr"]), float(row["q_agr"])),
+        "Cafetería":     (float(row["v_caf"]), float(row["q_caf"])),
+        "Postres":       (float(row["v_pos"]), float(row["q_pos"])),
+        "Líquidos S/A":  (float(row["v_lsa"]), float(row["q_lsa"])),
+        "Líquidos C/A":  (float(row["v_lca"]), float(row["q_lca"])),
+    }
+
+def _pg_construir(q1, q2, q3, ini, fin, meta):
+    """q1: semana actual por (local,garzon). q2: 6 sem por (local,garzon,anio,iso_week).
+    q3: semana por (local,garzon,nombre_producto) estratégicos. -> payload dict."""
+    import pandas as _pd, statistics as _st
+    numcols=["dias","n_ordenes","venta_total","v_agr","q_agr","v_caf","q_caf","v_pos","q_pos","v_lsa","q_lsa","v_lca","q_lca"]
+    for c in numcols:
+        if c in q1.columns: q1[c]=_pd.to_numeric(q1[c],errors="coerce").fillna(0)
+    for c in ["venta_total","v_agr","q_agr","v_caf","q_caf","v_pos","q_pos","v_lsa","q_lsa","v_lca","q_lca","iso_week","anio"]:
+        if c in q2.columns: q2[c]=_pd.to_numeric(q2[c],errors="coerce").fillna(0)
+    if q3 is not None and not q3.empty:
+        q3["q"]=_pd.to_numeric(q3["q"],errors="coerce").fillna(0)
+        if "venta" in q3.columns: q3["venta"]=_pd.to_numeric(q3["venta"],errors="coerce").fillna(0)
+
+    # etiqueta de semanas: "AAAA-SS"
+    wk_pairs = sorted(set((int(r["anio"]),int(r["iso_week"])) for _,r in q2.iterrows())) if not q2.empty else []
+    semanas = [f"{a:04d}-{w:02d}" for a,w in wk_pairs]
+    sem_key = {(a,w):f"{a:04d}-{w:02d}" for a,w in wk_pairs}
+
+    # ── ranking de locales por %adic ──
+    loc_rows=[]
+    for loc, sub in q1.groupby("local"):
+        vt=float(sub["venta_total"].sum())
+        adic=float((sub["v_agr"]+sub["v_caf"]+sub["v_pos"]+sub["v_lsa"]+sub["v_lca"]).sum())
+        loc_rows.append({"local":loc,"venta":vt,"n_garzones":int(len(sub)),
+            "venta_prom":(vt/len(sub) if len(sub) else 0),
+            "pct_adic":(adic/vt*100 if vt else 0),
+            "cats":{c:(float(sub[col].sum())/vt*100 if vt else 0)
+                    for c,col in zip(_PG_CATS,["v_agr","v_caf","v_pos","v_lsa","v_lca"])}})
+    loc_rows.sort(key=lambda x:-x["pct_adic"])
+    for i,lr in enumerate(loc_rows): lr["ranking"]=i+1
+    rank_of={lr["local"]:lr["ranking"] for lr in loc_rows}
+    n_locales=len(loc_rows)
+
+    data={}
+    for loc in _PG_ORDEN:
+        sub=q1[q1["local"]==loc]
+        if sub.empty: continue
+        sub=sub.sort_values("venta_total",ascending=False)
+        vt_loc=float(sub["venta_total"].sum()); ng=int(len(sub))
+        adic_loc=float((sub["v_agr"]+sub["v_caf"]+sub["v_pos"]+sub["v_lsa"]+sub["v_lca"]).sum())
+        cafe_q_loc=int(sub["q_caf"].sum()); post_q_loc=int(sub["q_pos"].sum())
+        mc=_PG_METAS_CP.get(loc,{}).get("cafe",0)*7; mp=_PG_METAS_CP.get(loc,{}).get("post",0)*7
+        vdias=[]
+        garzones=[]; matriz_g=[]
+        for _,r in sub.iterrows():
+            g_raw=r["garzon"]; venta=float(r["venta_total"]); dias=int(r["dias"]) or 1
+            nord=int(r["n_ordenes"]) or 0
+            cm=_pg_cat_montos(r)
+            adic=sum(v for v,_ in cm.values())
+            cafpos=cm["Cafetería"][0]+cm["Postres"][0]
+            bar=cm["Líquidos S/A"][0]+cm["Líquidos C/A"][0]
+            vdia=venta/dias; vdias.append(vdia)
+            # estratégicos del garzón
+            estr={}
+            if q3 is not None and not q3.empty:
+                qg=q3[(q3["local"]==loc)&(q3["garzon"]==g_raw)]
+                for etq,nom in _PG_ESTRAT:
+                    qq=float(qg[qg["nombre_producto"]==nom]["q"].sum())
+                    if qq: estr[etq]=qq
+            # evolución del garzón (venta + pct_adic por semana) y matriz por categoría
+            ge=q2[(q2["local"]==loc)&(q2["garzon"]==g_raw)]
+            ev_v={}; ev_p={}; cat_serie={c:{"pct":{}, "q":{}} for c in _PG_CATS}
+            for _,er in ge.iterrows():
+                key=sem_key[(int(er["anio"]),int(er["iso_week"]))]
+                vw=float(er["venta_total"])
+                ev_v[key]=vw
+                ecm=_pg_cat_montos(er)
+                aw=sum(v for v,_ in ecm.values())
+                ev_p[key]=(aw/vw*100 if vw else 0)
+                for c,(cv,cq) in ecm.items():
+                    cat_serie[c]["pct"][key]=(cv/vw*100 if vw else 0)
+                    cat_serie[c]["q"][key]=cq
+            serie_venta=[round(ev_v.get(s,0)) for s in semanas]
+            serie_pct=[round(ev_p.get(s,0),1) for s in semanas]
+            tend=_pg_tend(serie_pct)
+            garzones.append({"nombre":_pg_limpia(g_raw),"venta":venta,"dias":dias,
+                "n_ordenes":nord,"orden_prom":(venta/nord if nord else 0),"venta_diaria":vdia,
+                "pct_adic":(adic/venta*100 if venta else 0),
+                "pct_alim":(100-(cafpos/venta*100 if venta else 0)-(bar/venta*100 if venta else 0)),
+                "pct_bar":(bar/venta*100 if venta else 0),
+                "pct_cafpos":(cafpos/venta*100 if venta else 0),
+                "cafe_q":int(cm["Cafetería"][1]),"cafe_pct":(cm["Cafetería"][0]/venta*100 if venta else 0),
+                "postres_q":int(cm["Postres"][1]),"postres_pct":(cm["Postres"][0]/venta*100 if venta else 0),
+                "estrategicos":estr,"tendencia":tend})
+            celdas={}
+            for c in _PG_CATS:
+                sp=[round(cat_serie[c]["pct"].get(s,0),1) for s in semanas]
+                sq=[int(cat_serie[c]["q"].get(s,0)) for s in semanas]
+                celdas[c]={"actual_pct":(sp[-1] if sp else 0),"actual_q":(sq[-1] if sq else 0),
+                           "serie_pct":sp,"serie_q":sq,"tendencia":_pg_tend(sp)}
+            matriz_g.append({"nombre":_pg_limpia(g_raw),"celdas":celdas})
+
+        # evolución a nivel local (series por garzón)
+        ev_series=[]
+        for _,r in sub.iterrows():
+            g_raw=r["garzon"]; ge=q2[(q2["local"]==loc)&(q2["garzon"]==g_raw)]
+            ev_v={}; ev_p={}
+            for _,er in ge.iterrows():
+                key=sem_key[(int(er["anio"]),int(er["iso_week"]))]; vw=float(er["venta_total"])
+                ev_v[key]=vw; ecm=_pg_cat_montos(er); aw=sum(v for v,_ in ecm.values())
+                ev_p[key]=(aw/vw*100 if vw else 0)
+            ev_series.append({"nombre":_pg_limpia(g_raw),
+                "venta":[round(ev_v.get(s,0)) for s in semanas],
+                "pct_adic":[round(ev_p.get(s,0),1) for s in semanas]})
+
+        # alertas
+        med_vdia=_st.median(vdias) if vdias else 0
+        alertas=[]
+        for g in garzones:
+            ge=q2[(q2["local"]==loc)&(q2["garzon"].apply(lambda x:_pg_limpia(x)==g["nombre"]))]
+            if not ge.empty:
+                serie=[]
+                for _,er in ge.sort_values(["anio","iso_week"]).iterrows():
+                    vw=float(er["venta_total"]); ecm=_pg_cat_montos(er); aw=sum(v for v,_ in ecm.values())
+                    serie.append(aw/vw*100 if vw else 0)
+                if len(serie)>=2:
+                    prom_prev=sum(serie[:-1])/len(serie[:-1])
+                    if g["pct_adic"] < prom_prev-1:
+                        alertas.append({"garzon":g["nombre"],"tipo":"Rendimiento a la baja",
+                            "detalle":f"% adicionales en {_pg_pct1(g['pct_adic'])}, bajo su promedio de {_pg_pct1(prom_prev)} (5 sem)"})
+            if med_vdia and g["venta_diaria"]<med_vdia:
+                alertas.append({"garzon":g["nombre"],"tipo":"Productividad bajo la mediana",
+                    "detalle":f"venta/día {_pg_clp(g['venta_diaria'])} vs mediana local {_pg_clp(med_vdia)}"})
+
+        jf=_PG_JEFATURAS.get(loc,("","",""))
+        _et = q3[q3["local"]==loc] if (q3 is not None and not q3.empty) else None
+        _et_q = float(_et["q"].sum()) if (_et is not None and not _et.empty) else 0.0
+        _et_v = float(_et["venta"].sum()) if (_et is not None and "venta" in (_et.columns if _et is not None else []) and not _et.empty) else 0.0
+        data[loc]={
+            "estrategicos_total":{"q":_et_q,"venta":_et_v,"pct":(_et_v/vt_loc*100 if vt_loc else 0)},
+            "kpis":{"venta_local":vt_loc,"n_garzones":ng,"venta_prom":(vt_loc/ng if ng else 0),
+                "pct_adic":(adic_loc/vt_loc*100 if vt_loc else 0),"ranking":rank_of.get(loc,0),
+                "n_locales":n_locales,"cafe_q":cafe_q_loc,"postres_q":post_q_loc,
+                "cafe_cumpl":(cafe_q_loc/mc*100 if mc else 0),"postres_cumpl":(post_q_loc/mp*100 if mp else 0),
+                "meta_cafe":mc,"meta_post":mp},
+            "jefatura":{"supervisor":jf[0],"jefe":jf[1],"subjefe":jf[2]},
+            "garzones":garzones,
+            "evolucion":{"semanas":semanas,"series":ev_series},
+            "matriz_evol":{"categorias":_PG_CATS,"semanas":semanas,"garzones":matriz_g},
+            "alertas":alertas,
+        }
+
+    comparativa=[{"local":lr["local"],"venta":lr["venta"],"n_garzones":lr["n_garzones"],
+        "venta_prom":lr["venta_prom"],"pct_adic":lr["pct_adic"],"ranking":lr["ranking"],
+        "cats":lr["cats"]} for lr in loc_rows if lr["local"] in data]
+    estrategicos={etq:[nom.lower()] for etq,nom in _PG_ESTRAT}
+    return {"data":data,"comparativa":comparativa,"meta":meta,
+            "locales":list(data.keys()),"estrategicos":estrategicos,"unico":None}
+
+
+# ── Fragmentos SQL tomados del informe SeguimientoGarzones (validado) ──
+_PG_EXCL = ('Menu Ejecutivo','COLACIONES','PROTEINA ALMUERZO','ENSALADAS ALMUERZO','ACOMPANAMIENTO ALMUERZO')
+_PG_GRP_CASE = """
+    case
+      when categoria_menu in ('Agregados','Acompanamientos') then 'AGREGADOS'
+      when categoria_menu = 'Cafeteria' then 'CAFETERIA'
+      when categoria_menu = 'Postres' then 'POSTRES'
+      else null
+    end
+"""
+_PG_LIQ_JOIN = """
+    left join clasif_liquidos cn
+           on cn.match_tipo='nombre' and cn.match_valor = lower(trim(v.nombre_producto))
+    left join clasif_liquidos cs
+           on cs.match_tipo='sku' and cs.match_valor = v.sku_producto
+"""
+_PG_BUCKET = "coalesce(cn.bucket, cs.bucket)"
+
+def _pg_cargar_datos(ini, fin):
+    """Ejecuta las queries (réplica de la sección 5 de SeguimientoGarzones, multi-local)
+    y devuelve el payload P (o None si no hay whitelist/datos)."""
+    import datetime as _dt, pandas as _pd
+    try:
+        _wl = run_query("select garzon from garzones_whitelist where activo = true")
+        wl = _wl["garzon"].tolist() if (_wl is not None and not _wl.empty) else []
+    except Exception:
+        wl = []
+    if not wl:
+        return None
+    _lun = ini - _dt.timedelta(days=ini.weekday())
+    sem_ini = _lun - _dt.timedelta(weeks=5)            # 6 semanas ISO incl. la actual
+    excl = "','".join(_PG_EXCL)
+    GRP, BUCKET, LIQ = _PG_GRP_CASE, _PG_BUCKET, _PG_LIQ_JOIN
+
+    q1 = run_query(f"""
+        with d as (
+          select v.local, v.garzon, v.fecha_venta, v.id_orden,
+            v.monto_venta_real + coalesce(v.descuento,0) as venta,
+            v.cantidad_vendida as q,
+            {GRP} as grp_cat, {BUCKET} as liq_bucket
+          from ventas v {LIQ}
+          where v.origen is null and v.garzon = any(:wl)
+            and v.categoria_menu not in ('{excl}')
+            and v.fecha_venta between :i and :f
+        )
+        select local, garzon,
+          count(distinct fecha_venta) as dias,
+          count(distinct id_orden)    as n_ordenes,
+          sum(venta) as venta_total,
+          sum(case when grp_cat='AGREGADOS' then venta else 0 end) as v_agr,
+          sum(case when grp_cat='AGREGADOS' then q     else 0 end) as q_agr,
+          sum(case when grp_cat='CAFETERIA' then venta else 0 end) as v_caf,
+          sum(case when grp_cat='CAFETERIA' then q     else 0 end) as q_caf,
+          sum(case when grp_cat='POSTRES'   then venta else 0 end) as v_pos,
+          sum(case when grp_cat='POSTRES'   then q     else 0 end) as q_pos,
+          sum(case when liq_bucket='LIQ_SA' then venta else 0 end) as v_lsa,
+          sum(case when liq_bucket='LIQ_SA' then q     else 0 end) as q_lsa,
+          sum(case when liq_bucket='LIQ_CA' then venta else 0 end) as v_lca,
+          sum(case when liq_bucket='LIQ_CA' then q     else 0 end) as q_lca
+        from d group by local, garzon having sum(venta) > 0
+    """, {"i": str(ini), "f": str(fin), "wl": wl})
+
+    q2 = run_query(f"""
+        with d as (
+          select v.local, v.garzon, v.fecha_venta,
+            v.monto_venta_real + coalesce(v.descuento,0) as venta,
+            v.cantidad_vendida as q,
+            {GRP} as grp_cat, {BUCKET} as liq_bucket
+          from ventas v {LIQ}
+          where v.origen is null and v.garzon = any(:wl)
+            and v.categoria_menu not in ('{excl}')
+            and v.fecha_venta between :si and :f
+        )
+        select local, garzon,
+          extract(isoyear from fecha_venta)::int as anio,
+          extract(week    from fecha_venta)::int as iso_week,
+          sum(venta) as venta_total,
+          sum(case when grp_cat='AGREGADOS' then venta else 0 end) as v_agr,
+          sum(case when grp_cat='AGREGADOS' then q     else 0 end) as q_agr,
+          sum(case when grp_cat='CAFETERIA' then venta else 0 end) as v_caf,
+          sum(case when grp_cat='CAFETERIA' then q     else 0 end) as q_caf,
+          sum(case when grp_cat='POSTRES'   then venta else 0 end) as v_pos,
+          sum(case when grp_cat='POSTRES'   then q     else 0 end) as q_pos,
+          sum(case when liq_bucket='LIQ_SA' then venta else 0 end) as v_lsa,
+          sum(case when liq_bucket='LIQ_SA' then q     else 0 end) as q_lsa,
+          sum(case when liq_bucket='LIQ_CA' then venta else 0 end) as v_lca,
+          sum(case when liq_bucket='LIQ_CA' then q     else 0 end) as q_lca
+        from d group by local, garzon, anio, iso_week having sum(venta) > 0
+    """, {"si": str(sem_ini), "f": str(fin), "wl": wl})
+
+    _nombres = [nom for _, nom in _PG_ESTRAT]
+    q3 = run_query("""
+        select v.local, v.garzon, v.nombre_producto,
+          sum(v.cantidad_vendida) as q,
+          sum(v.monto_venta_real + coalesce(v.descuento,0)) as venta
+        from ventas v
+        where v.origen is null and v.garzon = any(:wl)
+          and v.nombre_producto = any(:nombres)
+          and v.fecha_venta between :i and :f
+        group by v.local, v.garzon, v.nombre_producto
+    """, {"i": str(ini), "f": str(fin), "wl": wl, "nombres": _nombres})
+
+    if q1 is None or q1.empty:
+        return None
+    if q2 is None:
+        q2 = _pd.DataFrame(columns=["local","garzon","anio","iso_week","venta_total",
+            "v_agr","q_agr","v_caf","q_caf","v_pos","q_pos","v_lsa","q_lsa","v_lca","q_lca"])
+    if q3 is None:
+        q3 = _pd.DataFrame(columns=["local","garzon","nombre_producto","q","venta"])
+
+    meta = {"semana": f"Semana {ini.strftime('%d-%m')} al {fin.strftime('%d-%m-%Y')}",
+            "generado": _dt.datetime.now().strftime('%Y-%m-%d %H:%M')}
+    return _pg_construir(q1, q2, q3, ini, fin, meta)
+
+
 # ===========================================================================
 #  CUMPLIMIENTO DE METAS (Cafetería/Postres) — cuadro mensual 1 pág horizontal
 # ===========================================================================
@@ -22830,6 +23162,57 @@ elif informe_sel == "CuentasCasa":
 # ============================================================
 # MÓDULO: NOTAS DE CRÉDITO
 # ============================================================
+elif modulo.startswith("🏅 Panel Garzones"):
+    import datetime as _pg_dt
+    st.markdown("""
+    <div style="margin-bottom:1.2rem">
+        <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#d4a853;margin-bottom:4px">Seguimiento</div>
+        <div style="font-family:'DM Serif Display',serif;font-size:2rem;color:#f0ede8;letter-spacing:-0.02em">
+            🏅 Panel de Garzones
+        </div>
+    </div>""", unsafe_allow_html=True)
+    st.caption("Genera un HTML autocontenido con el seguimiento por garzón de cada local (semana lun–dom). "
+               "Ventas de salón, garzones de la whitelist activa. Misma lógica del informe Seguimiento de Garzones (adicionales = Agregados + Cafetería + Postres + Líquidos S/A + C/A).")
+
+    _pg_hoy = _pg_dt.date.today()
+    _pg_lun_def = _pg_hoy - _pg_dt.timedelta(days=_pg_hoy.weekday() + 7)  # lunes semana pasada
+    _pgc1, _pgc2, _pgc3 = st.columns([2, 2, 2])
+    with _pgc1:
+        _pg_ini = st.date_input("Desde (lunes)", value=_pg_lun_def, key="pg_ini")
+    with _pgc2:
+        _pg_fin = st.date_input("Hasta (domingo)", value=_pg_lun_def + _pg_dt.timedelta(days=6), key="pg_fin")
+    with _pgc3:
+        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+        _pg_btn = st.button("🏅 Generar panel", type="primary", use_container_width=True, key="pg_btn")
+
+    if _pg_btn:
+        if _pg_fin < _pg_ini:
+            st.error("La fecha 'hasta' no puede ser anterior a 'desde'.")
+        else:
+            with st.spinner("Calculando seguimiento…"):
+                try:
+                    import json as _pg_json
+                    _pg_P = _pg_cargar_datos(_pg_ini, _pg_fin)
+                    if not _pg_P or not _pg_P.get("data"):
+                        st.warning("No hay datos para ese período (o la whitelist activa está vacía).")
+                        st.session_state.pop("pg_html", None)
+                    else:
+                        _pg_json_str = _pg_json.dumps(_pg_P, ensure_ascii=False)
+                        st.session_state["pg_html"] = _PG_TEMPLATE.replace("__PAYLOAD__", _pg_json_str)
+                        st.session_state["pg_fn"] = f"panel_garzones_{_pg_ini.isoformat()}.html"
+                        st.success(f"Panel generado: {len(_pg_P['data'])} locales.")
+                except Exception as _epg:
+                    st.error(f"Error generando el panel: {_epg}")
+
+    if st.session_state.get("pg_html"):
+        st.download_button("⬇️ Descargar panel (HTML)",
+            st.session_state["pg_html"].encode("utf-8"),
+            file_name=st.session_state.get("pg_fn", "panel_garzones.html"),
+            mime="text/html", use_container_width=True, key="pg_dl")
+        import streamlit.components.v1 as _pg_components
+        _pg_components.html(st.session_state["pg_html"], height=900, scrolling=True)
+
+
 elif modulo.startswith("📋 Notas de Crédito"):
     _is_admin_nc = st.session_state.get("user_role") == "admin"
     _uname_nc    = st.session_state.get("current_user", "")
