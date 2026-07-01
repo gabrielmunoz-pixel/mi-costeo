@@ -5020,8 +5020,8 @@ _PG_GRP_CASE = """
     case
       when categoria_menu = 'Agregados'       then 'AGREGADOS'
       when categoria_menu = 'Acompanamientos' then 'ACOMPANAMIENTOS'
-      when categoria_menu = 'Cafeteria'       then 'CAFETERIA'
-      when categoria_menu = 'Postres'         then 'POSTRES'
+      when categoria_menu = 'Cafeteria' and es_opcion = false then 'CAFETERIA'
+      when categoria_menu = 'Postres'   and es_opcion = false then 'POSTRES'
       else null
     end
 """
