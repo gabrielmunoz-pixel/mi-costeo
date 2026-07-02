@@ -5270,6 +5270,136 @@ def generar_pdf_cumplimiento_metas(rows, tot, mes_label, meta_col_label="Meta Me
     return buf.getvalue()
 
 
+def generar_pdf_cumplimiento_metas_b(rows, tot, mes_label, logo_path=None):
+    """Versión B (solo meses cerrados). 2 bloques: Cafetería y Postres.
+    Sin bloque TOTAL LOCAL. Agrega, además de Meta/Real/Cumpl.%/Estado:
+      - una columna 'Venta Salón' (venta $ total del local, base del %), y
+      - por bloque: 'Venta $' (venta del grupo) y '% Part.' (grupo ÷ venta local).
+
+    rows: lista de dicts {local, mc, rc, mp, rp, vloc, vc, vp}.
+          mc/rc = meta/real UNIDADES Cafetería; mp/rp = meta/real UNIDADES Postres.
+          vloc = venta $ salón del local (todas las categorías);
+          vc / vp = venta $ salón de Cafetería / Postres.
+    tot:  mismo esquema, agregado de la red.
+    """
+    import io as _io
+    from reportlab.lib.pagesizes import letter, landscape
+    from reportlab.lib import colors
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+
+    VERDE = colors.HexColor("#C6EFCE"); VERDE_T = colors.HexColor("#1E7B34")
+    AMBAR = colors.HexColor("#FFEB9C"); AMBAR_T = colors.HexColor("#9C6500")
+    ROJO  = colors.HexColor("#FFC7CE"); ROJO_T  = colors.HexColor("#9C0006")
+    AZUL  = colors.HexColor("#1F3864"); BORDE = colors.HexColor("#808080")
+    _cfill = {"verde": VERDE, "ambar": AMBAR, "rojo": ROJO}
+    _ctext = {"verde": VERDE_T, "ambar": AMBAR_T, "rojo": ROJO_T}
+
+    stt = ParagraphStyle("t", fontName="Helvetica-Bold", fontSize=12.5, alignment=TA_CENTER, leading=15, textColor=AZUL)
+    sts = ParagraphStyle("s", fontName="Helvetica", fontSize=7.5, alignment=TA_CENTER, leading=9, textColor=colors.HexColor("#555"))
+    sgh = ParagraphStyle("gh", fontName="Helvetica-Bold", fontSize=8.5, alignment=TA_CENTER, leading=10, textColor=colors.white)
+    sh  = ParagraphStyle("h", fontName="Helvetica-Bold", fontSize=6.6, alignment=TA_CENTER, leading=8, textColor=colors.white)
+    sc  = ParagraphStyle("c", fontName="Helvetica", fontSize=7.2, alignment=TA_CENTER, leading=8.6)
+    scl = ParagraphStyle("cl", fontName="Helvetica-Bold", fontSize=7.4, alignment=TA_LEFT, leading=8.6)
+    se  = ParagraphStyle("e", fontName="Helvetica-Bold", fontSize=6.3, alignment=TA_CENTER, leading=7.6)
+
+    def _fu(v):  return f"{v:,.0f}".replace(",", ".")            # unidades
+    def _fpe(v): return f"${int(round(float(v))):,}".replace(",", ".")   # pesos
+    def _fp(v):  return f"{v:.1f}%".replace(".", ",")            # porcentaje
+
+    PAG_W = landscape(letter)[0]; MX = 20
+    util = PAG_W - 2*MX
+    # LOCAL | VENTA SALÓN | Cafetería(6) | Postres(6)  -> 14 columnas
+    pesos = [2.6, 2.3,
+             1.5,1.4,1.5,1.9,2.2,1.5,
+             1.5,1.4,1.5,1.9,2.2,1.5]
+    sp = sum(pesos); wcols = [util*p/sp for p in pesos]
+
+    def _pct_part(g, base): return (g/base*100.0) if base else 0.0
+
+    def _build_tabla_b(_rows, _tot):
+        g_row = [Paragraph("LOCAL", sgh),
+                 Paragraph("VENTA<br/>SALÓN", sgh),
+                 Paragraph("CAFETERÍA", sgh), "", "", "", "", "",
+                 Paragraph("POSTRES", sgh), "", "", "", "", ""]
+        sub_blk = ["Meta", "Real", "Cumpl. %", "Estado", "Venta $", "% Part."]
+        h_row = ["", ""] + [Paragraph(x, sh) for x in sub_blk] \
+                         + [Paragraph(x, sh) for x in sub_blk]
+        data = [g_row, h_row]
+        cell_styles = []
+        r = 2
+        for row in _rows:
+            _vloc = float(row.get("vloc", 0.0))
+            cels = [Paragraph(row["local"], scl), Paragraph(_fpe(_vloc), sc)]
+            for meta, real, vgrp in [(row["mc"], row["rc"], float(row.get("vc", 0.0))),
+                                     (row["mp"], row["rp"], float(row.get("vp", 0.0)))]:
+                pct, color, estado = _cm_pct_color_estado(meta, real)
+                base = len(cels)
+                cels += [Paragraph(_fu(meta), sc), Paragraph(_fu(real), sc),
+                         Paragraph(_fp(pct), ParagraphStyle("p", parent=se, textColor=_ctext[color])),
+                         Paragraph(estado, ParagraphStyle("es", parent=se, textColor=_ctext[color])),
+                         Paragraph(_fpe(vgrp), sc),
+                         Paragraph(_fp(_pct_part(vgrp, _vloc)), sc)]
+                cell_styles.append((base+2, r, _cfill[color]))   # Cumpl. %
+                cell_styles.append((base+3, r, _cfill[color]))   # Estado
+            data.append(cels)
+            r += 1
+        # TOTAL RED
+        _tvloc = float(_tot.get("vloc", 0.0))
+        cels = [Paragraph("TOTAL RED", ParagraphStyle("tr", parent=scl, textColor=colors.white)),
+                Paragraph(_fpe(_tvloc), ParagraphStyle("w", parent=sc, textColor=colors.white))]
+        for meta, real, vgrp in [(_tot["mc"], _tot["rc"], float(_tot.get("vc", 0.0))),
+                                 (_tot["mp"], _tot["rp"], float(_tot.get("vp", 0.0)))]:
+            pct, color, estado = _cm_pct_color_estado(meta, real)
+            cels += [Paragraph(_fu(meta), ParagraphStyle("w", parent=sc, textColor=colors.white)),
+                     Paragraph(_fu(real), ParagraphStyle("w", parent=sc, textColor=colors.white)),
+                     Paragraph(_fp(pct), ParagraphStyle("w", parent=se, textColor=colors.white)),
+                     Paragraph(estado, ParagraphStyle("w", parent=se, textColor=colors.white)),
+                     Paragraph(_fpe(vgrp), ParagraphStyle("w", parent=sc, textColor=colors.white)),
+                     Paragraph(_fp(_pct_part(vgrp, _tvloc)), ParagraphStyle("w", parent=se, textColor=colors.white))]
+        data.append(cels)
+        r_total = r
+        t = Table(data, colWidths=wcols, repeatRows=2)
+        style = [
+            ("GRID",(0,0),(-1,-1),0.5,BORDE),
+            ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
+            ("ALIGN",(0,0),(-1,-1),"CENTER"),
+            ("SPAN",(0,0),(0,1)), ("SPAN",(1,0),(1,1)),
+            ("SPAN",(2,0),(7,0)), ("SPAN",(8,0),(13,0)),
+            ("BACKGROUND",(0,0),(-1,1),AZUL),
+            ("TOPPADDING",(0,0),(-1,-1),3),("BOTTOMPADDING",(0,0),(-1,-1),3),
+            ("LEFTPADDING",(0,0),(-1,-1),2),("RIGHTPADDING",(0,0),(-1,-1),2),
+            ("ROWBACKGROUNDS",(0,2),(-1,r_total-1),[colors.white, colors.HexColor("#F2F2F2")]),
+            ("BACKGROUND",(0,r_total),(-1,r_total),AZUL),
+        ]
+        for (c, rr, col) in cell_styles:
+            style.append(("BACKGROUND",(c,rr),(c,rr),col))
+        t.setStyle(TableStyle(style))
+        return t
+
+    t1 = _build_tabla_b(rows, tot)
+
+    buf = _io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=landscape(letter),
+                            leftMargin=MX, rightMargin=MX, topMargin=20, bottomMargin=20)
+    elems = [
+        Paragraph(f"CUADRO RESUMEN B · CUMPLIMIENTO DE METAS + VENTA SALÓN · {mes_label}", stt),
+        Spacer(1,3),
+        Paragraph("% Cumplimiento = Real ÷ Meta × 100 (unidades)  |  Verde &#8805;100% · Ámbar 90&#8211;99% · Rojo &lt;90%", sts),
+        Spacer(1,2),
+        Paragraph("% Part. = Venta $ del grupo ÷ Venta Salón del local", sts),
+        Spacer(1,8), t1,
+        Spacer(1,6),
+        Paragraph("Venta $ = venta bruta Salón (monto_venta_real + descuento), origen IS NULL. "
+                  "Real (unidades) excluye opciones (es_opcion=false). "
+                  "'Providencia' en ventas = 'Pedro de Valdivia' en metas.", sts),
+    ]
+    doc.build(elems)
+    buf.seek(0)
+    return buf.getvalue()
+
+
 def _sg_color_bands(n):
     """Cantidad de verdes/amarillos/rojos según nº de garzones (regla confirmada)."""
     if n <= 0:
@@ -14176,6 +14306,21 @@ elif modulo.startswith("📊"):
                 _cm_real["uds"] = pd.to_numeric(_cm_real["uds"], errors="coerce").fillna(0)
                 def _cm_es_cafe(c): return str(c).strip().lower() in ("cafeteria","cafetería")
                 def _cm_es_post(c): return str(c).strip().lower() == "postres"
+                # Venta $ Salón (para el Cuadro B, meses cerrados). Solo filtro Salón
+                # (origen IS NULL). Bruto = monto_venta_real + descuento.
+                _cm_money_q = run_query("""
+                    SELECT local, categoria_menu,
+                           SUM(monto_venta_real + COALESCE(descuento,0)) AS venta
+                    FROM ventas
+                    WHERE fecha_venta BETWEEN :fi AND :ff
+                      AND origen IS NULL
+                      AND local IS NOT NULL
+                    GROUP BY local, categoria_menu
+                """, {"fi": str(_cm_fi), "ff": str(_cm_ff)})
+                if _cm_money_q is None:
+                    _cm_money_q = pd.DataFrame(columns=["local","categoria_menu","venta"])
+                _cm_money_q["venta"] = pd.to_numeric(_cm_money_q["venta"], errors="coerce").fillna(0)
+                _cm_money = {}; _cm_money_tot = {"vloc":0.0,"vc":0.0,"vp":0.0}
                 # Cuadro 1: meta MENSUAL vs VENTA PROYECTADA al cierre (real × factor)
                 _cm_rows = []; _ct = {"mc":0.0,"rc":0.0,"mp":0.0,"rp":0.0}
                 # Cuadro 2: meta MENSUAL vs REAL acumulado (sin proyectar)
@@ -14194,10 +14339,18 @@ elif modulo.startswith("📊"):
                     # cuadro 2: real acumulado
                     _cm_rows_tot.append({"local": _loc, "mc": _mc_t, "rc": _rc, "mp": _mp_t, "rp": _rp})
                     _ct_tot["mc"]+=_mc_t; _ct_tot["rc"]+=_rc; _ct_tot["mp"]+=_mp_t; _ct_tot["rp"]+=_rp
+                    # venta $ Salón por local (Cuadro B)
+                    _subm = _cm_money_q[_cm_money_q["local"] == _loc]
+                    _vloc = float(_subm["venta"].sum())
+                    _vc = float(_subm[_subm["categoria_menu"].apply(_cm_es_cafe)]["venta"].sum())
+                    _vp = float(_subm[_subm["categoria_menu"].apply(_cm_es_post)]["venta"].sum())
+                    _cm_money[_loc] = {"vloc": _vloc, "vc": _vc, "vp": _vp}
+                    _cm_money_tot["vloc"]+=_vloc; _cm_money_tot["vc"]+=_vc; _cm_money_tot["vp"]+=_vp
                 st.session_state["cm_data"] = {
                     "rows": _cm_rows, "tot": _ct, "lbl": _cm_lbl,
                     "meta_col": _cm_meta_col, "nota": _cm_nota,
                     "rows_tot": _cm_rows_tot, "tot_tot": _ct_tot,
+                    "money": _cm_money, "money_tot": _cm_money_tot,
                     "en_curso": _cm_en_curso,
                     "dias_transc": _cm_dias_transc, "dias_mes": _cm_dias_mes,
                 }
@@ -14256,6 +14409,27 @@ elif modulo.startswith("📊"):
                     mime="application/pdf", use_container_width=True, key="cm_pdf_dl")
             except Exception as _ecm:
                 st.warning(f"No se pudo generar el PDF: {_ecm}")
+
+            # ── Cuadro B (Venta Salón): solo meses cerrados ──
+            if not _cm_cache.get("en_curso", False):
+                try:
+                    _money = _cm_cache.get("money", {})
+                    _rows_b = []
+                    for _r in _cm_cache["rows_tot"]:      # real acumulado (mes cerrado)
+                        _m = _money.get(_r["local"], {"vloc": 0.0, "vc": 0.0, "vp": 0.0})
+                        _rb = dict(_r); _rb.update(vloc=_m["vloc"], vc=_m["vc"], vp=_m["vp"])
+                        _rows_b.append(_rb)
+                    _mt = _cm_cache.get("money_tot", {"vloc": 0.0, "vc": 0.0, "vp": 0.0})
+                    _tot_b = dict(_cm_cache["tot_tot"])
+                    _tot_b.update(vloc=_mt["vloc"], vc=_mt["vc"], vp=_mt["vp"])
+                    _cm_pdf_b = generar_pdf_cumplimiento_metas_b(
+                        _rows_b, _tot_b, _cm_cache["lbl"])
+                    _cm_fn_b = _cm_cache["lbl"].split(" ·")[0].replace(" ", "_")
+                    st.download_button("📄 Descargar cuadro B · Venta Salón (PDF)", _cm_pdf_b,
+                        file_name=f"cumplimiento_metas_B_{_cm_fn_b}.pdf",
+                        mime="application/pdf", use_container_width=True, key="cm_pdf_b_dl")
+                except Exception as _ecb:
+                    st.warning(f"No se pudo generar el PDF B: {_ecb}")
 
 
     elif informe_sel == "ControlProduccion":
