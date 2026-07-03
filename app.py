@@ -5401,13 +5401,16 @@ def generar_pdf_cumplimiento_metas_b(rows, tot, mes_label, logo_path=None):
 
 
 def generar_pdf_resumen_ventas(ws, fecha, dias_cal, chart_pngs=None):
-    """PDF resumen (paralelo al Excel). Replica el cuadro de la foto AGREGANDO
-    la venta del día. Columnas: DÍA, ACUMULADA, PROYECCIÓN MES, AÑO ANTERIOR,
-    PROYECCIÓN ANUAL (cada una con su %). Solo sección Alemán (locales + total
-    locales + apps). Debajo, los 4 gráficos (formato nuevo).
+    """PDF resumen (paralelo al Excel). Misma estética del cuadro de referencia
+    (escala de grises) + columna de venta diaria + SEÑALIZADORES año-contra-año.
 
+    Señalizador (semáforo) sobre PROYECCIÓN DEL MES en las filas TOTAL:
+      proyección del mes vs mismo mes del año anterior.
+        ▲ verde  → crece  (var >= +5%)
+        → ámbar → estable (-5% .. +5%)
+        ▼ rojo  → cae     (var < -5%)
+    Solo tabla (sección Alemán: locales + total locales + apps). Sin gráficos.
     ws: worksheet 'INF DIARIO 15' YA con E/G escritas.
-    chart_pngs: dict opcional {'locales','delivery','aporte','aliva': bytes PNG}.
     """
     import io as _io, re as _re
     from openpyxl.utils import column_index_from_string as _cifs
@@ -5415,21 +5418,40 @@ def generar_pdf_resumen_ventas(ws, fecha, dias_cal, chart_pngs=None):
     from reportlab.lib import colors
     from reportlab.lib.styles import ParagraphStyle
     from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
-    from reportlab.platypus import (SimpleDocTemplate, Table, TableStyle, Paragraph,
-                                    Spacer, Image as RLImage, PageBreak)
+    from reportlab.platypus import (SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer)
 
-    AZUL = colors.HexColor("#1F3864"); GRIS = colors.HexColor("#D9D9D9")
-    GRIS2 = colors.HexColor("#F2F2F2"); BORDE = colors.HexColor("#808080")
+    # Fuente con glifos de flechas (DejaVu viene con matplotlib, ya usado por la app)
+    _ARROWF = 'Helvetica'
+    try:
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+        import matplotlib.font_manager as _fm2
+        pdfmetrics.registerFont(TTFont('DejaVuSans', _fm2.findfont('DejaVu Sans')))
+        _ARROWF = 'DejaVuSans'
+    except Exception:
+        _ARROWF = 'Helvetica'
+    if _ARROWF == 'DejaVuSans':
+        A_UP, A_DN, A_FL = '\u25B2', '\u25BC', '\u2192'   # ▲ ▼ →
+    else:
+        A_UP, A_DN, A_FL = '+', '-', '='
+
+    GRIS_HDR = colors.HexColor("#C9C9C9")
+    GRIS_TOT = colors.HexColor("#DEDEDE")
+    BORDE    = colors.HexColor("#808080")
+    NEGRO    = colors.black
+    V_T, V_F = colors.HexColor("#1E7B34"), colors.HexColor("#C6EFCE")
+    A_T, A_F = colors.HexColor("#9C6500"), colors.HexColor("#FFEB9C")
+    R_T, R_F = colors.HexColor("#C00000"), colors.HexColor("#FFC7CE")
 
     def num(r, c):
         v = ws.cell(r, c).value
         return float(v) if isinstance(v, (int, float)) else 0.0
     M2 = dias_cal if dias_cal else (num(2, 13) or 1)
 
-    DIA, ACUM, ANO_ANT = 5, 7, 33         # columnas de valor 'leaf'
+    DIA, ACUM, ANO_ANT = 5, 7, 33
     def proy_mes(r):  return num(r, ACUM) / M2 * 30 if M2 else 0.0
     def proy_anual(r):
-        f = ws.cell(r, 37).value          # AE=proy mes, AK=proy anual
+        f = ws.cell(r, 37).value
         if not isinstance(f, str) or not f.startswith('='):
             return 0.0
         tot = 0.0
@@ -5447,128 +5469,131 @@ def generar_pdf_resumen_ventas(ws, fecha, dias_cal, chart_pngs=None):
         return {'dia': num(r, DIA), 'acum': num(r, ACUM), 'pmes': proy_mes(r),
                 'ant': num(r, ANO_ANT), 'panual': proy_anual(r)}
     def suma(a, b): return {k: a[k] + b[k] for k in METRICS}
+    def pct_of(v, base): return {k: (v[k]/base[k] if base[k] else 0.0) for k in METRICS}
+    UNO = {k: 1.0 for k in METRICS}
 
     LOCS = [(6,'VITACURA'),(9,'LAS CONDES'),(12,'CHICUREO'),(15,'MACUL'),
             (18,'LA DEHESA'),(21,'LA REINA'),(24,'QUILIN'),(27,'PROVIDENCIA'),
             (30,'NUEVA PROVIDENCIA'),(33,'LOS TRAPENSES')]
 
-    # Etiquetas de columnas leídas del template (fila 5)
     def hdr(c):
         v = ws.cell(5, c).value
         v = str(v).strip() if v else ''
-        if v.startswith('='):           # AC5 ='="JUN 2026"'
+        if v.startswith('='):
             m = _re.search(r'"([^"]+)"', v); v = m.group(1).strip() if m else ''
         return v
-    lbl_dia = (hdr(5) or f"DÍA {fecha.strftime('%d/%m')}")
-    lbl_acum = hdr(7) or 'ACUMULADA'
-    lbl_pmes = hdr(31) or 'PROYECCIÓN MES'
-    lbl_ant = hdr(33) or 'AÑO ANTERIOR'
-    lbl_panual = hdr(37) or 'PROYECCIÓN ANUAL'
+    lbl = [hdr(5) or f"DÍA {fecha.strftime('%d/%m')}", hdr(7) or 'ACUMULADA',
+           hdr(31) or 'PROYECCIÓN MES', hdr(33) or 'AÑO ANTERIOR',
+           hdr(37) or 'PROYECCIÓN ANUAL']
 
-    def _fm(v):  return f"{v:,.0f}".replace(",", ".")
-    def _fp(v):  return f"{v*100:.0f}%"
+    def _fm(v): return f"{v:,.0f}".replace(",", ".")
+    def _fp(v): return f"{v*100:.0f}%"
 
-    # estilos
-    sh  = ParagraphStyle("h", fontName="Helvetica-Bold", fontSize=6.8, alignment=TA_CENTER, leading=8.2, textColor=colors.white)
-    scl = ParagraphStyle("cl", fontName="Helvetica-Bold", fontSize=7.2, alignment=TA_LEFT, leading=8.4)
-    sct = ParagraphStyle("ct", fontName="Helvetica", fontSize=7.0, alignment=TA_LEFT, leading=8.4)
-    snum= ParagraphStyle("n", fontName="Helvetica", fontSize=7.0, alignment=TA_RIGHT, leading=8.4)
-    spc = ParagraphStyle("p", fontName="Helvetica", fontSize=6.8, alignment=TA_RIGHT, leading=8.4, textColor=colors.HexColor("#555"))
-    stt = ParagraphStyle("t", fontName="Helvetica-Bold", fontSize=13, alignment=TA_CENTER, leading=15, textColor=AZUL)
-    sst = ParagraphStyle("s", fontName="Helvetica", fontSize=8, alignment=TA_CENTER, leading=10, textColor=colors.HexColor("#555"))
+    sh    = ParagraphStyle("h",  fontName="Helvetica-Bold", fontSize=6.8, alignment=TA_CENTER, leading=8.2, textColor=NEGRO)
+    sloc  = ParagraphStyle("l",  fontName="Helvetica-Bold", fontSize=7.4, alignment=TA_LEFT,   leading=8.6, textColor=NEGRO)
+    stipo = ParagraphStyle("tp", fontName="Helvetica",      fontSize=7.0, alignment=TA_LEFT,   leading=8.4, textColor=NEGRO)
+    stipb = ParagraphStyle("tb", fontName="Helvetica-Bold", fontSize=7.0, alignment=TA_LEFT,   leading=8.4, textColor=NEGRO)
+    snum  = ParagraphStyle("n",  fontName="Helvetica",      fontSize=7.0, alignment=TA_RIGHT,  leading=8.4, textColor=NEGRO)
+    snumb = ParagraphStyle("nb", fontName="Helvetica-Bold", fontSize=7.0, alignment=TA_RIGHT,  leading=8.4, textColor=NEGRO)
+    spct  = ParagraphStyle("p",  fontName="Helvetica",      fontSize=6.8, alignment=TA_RIGHT,  leading=8.4, textColor=NEGRO)
+    spctb = ParagraphStyle("pb", fontName="Helvetica-Bold", fontSize=6.8, alignment=TA_RIGHT,  leading=8.4, textColor=NEGRO)
+
+    def señal(vals):
+        """Devuelve (arrow, text_color, fill_color) comparando pmes vs año anterior."""
+        a = vals['ant']; p = vals['pmes']
+        if a <= 0:
+            return None
+        var = (p - a) / a
+        if var >= 0.05:  return (A_UP, V_T, V_F)
+        if var <= -0.05: return (A_DN, R_T, R_F)
+        return (A_FL, A_T, A_F)
 
     header = [Paragraph("LOCAL", sh), Paragraph("TIPO VENTA", sh)]
-    for lb in (lbl_dia, lbl_acum, lbl_pmes, lbl_ant, lbl_panual):
+    for lb in lbl:
         header += [Paragraph(lb.upper(), sh), Paragraph("%", sh)]
 
-    data = [header]; styles = []; r = 1
-    def add_row(local, tipo, vals, pcts, shade=False, bold=False):
+    data = [header]; sty = []; r = 1
+    def add_block(name, rows_defs):
         nonlocal r
-        est_l = scl if (bold or tipo == 'TOTAL') else sct
-        cel = [Paragraph(local, est_l), Paragraph(tipo, est_l)]
-        for k in METRICS:
-            ne = ParagraphStyle("nb", parent=snum, fontName="Helvetica-Bold") if (bold or tipo=='TOTAL') else snum
-            cel += [Paragraph(_fm(vals[k]), ne), Paragraph(_fp(pcts[k]), spc)]
-        data.append(cel)
-        if shade:
-            styles.append(("BACKGROUND", (0, r), (-1, r), GRIS))
-        r += 1
+        start = r
+        for i, (tipo, vals, pcts, is_tot) in enumerate(rows_defs):
+            cel = [Paragraph(name if i == 0 else '', sloc),
+                   Paragraph(tipo, stipb if is_tot else stipo)]
+            for k in METRICS:
+                nst = snumb if is_tot else snum
+                if k == 'pmes' and is_tot:
+                    sg = señal(vals)
+                    if sg:
+                        arrow, tcol, fcol = sg
+                        cel.append(Paragraph(
+                            f'<font name="{_ARROWF}" color="#{tcol.hexval()[2:]}">{arrow}</font>&nbsp;{_fm(vals[k])}', nst))
+                        sty.append(("BACKGROUND", (6, r), (6, r), fcol))
+                    else:
+                        cel.append(Paragraph(_fm(vals[k]), nst))
+                else:
+                    cel.append(Paragraph(_fm(vals[k]), nst))
+                cel.append(Paragraph(_fp(pcts[k]), spctb if is_tot else spct))
+            data.append(cel)
+            if is_tot:
+                sty.append(("BACKGROUND", (0, r), (5, r), GRIS_TOT))
+                sty.append(("BACKGROUND", (7, r), (-1, r), GRIS_TOT))
+            r += 1
+        if r - start > 1:
+            sty.append(("SPAN", (0, start), (0, r - 1)))
 
-    def pcts_of(v, base):
-        return {k: (v[k]/base[k] if base[k] else 0.0) for k in METRICS}
-    unit = {k: 1.0 for k in METRICS}
-
-    # Locales
     gt_s = {k:0.0 for k in METRICS}; gt_d = {k:0.0 for k in METRICS}
     for base, name in LOCS:
         s = leaf(base); d = leaf(base+1); t = suma(s, d)
         gt_s = suma(gt_s, s); gt_d = suma(gt_d, d)
-        add_row(name, 'SALÓN', s, pcts_of(s, t))
-        add_row('', 'DELIVERY', d, pcts_of(d, t))
-        add_row('', 'TOTAL', t, {k:1.0 for k in METRICS}, shade=True, bold=True)
-
-    # Separador
-    data.append([""]*12); styles.append(("SPAN",(0,r),(-1,r))); styles.append(("LINEBELOW",(0,r),(-1,r),0.4,colors.white)); r += 1
+        add_block(name, [('SALÓN', s, pct_of(s, t), False),
+                         ('DELIVERY', d, pct_of(d, t), False),
+                         ('TOTAL', t, UNO, True)])
 
     grand = suma(gt_s, gt_d)
-    add_row('TOTAL LOCALES', 'SALÓN', gt_s, pcts_of(gt_s, grand), bold=True)
-    add_row('', 'DELIVERY', gt_d, pcts_of(gt_d, grand), bold=True)
-    APPS = [(39,'UBER'),(40,'PEDIDOSYA'),(41,'RAPPI')]
-    for ar, an in APPS:
-        a = leaf(ar); add_row('', an, a, pcts_of(a, gt_d))
-    add_row('', 'TOTAL', grand, {k:1.0 for k in METRICS}, shade=True, bold=True)
+    tl_rows = [('SALÓN', gt_s, pct_of(gt_s, grand), True),
+               ('DELIVERY', gt_d, pct_of(gt_d, grand), True)]
+    for ar, an in [(39,'UBER'),(40,'PEDIDOSYA'),(41,'RAPPI')]:
+        a = leaf(ar); tl_rows.append((an, a, pct_of(a, gt_d), False))
+    tl_rows.append(('TOTAL', grand, UNO, True))
+    _sep = r; data.append([""]*12); r += 1
+    add_block('TOTAL LOCALES', tl_rows)
 
-    # anchos
-    PAGE_W = landscape(letter)[0]; MX = 22
+    PAGE_W = landscape(letter)[0]; MX = 24
     util = PAGE_W - 2*MX
     pesos = [2.6, 1.5] + [2.0, 0.9]*5
     sp = sum(pesos); wcols = [util*p/sp for p in pesos]
 
     t = Table(data, colWidths=wcols, repeatRows=1)
-    base_style = [
+    t.setStyle(TableStyle([
         ("GRID",(0,0),(-1,-1),0.4,BORDE),
         ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
-        ("BACKGROUND",(0,0),(-1,0),AZUL),
-        ("TOPPADDING",(0,0),(-1,-1),2.2),("BOTTOMPADDING",(0,0),(-1,-1),2.2),
+        ("ALIGN",(0,0),(-1,0),"CENTER"),
+        ("BACKGROUND",(0,0),(-1,0),GRIS_HDR),
+        ("TOPPADDING",(0,0),(-1,-1),2.4),("BOTTOMPADDING",(0,0),(-1,-1),2.4),
         ("LEFTPADDING",(0,0),(-1,-1),3),("RIGHTPADDING",(0,0),(-1,-1),3),
-    ]
-    t.setStyle(TableStyle(base_style + styles))
+        ("SPAN",(0,_sep),(-1,_sep)),
+        ("GRID",(0,_sep),(-1,_sep),0,colors.white),
+    ] + sty))
+
+    # Leyenda del señalizador
+    mes_lbl = (lbl[2] or 'PROYECCIÓN').replace('PROYECCIÓN', '').strip() or 'del mes'
+    ant_lbl = lbl[3] or 'año anterior'
+    sleg = ParagraphStyle("leg", fontName="Helvetica", fontSize=7.2, alignment=TA_LEFT, leading=9, textColor=colors.HexColor("#333"))
+    leyenda = (f'Señalizador sobre <b>{lbl[2]}</b> (vs <b>{ant_lbl}</b>): '
+               f'<font name="{_ARROWF}" color="#1E7B34">{A_UP}</font> crece (&#8805;+5%) &nbsp;·&nbsp; '
+               f'<font name="{_ARROWF}" color="#9C6500">{A_FL}</font> estable (&#177;5%) &nbsp;·&nbsp; '
+               f'<font name="{_ARROWF}" color="#C00000">{A_DN}</font> cae (&lt;-5%)')
 
     buf = _io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=landscape(letter),
-                            leftMargin=MX, rightMargin=MX, topMargin=22, bottomMargin=22)
-    elems = [
-        Paragraph(f"INFORME DE VENTAS · ALEMÁN EXPERTO", stt),
-        Spacer(1,2),
-        Paragraph(f"Resumen al {fecha.strftime('%d/%m/%Y')} · valores en $ · % = participación del grupo", sst),
-        Spacer(1,8), t,
-    ]
-
-    # Gráficos (formato nuevo) — todo en una hoja
-    if chart_pngs:
-        elems += [PageBreak(), Paragraph("GRÁFICOS", stt), Spacer(1,10)]
-        def im_h(key, target_h, max_w):
-            b = chart_pngs.get(key)
-            if not b: return None
-            im = RLImage(_io.BytesIO(b)); ar = im.imageHeight/im.imageWidth
-            w = target_h/ar
-            if w > max_w: w = max_w
-            im.drawWidth = w; im.drawHeight = w*ar; return im
-        _ctr = [("ALIGN",(0,0),(-1,-1),"CENTER"),("VALIGN",(0,0),(-1,-1),"TOP")]
-        il = im_h('locales', 132, util)
-        if il:
-            elems += [Table([[il]], colWidths=[util], style=_ctr), Spacer(1,8)]
-        pies = [im_h('delivery', 190, util*0.46), im_h('aporte', 190, util*0.50)]
-        pies = [p for p in pies if p]
-        if pies:
-            elems += [Table([pies], colWidths=[util*0.5]*len(pies), style=_ctr), Spacer(1,8)]
-        ia = im_h('aliva', 118, util)
-        if ia:
-            elems += [Table([[ia]], colWidths=[util], style=_ctr)]
-
-    doc.build(elems)
+                            leftMargin=MX, rightMargin=MX, topMargin=24, bottomMargin=22)
+    doc.build([t, Spacer(1, 8), Paragraph(leyenda, sleg)])
     buf.seek(0)
     return buf.getvalue()
+
+
+
+
 
 
 
@@ -11418,37 +11443,43 @@ if modulo.startswith("📦"):
                         if not _registros:
                             st.error("No quedaron registros válidos tras el filtrado.")
                         else:
-                            # 5) UPSERT idempotente
+                            # 5) UPSERT idempotente y RÁPIDO: carga masiva multi-fila
+                            #    (execute_values) → un solo INSERT por lote en vez de una
+                            #    ida/vuelta por fila. Baja de minutos a segundos.
+                            import psycopg2.extras as _pgx_as
                             _engine_as = get_engine()
-                            _UPSERT_AS = text("""
-                                INSERT INTO asistencia_rrhh
-                                    (rut, apellidos, nombre, local, fecha, tipo_jornada, turno_raw,
-                                     colacion_min, horas_totales, trabajo, cargo, permiso)
-                                VALUES
-                                    (:rut, :apellidos, :nombre, :local, :fecha, :tipo_jornada, :turno_raw,
-                                     :colacion_min, :horas_totales, :trabajo, :cargo, :permiso)
+                            _COLS_AS = ['rut', 'apellidos', 'nombre', 'local', 'fecha',
+                                        'tipo_jornada', 'turno_raw', 'colacion_min',
+                                        'horas_totales', 'trabajo', 'cargo', 'permiso']
+                            _SQL_AS = f"""
+                                INSERT INTO asistencia_rrhh ({', '.join(_COLS_AS)})
+                                VALUES %s
                                 ON CONFLICT (rut, fecha) DO UPDATE SET
                                     apellidos=EXCLUDED.apellidos, nombre=EXCLUDED.nombre,
                                     local=EXCLUDED.local, tipo_jornada=EXCLUDED.tipo_jornada,
                                     turno_raw=EXCLUDED.turno_raw, colacion_min=EXCLUDED.colacion_min,
                                     horas_totales=EXCLUDED.horas_totales, trabajo=EXCLUDED.trabajo,
                                     cargo=EXCLUDED.cargo, permiso=EXCLUDED.permiso, fecha_carga=NOW()
-                            """)
-                            # Insertar por lotes con commit por lote: una sentencia masiva
-                            # con ON CONFLICT sobre miles de filas excede el statement_timeout
-                            # de la base. Cada lote en su propia transacción mantiene las
-                            # sentencias rápidas y evita el timeout.
-                            _CHUNK_AS = 500
+                            """
+                            # 1000 filas por sentencia: rápido y muy por debajo del statement_timeout.
+                            _CHUNK_AS = 1000
                             _total_as = len(_registros)
                             _prog_as = st.progress(0.0, text="Cargando asistencia…")
-                            for _ini in range(0, _total_as, _CHUNK_AS):
-                                _lote = _registros[_ini:_ini + _CHUNK_AS]
-                                with _engine_as.begin() as _conn_as:
-                                    _conn_as.execute(_UPSERT_AS, _lote)
-                                _prog_as.progress(
-                                    min((_ini + _CHUNK_AS) / _total_as, 1.0),
-                                    text=f"Cargando asistencia… {min(_ini + _CHUNK_AS, _total_as)}/{_total_as}"
-                                )
+                            _raw_as = _engine_as.raw_connection()
+                            try:
+                                _cur_as = _raw_as.cursor()
+                                for _ini in range(0, _total_as, _CHUNK_AS):
+                                    _lote = _registros[_ini:_ini + _CHUNK_AS]
+                                    _vals_as = [tuple(_r.get(_c) for _c in _COLS_AS) for _r in _lote]
+                                    _pgx_as.execute_values(_cur_as, _SQL_AS, _vals_as, page_size=_CHUNK_AS)
+                                    _raw_as.commit()
+                                    _prog_as.progress(
+                                        min((_ini + _CHUNK_AS) / _total_as, 1.0),
+                                        text=f"Cargando asistencia… {min(_ini + _CHUNK_AS, _total_as)}/{_total_as}"
+                                    )
+                                _cur_as.close()
+                            finally:
+                                _raw_as.close()
                             _prog_as.empty()
 
                             _fmin = min(r["fecha"] for r in _registros)
@@ -11759,60 +11790,42 @@ if modulo.startswith("📦"):
                         if not _regs_rm:
                             st.warning("No quedaron registros válidos tras el filtrado.")
                         else:
-                            _UPSERT_RM = text("""
-                                INSERT INTO remuneraciones_rrhh
-                                    (rut, periodo, estado, nombre, cargo, familia_cargo,
-                                     empresa, local, sueldo_base, bono_produccion,
-                                     bono_gestion, bono_formacion, horas_extras_50,
-                                     bono_delivery, bono_reserva, gratificacion,
-                                     colacion_haber, movilizacion, total_haberes,
-                                     aportes_patronales, costo_empresa, valor_dia,
-                                     valor_feriado, valor_domingo_cocina,
-                                     valor_domingo_salon, gratif_tope)
-                                VALUES
-                                    (:rut, :periodo, :estado, :nombre, :cargo, :familia_cargo,
-                                     :empresa, :local, :sueldo_base, :bono_produccion,
-                                     :bono_gestion, :bono_formacion, :horas_extras_50,
-                                     :bono_delivery, :bono_reserva, :gratificacion,
-                                     :colacion_haber, :movilizacion, :total_haberes,
-                                     :aportes_patronales, :costo_empresa, :valor_dia,
-                                     :valor_feriado, :valor_domingo_cocina,
-                                     :valor_domingo_salon, :gratif_tope)
+                            # Carga masiva multi-fila (execute_values): un INSERT por lote.
+                            import psycopg2.extras as _pgx_rm
+                            _COLS_RM = ['rut', 'periodo', 'estado', 'nombre', 'cargo', 'familia_cargo',
+                                        'empresa', 'local', 'sueldo_base', 'bono_produccion',
+                                        'bono_gestion', 'bono_formacion', 'horas_extras_50',
+                                        'bono_delivery', 'bono_reserva', 'gratificacion',
+                                        'colacion_haber', 'movilizacion', 'total_haberes',
+                                        'aportes_patronales', 'costo_empresa', 'valor_dia',
+                                        'valor_feriado', 'valor_domingo_cocina',
+                                        'valor_domingo_salon', 'gratif_tope']
+                            _SET_RM = ",\n".join(
+                                f"{_c}=EXCLUDED.{_c}" for _c in _COLS_RM if _c not in ('rut', 'periodo'))
+                            _SQL_RM = f"""
+                                INSERT INTO remuneraciones_rrhh ({', '.join(_COLS_RM)})
+                                VALUES %s
                                 ON CONFLICT (rut, periodo) DO UPDATE SET
-                                    estado=EXCLUDED.estado, nombre=EXCLUDED.nombre,
-                                    cargo=EXCLUDED.cargo, familia_cargo=EXCLUDED.familia_cargo,
-                                    empresa=EXCLUDED.empresa, local=EXCLUDED.local,
-                                    sueldo_base=EXCLUDED.sueldo_base,
-                                    bono_produccion=EXCLUDED.bono_produccion,
-                                    bono_gestion=EXCLUDED.bono_gestion,
-                                    bono_formacion=EXCLUDED.bono_formacion,
-                                    horas_extras_50=EXCLUDED.horas_extras_50,
-                                    bono_delivery=EXCLUDED.bono_delivery,
-                                    bono_reserva=EXCLUDED.bono_reserva,
-                                    gratificacion=EXCLUDED.gratificacion,
-                                    colacion_haber=EXCLUDED.colacion_haber,
-                                    movilizacion=EXCLUDED.movilizacion,
-                                    total_haberes=EXCLUDED.total_haberes,
-                                    aportes_patronales=EXCLUDED.aportes_patronales,
-                                    costo_empresa=EXCLUDED.costo_empresa,
-                                    valor_dia=EXCLUDED.valor_dia,
-                                    valor_feriado=EXCLUDED.valor_feriado,
-                                    valor_domingo_cocina=EXCLUDED.valor_domingo_cocina,
-                                    valor_domingo_salon=EXCLUDED.valor_domingo_salon,
-                                    gratif_tope=EXCLUDED.gratif_tope,
+                                    {_SET_RM},
                                     fecha_carga=NOW()
-                            """)
+                            """
                             _eng_rm2 = get_engine()
-                            _CHUNK_RM = 500
+                            _CHUNK_RM = 1000
                             _tot_rm = len(_regs_rm)
                             _prog_rm = st.progress(0.0, text="Cargando remuneraciones…")
-                            for _ini in range(0, _tot_rm, _CHUNK_RM):
-                                _lote = _regs_rm[_ini:_ini + _CHUNK_RM]
-                                with _eng_rm2.connect() as _c2:
-                                    _c2.execute(_UPSERT_RM, _lote)
-                                    _c2.commit()
-                                _prog_rm.progress(min((_ini + _CHUNK_RM) / _tot_rm, 1.0),
-                                    text=f"Cargando… {min(_ini + _CHUNK_RM, _tot_rm)}/{_tot_rm}")
+                            _raw_rm = _eng_rm2.raw_connection()
+                            try:
+                                _cur_rm = _raw_rm.cursor()
+                                for _ini in range(0, _tot_rm, _CHUNK_RM):
+                                    _lote = _regs_rm[_ini:_ini + _CHUNK_RM]
+                                    _vals_rm = [tuple(_r.get(_c) for _c in _COLS_RM) for _r in _lote]
+                                    _pgx_rm.execute_values(_cur_rm, _SQL_RM, _vals_rm, page_size=_CHUNK_RM)
+                                    _raw_rm.commit()
+                                    _prog_rm.progress(min((_ini + _CHUNK_RM) / _tot_rm, 1.0),
+                                        text=f"Cargando… {min(_ini + _CHUNK_RM, _tot_rm)}/{_tot_rm}")
+                                _cur_rm.close()
+                            finally:
+                                _raw_rm.close()
                             _prog_rm.empty()
 
                             st.success(f"✅ {len(_regs_rm)} registros de remuneraciones "
