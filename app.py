@@ -5400,6 +5400,178 @@ def generar_pdf_cumplimiento_metas_b(rows, tot, mes_label, logo_path=None):
     return buf.getvalue()
 
 
+def generar_pdf_resumen_ventas(ws, fecha, dias_cal, chart_pngs=None):
+    """PDF resumen (paralelo al Excel). Replica el cuadro de la foto AGREGANDO
+    la venta del día. Columnas: DÍA, ACUMULADA, PROYECCIÓN MES, AÑO ANTERIOR,
+    PROYECCIÓN ANUAL (cada una con su %). Solo sección Alemán (locales + total
+    locales + apps). Debajo, los 4 gráficos (formato nuevo).
+
+    ws: worksheet 'INF DIARIO 15' YA con E/G escritas.
+    chart_pngs: dict opcional {'locales','delivery','aporte','aliva': bytes PNG}.
+    """
+    import io as _io, re as _re
+    from openpyxl.utils import column_index_from_string as _cifs
+    from reportlab.lib.pagesizes import letter, landscape
+    from reportlab.lib import colors
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+    from reportlab.platypus import (SimpleDocTemplate, Table, TableStyle, Paragraph,
+                                    Spacer, Image as RLImage, PageBreak)
+
+    AZUL = colors.HexColor("#1F3864"); GRIS = colors.HexColor("#D9D9D9")
+    GRIS2 = colors.HexColor("#F2F2F2"); BORDE = colors.HexColor("#808080")
+
+    def num(r, c):
+        v = ws.cell(r, c).value
+        return float(v) if isinstance(v, (int, float)) else 0.0
+    M2 = dias_cal if dias_cal else (num(2, 13) or 1)
+
+    DIA, ACUM, ANO_ANT = 5, 7, 33         # columnas de valor 'leaf'
+    def proy_mes(r):  return num(r, ACUM) / M2 * 30 if M2 else 0.0
+    def proy_anual(r):
+        f = ws.cell(r, 37).value          # AE=proy mes, AK=proy anual
+        if not isinstance(f, str) or not f.startswith('='):
+            return 0.0
+        tot = 0.0
+        for col_l, row_s in _re.findall(r'([A-Z]{1,3})(\d+)', f):
+            cc = _cifs(col_l); rr = int(row_s)
+            tot += proy_mes(rr) if cc == 31 else num(rr, cc)
+        m = _re.search(r'\)\s*/\s*(\d+(?:\.\d+)?)\s*\*\s*(\d+(?:\.\d+)?)', f)
+        if m:
+            d = float(m.group(1)); mul = float(m.group(2))
+            return tot / d * mul if d else 0.0
+        return tot
+
+    METRICS = ['dia', 'acum', 'pmes', 'ant', 'panual']
+    def leaf(r):
+        return {'dia': num(r, DIA), 'acum': num(r, ACUM), 'pmes': proy_mes(r),
+                'ant': num(r, ANO_ANT), 'panual': proy_anual(r)}
+    def suma(a, b): return {k: a[k] + b[k] for k in METRICS}
+
+    LOCS = [(6,'VITACURA'),(9,'LAS CONDES'),(12,'CHICUREO'),(15,'MACUL'),
+            (18,'LA DEHESA'),(21,'LA REINA'),(24,'QUILIN'),(27,'PROVIDENCIA'),
+            (30,'NUEVA PROVIDENCIA'),(33,'LOS TRAPENSES')]
+
+    # Etiquetas de columnas leídas del template (fila 5)
+    def hdr(c):
+        v = ws.cell(5, c).value
+        v = str(v).strip() if v else ''
+        if v.startswith('='):           # AC5 ='="JUN 2026"'
+            m = _re.search(r'"([^"]+)"', v); v = m.group(1).strip() if m else ''
+        return v
+    lbl_dia = (hdr(5) or f"DÍA {fecha.strftime('%d/%m')}")
+    lbl_acum = hdr(7) or 'ACUMULADA'
+    lbl_pmes = hdr(31) or 'PROYECCIÓN MES'
+    lbl_ant = hdr(33) or 'AÑO ANTERIOR'
+    lbl_panual = hdr(37) or 'PROYECCIÓN ANUAL'
+
+    def _fm(v):  return f"{v:,.0f}".replace(",", ".")
+    def _fp(v):  return f"{v*100:.0f}%"
+
+    # estilos
+    sh  = ParagraphStyle("h", fontName="Helvetica-Bold", fontSize=6.8, alignment=TA_CENTER, leading=8.2, textColor=colors.white)
+    scl = ParagraphStyle("cl", fontName="Helvetica-Bold", fontSize=7.2, alignment=TA_LEFT, leading=8.4)
+    sct = ParagraphStyle("ct", fontName="Helvetica", fontSize=7.0, alignment=TA_LEFT, leading=8.4)
+    snum= ParagraphStyle("n", fontName="Helvetica", fontSize=7.0, alignment=TA_RIGHT, leading=8.4)
+    spc = ParagraphStyle("p", fontName="Helvetica", fontSize=6.8, alignment=TA_RIGHT, leading=8.4, textColor=colors.HexColor("#555"))
+    stt = ParagraphStyle("t", fontName="Helvetica-Bold", fontSize=13, alignment=TA_CENTER, leading=15, textColor=AZUL)
+    sst = ParagraphStyle("s", fontName="Helvetica", fontSize=8, alignment=TA_CENTER, leading=10, textColor=colors.HexColor("#555"))
+
+    header = [Paragraph("LOCAL", sh), Paragraph("TIPO VENTA", sh)]
+    for lb in (lbl_dia, lbl_acum, lbl_pmes, lbl_ant, lbl_panual):
+        header += [Paragraph(lb.upper(), sh), Paragraph("%", sh)]
+
+    data = [header]; styles = []; r = 1
+    def add_row(local, tipo, vals, pcts, shade=False, bold=False):
+        nonlocal r
+        est_l = scl if (bold or tipo == 'TOTAL') else sct
+        cel = [Paragraph(local, est_l), Paragraph(tipo, est_l)]
+        for k in METRICS:
+            ne = ParagraphStyle("nb", parent=snum, fontName="Helvetica-Bold") if (bold or tipo=='TOTAL') else snum
+            cel += [Paragraph(_fm(vals[k]), ne), Paragraph(_fp(pcts[k]), spc)]
+        data.append(cel)
+        if shade:
+            styles.append(("BACKGROUND", (0, r), (-1, r), GRIS))
+        r += 1
+
+    def pcts_of(v, base):
+        return {k: (v[k]/base[k] if base[k] else 0.0) for k in METRICS}
+    unit = {k: 1.0 for k in METRICS}
+
+    # Locales
+    gt_s = {k:0.0 for k in METRICS}; gt_d = {k:0.0 for k in METRICS}
+    for base, name in LOCS:
+        s = leaf(base); d = leaf(base+1); t = suma(s, d)
+        gt_s = suma(gt_s, s); gt_d = suma(gt_d, d)
+        add_row(name, 'SALÓN', s, pcts_of(s, t))
+        add_row('', 'DELIVERY', d, pcts_of(d, t))
+        add_row('', 'TOTAL', t, {k:1.0 for k in METRICS}, shade=True, bold=True)
+
+    # Separador
+    data.append([""]*12); styles.append(("SPAN",(0,r),(-1,r))); styles.append(("LINEBELOW",(0,r),(-1,r),0.4,colors.white)); r += 1
+
+    grand = suma(gt_s, gt_d)
+    add_row('TOTAL LOCALES', 'SALÓN', gt_s, pcts_of(gt_s, grand), bold=True)
+    add_row('', 'DELIVERY', gt_d, pcts_of(gt_d, grand), bold=True)
+    APPS = [(39,'UBER'),(40,'PEDIDOSYA'),(41,'RAPPI')]
+    for ar, an in APPS:
+        a = leaf(ar); add_row('', an, a, pcts_of(a, gt_d))
+    add_row('', 'TOTAL', grand, {k:1.0 for k in METRICS}, shade=True, bold=True)
+
+    # anchos
+    PAGE_W = landscape(letter)[0]; MX = 22
+    util = PAGE_W - 2*MX
+    pesos = [2.6, 1.5] + [2.0, 0.9]*5
+    sp = sum(pesos); wcols = [util*p/sp for p in pesos]
+
+    t = Table(data, colWidths=wcols, repeatRows=1)
+    base_style = [
+        ("GRID",(0,0),(-1,-1),0.4,BORDE),
+        ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
+        ("BACKGROUND",(0,0),(-1,0),AZUL),
+        ("TOPPADDING",(0,0),(-1,-1),2.2),("BOTTOMPADDING",(0,0),(-1,-1),2.2),
+        ("LEFTPADDING",(0,0),(-1,-1),3),("RIGHTPADDING",(0,0),(-1,-1),3),
+    ]
+    t.setStyle(TableStyle(base_style + styles))
+
+    buf = _io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=landscape(letter),
+                            leftMargin=MX, rightMargin=MX, topMargin=22, bottomMargin=22)
+    elems = [
+        Paragraph(f"INFORME DE VENTAS · ALEMÁN EXPERTO", stt),
+        Spacer(1,2),
+        Paragraph(f"Resumen al {fecha.strftime('%d/%m/%Y')} · valores en $ · % = participación del grupo", sst),
+        Spacer(1,8), t,
+    ]
+
+    # Gráficos (formato nuevo) — todo en una hoja
+    if chart_pngs:
+        elems += [PageBreak(), Paragraph("GRÁFICOS", stt), Spacer(1,10)]
+        def im_h(key, target_h, max_w):
+            b = chart_pngs.get(key)
+            if not b: return None
+            im = RLImage(_io.BytesIO(b)); ar = im.imageHeight/im.imageWidth
+            w = target_h/ar
+            if w > max_w: w = max_w
+            im.drawWidth = w; im.drawHeight = w*ar; return im
+        _ctr = [("ALIGN",(0,0),(-1,-1),"CENTER"),("VALIGN",(0,0),(-1,-1),"TOP")]
+        il = im_h('locales', 132, util)
+        if il:
+            elems += [Table([[il]], colWidths=[util], style=_ctr), Spacer(1,8)]
+        pies = [im_h('delivery', 190, util*0.46), im_h('aporte', 190, util*0.50)]
+        pies = [p for p in pies if p]
+        if pies:
+            elems += [Table([pies], colWidths=[util*0.5]*len(pies), style=_ctr), Spacer(1,8)]
+        ia = im_h('aliva', 118, util)
+        if ia:
+            elems += [Table([[ia]], colWidths=[util], style=_ctr)]
+
+    doc.build(elems)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+
 def _sg_color_bands(n):
     """Cantidad de verdes/amarillos/rojos según nº de garzones (regla confirmada)."""
     if n <= 0:
@@ -12475,6 +12647,7 @@ elif modulo.startswith("📊"):
                 st.session_state['vd_excel_dias_cal'] = int(_exp_dias_cal)
                 st.session_state['vd_excel_dias_hab'] = int(_exp_dias_hab)
                 st.session_state['vd_excel_data'] = None  # resetear
+                st.session_state['vd_pdf_data'] = None
 
             if st.session_state.get('vd_excel_fecha') and st.session_state.get('vd_excel_data') is None:
                 with st.spinner("Generando informe..."):
@@ -12641,23 +12814,15 @@ elif modulo.startswith("📊"):
                         import matplotlib.pyplot as _plt
                         import matplotlib.ticker as _mticker
 
-                        _GOLD   = '#d4a853'
-                        _DARK   = '#1a1a1a'
-                        _GRAY   = '#888888'
-                        _GREEN  = '#4caf7d'
-                        _BLUE   = '#5b9bd5'
-                        _RED    = '#e84545'
-                        _BG     = '#0d0d0d'
-                        _LOCALES_GRAF = ['Vitacura','Las Condes','Chicureo','Macul',
-                                         'La Dehesa','La Reina','Quilin',
-                                         'Nueva Providencia','Providencia','Los Trapenses']
+                        _GOLD='#d4a853'; _GRAY='#888888'; _GREEN='#4caf7d'
+                        _BLUE='#5b9bd5'; _RED='#e84545'; _BG='#0d0d0d'
+                        # figsize(px/DPI) == tamaño de inserción -> Excel no deforma la imagen
+                        _DPI = 100
+                        _H_BANDA = 344  # alto común de los 4 gráficos (px)
 
-                        # Leer meses del histórico (cols I,K,M...AC = cols 9,11,13...29 + AE=31)
-                        _HIST_COLS = list(range(9, 30, 2)) + [31]  # 12 meses
-                        _meses_lbl_raw = []
-                        for _hc in _HIST_COLS:
-                            _v = _ws_out.cell(5, _hc).value
-                            _meses_lbl_raw.append(str(_v).strip() if _v else '')
+                        # Meses del histórico (I,K,...,AC = 9,11,...,29 + AE=31)
+                        _HIST_COLS = list(range(9, 30, 2)) + [31]
+                        _meses_lbl_raw = [str(_ws_out.cell(5, _hc).value or '').strip() for _hc in _HIST_COLS]
 
                         def _fmt_mill(x, pos=None):
                             if x >= 1_000_000: return f'${x/1_000_000:.1f}M'
@@ -12665,12 +12830,12 @@ elif modulo.startswith("📊"):
                             return f'${x:.0f}'
 
                         def _cell_float(ws, row, col):
-                            """Lee una celda como float, ignorando fórmulas y None."""
+                            """Lee una celda como float; ignora None y, si es fórmula de la
+                            col AE(31), recalcula la proyección desde G."""
                             v = ws.cell(row, col).value
                             if v is None:
                                 return 0.0
                             if isinstance(v, str) and v.startswith('='):
-                                # Para col AE(31) calcular proyección desde G
                                 if col == 31:
                                     g_val = ws.cell(row, 7).value
                                     try:
@@ -12683,149 +12848,111 @@ elif modulo.startswith("📊"):
                             except (TypeError, ValueError):
                                 return 0.0
 
-                        def _img_bytes(fig):
+                        def _insert_fig(ws, fig, anchor_cell, width_px, height_px):
+                            """Inserta la figura con proporción EXACTA width:height. La figura
+                            debe crearse con ese mismo aspecto para que no se deforme."""
                             _buf_img = _io_exp.BytesIO()
-                            fig.savefig(_buf_img, format='png', dpi=130,
-                                        bbox_inches='tight', facecolor=_BG)
-                            _buf_img.seek(0)
+                            fig.savefig(_buf_img, format='png', dpi=_DPI, facecolor=_BG)
                             _plt.close(fig)
-                            return _buf_img
-
-                        def _img_bytes_pie(fig):
-                            """Exporta gráfico de torta SIN bbox_inches='tight'.
-                            El figsize ya es cuadrado, así que la imagen resultante
-                            conserva proporciones 1:1 y no se estira en Excel."""
-                            _buf_img = _io_exp.BytesIO()
-                            fig.savefig(_buf_img, format='png', dpi=130,
-                                        facecolor=_BG)
-                            _buf_img.seek(0)
-                            _plt.close(fig)
-                            return _buf_img
-
-                        def _insert_img(ws, img_bytes, anchor_cell, width_px=None, height_px=None):
+                            _png = _buf_img.getvalue()
                             from openpyxl.drawing.image import Image as _OXLImg
-                            _img = _OXLImg(img_bytes)
-                            if width_px:
-                                _img.width  = width_px
-                            if height_px:
-                                _img.height = height_px
+                            _img = _OXLImg(_io_exp.BytesIO(_png))
+                            _img.width  = width_px
+                            _img.height = height_px
                             ws.add_image(_img, anchor_cell)
+                            return _png
 
-                        # Calcular dimensiones del área C59:AL74 dividida en 2x2
-                        # Medir columnas C(3) a AL(38): 36 cols; filas 59-74: 16 filas
-                        # Dividir: 18 cols de ancho, 8 filas de alto por gráfico
-                        # Ancho col promedio ~65px, alto fila promedio ~18px
-                        _GRAF_W = 18 * 65   # ≈ 1170px cada gráfico
-                        _GRAF_H = 8  * 18   # ≈ 144px  — ajustar si se ve muy comprimido
+                        def _line_fig(w_px, h_px):
+                            f, a = _plt.subplots(figsize=(w_px/_DPI, h_px/_DPI), facecolor=_BG)
+                            a.set_facecolor(_BG)
+                            return f, a
 
-                        # ── GRÁFICO 1: Locales año móvil (línea) ─────────────
+                        def _style_line(a, title):
+                            a.yaxis.set_major_formatter(_mticker.FuncFormatter(_fmt_mill))
+                            a.tick_params(colors=_GRAY, labelsize=8)
+                            a.spines[:].set_color('#2a2a2a')
+                            a.set_title(title, color='white', fontsize=10, fontweight='bold', pad=8)
+                            a.grid(axis='y', color='#2a2a2a', linewidth=0.5)
+
+                        def _pie_panel(w_px, h_px, title, vals, labs, colors, anchor):
+                            """Panel rectangular: torta redonda (aspect equal) a la izquierda +
+                            leyenda con % a la derecha. Fondo negro; el círculo nunca se deforma."""
+                            f = _plt.figure(figsize=(w_px/_DPI, h_px/_DPI), facecolor=_BG)
+                            f.patch.set_facecolor(_BG)
+                            f.suptitle(title, color='white', fontsize=10, fontweight='bold', y=0.96)
+                            _data = [(v, l, c) for v, l, c in zip(vals, labs, colors) if v > 0]
+                            if not _data:
+                                return _insert_fig(_ws_out, f, anchor, w_px, h_px)
+                            _vv, _ll, _cc = zip(*_data); _tt = sum(_vv)
+                            _frac = h_px / w_px
+                            _axp = f.add_axes([0.01, 0.02, _frac*0.92, 0.82]); _axp.set_aspect('equal')
+                            _wed, _, _ = _axp.pie(_vv, colors=_cc, startangle=90,
+                                                  wedgeprops={'edgecolor': _BG, 'linewidth': 1.5},
+                                                  autopct='%1.1f%%', pctdistance=0.72,
+                                                  textprops={'color': 'white', 'fontsize': 7})
+                            _leg = [f'{l}  {v/_tt*100:.1f}%' for v, l in zip(_vv, _ll)]
+                            _axl = f.add_axes([_frac*0.94, 0.02, 1 - _frac*0.94 - 0.01, 0.82]); _axl.axis('off')
+                            _axl.legend(_wed, _leg, loc='center left', facecolor='#151515',
+                                        edgecolor='#333', labelcolor='white', fontsize=8,
+                                        handlelength=1.1, borderaxespad=0)
+                            return _insert_fig(_ws_out, f, anchor, w_px, h_px)
+
+                        # ── GRÁFICO 1: Locales año móvil (línea) · hueco C→N ──
                         _tot_hist_raw = [_cell_float(_ws_out, 42, _c) for _c in _HIST_COLS]
                         _sal_hist_raw = [_cell_float(_ws_out, 37, _c) for _c in _HIST_COLS]
                         _del_hist_raw = [_cell_float(_ws_out, 38, _c) for _c in _HIST_COLS]
-                        # Filtrar columnas donde el total es 0 (fórmulas sin calcular)
                         _hist_mask = [v > 0 for v in _tot_hist_raw]
                         _meses_lbl = [l for l, m in zip(_meses_lbl_raw, _hist_mask) if m]
                         _tot_hist  = [v for v, m in zip(_tot_hist_raw, _hist_mask) if m]
                         _sal_hist  = [v for v, m in zip(_sal_hist_raw, _hist_mask) if m]
                         _del_hist  = [v for v, m in zip(_del_hist_raw, _hist_mask) if m]
-
-                        fig1, ax1 = _plt.subplots(figsize=(14.5, 3.6), facecolor=_BG)
-                        ax1.set_facecolor(_BG)
+                        fig1, ax1 = _line_fig(1362, _H_BANDA)
                         _x = range(len(_meses_lbl))
                         ax1.plot(_x, _tot_hist, color=_GOLD,  linewidth=2.5, marker='o', markersize=5, label='TOTAL')
-                        ax1.plot(_x, _sal_hist, color=_GREEN, linewidth=1.8, marker='o', markersize=4, label='SALÓN', linestyle='--')
-                        ax1.plot(_x, _del_hist, color=_BLUE,  linewidth=1.8, marker='o', markersize=4, label='DELIVERY', linestyle=':')
-                        ax1.set_xticks(_x)
+                        ax1.plot(_x, _sal_hist, color=_GREEN, linewidth=1.8, marker='o', markersize=4, linestyle='--', label='SALÓN')
+                        ax1.plot(_x, _del_hist, color=_BLUE,  linewidth=1.8, marker='o', markersize=4, linestyle=':',  label='DELIVERY')
+                        ax1.set_xticks(list(_x))
                         ax1.set_xticklabels(_meses_lbl, rotation=45, ha='right', fontsize=8, color=_GRAY)
-                        ax1.yaxis.set_major_formatter(_mticker.FuncFormatter(_fmt_mill))
-                        ax1.tick_params(colors=_GRAY, labelsize=8)
-                        ax1.spines[:].set_color('#2a2a2a')
-                        ax1.set_title('LOCALES AÑO MÓVIL — 12 ÚLTIMOS MESES',
-                                      color='white', fontsize=10, fontweight='bold', pad=10)
+                        _style_line(ax1, 'LOCALES AÑO MÓVIL — 12 ÚLTIMOS MESES')
                         ax1.legend(facecolor='#1a1a1a', edgecolor='#333', labelcolor='white', fontsize=8)
-                        ax1.grid(axis='y', color='#2a2a2a', linewidth=0.5)
                         fig1.tight_layout()
-                        _insert_img(_ws_out, _img_bytes(fig1), 'C59', 1396, 344)
+                        _chart_pngs = {}
+                        _chart_pngs['locales'] = _insert_fig(_ws_out, fig1, 'C59', 1362, _H_BANDA)
 
-                        # ── GRÁFICO 2: Aporte % Local (torta) ─────────────
-                        _APORTE_ROWS = [8,10,14,17,20,23,26,29,32,35]
-                        _aporte_vals = [_cell_float(_ws_out, _r, 7) for _r in _APORTE_ROWS]
-                        _aporte_locs = ['Vitacura','Las Condes','Chicureo','Macul',
-                                        'La Dehesa','La Reina','Quilin',
-                                        'N.Prov.','Providencia','L.Trapenses']
-                        _aporte_total = sum(_aporte_vals)
-                        _APORTE_COLORS = ['#d4a853','#5b9bd5','#4caf7d','#e84545','#9b59b6',
-                                          '#f39c12','#1abc9c','#e74c3c','#3498db','#2ecc71']
-
-                        fig2, ax2 = _plt.subplots(figsize=(3.6, 3.6), facecolor=_BG)  # cuadrado, no estirar
-                        ax2.set_facecolor(_BG)
-                        if _aporte_total > 0:
-                            _filtered = [(v, l, c) for v, l, c in zip(_aporte_vals, _aporte_locs, _APORTE_COLORS) if v > 0]
-                            if _filtered:
-                                _fv, _fl, _fc = zip(*_filtered)
-                                _wedges2, _texts2, _autotexts2 = ax2.pie(
-                                    _fv, labels=_fl, colors=_fc,
-                                    autopct='%1.0f%%', startangle=90,
-                                    wedgeprops={'edgecolor': _BG, 'linewidth': 1.5},
-                                    textprops={'fontsize': 6}
-                                )
-                                for _t in _texts2:      _t.set_color(_GRAY)
-                                for _at in _autotexts2: _at.set_color('white'); _at.set_fontsize(7)
-                        ax2.set_title('APORTE % LOCAL',
-                                      color='white', fontsize=10, fontweight='bold', pad=10)
-                        fig2.tight_layout()
-                        _insert_img(_ws_out, _img_bytes(fig2), 'S59')  # sin dimensiones → tamaño natural
-
-                        # ── GRÁFICO 3: Participación delivery apps (torta) ────
+                        # ── GRÁFICO 2: Participación delivery apps (torta) · hueco N→S ──
                         _app_names = ['UberEats', 'PedidosYa', 'Rappi']
                         _app_vals  = [_cell_float(_ws_out, _r, 31) for _r in [39, 40, 41]]
-                        _app_colors = [_GOLD, _GREEN, _RED]
-                        _app_total = sum(_app_vals)
+                        _chart_pngs['delivery'] = _pie_panel(493, _H_BANDA, 'PARTICIPACIÓN DELIVERY APPS',
+                                   _app_vals, _app_names, [_GOLD, _GREEN, _RED], 'N59')
 
-                        fig3, ax3 = _plt.subplots(figsize=(3.6, 3.6), facecolor=_BG)  # cuadrado, no estirar
-                        ax3.set_facecolor(_BG)
-                        if _app_total > 0:
-                            _wedges, _texts, _autotexts = ax3.pie(
-                                _app_vals, labels=_app_names, colors=_app_colors,
-                                autopct='%1.1f%%', startangle=90,
-                                wedgeprops={'edgecolor': _BG, 'linewidth': 2}
-                            )
-                            for _t in _texts:      _t.set_color(_GRAY)
-                            for _at in _autotexts: _at.set_color('white'); _at.set_fontsize(9)
-                        ax3.set_title('PARTICIPACIÓN DELIVERY APPS',
-                                      color='white', fontsize=10, fontweight='bold', pad=10)
-                        fig3.tight_layout()
-                        _insert_img(_ws_out, _img_bytes(fig3), 'N59')  # sin dimensiones → tamaño natural
+                        # ── GRÁFICO 3: Aporte % local (torta) · hueco S→Y ──
+                        _APORTE_ROWS = [8, 11, 14, 17, 20, 23, 26, 29, 32, 35]  # filas TOTAL de cada local
+                        _aporte_vals = [_cell_float(_ws_out, _r, 7) for _r in _APORTE_ROWS]
+                        _aporte_locs = ['Vitacura','Las Condes','Chicureo','Macul','La Dehesa',
+                                        'La Reina','Quilin','N.Prov.','Providencia','L.Trap.']
+                        _APORTE_COLORS = ['#d4a853','#5b9bd5','#4caf7d','#e84545','#9b59b6',
+                                          '#f39c12','#1abc9c','#e74c3c','#3498db','#2ecc71']
+                        _chart_pngs['aporte'] = _pie_panel(654, _H_BANDA, 'APORTE % LOCAL',
+                                   _aporte_vals, _aporte_locs, _APORTE_COLORS, 'S59')
 
-                                                # ── GRÁFICO 4: Total Aliva histórico (línea) ──────────
-                        # Aliva usa cols I,K...AE fila 44 como categorías
-                        # Total = suma filas 45-54 (openpyxl no evalúa fórmulas de fila 56)
+                        # ── GRÁFICO 4: Total Aliva histórico (línea) · hueco Y→AL ──
                         _ALIVA_HIST_COLS = list(range(9, 30, 2)) + [31]
                         _aliva_lbl_raw  = [str(_ws_out.cell(44, _c).value or '').strip() for _c in _ALIVA_HIST_COLS]
                         _aliva_vals_raw = [sum(_cell_float(_ws_out, _ar, _c) for _ar in range(45, 55)) for _c in _ALIVA_HIST_COLS]
-                        # Filtrar puntos con valor 0 (celdas con fórmula sin calcular o vacías)
                         _aliva_pairs = [(l, v) for l, v in zip(_aliva_lbl_raw, _aliva_vals_raw) if v > 0]
                         if _aliva_pairs:
                             _aliva_lbl, _aliva_vals = zip(*_aliva_pairs)
                         else:
                             _aliva_lbl, _aliva_vals = _aliva_lbl_raw, _aliva_vals_raw
-
-                        fig4, ax4 = _plt.subplots(figsize=(15.0, 3.6), facecolor=_BG)
-                        ax4.set_facecolor(_BG)
-                        ax4.plot(range(len(_aliva_lbl)), _aliva_vals,
-                                 color=_GOLD, linewidth=2.5, marker='o', markersize=5)
-                        ax4.fill_between(range(len(_aliva_lbl)), _aliva_vals,
-                                         alpha=0.15, color=_GOLD)
-                        ax4.set_xticks(range(len(_aliva_lbl)))
+                        fig4, ax4 = _line_fig(1627, _H_BANDA)
+                        _xa = range(len(_aliva_lbl))
+                        ax4.fill_between(_xa, _aliva_vals, alpha=0.15, color=_GOLD)
+                        ax4.plot(_xa, _aliva_vals, color=_GOLD, linewidth=2.5, marker='o', markersize=5)
+                        ax4.set_xticks(list(_xa))
                         ax4.set_xticklabels(_aliva_lbl, rotation=45, ha='right', fontsize=8, color=_GRAY)
-                        ax4.yaxis.set_major_formatter(_mticker.FuncFormatter(_fmt_mill))
-                        ax4.tick_params(colors=_GRAY, labelsize=8)
-                        ax4.spines[:].set_color('#2a2a2a')
-                        ax4.set_title('TOTAL ALIVA — 12 ÚLTIMOS MESES',
-                                      color='white', fontsize=10, fontweight='bold', pad=10)
-                        ax4.grid(axis='y', color='#2a2a2a', linewidth=0.5)
+                        _style_line(ax4, 'TOTAL ALIVA — 12 ÚLTIMOS MESES')
                         fig4.tight_layout()
-                        _insert_img(_ws_out, _img_bytes(fig4), 'Y59', 1443, 344)
+                        _chart_pngs['aliva'] = _insert_fig(_ws_out, fig4, 'Y59', 1627, _H_BANDA)
 
                         # Guardar
                         _buf_exp = _io_exp.BytesIO()
@@ -12834,6 +12961,16 @@ elif modulo.startswith("📊"):
 
                         st.session_state['vd_excel_data']    = _buf_exp.getvalue()
                         st.session_state['vd_excel_filename'] = f"Informe_Ventas_{_exp_fecha.strftime('%d%m%Y')}.xlsx"
+
+                        # ── PDF resumen paralelo (cuadro reducido + gráficos) ──
+                        try:
+                            _pdf_res = generar_pdf_resumen_ventas(
+                                _ws_out, _exp_fecha, int(_exp_dias_cal), _chart_pngs)
+                            st.session_state['vd_pdf_data'] = _pdf_res
+                            st.session_state['vd_pdf_filename'] = f"Resumen_Ventas_{_exp_fecha.strftime('%d%m%Y')}.pdf"
+                        except Exception as _e_pdf:
+                            st.session_state['vd_pdf_data'] = None
+                            st.warning(f"No se pudo generar el PDF resumen: {_e_pdf}")
                         st.rerun()
                     except Exception as _e_exp:
                         st.error(f"Error generando Excel: {_e_exp}")
@@ -12849,6 +12986,14 @@ elif modulo.startswith("📊"):
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key="dl_informe_excel"
                 )
+                if st.session_state.get('vd_pdf_data') is not None:
+                    st.download_button(
+                        label=f"📄 {st.session_state.get('vd_pdf_filename', 'Resumen_Ventas.pdf')}",
+                        data=st.session_state['vd_pdf_data'],
+                        file_name=st.session_state.get('vd_pdf_filename', 'Resumen_Ventas.pdf'),
+                        mime="application/pdf",
+                        key="dl_informe_pdf"
+                    )
 
 
     elif informe_sel == "Garzones":
