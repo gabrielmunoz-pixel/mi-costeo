@@ -21286,9 +21286,11 @@ buildTree(data, 1, null);
                         st.warning(f"Informe B pendiente: {_e_b}")
                 with _sg_cols_btn[2]:
                     try:
-                        _df5r = locals().get("_df5_acum")
+                        # Resumen (colores) = SEMANA COMPLETA (usa _df5_sem y _sg_dias_sem,
+                        # no el acumulado mensual). Los otros informes siguen en mensual.
+                        _df5r = locals().get("_df5_sem")
                         if _df5r is not None and not _df5r.empty:
-                            _pdf_res = _sg_resumen_colores_pdf(_df5r, _sg_local, _sg_dias_acum,
+                            _pdf_res = _sg_resumen_colores_pdf(_df5r, _sg_local, _sg_dias_sem,
                                                               logo_path=LOGO_PATH)
                             st.download_button("🎨 Descargar resumen (colores)", _pdf_res,
                                 file_name=f"resumen_{_sg_local}_{_sg_ini}.pdf",
@@ -21306,7 +21308,7 @@ buildTree(data, 1, null);
                 def _sg_calc_local(loc):
                     """Recalcula el informe B + df del resumen para un local cualquiera.
                     Reusa s6/s7/s11 (compartidos, todos los locales) y _sg_seccion5.
-                    Devuelve (ctx_b, df5_acum)."""
+                    Devuelve (ctx_b, df5_sem)  # 2º valor = df SEMANAL (resumen colores)."""
                     _pl = dict(_sg_p); _pl["loc"] = loc
                     _pe = dict(_pl); _pe["nombres"] = _sg_estrat_nombres
                     # Sección 1 (raw)
@@ -21400,8 +21402,8 @@ buildTree(data, 1, null);
                                   "$ Semanal": _sg_fmt_money(_t4s),
                                   "%": f"{(_t4s / tot_eval * 100) if tot_eval else 0:.1f}%"})
                     # Sección 5 (acum + semanal), sin pintar en pantalla
-                    rows5, df5 = _sg_seccion5(_sg_mes_ini, _sg_fin, "", p=_pl, mostrar=False)
-                    rows5_sem, _ = _sg_seccion5(_sg_ini, _sg_fin, "", p=_pl, mostrar=False)
+                    rows5, _ = _sg_seccion5(_sg_mes_ini, _sg_fin, "", p=_pl, mostrar=False)
+                    rows5_sem, df5_sem = _sg_seccion5(_sg_ini, _sg_fin, "", p=_pl, mostrar=False)
                     # Sección 9 (raw, por local)
                     s9 = run_query(f"""
                         with d as (
@@ -21432,7 +21434,7 @@ buildTree(data, 1, null);
                         _s6, _sg_s7, [], [],
                         s9_raw=s9, s11s=_sg_s11s, s11m=_sg_s11m,
                     )
-                    return ctx, df5
+                    return ctx, df5_sem   # 2º valor = df SEMANAL → resumen de colores
 
                 _locales_todos = list(_SG_JEFATURAS.keys())
                 if st.button(f"📦 Generar los {len(_locales_todos)} locales (ZIP)",
@@ -21448,7 +21450,7 @@ buildTree(data, 1, null);
                                 _pdf_l = generar_pdf_garzones_b(_ctx_l, logo_path=LOGO_PATH)
                                 _zf.writestr(f"informe_B_{_loc}_{_sg_ini}.pdf", _pdf_l)
                                 if _df5_l is not None and not _df5_l.empty:
-                                    _res_l = _sg_resumen_colores_pdf(_df5_l, _loc, _sg_dias_acum,
+                                    _res_l = _sg_resumen_colores_pdf(_df5_l, _loc, _sg_dias_sem,
                                                                     logo_path=LOGO_PATH)
                                     _zf.writestr(f"resumen_{_loc}_{_sg_ini}.pdf", _res_l)
                                 _ok += 1
