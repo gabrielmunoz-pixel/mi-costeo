@@ -20661,8 +20661,11 @@ buildTree(data, 1, null);
         # Rango semanal: lunes elegido → domingo
         _sg_ini = _sg_lun - _sg_td(days=_sg_lun.weekday())  # asegura lunes
         _sg_fin = _sg_ini + _sg_td(days=6)
-        # Acumulado mensual: del 1° del mes al fin de la semana (tope del informe)
-        _sg_mes_ini = _sg_ini.replace(day=1)
+        # Acumulado mensual: solo el "presente mes" = mes del cierre de semana (domingo).
+        # Cuando la semana cruza dos meses (ej. lun 29-jun → dom 05-jul), lo semanal
+        # conserva los 7 días (29→05) pero lo mensual parte del 1° del mes del domingo
+        # (01-jul) para no mezclar meses. Si la semana no cruza, equivale al 1° del mes.
+        _sg_mes_ini = _sg_fin.replace(day=1)
         _sg_dias_sem = 7
         _sg_dias_acum = (_sg_fin - _sg_mes_ini).days + 1
 
