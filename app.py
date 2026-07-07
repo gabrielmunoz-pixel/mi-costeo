@@ -7761,11 +7761,16 @@ if modulo.startswith("📦"):
                                               if_exists='append', index=False,
                                               method='multi', chunksize=1000)
                                 st.cache_data.clear()
+                                # Verificación inmediata de lo que quedó en BD
+                                _ro_check = run_query(
+                                    "SELECT COUNT(*) AS n FROM recetas_oficial")
+                                _n_bd = int(_ro_check["n"].iloc[0]) if _ro_check is not None and not _ro_check.empty else 0
                                 st.success(f"✅ Recetario oficial reemplazado: "
-                                           f"{_n_limpio:,} filas · "
+                                           f"{_n_limpio:,} filas enviadas · "
+                                           f"{_n_bd:,} filas confirmadas en la base · "
                                            f"{_df_ro['id_producto'].nunique():,} productos · "
                                            f"{_df_ro['id_ingrediente'].nunique():,} ingredientes.")
-                                st.rerun()
+                                st.balloons()
                             except Exception as _ero:
                                 st.error(f"Error al cargar: {_ero}")
                                 st.exception(_ero)
@@ -24838,8 +24843,8 @@ elif modulo.startswith("📥 Stock Cierre"):
     _SK_LOCALES = ["Vitacura","Las Condes","Chicureo","La Dehesa","Macul",
                    "La Reina","Quilin","Nueva Providencia","Providencia","Los Trapenses"]
 
-    _sk_tab1, _sk_tab2, _sk_tab3, _sk_tab4 = st.tabs(
-        ["➕ Registrar cierre", "📋 Historial", "🎯 Producir hoy", "⚖️ Vista Kilos"])
+    _sk_tab1, _sk_tab2, _sk_tab3 = st.tabs(
+        ["➕ Registrar cierre", "📋 Historial", "🎯 Producir hoy"])
 
     # ══════════ TAB 1: REGISTRAR ══════════
     with _sk_tab1:
@@ -25157,12 +25162,14 @@ elif modulo.startswith("📥 Stock Cierre"):
             # Armar tabla meta / saldo / a producir + estado por criterio
             import pandas as _pd_ph
             _rows = []
-            for _cat in _SK_CATS:
+            _ph_neto_cat = {}          # {categoria: unidades netas a producir} para explosión a kilos
+            for _cat in _SKR_CATS:
                 _cat_dows = _ph_max.get(_cat, {})
                 _tiene_ref = _ph_dow in _cat_dows           # ¿hubo venta ese día en el mes?
                 _meta = _cat_dows.get(_ph_dow, 0) or 0
                 _saldo = _ph_saldo_map.get(_cat, 0) or 0
                 _producir = max(_meta - _saldo, 0)
+                _ph_neto_cat[_cat] = _producir
                 if not _tiene_ref:
                     _estado = "⚠️ Sin referencia"
                 elif _producir > 0:
@@ -25267,148 +25274,55 @@ elif modulo.startswith("📥 Stock Cierre"):
                 file_name=f"producir_{_ph_local}_{_ph_fecha}.csv",
                 mime="text/csv", key="ph_dl")
 
-    # ══════════ TAB 4: VISTA KILOS ══════════
-    with _sk_tab4:
-        import pandas as _pd_kg
-
-        if _user_local_sk:
-            _kg_local = _user_local_sk
-            _kg_fecha = _sk_dt.date.today()
-            _kgc1, _kgc2 = st.columns(2)
-            with _kgc1:
-                st.markdown(f"**Local:** `{_kg_local}`")
-            with _kgc2:
-                st.markdown(f"**Día:** `{_kg_fecha.strftime('%d-%m-%Y')}`")
-        else:
-            _kg1, _kg2 = st.columns(2)
-            with _kg1:
-                _kg_local = st.selectbox("Local", _SK_LOCALES, key="kg_local")
-            with _kg2:
-                _kg_fecha = st.date_input("Día a producir", key="kg_fecha",
-                                          value=_sk_dt.date.today())
-
-        _MN_KG = {"01": "Enero", "02": "Febrero", "03": "Marzo", "04": "Abril",
-                  "05": "Mayo", "06": "Junio", "07": "Julio", "08": "Agosto",
-                  "09": "Septiembre", "10": "Octubre", "11": "Noviembre", "12": "Diciembre"}
-        _DOW_KG = {0: "Lun", 1: "Mar", 2: "Mié", 3: "Jue", 4: "Vie", 5: "Sáb", 6: "Dom"}
-        _DOWF_KG = {0: "lunes", 1: "martes", 2: "miércoles", 3: "jueves",
-                    4: "viernes", 5: "sábado", 6: "domingo"}
-        _kg_dow = _DOW_KG[_kg_fecha.weekday()]
-        _kg_dow_full = _DOWF_KG[_kg_fecha.weekday()]
-
-        # Verificar que exista recetario oficial
-        _kg_chk = run_query("SELECT COUNT(*) AS n FROM recetas_oficial")
-        if _kg_chk is None or _kg_chk.empty or int(_kg_chk["n"].iloc[0]) == 0:
-            st.warning("⚠️ No hay **recetario oficial** cargado. Cárgalo en "
-                       "**Gestión de Datos → Recetario → Recetario Oficial** "
-                       "para calcular los kilos por materia prima.")
-            st.stop()
-
-        # Mes de muestra (misma config que Producir hoy)
-        _kg_cfg = run_query("""
-            SELECT anio, mes FROM config_mes_muestra WHERE local = :l
-        """, {"l": _kg_local})
-        _kg_mes = None
-        if _kg_cfg is not None and not _kg_cfg.empty:
-            _kg_mes = f"{int(_kg_cfg['anio'].iloc[0]):04d}-{int(_kg_cfg['mes'].iloc[0]):02d}"
-
-        if _kg_mes is None:
-            st.warning(f"⚠️ El local **{_kg_local}** no tiene mes de muestra configurado "
-                       "(módulo 🎯 Config Producción).")
-            st.stop()
-
-        st.markdown(f"#### ⚖️ Proyección en kilos · **{_kg_dow_full} "
-                    f"{_kg_fecha.strftime('%d-%m-%Y')}** · {_kg_local}")
-        st.caption(f"Meta = mejor **{_kg_dow_full}** de "
-                   f"{_MN_KG.get(_kg_mes.split('-')[1], _kg_mes)} {_kg_mes.split('-')[0]} "
-                   "por categoría · gramaje del recetario oficial (kg brutos, con rendimiento).")
-
-        # 1) Meta en unidades (máximos por día) — solo categorías de la lista reducida
-        _kg_max = _cp_maximos_por_dia(_kg_mes, _kg_local)
-        # 2) Saldo del último cierre anterior al día (mismo criterio que Producir hoy)
-        _kg_saldo_q = run_query("""
-            SELECT categoria, cantidad, fecha
-            FROM stock_cierre_diario
-            WHERE local = :l AND fecha < :f
-              AND fecha = (
-                  SELECT MAX(fecha) FROM stock_cierre_diario
-                  WHERE local = :l AND fecha < :f
-              )
-        """, {"l": _kg_local, "f": str(_kg_fecha)})
-        _kg_saldo_map = {}
-        _kg_saldo_fecha = None
-        if _kg_saldo_q is not None and not _kg_saldo_q.empty:
-            _kg_saldo_map = dict(zip(_kg_saldo_q["categoria"], _kg_saldo_q["cantidad"]))
-            _kg_saldo_fecha = str(_kg_saldo_q["fecha"].iloc[0])
-
-        # Unidades por categoría reducida: meta (bruto) y neto (meta - saldo)
-        _u_meta = {}
-        _u_neto = {}
-        for _cat in _SKR_CATS:
-            _meta = (_kg_max.get(_cat, {}) or {}).get(_kg_dow, 0) or 0
-            _saldo = _kg_saldo_map.get(_cat, 0) or 0
-            _u_meta[_cat] = _meta
-            _u_neto[_cat] = max(_meta - _saldo, 0)
-
-        # Explosión a kilos por materia prima
-        _kg_bruto = _skr_kilos_por_mp(_u_meta)     # total a producir (meta)
-        _kg_real  = _skr_kilos_por_mp(_u_neto)      # total real (con descuento)
-
-        if _kg_saldo_fecha:
-            st.caption(f"📦 Saldo descontado del último cierre: **{_kg_saldo_fecha}**.")
-        else:
-            st.caption("📦 Sin cierre previo — el total real coincide con el total a producir.")
-
-        # ── KPIs superiores ──
-        _tot_bruto = sum(_kg_bruto.values())
-        _tot_real = sum(_kg_real.values())
-        st.markdown(f"""
-        <div style="display:flex;flex-wrap:wrap;gap:8px;margin:4px 0 16px 0">
-          <div style="flex:1 1 120px;min-width:120px;background:#0e1116;border:1px solid #1f242c;
-                      border-radius:12px;padding:12px 14px">
-            <div style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;color:#ffffff">Total a producir</div>
-            <div style="font-family:'DM Serif Display',serif;font-size:1.8rem;color:#f0ede8;line-height:1.1">{_tot_bruto:,.2f} kg</div>
-          </div>
-          <div style="flex:1 1 120px;min-width:120px;background:#0e1116;border:1px solid #1f242c;
-                      border-radius:12px;padding:12px 14px">
-            <div style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;color:#ffffff">Total real (neto)</div>
-            <div style="font-family:'DM Serif Display',serif;font-size:1.8rem;color:#d4a853;line-height:1.1">{_tot_real:,.2f} kg</div>
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        def _kg_tabla(_dmap, _titulo, _color):
-            _rows = []
-            for _mp in _SKR_MP_ORDEN:
-                _rows.append({"Materia Prima": _mp,
-                              "Kilos (bruto)": round(_dmap.get(_mp, 0.0), 3)})
-            _df = _pd_kg.DataFrame(_rows)
-            _df.loc[len(_df)] = {"Materia Prima": "TOTAL",
-                                 "Kilos (bruto)": round(sum(_dmap.values()), 3)}
-            st.markdown(f"<div style='font-family:\"DM Serif Display\",serif;font-size:1.1rem;"
-                        f"color:{_color};margin:10px 0 6px 0'>{_titulo}</div>",
+            # ── PROYECCIÓN EN KILOS POR MATERIA PRIMA (resumen en tarjetas) ──
+            st.markdown("<div style='font-family:\"DM Serif Display\",serif;"
+                        "font-size:1.15rem;color:#f0ede8;margin:20px 0 4px 0'>"
+                        "⚖️ Kilos a producir por materia prima</div>",
                         unsafe_allow_html=True)
-            st.dataframe(_df, use_container_width=True, hide_index=True)
-            return _df
 
-        _c_kg1, _c_kg2 = st.columns(2)
-        with _c_kg1:
-            _df_bruto = _kg_tabla(_kg_bruto, "① Total a producir (calculado)", "#f0ede8")
-        with _c_kg2:
-            _df_real = _kg_tabla(_kg_real, "② Total real (con descuento de stock)", "#d4a853")
+            _ph_rec_chk = run_query("SELECT COUNT(*) AS n FROM recetas_oficial")
+            if (_ph_rec_chk is None or _ph_rec_chk.empty
+                    or int(_ph_rec_chk["n"].iloc[0]) == 0):
+                st.info("Carga el **Recetario Oficial** (Gestión de Datos → Recetario) "
+                        "para ver los kilos por materia prima.")
+            else:
+                # Kilos del 'A producir' NETO (espejo en kilos de la columna A producir)
+                _ph_kg = _skr_kilos_por_mp(_ph_neto_cat)
+                _ph_kg_tot = sum(_ph_kg.values())
+                st.caption(f"Explosión de las **{_prod_tot:,}** unidades a producir · "
+                           "kg brutos (incluye rendimiento) según recetario oficial.")
 
-        # Descarga combinada
-        _df_dl = _df_bruto.rename(columns={"Kilos (bruto)": "kg_a_producir"}).copy()
-        _df_dl["kg_real"] = _df_real["Kilos (bruto)"].values
-        st.download_button(
-            "📥 Descargar proyección kilos (CSV)",
-            _df_dl.to_csv(index=False).encode("utf-8"),
-            file_name=f"kilos_{_kg_local}_{_kg_fecha}.csv",
-            mime="text/csv", key="kg_dl")
-
-        st.caption("Kilos **brutos** (incluyen rendimiento: kg = cantidad ÷ rendimiento). "
-                   "**Total a producir** usa la meta del día; **total real** descuenta el "
-                   "stock de cierre del día anterior antes de explotar a materia prima.")
+                # 4 tarjetas (POSTA / FILETE / LOMO LISO / LOMO VETADO)
+                _mp_emoji = {"POSTA": "🥩", "FILETE": "🍖",
+                             "LOMO LISO": "🥓", "LOMO VETADO": "🍖"}
+                _cards_kg = []
+                for _mp in _SKR_MP_ORDEN:
+                    _val = _ph_kg.get(_mp, 0.0)
+                    _cards_kg.append(f"""
+                    <div style="flex:1 1 130px;min-width:130px;background:#0e1116;
+                                border:1px solid #1f242c;border-left:4px solid #d4a853;
+                                border-radius:12px;padding:12px 14px">
+                      <div style="font-size:0.68rem;text-transform:uppercase;
+                                  letter-spacing:0.08em;color:#ffffff">{_mp_emoji.get(_mp,'⚖️')} {_mp}</div>
+                      <div style="font-family:'DM Serif Display',serif;font-size:1.7rem;
+                                  color:#d4a853;line-height:1.15">{_val:,.2f} <span style="font-size:0.9rem;color:#ffffff">kg</span></div>
+                    </div>
+                    """)
+                # Tarjeta total
+                _cards_kg.append(f"""
+                <div style="flex:1 1 130px;min-width:130px;background:rgba(212,168,83,0.10);
+                            border:1px solid #1f242c;border-left:4px solid #4caf7d;
+                            border-radius:12px;padding:12px 14px">
+                  <div style="font-size:0.68rem;text-transform:uppercase;
+                              letter-spacing:0.08em;color:#ffffff">Σ TOTAL</div>
+                  <div style="font-family:'DM Serif Display',serif;font-size:1.7rem;
+                              color:#f0ede8;line-height:1.15">{_ph_kg_tot:,.2f} <span style="font-size:0.9rem;color:#ffffff">kg</span></div>
+                </div>
+                """)
+                st.markdown(
+                    f"<div style='display:flex;flex-wrap:wrap;gap:8px;margin:4px 0 10px 0'>"
+                    f"{''.join(_cards_kg)}</div>",
+                    unsafe_allow_html=True)
 
 
 
