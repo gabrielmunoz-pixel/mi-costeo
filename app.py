@@ -1415,6 +1415,16 @@ def _skr_kilos_por_mp(cant_por_cat):
     return dict(total)
 
 
+def _skr_kilos_teoricos_dia(kg_max, dow_abbr):
+    """Dado el dict de máximos {categoria: {dow: unidades}} (de _cp_maximos_por_dia)
+    y la abreviatura del día ('Lun','Mar',...), devuelve {MP: kg_bruto} de la
+    producción TEÓRICA de ese día (meta del día explotada, solo lista reducida)."""
+    _u = {}
+    for _cat in _SKR_CATS:
+        _u[_cat] = (kg_max.get(_cat, {}) or {}).get(dow_abbr, 0) or 0
+    return _skr_kilos_por_mp(_u)
+
+
 def _cp_maximos_por_dia(mes, local="Todos"):
     """Devuelve dict {categoria: {dow: max}} con el máximo vendido por categoría
     en cada día de la semana (Lun..Dom) dentro del mes 'YYYY-MM'."""
@@ -24843,8 +24853,8 @@ elif modulo.startswith("📥 Stock Cierre"):
     _SK_LOCALES = ["Vitacura","Las Condes","Chicureo","La Dehesa","Macul",
                    "La Reina","Quilin","Nueva Providencia","Providencia","Los Trapenses"]
 
-    _sk_tab1, _sk_tab2, _sk_tab3 = st.tabs(
-        ["➕ Registrar cierre", "📋 Historial", "🎯 Producir hoy"])
+    _sk_tab1, _sk_tab2, _sk_tab3, _sk_tab5 = st.tabs(
+        ["➕ Registrar cierre", "📋 Historial", "🎯 Producir hoy", "📆 Control Kilos"])
 
     # ══════════ TAB 1: REGISTRAR ══════════
     with _sk_tab1:
@@ -25298,31 +25308,208 @@ elif modulo.startswith("📥 Stock Cierre"):
                 _cards_kg = []
                 for _mp in _SKR_MP_ORDEN:
                     _val = _ph_kg.get(_mp, 0.0)
-                    _cards_kg.append(f"""
-                    <div style="flex:1 1 130px;min-width:130px;background:#0e1116;
-                                border:1px solid #1f242c;border-left:4px solid #d4a853;
-                                border-radius:12px;padding:12px 14px">
-                      <div style="font-size:0.68rem;text-transform:uppercase;
-                                  letter-spacing:0.08em;color:#ffffff">{_mp_emoji.get(_mp,'⚖️')} {_mp}</div>
-                      <div style="font-family:'DM Serif Display',serif;font-size:1.7rem;
-                                  color:#d4a853;line-height:1.15">{_val:,.2f} <span style="font-size:0.9rem;color:#ffffff">kg</span></div>
-                    </div>
-                    """)
+                    _cards_kg.append(
+                        "<div style=\"flex:1 1 130px;min-width:130px;background:#0e1116;"
+                        "border:1px solid #1f242c;border-left:4px solid #d4a853;"
+                        "border-radius:12px;padding:12px 14px\">"
+                        "<div style=\"font-size:0.68rem;text-transform:uppercase;"
+                        f"letter-spacing:0.08em;color:#ffffff\">{_mp_emoji.get(_mp,'⚖️')} {_mp}</div>"
+                        "<div style=\"font-family:'DM Serif Display',serif;font-size:1.7rem;"
+                        f"color:#d4a853;line-height:1.15\">{_val:,.2f} "
+                        "<span style=\"font-size:0.9rem;color:#ffffff\">kg</span></div>"
+                        "</div>"
+                    )
                 # Tarjeta total
-                _cards_kg.append(f"""
-                <div style="flex:1 1 130px;min-width:130px;background:rgba(212,168,83,0.10);
-                            border:1px solid #1f242c;border-left:4px solid #4caf7d;
-                            border-radius:12px;padding:12px 14px">
-                  <div style="font-size:0.68rem;text-transform:uppercase;
-                              letter-spacing:0.08em;color:#ffffff">Σ TOTAL</div>
-                  <div style="font-family:'DM Serif Display',serif;font-size:1.7rem;
-                              color:#f0ede8;line-height:1.15">{_ph_kg_tot:,.2f} <span style="font-size:0.9rem;color:#ffffff">kg</span></div>
-                </div>
-                """)
+                _cards_kg.append(
+                    "<div style=\"flex:1 1 130px;min-width:130px;background:rgba(212,168,83,0.10);"
+                    "border:1px solid #1f242c;border-left:4px solid #4caf7d;"
+                    "border-radius:12px;padding:12px 14px\">"
+                    "<div style=\"font-size:0.68rem;text-transform:uppercase;"
+                    "letter-spacing:0.08em;color:#ffffff\">Σ TOTAL</div>"
+                    "<div style=\"font-family:'DM Serif Display',serif;font-size:1.7rem;"
+                    f"color:#f0ede8;line-height:1.15\">{_ph_kg_tot:,.2f} "
+                    "<span style=\"font-size:0.9rem;color:#ffffff\">kg</span></div>"
+                    "</div>"
+                )
                 st.markdown(
-                    f"<div style='display:flex;flex-wrap:wrap;gap:8px;margin:4px 0 10px 0'>"
-                    f"{''.join(_cards_kg)}</div>",
+                    "<div style=\"display:flex;flex-wrap:wrap;gap:8px;margin:4px 0 10px 0\">"
+                    + "".join(_cards_kg) + "</div>",
                     unsafe_allow_html=True)
+
+    # ══════════ TAB 5: CONTROL KILOS (semanal / mensual) ══════════
+    with _sk_tab5:
+        import pandas as _pd_ck
+        import datetime as _ck_dt
+
+        _ckc1, _ckc2, _ckc3 = st.columns([2, 2, 2])
+        with _ckc1:
+            if _user_local_sk:
+                _ck_local = _user_local_sk
+                st.markdown(f"**Local:** `{_ck_local}`")
+            else:
+                _ck_local = st.selectbox("Local", _SK_LOCALES, key="ck_local")
+        with _ckc2:
+            _ck_vista = st.radio("Vista", ["Semanal", "Mensual"], key="ck_vista",
+                                 horizontal=True)
+        with _ckc3:
+            _ck_ref = st.date_input("Fecha de referencia", key="ck_ref",
+                                    value=_ck_dt.date.today())
+
+        # Verificar recetario oficial
+        _ck_chk = run_query("SELECT COUNT(*) AS n FROM recetas_oficial")
+        if _ck_chk is None or _ck_chk.empty or int(_ck_chk["n"].iloc[0]) == 0:
+            st.warning("⚠️ No hay **recetario oficial** cargado. Cárgalo en "
+                       "**Gestión de Datos → Recetario → Recetario Oficial**.")
+            st.stop()
+
+        # Mes de muestra (misma config que Producir hoy)
+        _ck_cfg = run_query("""
+            SELECT anio, mes FROM config_mes_muestra WHERE local = :l
+        """, {"l": _ck_local})
+        if _ck_cfg is None or _ck_cfg.empty:
+            st.warning(f"⚠️ El local **{_ck_local}** no tiene mes de muestra configurado "
+                       "(módulo 🎯 Config Producción).")
+            st.stop()
+        _ck_mes = f"{int(_ck_cfg['anio'].iloc[0]):04d}-{int(_ck_cfg['mes'].iloc[0]):02d}"
+
+        # Rango de fechas según vista
+        if _ck_vista == "Semanal":
+            _ck_ini = _ck_ref - _ck_dt.timedelta(days=_ck_ref.weekday())   # lunes
+            _ck_fin = _ck_ini + _ck_dt.timedelta(days=6)                    # domingo
+            _ck_titulo = (f"Semana {_ck_ini.strftime('%d-%m')} al "
+                          f"{_ck_fin.strftime('%d-%m-%Y')}")
+        else:
+            _ck_ini = _ck_ref.replace(day=1)
+            if _ck_ini.month == 12:
+                _ck_fin = _ck_ini.replace(year=_ck_ini.year + 1, month=1, day=1) - _ck_dt.timedelta(days=1)
+            else:
+                _ck_fin = _ck_ini.replace(month=_ck_ini.month + 1, day=1) - _ck_dt.timedelta(days=1)
+            _MN_CK = {1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo",
+                      6: "Junio", 7: "Julio", 8: "Agosto", 9: "Septiembre",
+                      10: "Octubre", 11: "Noviembre", 12: "Diciembre"}
+            _ck_titulo = f"{_MN_CK[_ck_ini.month]} {_ck_ini.year}"
+
+        st.markdown(f"#### 📆 Control de kilos · **{_ck_titulo}** · {_ck_local}")
+        st.caption("Producción **teórica** por día (meta del día explotada a materia prima, "
+                   f"según mes de muestra {_ck_mes}). El **stock inicial** es real y se "
+                   "descuenta una sola vez del total del período.")
+
+        # Máximos por día del mes de muestra (una sola vez)
+        _ck_max = _cp_maximos_por_dia(_ck_mes, _ck_local)
+        _DOW_CK = {0: "Lun", 1: "Mar", 2: "Mié", 3: "Jue", 4: "Vie", 5: "Sáb", 6: "Dom"}
+
+        # Construir tabla día × MP (kilos teóricos brutos)
+        _DIA_ES_CK = {0: "Lun", 1: "Mar", 2: "Mié", 3: "Jue", 4: "Vie", 5: "Sáb", 6: "Dom"}
+        _ck_rows = []
+        _ck_dia = _ck_ini
+        while _ck_dia <= _ck_fin:
+            _kg_dia = _skr_kilos_teoricos_dia(_ck_max, _DOW_CK[_ck_dia.weekday()])
+            _fila = {"Fecha": f"{_ck_dia.strftime('%d-%m')} {_DIA_ES_CK[_ck_dia.weekday()]}"}
+            for _mp in _SKR_MP_ORDEN:
+                _fila[_mp] = round(_kg_dia.get(_mp, 0.0), 2)
+            _fila["Total día"] = round(sum(_kg_dia.values()), 2)
+            _ck_rows.append(_fila)
+            _ck_dia += _ck_dt.timedelta(days=1)
+        _ck_df = _pd_ck.DataFrame(_ck_rows)
+
+        # Totales del período (bruto)
+        _ck_tot_mp = {_mp: round(_ck_df[_mp].sum(), 2) for _mp in _SKR_MP_ORDEN}
+        _ck_tot_bruto = round(sum(_ck_tot_mp.values()), 2)
+
+        # Stock inicial: último cierre ANTES del inicio del período (real), en kilos
+        _ck_saldo_q = run_query("""
+            SELECT categoria, cantidad, fecha
+            FROM stock_cierre_diario
+            WHERE local = :l AND fecha < :f
+              AND fecha = (
+                  SELECT MAX(fecha) FROM stock_cierre_diario
+                  WHERE local = :l AND fecha < :f
+              )
+        """, {"l": _ck_local, "f": str(_ck_ini)})
+        _ck_ini_map = {}
+        _ck_ini_fecha = None
+        if _ck_saldo_q is not None and not _ck_saldo_q.empty:
+            _ck_ini_map = {r.categoria: r.cantidad for r in _ck_saldo_q.itertuples()
+                           if r.categoria in _SKR_CATS}
+            _ck_ini_fecha = str(_ck_saldo_q["fecha"].iloc[0])
+        _ck_kg_ini = _skr_kilos_por_mp(_ck_ini_map)     # stock inicial en kilos por MP
+        _ck_tot_ini = round(sum(_ck_kg_ini.values()), 2)
+
+        # Neto = bruto período − stock inicial (una sola vez, mínimo 0 por MP)
+        _ck_neto_mp = {_mp: round(max(_ck_tot_mp[_mp] - _ck_kg_ini.get(_mp, 0.0), 0.0), 2)
+                       for _mp in _SKR_MP_ORDEN}
+        _ck_tot_neto = round(sum(_ck_neto_mp.values()), 2)
+
+        # ── KPIs (tarjetas, HTML de una línea) ──
+        _ck_cards = []
+        for _lbl, _val, _col in [
+                ("Producción bruta", _ck_tot_bruto, "#f0ede8"),
+                ("Stock inicial", _ck_tot_ini, "#d4a853"),
+                ("Neto del período", _ck_tot_neto, "#4caf7d")]:
+            _ck_cards.append(
+                "<div style=\"flex:1 1 130px;min-width:130px;background:#0e1116;"
+                "border:1px solid #1f242c;border-left:4px solid " + _col + ";"
+                "border-radius:12px;padding:12px 14px\">"
+                "<div style=\"font-size:0.68rem;text-transform:uppercase;"
+                "letter-spacing:0.08em;color:#ffffff\">" + _lbl + "</div>"
+                "<div style=\"font-family:'DM Serif Display',serif;font-size:1.7rem;"
+                "color:" + _col + ";line-height:1.15\">" + f"{_val:,.2f} "
+                "<span style=\"font-size:0.9rem;color:#ffffff\">kg</span></div>"
+                "</div>"
+            )
+        st.markdown(
+            "<div style=\"display:flex;flex-wrap:wrap;gap:8px;margin:4px 0 14px 0\">"
+            + "".join(_ck_cards) + "</div>", unsafe_allow_html=True)
+
+        if _ck_ini_fecha:
+            st.caption(f"📦 Stock inicial tomado del cierre real del **{_ck_ini_fecha}** "
+                       f"(anterior al inicio del período).")
+        else:
+            st.caption("📦 Sin cierre previo al período — stock inicial = 0, "
+                       "el neto coincide con la producción bruta.")
+
+        # ── Tabla día × MP ──
+        st.markdown("<div style='font-family:\"DM Serif Display\",serif;font-size:1.1rem;"
+                    "color:#f0ede8;margin:8px 0 6px 0'>Kilos teóricos por día</div>",
+                    unsafe_allow_html=True)
+        # fila TOTAL bruto
+        _ck_show = _ck_df.copy()
+        _tot_row = {"Fecha": "TOTAL BRUTO"}
+        for _mp in _SKR_MP_ORDEN:
+            _tot_row[_mp] = _ck_tot_mp[_mp]
+        _tot_row["Total día"] = _ck_tot_bruto
+        _ck_show.loc[len(_ck_show)] = _tot_row
+        st.dataframe(_ck_show, use_container_width=True, hide_index=True)
+
+        # ── Detalle del impacto del stock inicial por MP ──
+        st.markdown("<div style='font-family:\"DM Serif Display\",serif;font-size:1.1rem;"
+                    "color:#f0ede8;margin:14px 0 6px 0'>Impacto del stock inicial "
+                    "en el total del período</div>", unsafe_allow_html=True)
+        _ck_impacto = _pd_ck.DataFrame([{
+            "Materia Prima": _mp,
+            "Producción bruta": _ck_tot_mp[_mp],
+            "Stock inicial (−)": round(_ck_kg_ini.get(_mp, 0.0), 2),
+            "Neto a producir": _ck_neto_mp[_mp],
+        } for _mp in _SKR_MP_ORDEN])
+        _ck_impacto.loc[len(_ck_impacto)] = {
+            "Materia Prima": "TOTAL",
+            "Producción bruta": _ck_tot_bruto,
+            "Stock inicial (−)": _ck_tot_ini,
+            "Neto a producir": _ck_tot_neto,
+        }
+        st.dataframe(_ck_impacto, use_container_width=True, hide_index=True)
+
+        # Descarga
+        st.download_button(
+            "📥 Descargar control (CSV)",
+            _ck_show.to_csv(index=False).encode("utf-8"),
+            file_name=f"control_kilos_{_ck_local}_{_ck_ini}_{_ck_fin}.csv",
+            mime="text/csv", key="ck_dl")
+
+        st.caption("Kilos brutos (con rendimiento). La producción diaria es teórica "
+                   "(punto de partida = stock real del último cierre; el resto es "
+                   "proyección). El stock inicial se descuenta una sola vez del total, "
+                   "no día a día.")
 
 
 
