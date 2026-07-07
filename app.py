@@ -5448,7 +5448,7 @@ def generar_pdf_resumen_ventas(ws, fecha, dias_cal, chart_pngs=None):
         return float(v) if isinstance(v, (int, float)) else 0.0
     M2 = dias_cal if dias_cal else (num(2, 13) or 1)
 
-    DIA, ACUM, ANO_ANT = 5, 7, 33
+    DIA, ACUM, ANO_ANT, JUN26 = 5, 7, 33, 29
     def proy_mes(r):  return num(r, ACUM) / M2 * 30 if M2 else 0.0
     def proy_anual(r):
         f = ws.cell(r, 37).value
@@ -5464,10 +5464,10 @@ def generar_pdf_resumen_ventas(ws, fecha, dias_cal, chart_pngs=None):
             return tot / d * mul if d else 0.0
         return tot
 
-    METRICS = ['dia', 'acum', 'pmes', 'ant', 'panual']
+    METRICS = ['dia', 'acum', 'pmes', 'jun26', 'ant', 'panual']
     def leaf(r):
         return {'dia': num(r, DIA), 'acum': num(r, ACUM), 'pmes': proy_mes(r),
-                'ant': num(r, ANO_ANT), 'panual': proy_anual(r)}
+                'jun26': num(r, JUN26), 'ant': num(r, ANO_ANT), 'panual': proy_anual(r)}
     def suma(a, b): return {k: a[k] + b[k] for k in METRICS}
     def pct_of(v, base): return {k: (v[k]/base[k] if base[k] else 0.0) for k in METRICS}
     UNO = {k: 1.0 for k in METRICS}
@@ -5483,8 +5483,8 @@ def generar_pdf_resumen_ventas(ws, fecha, dias_cal, chart_pngs=None):
             m = _re.search(r'"([^"]+)"', v); v = m.group(1).strip() if m else ''
         return v
     lbl = [hdr(5) or f"DÍA {fecha.strftime('%d/%m')}", hdr(7) or 'ACUMULADA',
-           hdr(31) or 'PROYECCIÓN MES', hdr(33) or 'AÑO ANTERIOR',
-           hdr(37) or 'PROYECCIÓN ANUAL']
+           hdr(31) or 'PROYECCIÓN MES', hdr(29) or 'JUN 2026',
+           hdr(33) or 'AÑO ANTERIOR', hdr(37) or 'PROYECCIÓN ANUAL']
 
     def _fm(v): return f"{v:,.0f}".replace(",", ".")
     def _fp(v): return f"{v*100:.0f}%"
@@ -5555,12 +5555,12 @@ def generar_pdf_resumen_ventas(ws, fecha, dias_cal, chart_pngs=None):
     for ar, an in [(39,'UBER'),(40,'PEDIDOSYA'),(41,'RAPPI')]:
         a = leaf(ar); tl_rows.append((an, a, pct_of(a, gt_d), False))
     tl_rows.append(('TOTAL', grand, UNO, True))
-    _sep = r; data.append([""]*12); r += 1
+    _sep = r; data.append([""]*14); r += 1
     add_block('TOTAL LOCALES', tl_rows)
 
     PAGE_W = landscape(letter)[0]; MX = 24
     util = PAGE_W - 2*MX
-    pesos = [2.6, 1.5] + [2.0, 0.9]*5
+    pesos = [2.6, 1.5] + [2.0, 0.9]*6
     sp = sum(pesos); wcols = [util*p/sp for p in pesos]
 
     t = Table(data, colWidths=wcols, repeatRows=1)
