@@ -1269,6 +1269,151 @@ _CP_SKU_CAT = {
     'SUB003': 'Hamburguesa Niño',
 }
 
+# ============================================================
+# STOCK CIERRE — VERSIÓN REDUCIDA (4 materias primas de control)
+# Lista acotada de SKU derivados de POSTA / FILETE / LOMO LISO / LOMO VETADO.
+# _CP_SKU_CAT (arriba) se mantiene COMPLETO para uso futuro; esto es paralelo.
+# ============================================================
+_SKR_SKU_CAT = {
+    'AE02': 'Crudo Aleman Experto', 'AE03': 'Hamburguesa', 'AE04': 'Hamburguesa',
+    'AE24': 'Churrasco', 'AE25': 'Crudo Aleman Experto',
+    'BOLNX-01': 'Hamburguesa Niño', 'BOLNX-02': 'Churrasco Niño',
+    'CHU-001': 'Churrasco', 'CHU-002': 'Churrasco', 'CHU-003': 'Churrasco',
+    'CHU-004': 'Churrasco', 'CHU-005': 'Churrasco', 'CHU-006': 'Churrasco',
+    'CHU-007': 'Churrasco', 'CHU-008': 'Churrasco', 'CHU-009': 'Churrasco',
+    'CHU-010': 'Churrasco', 'CHUSIT-002': 'Churrasco', 'CHUX-020': 'Churrasco',
+    'CHUX-021': 'Churrasco', 'CPC-010': 'Hamburguesa', 'CPP-002': 'Churrasco',
+    'CPP-007': 'Hamburguesa', 'ENS-019': 'Carpaccio Filete Ens',
+    'FIL-001': 'Churrasco Filete', 'FIL-002': 'Churrasco Filete',
+    'FIL-003': 'Churrasco Filete', 'FIL-004': 'Churrasco Filete',
+    'FIL-005': 'Churrasco Filete', 'FIL-006': 'Churrasco Filete',
+    'FIL-007': 'Churrasco Filete', 'FIL-008': 'Churrasco Filete',
+    'FIL-009': 'Churrasco Filete', 'FIL-010': 'Churrasco Filete',
+    'FILSIT-002': 'Churrasco Filete', 'FILX-020': 'Churrasco Filete',
+    'FILX-021': 'Churrasco Filete', 'HAC-001': 'Hamburguesa Rellena',
+    'HAC-003': 'Hamburguesa', 'HAC-006': 'Hamburguesa', 'HAC-007': 'Hamburguesa',
+    'HAC-008': 'Hamburguesa', 'HAC-009': 'Hamburguesa', 'HAC-010': 'Hamburguesa',
+    'HAC-012': 'Hamburguesa', 'HAM-001': 'Hamburguesa', 'HAM-002': 'Hamburguesa',
+    'HAM-003': 'Hamburguesa', 'HAM-004': 'Hamburguesa', 'HAM-005': 'Hamburguesa',
+    'HAM-006': 'Hamburguesa', 'HAM-007': 'Hamburguesa', 'HAM-008': 'Hamburguesa',
+    'HAM-009': 'Hamburguesa', 'HAM-010': 'Hamburguesa', 'HAMSIT-002': 'Hamburguesa',
+    'HAMX-020': 'Hamburguesa', 'HAMX-021': 'Hamburguesa', 'MEJ-001': 'Churrasco',
+    'MEJ-003': 'Hamburguesa', 'MEJ-048': 'Churrasco', 'MEJ-050': 'Hamburguesa',
+    'MEJ-055': 'Crudo Aleman Experto', 'NIN-003': 'Churrasco Niño',
+    'NIN-004': 'Hamburguesa Niño', 'NIN-006': 'Hamburguesa Niño',
+    'NIN-007': 'Hamburguesa Niño', 'NIN-009': 'Churrasco Niño',
+    'PAC-001': 'Crudo Aleman Experto', 'PAC-002': 'Crudo Filete',
+    'PAC-015': 'Carpaccio Filete', 'PLC-004': 'Filete Medallon',
+    'PLC-005': 'Filete Medallon', 'PLC-006': 'Filete Medallon',
+    'PLC-007': 'Filete Medallon', 'PLC-008': 'Lomo Liso', 'PLC-009': 'Lomo Liso',
+    'PLC-013': 'Hamburguesa', 'PLC-014': 'Hamburguesa', 'PLC-022': 'Lomo Vetado',
+    'PYAH-001': 'Hamburguesa', 'SUB001': 'Hamburguesa',
+    'SUB002': 'Hamburguesa Rellena', 'SUB003': 'Hamburguesa Niño',
+}
+
+# Categorías reducidas para el input manual de Stock Cierre (orden alfabético),
+# derivadas de la lista _SKR_SKU_CAT.
+_SKR_CATS = sorted(set(_SKR_SKU_CAT.values()))
+
+# Códigos de las 4 materias primas de control en el recetario oficial.
+_SKR_MP = {
+    'AL-CA-010': 'POSTA',
+    'AL-CA-002': 'FILETE',
+    'AL-CA-006': 'LOMO LISO',
+    'AL-CA-027': 'LOMO VETADO',
+}
+_SKR_MP_ORDEN = ['POSTA', 'FILETE', 'LOMO LISO', 'LOMO VETADO']
+
+
+@st.cache_data(ttl=600)
+def _skr_cargar_recetario():
+    """Carga el recetario oficial (tabla recetas_oficial) y construye el índice
+    de recetas para la explosión. Devuelve (recipe_dict, set_productos).
+    recipe_dict: {id_producto: [(id_ingrediente, cantidad, tasa_rendimiento), ...]}"""
+    from collections import defaultdict as _dd
+    df = run_query("""
+        SELECT id_producto, id_ingrediente, cantidad, tasa_rendimiento
+        FROM recetas_oficial
+    """)
+    recipe = _dd(list)
+    if df is None or df.empty:
+        return {}, set()
+    df = df.drop_duplicates()
+    for _r in df.itertuples(index=False):
+        _cant = float(_r.cantidad) if _r.cantidad is not None else 0.0
+        _rend = float(_r.tasa_rendimiento) if _r.tasa_rendimiento not in (None, 0) else 100.0
+        recipe[_r.id_producto].append((_r.id_ingrediente, _cant, _rend))
+    return dict(recipe), set(recipe.keys())
+
+
+def _skr_explotar(sku, qty, recipe, prods, seen=None):
+    """Explosión recursiva de un SKU a kilos BRUTOS por materia prima de control.
+    Aplica rendimiento: kg_bruto = cantidad / (tasa_rendimiento/100).
+    Resuelve ingredientes procesados (que a su vez son id_producto) bajando nivel.
+    Devuelve dict {nombre_MP: kg}."""
+    from collections import defaultdict as _dd
+    out = _dd(float)
+    if seen is None:
+        seen = set()
+    if sku in seen:
+        return out                      # protección contra ciclos
+    for _ing, _cant, _rend in recipe.get(sku, []):
+        _kg = qty * _cant / (_rend / 100.0 if _rend else 1.0)
+        if _ing in _SKR_MP:
+            out[_SKR_MP[_ing]] += _kg
+        elif _ing in prods:             # ingrediente procesado → explotar
+            for _k, _v in _skr_explotar(_ing, _kg, recipe, prods, seen | {sku}).items():
+                out[_k] += _v
+    return out
+
+
+@st.cache_data(ttl=600)
+def _skr_gramaje_por_categoria():
+    """Devuelve {categoria_reducida: {MP: kg_por_unidad}} usando el gramaje CANÓNICO
+    de cada categoría. Dentro de una categoría los SKU comparten receta (validado);
+    los SKU sin receta/MP (explosión vacía) se ignoran. Las variantes con factor
+    propio (p.ej. hamburguesa doble = 2× lineal) ya vienen resueltas en su receta,
+    por lo que se toma el gramaje del SKU representativo (el más frecuente/base).
+    Para categorías con variantes de distinto factor, se usa el valor modal (el que
+    comparte la mayoría de SKU), que corresponde a la unidad estándar de venta."""
+    from collections import defaultdict as _dd, Counter as _Counter
+    recipe, prods = _skr_cargar_recetario()
+    cat_to_skus = _dd(list)
+    for _sku, _cat in _SKR_SKU_CAT.items():
+        cat_to_skus[_cat].append(_sku)
+
+    out = {}
+    for _cat, _skus in cat_to_skus.items():
+        # explota cada SKU; guarda solo los que aportan MP
+        _por_sku = {}
+        for _sku in _skus:
+            _exp = _skr_explotar(_sku, 1.0, recipe, prods)
+            if _exp:
+                _por_sku[_sku] = {k: round(v, 6) for k, v in _exp.items()}
+        if not _por_sku:
+            out[_cat] = {}
+            continue
+        # gramaje canónico = el patrón MP más frecuente entre los SKU de la categoría
+        _firmas = _Counter(tuple(sorted(v.items())) for v in _por_sku.values())
+        _firma_canon = _firmas.most_common(1)[0][0]
+        out[_cat] = dict(_firma_canon)
+    return out
+
+
+def _skr_kilos_por_mp(cant_por_cat):
+    """Dado {categoria_reducida: unidades}, devuelve {MP: kg_bruto_total} usando el
+    gramaje canónico por categoría (sin promedios: cada categoría tiene un gramaje
+    único por unidad estándar de venta)."""
+    from collections import defaultdict as _dd
+    _gram = _skr_gramaje_por_categoria()
+    total = _dd(float)
+    for _cat, _unid in cant_por_cat.items():
+        if not _unid:
+            continue
+        for _mp, _kg_u in _gram.get(_cat, {}).items():
+            total[_mp] += _kg_u * _unid
+    return dict(total)
+
 
 def _cp_maximos_por_dia(mes, local="Todos"):
     """Devuelve dict {categoria: {dow: max}} con el máximo vendido por categoría
@@ -7175,7 +7320,7 @@ if modulo.startswith("📦"):
     tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14 = st.tabs(["📖 Recetario", "🛒 Compras", "📈 Ventas", "🔀 Equivalencias SKU", "🔍 Auditoría Compras", "📦 Inventario / Uso", "🗂️ Clasificación", "🏷️ Auditoría Categorías", "🔗 Conciliador", "🏢 Proveedores", "📊 Resumen Ventas", "🛍️ Estimador de Compras", "👥 Asistencia RRHH", "✅ Whitelist Garzones"])
 
     with tab1:
-        _rt1, _rt2 = st.tabs(["📥 Carga Masiva", "✏️ Editor de Recetas"])
+        _rt1, _rt2, _rt3 = st.tabs(["📥 Carga Masiva", "✏️ Editor de Recetas", "📖 Recetario Oficial"])
 
         # ── CARGA MASIVA ─────────────────────────────────────────
         with _rt1:
@@ -7518,6 +7663,145 @@ if modulo.startswith("📦"):
 
             else:
                 st.caption("☝️ Selecciona un plato para editar o activa 'Crear receta nueva'.")
+
+        # ── RECETARIO OFICIAL (tabla recetas_oficial, paralela) ───────────
+        with _rt3:
+            st.markdown(
+                "<div class='info-box'>Carga el <b>Maestro de Recetas Toteat</b> (.xlsx). "
+                "Alimenta la tabla paralela <b>recetas_oficial</b>, usada por el módulo "
+                "<b>Stock Cierre</b> para la explosión de materias primas. "
+                "<b>Cada carga reemplaza el recetario oficial completo.</b> "
+                "Los duplicados se eliminan automáticamente.</div>",
+                unsafe_allow_html=True)
+
+            _ro_cols_bd = ['id_producto', 'nombre_producto', 'id_ingrediente',
+                           'nombre_ingrediente', 'cantidad', 'unidad_medida',
+                           'tasa_rendimiento', 'visible_clientes', 'id_jerarquia']
+            # Mapa encabezado Excel oficial → columna BD
+            _ro_rename = {
+                'Id Producto': 'id_producto',
+                'Nombre Producto*': 'nombre_producto',
+                'Id Ingrediente': 'id_ingrediente',
+                'Nombre Ingrediente*': 'nombre_ingrediente',
+                'Cantidad Ingrediente': 'cantidad',
+                'Unidad Medida': 'unidad_medida',
+                'Tasa Rendimiento': 'tasa_rendimiento',
+                'Visible Clientes**': 'visible_clientes',
+                'Id Jerarquia Toteat**': 'id_jerarquia',
+            }
+
+            _f_ro = st.file_uploader("Maestro de Recetas (.xlsx)", type=["xlsx"],
+                                     key="ro_file")
+
+            if _f_ro is not None:
+                try:
+                    _df_ro = pd.read_excel(_f_ro, sheet_name=0, header=0, dtype=str)
+                    _df_ro.columns = _df_ro.columns.str.strip()
+                    _df_ro = _df_ro.rename(columns=_ro_rename)
+
+                    _faltan = [c for c in ['id_producto', 'id_ingrediente', 'cantidad']
+                               if c not in _df_ro.columns]
+                    if _faltan:
+                        st.error(f"El archivo no tiene las columnas esperadas: {_faltan}. "
+                                 f"Columnas encontradas: {list(_df_ro.columns)}")
+                    else:
+                        # Asegurar todas las columnas BD (rellenar ausentes)
+                        for _c in _ro_cols_bd:
+                            if _c not in _df_ro.columns:
+                                _df_ro[_c] = None
+                        _df_ro = _df_ro[_ro_cols_bd]
+
+                        # Tipos numéricos
+                        _df_ro['cantidad'] = pd.to_numeric(_df_ro['cantidad'], errors='coerce')
+                        _df_ro['tasa_rendimiento'] = pd.to_numeric(
+                            _df_ro['tasa_rendimiento'], errors='coerce')
+                        _df_ro['visible_clientes'] = pd.to_numeric(
+                            _df_ro['visible_clientes'], errors='coerce')
+
+                        # Descartar filas sin producto o ingrediente
+                        _df_ro = _df_ro.dropna(subset=['id_producto', 'id_ingrediente'])
+                        _df_ro['id_producto'] = _df_ro['id_producto'].str.strip()
+                        _df_ro['id_ingrediente'] = _df_ro['id_ingrediente'].str.strip()
+
+                        _n_bruto = len(_df_ro)
+                        _df_ro = _df_ro.drop_duplicates()
+                        _n_limpio = len(_df_ro)
+                        _dups = _n_bruto - _n_limpio
+
+                        st.markdown(f"""
+                        <div style="display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 12px 0">
+                          <div style="flex:1 1 90px;min-width:90px;background:#0e1116;border:1px solid #1f242c;
+                                      border-radius:12px;padding:12px 14px">
+                            <div style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;color:#ffffff">Filas archivo</div>
+                            <div style="font-family:'DM Serif Display',serif;font-size:1.8rem;color:#f0ede8;line-height:1.1">{_n_bruto:,}</div>
+                          </div>
+                          <div style="flex:1 1 90px;min-width:90px;background:#0e1116;border:1px solid #1f242c;
+                                      border-radius:12px;padding:12px 14px">
+                            <div style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;color:#ffffff">Duplicados</div>
+                            <div style="font-family:'DM Serif Display',serif;font-size:1.8rem;color:#d4a853;line-height:1.1">{_dups:,}</div>
+                          </div>
+                          <div style="flex:1 1 90px;min-width:90px;background:#0e1116;border:1px solid #1f242c;
+                                      border-radius:12px;padding:12px 14px">
+                            <div style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;color:#ffffff">A cargar</div>
+                            <div style="font-family:'DM Serif Display',serif;font-size:1.8rem;color:#f0ede8;line-height:1.1">{_n_limpio:,}</div>
+                          </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                        st.dataframe(_df_ro.head(50), use_container_width=True, hide_index=True)
+
+                        if st.button("🔄 Reemplazar Recetario Oficial", type="primary",
+                                     key="ro_btn"):
+                            try:
+                                _eng_ro = get_engine()
+                                with _eng_ro.connect() as _cro:
+                                    _cro.execute(text("DELETE FROM recetas_oficial"))
+                                    _cro.commit()
+                                _df_ro.to_sql('recetas_oficial', _eng_ro,
+                                              if_exists='append', index=False,
+                                              method='multi', chunksize=1000)
+                                st.cache_data.clear()
+                                st.success(f"✅ Recetario oficial reemplazado: "
+                                           f"{_n_limpio:,} filas · "
+                                           f"{_df_ro['id_producto'].nunique():,} productos · "
+                                           f"{_df_ro['id_ingrediente'].nunique():,} ingredientes.")
+                                st.rerun()
+                            except Exception as _ero:
+                                st.error(f"Error al cargar: {_ero}")
+                                st.exception(_ero)
+                except Exception as _e_ro:
+                    st.error(f"Error al leer el archivo: {_e_ro}")
+                    st.exception(_e_ro)
+
+            # Vista de lo que hay en BD
+            st.markdown("---")
+            _ro_bd = run_query("""
+                SELECT COUNT(*) AS filas,
+                       COUNT(DISTINCT id_producto) AS productos,
+                       COUNT(DISTINCT id_ingrediente) AS ingredientes
+                FROM recetas_oficial
+            """)
+            if _ro_bd is not None and not _ro_bd.empty and int(_ro_bd['filas'].iloc[0]) > 0:
+                _rf = int(_ro_bd['filas'].iloc[0])
+                _rp = int(_ro_bd['productos'].iloc[0])
+                _ri = int(_ro_bd['ingredientes'].iloc[0])
+                st.caption(f"📖 Recetario oficial en BD: **{_rf:,}** filas · "
+                           f"**{_rp:,}** productos · **{_ri:,}** ingredientes.")
+                # Verificación de las 4 materias primas de control
+                _ro_mp = run_query("""
+                    SELECT id_ingrediente, MAX(nombre_ingrediente) AS nombre,
+                           COUNT(*) AS usos
+                    FROM recetas_oficial
+                    WHERE id_ingrediente = ANY(:mp)
+                    GROUP BY id_ingrediente
+                """, {"mp": list(_SKR_MP.keys())})
+                if _ro_mp is not None and not _ro_mp.empty:
+                    _ro_mp['MP'] = _ro_mp['id_ingrediente'].map(_SKR_MP)
+                    st.caption("Materias primas de control detectadas:")
+                    st.dataframe(_ro_mp[['MP', 'id_ingrediente', 'nombre', 'usos']],
+                                 use_container_width=True, hide_index=True)
+            else:
+                st.info("Aún no hay recetario oficial cargado.")
 
 
 
@@ -24554,8 +24838,8 @@ elif modulo.startswith("📥 Stock Cierre"):
     _SK_LOCALES = ["Vitacura","Las Condes","Chicureo","La Dehesa","Macul",
                    "La Reina","Quilin","Nueva Providencia","Providencia","Los Trapenses"]
 
-    _sk_tab1, _sk_tab2, _sk_tab3 = st.tabs(
-        ["➕ Registrar cierre", "📋 Historial", "🎯 Producir hoy"])
+    _sk_tab1, _sk_tab2, _sk_tab3, _sk_tab4 = st.tabs(
+        ["➕ Registrar cierre", "📋 Historial", "🎯 Producir hoy", "⚖️ Vista Kilos"])
 
     # ══════════ TAB 1: REGISTRAR ══════════
     with _sk_tab1:
@@ -24617,10 +24901,11 @@ elif modulo.startswith("📥 Stock Cierre"):
 
         # Form: los inputs no provocan rerun; solo se comunican al pulsar Guardar.
         # Siempre parten en 0 (no se precargan valores previos para evitar errores).
+        # Lista REDUCIDA: solo categorías derivadas de las 4 materias primas de control.
         with st.form("sk_form_cierre", clear_on_submit=True):
             _sk_inputs = {}
             _sk_cols = st.columns(3)
-            for _i, _cat in enumerate(_SK_CATS):
+            for _i, _cat in enumerate(_SKR_CATS):
                 with _sk_cols[_i % 3]:
                     _sk_inputs[_cat] = st.number_input(
                         _cat, min_value=0.0, step=1.0, value=0.0,
@@ -24981,6 +25266,149 @@ elif modulo.startswith("📥 Stock Cierre"):
                 _ph_df.to_csv(index=False).encode("utf-8"),
                 file_name=f"producir_{_ph_local}_{_ph_fecha}.csv",
                 mime="text/csv", key="ph_dl")
+
+    # ══════════ TAB 4: VISTA KILOS ══════════
+    with _sk_tab4:
+        import pandas as _pd_kg
+
+        if _user_local_sk:
+            _kg_local = _user_local_sk
+            _kg_fecha = _sk_dt.date.today()
+            _kgc1, _kgc2 = st.columns(2)
+            with _kgc1:
+                st.markdown(f"**Local:** `{_kg_local}`")
+            with _kgc2:
+                st.markdown(f"**Día:** `{_kg_fecha.strftime('%d-%m-%Y')}`")
+        else:
+            _kg1, _kg2 = st.columns(2)
+            with _kg1:
+                _kg_local = st.selectbox("Local", _SK_LOCALES, key="kg_local")
+            with _kg2:
+                _kg_fecha = st.date_input("Día a producir", key="kg_fecha",
+                                          value=_sk_dt.date.today())
+
+        _MN_KG = {"01": "Enero", "02": "Febrero", "03": "Marzo", "04": "Abril",
+                  "05": "Mayo", "06": "Junio", "07": "Julio", "08": "Agosto",
+                  "09": "Septiembre", "10": "Octubre", "11": "Noviembre", "12": "Diciembre"}
+        _DOW_KG = {0: "Lun", 1: "Mar", 2: "Mié", 3: "Jue", 4: "Vie", 5: "Sáb", 6: "Dom"}
+        _DOWF_KG = {0: "lunes", 1: "martes", 2: "miércoles", 3: "jueves",
+                    4: "viernes", 5: "sábado", 6: "domingo"}
+        _kg_dow = _DOW_KG[_kg_fecha.weekday()]
+        _kg_dow_full = _DOWF_KG[_kg_fecha.weekday()]
+
+        # Verificar que exista recetario oficial
+        _kg_chk = run_query("SELECT COUNT(*) AS n FROM recetas_oficial")
+        if _kg_chk is None or _kg_chk.empty or int(_kg_chk["n"].iloc[0]) == 0:
+            st.warning("⚠️ No hay **recetario oficial** cargado. Cárgalo en "
+                       "**Gestión de Datos → Recetario → Recetario Oficial** "
+                       "para calcular los kilos por materia prima.")
+            st.stop()
+
+        # Mes de muestra (misma config que Producir hoy)
+        _kg_cfg = run_query("""
+            SELECT anio, mes FROM config_mes_muestra WHERE local = :l
+        """, {"l": _kg_local})
+        _kg_mes = None
+        if _kg_cfg is not None and not _kg_cfg.empty:
+            _kg_mes = f"{int(_kg_cfg['anio'].iloc[0]):04d}-{int(_kg_cfg['mes'].iloc[0]):02d}"
+
+        if _kg_mes is None:
+            st.warning(f"⚠️ El local **{_kg_local}** no tiene mes de muestra configurado "
+                       "(módulo 🎯 Config Producción).")
+            st.stop()
+
+        st.markdown(f"#### ⚖️ Proyección en kilos · **{_kg_dow_full} "
+                    f"{_kg_fecha.strftime('%d-%m-%Y')}** · {_kg_local}")
+        st.caption(f"Meta = mejor **{_kg_dow_full}** de "
+                   f"{_MN_KG.get(_kg_mes.split('-')[1], _kg_mes)} {_kg_mes.split('-')[0]} "
+                   "por categoría · gramaje del recetario oficial (kg brutos, con rendimiento).")
+
+        # 1) Meta en unidades (máximos por día) — solo categorías de la lista reducida
+        _kg_max = _cp_maximos_por_dia(_kg_mes, _kg_local)
+        # 2) Saldo del último cierre anterior al día (mismo criterio que Producir hoy)
+        _kg_saldo_q = run_query("""
+            SELECT categoria, cantidad, fecha
+            FROM stock_cierre_diario
+            WHERE local = :l AND fecha < :f
+              AND fecha = (
+                  SELECT MAX(fecha) FROM stock_cierre_diario
+                  WHERE local = :l AND fecha < :f
+              )
+        """, {"l": _kg_local, "f": str(_kg_fecha)})
+        _kg_saldo_map = {}
+        _kg_saldo_fecha = None
+        if _kg_saldo_q is not None and not _kg_saldo_q.empty:
+            _kg_saldo_map = dict(zip(_kg_saldo_q["categoria"], _kg_saldo_q["cantidad"]))
+            _kg_saldo_fecha = str(_kg_saldo_q["fecha"].iloc[0])
+
+        # Unidades por categoría reducida: meta (bruto) y neto (meta - saldo)
+        _u_meta = {}
+        _u_neto = {}
+        for _cat in _SKR_CATS:
+            _meta = (_kg_max.get(_cat, {}) or {}).get(_kg_dow, 0) or 0
+            _saldo = _kg_saldo_map.get(_cat, 0) or 0
+            _u_meta[_cat] = _meta
+            _u_neto[_cat] = max(_meta - _saldo, 0)
+
+        # Explosión a kilos por materia prima
+        _kg_bruto = _skr_kilos_por_mp(_u_meta)     # total a producir (meta)
+        _kg_real  = _skr_kilos_por_mp(_u_neto)      # total real (con descuento)
+
+        if _kg_saldo_fecha:
+            st.caption(f"📦 Saldo descontado del último cierre: **{_kg_saldo_fecha}**.")
+        else:
+            st.caption("📦 Sin cierre previo — el total real coincide con el total a producir.")
+
+        # ── KPIs superiores ──
+        _tot_bruto = sum(_kg_bruto.values())
+        _tot_real = sum(_kg_real.values())
+        st.markdown(f"""
+        <div style="display:flex;flex-wrap:wrap;gap:8px;margin:4px 0 16px 0">
+          <div style="flex:1 1 120px;min-width:120px;background:#0e1116;border:1px solid #1f242c;
+                      border-radius:12px;padding:12px 14px">
+            <div style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;color:#ffffff">Total a producir</div>
+            <div style="font-family:'DM Serif Display',serif;font-size:1.8rem;color:#f0ede8;line-height:1.1">{_tot_bruto:,.2f} kg</div>
+          </div>
+          <div style="flex:1 1 120px;min-width:120px;background:#0e1116;border:1px solid #1f242c;
+                      border-radius:12px;padding:12px 14px">
+            <div style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;color:#ffffff">Total real (neto)</div>
+            <div style="font-family:'DM Serif Display',serif;font-size:1.8rem;color:#d4a853;line-height:1.1">{_tot_real:,.2f} kg</div>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        def _kg_tabla(_dmap, _titulo, _color):
+            _rows = []
+            for _mp in _SKR_MP_ORDEN:
+                _rows.append({"Materia Prima": _mp,
+                              "Kilos (bruto)": round(_dmap.get(_mp, 0.0), 3)})
+            _df = _pd_kg.DataFrame(_rows)
+            _df.loc[len(_df)] = {"Materia Prima": "TOTAL",
+                                 "Kilos (bruto)": round(sum(_dmap.values()), 3)}
+            st.markdown(f"<div style='font-family:\"DM Serif Display\",serif;font-size:1.1rem;"
+                        f"color:{_color};margin:10px 0 6px 0'>{_titulo}</div>",
+                        unsafe_allow_html=True)
+            st.dataframe(_df, use_container_width=True, hide_index=True)
+            return _df
+
+        _c_kg1, _c_kg2 = st.columns(2)
+        with _c_kg1:
+            _df_bruto = _kg_tabla(_kg_bruto, "① Total a producir (calculado)", "#f0ede8")
+        with _c_kg2:
+            _df_real = _kg_tabla(_kg_real, "② Total real (con descuento de stock)", "#d4a853")
+
+        # Descarga combinada
+        _df_dl = _df_bruto.rename(columns={"Kilos (bruto)": "kg_a_producir"}).copy()
+        _df_dl["kg_real"] = _df_real["Kilos (bruto)"].values
+        st.download_button(
+            "📥 Descargar proyección kilos (CSV)",
+            _df_dl.to_csv(index=False).encode("utf-8"),
+            file_name=f"kilos_{_kg_local}_{_kg_fecha}.csv",
+            mime="text/csv", key="kg_dl")
+
+        st.caption("Kilos **brutos** (incluyen rendimiento: kg = cantidad ÷ rendimiento). "
+                   "**Total a producir** usa la meta del día; **total real** descuenta el "
+                   "stock de cierre del día anterior antes de explotar a materia prima.")
 
 
 
