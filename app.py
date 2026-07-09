@@ -1267,6 +1267,12 @@ _CP_SKU_CAT = {
     'SUB001': 'Hamburguesa',
     'SUB002': 'Hamburguesa Rellena',
     'SUB003': 'Hamburguesa Niño',
+    # --- Añadidos por validación contra recetario (jul-2026) ---
+    'AE27': 'Churrasco',
+    'HAC-002': 'Hamburguesa', 'HAC-005': 'Hamburguesa',
+    'PAC-012': 'Carne Trozada', 'PAC-014': 'Carne Trozada',
+    'CPC-012': 'Colaciones', 'CPC-013': 'Colaciones', 'CPC-019': 'Colaciones',
+    'CPC-021': 'Colaciones', 'CPC-022': 'Colaciones', 'CPP-008': 'Colaciones',
 }
 
 # ============================================================
@@ -1275,19 +1281,19 @@ _CP_SKU_CAT = {
 # _CP_SKU_CAT (arriba) se mantiene COMPLETO para uso futuro; esto es paralelo.
 # ============================================================
 _SKR_SKU_CAT = {
-    'AE02': 'Crudo Aleman Experto', 'AE03': 'Hamburguesa', 'AE04': 'Hamburguesa',
+    'AE03': 'Hamburguesa',
     'AE24': 'Churrasco', 'AE25': 'Crudo Aleman Experto',
     'BOLNX-01': 'Hamburguesa Niño', 'BOLNX-02': 'Churrasco Niño',
     'CHU-001': 'Churrasco', 'CHU-002': 'Churrasco', 'CHU-003': 'Churrasco',
     'CHU-004': 'Churrasco', 'CHU-005': 'Churrasco', 'CHU-006': 'Churrasco',
-    'CHU-007': 'Churrasco', 'CHU-008': 'Churrasco', 'CHU-009': 'Churrasco',
+    'CHU-008': 'Churrasco', 'CHU-009': 'Churrasco',
     'CHU-010': 'Churrasco', 'CHUSIT-002': 'Churrasco', 'CHUX-020': 'Churrasco',
     'CHUX-021': 'Churrasco', 'CPC-010': 'Hamburguesa', 'CPP-002': 'Churrasco',
     'CPP-007': 'Hamburguesa', 'ENS-019': 'Carpaccio Filete Ens',
     'FIL-001': 'Churrasco Filete', 'FIL-002': 'Churrasco Filete',
     'FIL-003': 'Churrasco Filete', 'FIL-004': 'Churrasco Filete',
     'FIL-005': 'Churrasco Filete', 'FIL-006': 'Churrasco Filete',
-    'FIL-007': 'Churrasco Filete', 'FIL-008': 'Churrasco Filete',
+    'FIL-008': 'Churrasco Filete',
     'FIL-009': 'Churrasco Filete', 'FIL-010': 'Churrasco Filete',
     'FILSIT-002': 'Churrasco Filete', 'FILX-020': 'Churrasco Filete',
     'FILX-021': 'Churrasco Filete', 'HAC-001': 'Hamburguesa Rellena',
@@ -1299,16 +1305,25 @@ _SKR_SKU_CAT = {
     'HAM-009': 'Hamburguesa', 'HAM-010': 'Hamburguesa', 'HAMSIT-002': 'Hamburguesa',
     'HAMX-020': 'Hamburguesa', 'HAMX-021': 'Hamburguesa', 'MEJ-001': 'Churrasco',
     'MEJ-003': 'Hamburguesa', 'MEJ-048': 'Churrasco', 'MEJ-050': 'Hamburguesa',
-    'MEJ-055': 'Crudo Aleman Experto', 'NIN-003': 'Churrasco Niño',
+    'NIN-003': 'Churrasco Niño',
     'NIN-004': 'Hamburguesa Niño', 'NIN-006': 'Hamburguesa Niño',
-    'NIN-007': 'Hamburguesa Niño', 'NIN-009': 'Churrasco Niño',
+    'NIN-009': 'Churrasco Niño',
     'PAC-001': 'Crudo Aleman Experto', 'PAC-002': 'Crudo Filete',
     'PAC-015': 'Carpaccio Filete', 'PLC-004': 'Filete Medallon',
     'PLC-005': 'Filete Medallon', 'PLC-006': 'Filete Medallon',
     'PLC-007': 'Filete Medallon', 'PLC-008': 'Lomo Liso', 'PLC-009': 'Lomo Liso',
     'PLC-013': 'Hamburguesa', 'PLC-014': 'Hamburguesa', 'PLC-022': 'Lomo Vetado',
-    'PYAH-001': 'Hamburguesa', 'SUB001': 'Hamburguesa',
+    'SUB001': 'Hamburguesa',
     'SUB002': 'Hamburguesa Rellena', 'SUB003': 'Hamburguesa Niño',
+    # --- Añadidos por validación contra recetario (jul-2026) ---
+    'AE02': 'Crudo Aleman Experto',  # receta corregida: ahora lleva POSTA
+    'AE27': 'Churrasco',
+    'HAC-002': 'Hamburguesa', 'HAC-005': 'Hamburguesa',
+    'PLA-001': 'Escalopa', 'PLA-002': 'Escalopa',
+    'PLA-003': 'Escalopa', 'PLA-004': 'Escalopa',
+    'PAC-012': 'Carne Trozada', 'PAC-014': 'Carne Trozada',
+    'CPC-012': 'Colaciones', 'CPC-013': 'Colaciones', 'CPC-019': 'Colaciones',
+    'CPC-021': 'Colaciones', 'CPC-022': 'Colaciones', 'CPP-008': 'Colaciones',
 }
 
 # Categorías reducidas para el input manual de Stock Cierre (orden alfabético),
@@ -1425,11 +1440,13 @@ def _skr_kilos_teoricos_dia(kg_max, dow_abbr):
     return _skr_kilos_por_mp(_u)
 
 
-def _cp_maximos_por_dia(mes, local="Todos"):
+def _cp_maximos_por_dia(mes, local="Todos", excluir_cp=False):
     """Devuelve dict {categoria: {dow: max}} con el máximo vendido por categoría
     en cada día de la semana (Lun..Dom) dentro del mes 'YYYY-MM'."""
     import calendar as _cal
     skus = list(_CP_SKU_CAT.keys())
+    if excluir_cp:  # excluir colaciones: SKU que empiezan con 'CP'
+        skus = [s for s in skus if not str(s).upper().startswith('CP')]
     y, mo = map(int, mes.split("-"))
     dim = _cal.monthrange(y, mo)[1]
     params = {"i": f"{y:04d}-{mo:02d}-01", "f": f"{y:04d}-{mo:02d}-{dim:02d}", "skus": skus}
@@ -25142,8 +25159,14 @@ elif modulo.startswith("📥 Stock Cierre"):
         st.markdown(f"#### 🎯 Producción sugerida para el **{_ph_dow_full} {_ph_fecha.strftime('%d-%m-%Y')}** · {_ph_local}")
         st.caption(f"Meta = mejor **{_ph_dow_full}** de {_MN_PH.get(_ph_mes.split('-')[1], _ph_mes)} {_ph_mes.split('-')[0]} por categoría (mes de muestra configurado).")
 
+        # Switch: incluir/excluir colaciones (SKU que empiezan con "CP")
+        _ph_incl_col = st.toggle(
+            "Incluir colaciones (platos con SKU 'CP')", value=True,
+            key="ph_incl_col",
+            help="Al desactivar, se excluyen del cálculo de la meta todos los "
+                 "productos cuyo SKU empieza con 'CP' (colaciones).")
         # 1) Meta: máximos del día de la semana correspondiente
-        _ph_max = _cp_maximos_por_dia(_ph_mes, _ph_local)
+        _ph_max = _cp_maximos_por_dia(_ph_mes, _ph_local, excluir_cp=not _ph_incl_col)
         # 2) Saldo: último cierre registrado ANTES del día a producir, para ese local
         _ph_saldo_q = run_query("""
             SELECT categoria, cantidad, fecha
