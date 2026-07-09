@@ -1127,12 +1127,12 @@ _CP_SKU_CAT = {
     'CHUSIT-002': 'Churrasco',
     'CHUX-020': 'Churrasco',
     'CHUX-021': 'Churrasco',
-    'CPC-010': 'Hamburguesa',
+    'CPC-010': 'Hamburguesa Colación',
     'CPP-001': 'Mechada',
-    'CPP-002': 'Churrasco',
+    'CPP-002': 'Churrasco Colación',
     'CPP-003': 'Lomito',
     'CPP-004': 'Pollo Panko',
-    'CPP-007': 'Hamburguesa',
+    'CPP-007': 'Hamburguesa Colación',
     'ENS-001': 'Atun',
     'ENS-007': 'Pollo Panko Ensalada',
     'ENS-008': 'Atun Ensalada',
@@ -1271,8 +1271,10 @@ _CP_SKU_CAT = {
     'AE27': 'Churrasco',
     'HAC-002': 'Hamburguesa', 'HAC-005': 'Hamburguesa',
     'PAC-012': 'Carne Trozada', 'PAC-014': 'Carne Trozada',
-    'CPC-012': 'Colaciones', 'CPC-013': 'Colaciones', 'CPC-019': 'Colaciones',
-    'CPC-021': 'Colaciones', 'CPC-022': 'Colaciones', 'CPP-008': 'Colaciones',
+    'CPC-021': 'Posta Colación 100',
+    'CPC-012': 'Posta Colación 150', 'CPC-013': 'Posta Colación 150',
+    'CPC-022': 'Posta Colación 150', 'CPP-008': 'Posta Colación 150',
+    'CPC-019': 'Posta Colación 180',
 }
 
 # ============================================================
@@ -1288,8 +1290,8 @@ _SKR_SKU_CAT = {
     'CHU-004': 'Churrasco', 'CHU-005': 'Churrasco', 'CHU-006': 'Churrasco',
     'CHU-008': 'Churrasco', 'CHU-009': 'Churrasco',
     'CHU-010': 'Churrasco', 'CHUSIT-002': 'Churrasco', 'CHUX-020': 'Churrasco',
-    'CHUX-021': 'Churrasco', 'CPC-010': 'Hamburguesa', 'CPP-002': 'Churrasco',
-    'CPP-007': 'Hamburguesa', 'ENS-019': 'Carpaccio Filete Ens',
+    'CHUX-021': 'Churrasco', 'CPC-010': 'Hamburguesa Colación', 'CPP-002': 'Churrasco Colación',
+    'CPP-007': 'Hamburguesa Colación', 'ENS-019': 'Carpaccio Filete Ens',
     'FIL-001': 'Churrasco Filete', 'FIL-002': 'Churrasco Filete',
     'FIL-003': 'Churrasco Filete', 'FIL-004': 'Churrasco Filete',
     'FIL-005': 'Churrasco Filete', 'FIL-006': 'Churrasco Filete',
@@ -1322,8 +1324,10 @@ _SKR_SKU_CAT = {
     'PLA-001': 'Escalopa', 'PLA-002': 'Escalopa',
     'PLA-003': 'Escalopa', 'PLA-004': 'Escalopa',
     'PAC-012': 'Carne Trozada', 'PAC-014': 'Carne Trozada',
-    'CPC-012': 'Colaciones', 'CPC-013': 'Colaciones', 'CPC-019': 'Colaciones',
-    'CPC-021': 'Colaciones', 'CPC-022': 'Colaciones', 'CPP-008': 'Colaciones',
+    'CPC-021': 'Posta Colación 100',
+    'CPC-012': 'Posta Colación 150', 'CPC-013': 'Posta Colación 150',
+    'CPC-022': 'Posta Colación 150', 'CPP-008': 'Posta Colación 150',
+    'CPC-019': 'Posta Colación 180',
 }
 
 # Categorías reducidas para el input manual de Stock Cierre (orden alfabético),
@@ -1440,13 +1444,15 @@ def _skr_kilos_teoricos_dia(kg_max, dow_abbr):
     return _skr_kilos_por_mp(_u)
 
 
-def _cp_maximos_por_dia(mes, local="Todos", excluir_cp=False):
+def _cp_maximos_por_dia(mes, local="Todos", excluir_cp=False, solo_skus=None):
     """Devuelve dict {categoria: {dow: max}} con el máximo vendido por categoría
     en cada día de la semana (Lun..Dom) dentro del mes 'YYYY-MM'."""
     import calendar as _cal
     skus = list(_CP_SKU_CAT.keys())
     if excluir_cp:  # excluir colaciones: SKU que empiezan con 'CP'
         skus = [s for s in skus if not str(s).upper().startswith('CP')]
+    if solo_skus is not None:  # restringir a whitelist (Stock Cierre)
+        skus = [s for s in skus if s in solo_skus]
     y, mo = map(int, mes.split("-"))
     dim = _cal.monthrange(y, mo)[1]
     params = {"i": f"{y:04d}-{mo:02d}-01", "f": f"{y:04d}-{mo:02d}-{dim:02d}", "skus": skus}
@@ -25166,7 +25172,7 @@ elif modulo.startswith("📥 Stock Cierre"):
             help="Al desactivar, se excluyen del cálculo de la meta todos los "
                  "productos cuyo SKU empieza con 'CP' (colaciones).")
         # 1) Meta: máximos del día de la semana correspondiente
-        _ph_max = _cp_maximos_por_dia(_ph_mes, _ph_local, excluir_cp=not _ph_incl_col)
+        _ph_max = _cp_maximos_por_dia(_ph_mes, _ph_local, excluir_cp=not _ph_incl_col, solo_skus=set(_SKR_SKU_CAT))
         # 2) Saldo: último cierre registrado ANTES del día a producir, para ese local
         _ph_saldo_q = run_query("""
             SELECT categoria, cantidad, fecha
@@ -25417,8 +25423,12 @@ elif modulo.startswith("📥 Stock Cierre"):
                    f"según mes de muestra {_ck_mes}). El **stock inicial** es real y se "
                    "descuenta una sola vez del total del período.")
 
+        _ck_incl_col = st.toggle(
+            "Incluir colaciones (platos con SKU 'CP')", value=True,
+            key="ck_incl_col",
+            help="Al desactivar, se excluyen los productos cuyo SKU empieza con 'CP' (colaciones).")
         # Máximos por día del mes de muestra (una sola vez)
-        _ck_max = _cp_maximos_por_dia(_ck_mes, _ck_local)
+        _ck_max = _cp_maximos_por_dia(_ck_mes, _ck_local, excluir_cp=not _ck_incl_col, solo_skus=set(_SKR_SKU_CAT))
         _DOW_CK = {0: "Lun", 1: "Mar", 2: "Mié", 3: "Jue", 4: "Vie", 5: "Sáb", 6: "Dom"}
 
         # Construir tabla día × MP (kilos teóricos brutos)
