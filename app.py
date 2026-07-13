@@ -1490,19 +1490,16 @@ _PP_CRITERIOS = {
 }
 
 
-def _pp_perfil_dow(mes, local, criterio="max", excluir_cp=False, solo_skus=None):
+def _pp_perfil_dow(ini, fin, local, criterio="max", excluir_cp=False, solo_skus=None):
     """Igual que _cp_maximos_por_dia pero con criterio de agregación seleccionable
-    sobre las ocurrencias de cada día de semana dentro del mes de muestra 'YYYY-MM'.
+    sobre las ocurrencias de cada día de semana dentro del RANGO DE MUESTRA [ini, fin].
     criterio ∈ {'max','mean','median','min','p75'}. Devuelve {categoria: {dow: valor}}."""
-    import calendar as _cal
     skus = list(_CP_SKU_CAT.keys())
     if excluir_cp:
         skus = [s for s in skus if not str(s).upper().startswith('CP')]
     if solo_skus is not None:
         skus = [s for s in skus if s in solo_skus]
-    y, mo = map(int, mes.split("-"))
-    dim = _cal.monthrange(y, mo)[1]
-    params = {"i": f"{y:04d}-{mo:02d}-01", "f": f"{y:04d}-{mo:02d}-{dim:02d}", "skus": skus}
+    params = {"i": str(ini), "f": str(fin), "skus": skus}
     loc_filter = ""
     if local and local != "Todos":
         loc_filter = "AND UPPER(local) = UPPER(:l)"
@@ -25732,11 +25729,11 @@ elif modulo.startswith("🏭 Proyecto Producción"):
     </div>
     """, unsafe_allow_html=True)
     st.markdown("<div class='info-box'>Estima la <b>producción propia de cada local</b> de las 4 "
-                "materias primas de control (<b>POSTA, FILETE, LOMO LISO, LOMO VETADO</b>) para el "
-                "<b>período seleccionado</b>, orientado al proyecto de centralización en planta. "
-                "El perfil por día de semana se calcula con el <b>criterio elegido</b> sobre el "
-                "<b>mes de muestra</b> de cada local (🎯 Config Producción) y se proyecta sobre el "
-                "rango. Los kilos son <b>brutos</b> (con rendimiento de receta aplicado).</div>",
+                "materias primas de control (<b>POSTA, FILETE, LOMO LISO, LOMO VETADO</b>), orientado "
+                "al proyecto de centralización en planta. El perfil de demanda por día de semana se "
+                "calcula con el <b>criterio elegido</b> sobre el <b>rango de muestra</b> (histórico) y "
+                "se proyecta sobre el <b>rango a proyectar</b>. Los kilos son <b>brutos</b> (con "
+                "rendimiento de receta aplicado).</div>",
                 unsafe_allow_html=True)
 
     _PP_LOCALES = ["Vitacura", "Las Condes", "Macul", "Los Trapenses", "Quilin"]
@@ -25749,32 +25746,37 @@ elif modulo.startswith("🏭 Proyecto Producción"):
                    "**Gestión de Datos → Recetario → Recetario Oficial**.")
         st.stop()
 
-    # ── Controles ──
-    _ppc1, _ppc2, _ppc3 = st.columns([2, 2, 2])
+    # ── Controles: rango de muestra (base) + rango a proyectar ──
     _pp_hoy = _pp_dt.date.today()
-    with _ppc1:
-        _pp_ini = st.date_input("Desde", value=_pp_hoy.replace(day=1), key="pp_ini")
-    with _ppc2:
-        _pp_fin = st.date_input("Hasta", value=_pp_hoy, key="pp_fin")
-    with _ppc3:
+    st.markdown("**1) Rango de muestra** — historia base para el perfil por día de semana")
+    _ppm1, _ppm2 = st.columns(2)
+    with _ppm1:
+        _pp_m_ini = st.date_input("Muestra · desde", value=_pp_hoy.replace(day=1), key="pp_m_ini")
+    with _ppm2:
+        _pp_m_fin = st.date_input("Muestra · hasta", value=_pp_hoy, key="pp_m_fin")
+
+    st.markdown("**2) Rango a proyectar** — período que se quiere estimar")
+    _ppp1, _ppp2, _ppp3 = st.columns([2, 2, 2])
+    with _ppp1:
+        _pp_ini = st.date_input("Proyección · desde", value=_pp_hoy, key="pp_p_ini")
+    with _ppp2:
+        _pp_fin = st.date_input("Proyección · hasta",
+                                value=_pp_hoy + _pp_dt.timedelta(days=6), key="pp_p_fin")
+    with _ppp3:
         _pp_crit_lbl = st.selectbox("Criterio de estimación",
                                     list(_PP_CRITERIOS.keys()), index=0, key="pp_crit")
     _pp_incl = st.toggle("Incluir colaciones (SKU 'CP')", value=True, key="pp_incl",
                          help="Al desactivar, se excluyen los productos cuyo SKU empieza con 'CP'.")
     _pp_crit = _PP_CRITERIOS[_pp_crit_lbl]
 
+    if _pp_m_fin < _pp_m_ini:
+        st.error("Rango de muestra inválido: 'hasta' es anterior a 'desde'.")
+        st.stop()
     if _pp_fin < _pp_ini:
-        st.error("La fecha 'hasta' no puede ser anterior a 'desde'.")
+        st.error("Rango a proyectar inválido: 'hasta' es anterior a 'desde'.")
         st.stop()
 
-    # Mes de muestra por local (Config Producción)
-    _pp_cfg = run_query("SELECT local, anio, mes FROM config_mes_muestra")
-    _pp_cfg_map = {}
-    if _pp_cfg is not None and not _pp_cfg.empty:
-        for _r in _pp_cfg.itertuples(index=False):
-            _pp_cfg_map[_r.local] = f"{int(_r.anio):04d}-{int(_r.mes):02d}"
-
-    # Ocurrencias de cada día de semana dentro del rango (para proyectar el perfil)
+    # Ocurrencias de cada día de semana dentro del rango a PROYECTAR
     _pp_dow_count = {}
     _pp_d = _pp_ini
     while _pp_d <= _pp_fin:
@@ -25785,12 +25787,12 @@ elif modulo.startswith("🏭 Proyecto Producción"):
 
     _pp_matriz, _pp_det_cat, _pp_det_dia, _pp_sincfg = [], {}, {}, []
     for _loc in _PP_LOCALES:
-        _mes = _pp_cfg_map.get(_loc)
-        if not _mes:
+        # Perfil por día de semana desde el RANGO DE MUESTRA, con el criterio elegido
+        _perfil = _pp_perfil_dow(_pp_m_ini, _pp_m_fin, _loc, criterio=_pp_crit,
+                                 excluir_cp=not _pp_incl, solo_skus=set(_SKR_SKU_CAT))
+        if not _perfil:
             _pp_sincfg.append(_loc)
             continue
-        _perfil = _pp_perfil_dow(_mes, _loc, criterio=_pp_crit,
-                                 excluir_cp=not _pp_incl, solo_skus=set(_SKR_SKU_CAT))
         # Unidades por categoría en todo el período = perfil(dow) × nº de ese dow en el rango
         _unid_cat = _pp_dd(float)
         for _dow, _cnt in _pp_dow_count.items():
@@ -25823,8 +25825,8 @@ elif modulo.startswith("🏭 Proyecto Producción"):
         _pp_matriz.append(_fila)
 
     if _pp_sincfg:
-        st.warning("Locales sin **mes de muestra** configurado (no se estiman): "
-                   + ", ".join(_pp_sincfg) + ". Configúralos en 🎯 Config Producción.")
+        st.warning("Locales sin ventas en el **rango de muestra** (no se estiman): "
+                   + ", ".join(_pp_sincfg) + ". Amplía el rango de muestra o revisa que tengan datos.")
 
     if not _pp_matriz:
         st.info("No hay locales con datos para estimar en este período.")
@@ -25847,7 +25849,8 @@ elif modulo.startswith("🏭 Proyecto Producción"):
             "<div style=\"font-family:'DM Serif Display',serif;font-size:1.5rem;color:" + _col + ";"
             "line-height:1.15\">" + f"{_val:,.1f} "
             "<span style=\"font-size:0.8rem;color:#ffffff\">kg</span></div></div>")
-    st.markdown(f"**Período:** {_pp_ini.strftime('%d-%m-%Y')} al {_pp_fin.strftime('%d-%m-%Y')} "
+    st.markdown(f"**Muestra:** {_pp_m_ini.strftime('%d-%m-%Y')} al {_pp_m_fin.strftime('%d-%m-%Y')} · "
+                f"**Proyección:** {_pp_ini.strftime('%d-%m-%Y')} al {_pp_fin.strftime('%d-%m-%Y')} "
                 f"({_pp_dias} días) · **Criterio:** {_pp_crit_lbl}")
     st.markdown("<div style=\"display:flex;gap:10px;flex-wrap:wrap;margin:6px 0 16px 0\">"
                 + "".join(_pp_cards) + "</div>", unsafe_allow_html=True)
