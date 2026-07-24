@@ -1086,6 +1086,25 @@ def run_query(sql, params=None):
         return pd.DataFrame()
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _wlg_universo_ventas(solo_salon: bool):
+    """Universo de garzones (por local) desde ventas. Cacheado: cambia poco y es
+    una consulta pesada; evita re-consultar en cada interacción del módulo."""
+    _filtro = "AND origen IS NULL" if solo_salon else ""
+    return run_query(f"""
+        SELECT local,
+               garzon,
+               COUNT(*)         AS registros,
+               MAX(fecha_venta) AS ultima_venta
+        FROM ventas
+        WHERE garzon IS NOT NULL
+          AND btrim(garzon) <> ''
+          {_filtro}
+        GROUP BY local, garzon
+        ORDER BY local, garzon
+    """)
+
+
 # ============================================================
 # Helper: máximos por día de semana (Control de Producción)
 # Reutilizable por el módulo Stock Cierre / Producción sugerida
@@ -4880,7 +4899,7 @@ def _cr_conclusion_local(sub, periodos, modo, cp_red, caso):
     return " ".join(partes)
 
 
-def generar_pdf_colaciones_empresa(comp, modo, fi, ff, df_pers_dia=None):
+def generar_pdf_colaciones_empresa(comp, modo, fi, ff, df_pers_dia=None, dias_sin_col=None):
     R = _cr_pdf_base()
     mm = R["mm"]; pal = R["pal"]; PS = R["ParagraphStyle"]
     TA_LEFT, TA_CENTER, TA_JUSTIFY = R["TA_LEFT"], R["TA_CENTER"], R["TA_JUSTIFY"]
@@ -4938,6 +4957,41 @@ def generar_pdf_colaciones_empresa(comp, modo, fi, ff, df_pers_dia=None):
     for txt in _cr_resumen_ejecutivo(comp, red, periodos, modo, cp_red):
         story += [Paragraph(txt, s(9, pal["CM"], align=TA_JUSTIFY)), Spacer(1, 1.5*mm)]
     story += [Spacer(1, 3*mm)]
+
+    # ── Datos críticos (bloque compacto): peores/mejores, bandas y faltantes ──
+    _dc = comp[comp["periodo"] == ult].copy()
+    _dc_val = (_dc[_dc["col_x_turno"].notna() & (_dc["col_x_turno"] > 0)]
+               .sort_values("col_x_turno", ascending=False))
+    _dc_sin = _dc[_dc["colaciones"].fillna(0) == 0]["local"].astype(str).tolist()
+    _dc_lineas = []
+    if not _dc_val.empty:
+        _peor = _dc_val.head(2)
+        _mejor = _dc_val.tail(2).iloc[::-1]
+        _peor_txt = ", ".join(f"{r.local} ({r.col_x_turno:.2f})" for r in _peor.itertuples())
+        _mejor_txt = ", ".join(f"{r.local} ({r.col_x_turno:.2f})" for r in _mejor.itertuples())
+        _n_rojo = int((_dc_val["col_x_turno"] > _CR_EMP_AMBAR).sum())
+        _n_amar = int(((_dc_val["col_x_turno"] > _CR_EMP_VERDE) &
+                       (_dc_val["col_x_turno"] <= _CR_EMP_AMBAR)).sum())
+        _dc_lineas.append(f"<b>Más crítico (mayor col/turno):</b> {_peor_txt}")
+        _dc_lineas.append(f"<b>Mejor (menor col/turno):</b> {_mejor_txt}")
+        _dc_lineas.append(
+            f"<b>En rojo (&gt;{_CR_EMP_AMBAR:.1f}):</b> {_n_rojo}"
+            f" &nbsp;·&nbsp; <b>en amarillo ({_CR_EMP_VERDE:.1f}–{_CR_EMP_AMBAR:.1f}):</b> {_n_amar}")
+    _dc_lineas.append(
+        "<b>Sin colaciones registradas:</b> "
+        + (", ".join(_dc_sin) if _dc_sin else "ninguno"))
+    # Señal simple: días trabajados en que un local no registró colación
+    if dias_sin_col:
+        _sc_parts = []
+        for _lc in sorted(dias_sin_col):
+            _ds = dias_sin_col[_lc]
+            _shown = ", ".join(_ds[:8]) + (f" +{len(_ds) - 8}" if len(_ds) > 8 else "")
+            _sc_parts.append(f"{_lc} ({_shown})")
+        _dc_lineas.append("<b>Días trabajados sin colación:</b> " + "; ".join(_sc_parts))
+    else:
+        _dc_lineas.append("<b>Días trabajados sin colación:</b> ninguno")
+    story += [Paragraph("DATOS CRÍTICOS", s(11, pal["CG"], bold=True)), Spacer(1, 2*mm),
+              Paragraph("<br/>".join(_dc_lineas), s(9, pal["CM"])), Spacer(1, 3*mm)]
 
     # Gráfico barras ranking último período
     bar = _cr_chart_barras(comp, ult, pal)
@@ -12067,20 +12121,7 @@ if modulo.startswith("📦"):
                 "Solo salón (origen IS NULL)", value=False, key="wlg_solo_salon",
                 help="Oculta garzones que solo aparecen en ventas con origen (delivery).",
             )
-        _wlg_filtro_salon = "AND origen IS NULL" if _wlg_solo_salon else ""
-
-        _wlg_raw = run_query(f"""
-            SELECT local,
-                   garzon,
-                   COUNT(*)         AS registros,
-                   MAX(fecha_venta) AS ultima_venta
-            FROM ventas
-            WHERE garzon IS NOT NULL
-              AND btrim(garzon) <> ''
-              {_wlg_filtro_salon}
-            GROUP BY local, garzon
-            ORDER BY local, garzon
-        """)
+        _wlg_raw = _wlg_universo_ventas(_wlg_solo_salon)
 
         if _wlg_raw is None or _wlg_raw.empty:
             st.warning("No se encontraron garzones en la tabla de ventas con los filtros actuales.")
@@ -12144,57 +12185,54 @@ if modulo.startswith("📦"):
 
             if _wlg_data.empty:
                 st.info("Ningún garzón coincide con la búsqueda.")
+                _wlg_guardar = False
             else:
-                # ── Un expander por local ──
-                for _loc in sorted(_wlg_data["local"].unique().tolist()):
-                    _sub = _wlg_data[_wlg_data["local"] == _loc]
-                    _loc_names = _sub["garzon"].tolist()
-                    _loc_on = sum(1 for _g in _loc_names if _wlg_state(_g))
-                    with st.expander(f"🏢  {_loc}", expanded=bool(_wlg_buscar)):
-                        st.markdown(
-                            f"<span class='wlg-pill on'>{_loc_on} en whitelist</span>&nbsp;"
-                            f"<span class='wlg-pill off'>{len(_loc_names)} garzones</span>",
-                            unsafe_allow_html=True,
-                        )
-                        st.write("")
-                        _cols = st.columns(3)
-                        for _idx, (_, _row) in enumerate(_sub.iterrows()):
-                            _g = _row["garzon"]
-                            _reg = int(_row["registros"]) if pd.notna(_row["registros"]) else 0
-                            with _cols[_idx % 3]:
-                                st.checkbox(
-                                    f"{_g}",
-                                    value=_wlg_orig.get(_g, False),
-                                    key=f"wlg_chk::{_g}",
-                                    help=f"{_reg} venta(s) registradas",
-                                )
-
-            st.divider()
-
-            _b1, _b2 = st.columns([1, 2])
-            with _b1:
-                _wlg_guardar = st.button("💾 Guardar marcadores", type="primary", key="wlg_save")
-            with _b2:
-                if _wlg_cambios:
-                    st.markdown(
-                        f"<div class='wlg-hint'>✏️ {len(_wlg_cambios)} cambio(s) sin guardar.</div>",
-                        unsafe_allow_html=True,
-                    )
-                else:
-                    st.markdown("<div class='wlg-hint'>Sin cambios pendientes.</div>", unsafe_allow_html=True)
+                # Formulario: marcar/desmarcar NO recarga la página; solo "Guardar" envía.
+                with st.form("wlg_form", clear_on_submit=False):
+                    for _loc in sorted(_wlg_data["local"].unique().tolist()):
+                        _sub = _wlg_data[_wlg_data["local"] == _loc]
+                        _loc_names = _sub["garzon"].tolist()
+                        _loc_on = sum(1 for _g in _loc_names if _wlg_state(_g))
+                        with st.expander(f"🏢  {_loc}", expanded=bool(_wlg_buscar)):
+                            st.markdown(
+                                f"<span class='wlg-pill on'>{_loc_on} en whitelist</span>&nbsp;"
+                                f"<span class='wlg-pill off'>{len(_loc_names)} garzones</span>",
+                                unsafe_allow_html=True,
+                            )
+                            st.write("")
+                            _cols = st.columns(3)
+                            for _idx, (_, _row) in enumerate(_sub.iterrows()):
+                                _g = _row["garzon"]
+                                _reg = int(_row["registros"]) if pd.notna(_row["registros"]) else 0
+                                with _cols[_idx % 3]:
+                                    st.checkbox(
+                                        f"{_g}",
+                                        value=_wlg_orig.get(_g, False),
+                                        key=f"wlg_chk::{_g}",
+                                        help=f"{_reg} venta(s) registradas",
+                                    )
+                    st.divider()
+                    _wlg_guardar = st.form_submit_button("💾 Guardar marcadores", type="primary")
 
             if _wlg_guardar:
+                # El diff se calcula al enviar (los checkboxes ya no recargan en cada clic).
+                _wlg_cambios = {
+                    _g: _wlg_state(_g) for _g in _wlg_univ["garzon"]
+                    if _wlg_state(_g) != bool(_wlg_orig.get(_g, False))
+                }
                 if not _wlg_cambios:
                     st.info("No hay cambios que guardar.")
                 else:
                     _eng_wlg = get_engine()
-                    _ok_wlg, _err_wlg = 0, []
                     if _eng_wlg is None:
                         st.error("Sin conexión a la base de datos.")
                     else:
-                        for _g, _v in _wlg_cambios.items():
-                            try:
-                                with _eng_wlg.begin() as _c_wlg:
+                        _ok_wlg = 0
+                        _err_wlg = None
+                        try:
+                            # Una sola transacción para todos los cambios (antes: una por garzón).
+                            with _eng_wlg.begin() as _c_wlg:
+                                for _g, _v in _wlg_cambios.items():
                                     _res_wlg = _c_wlg.execute(
                                         text("UPDATE garzones_whitelist SET activo = :a WHERE garzon = :g"),
                                         {"a": bool(_v), "g": _g},
@@ -12204,18 +12242,13 @@ if modulo.startswith("📦"):
                                             text("INSERT INTO garzones_whitelist (garzon, activo) VALUES (:g, :a)"),
                                             {"g": _g, "a": bool(_v)},
                                         )
-                                _ok_wlg += 1
-                            except Exception as _e_wlg:
-                                _err_wlg.append(f"{_g}: {_e_wlg}")
-                        if _ok_wlg:
+                                    _ok_wlg += 1
                             st.success(f"✅ {_ok_wlg} garzón(es) actualizado(s) en la whitelist.")
-                        if _err_wlg:
-                            st.error("No se pudieron guardar algunos:\n- " + "\n- ".join(_err_wlg[:8]))
-                            if len(_err_wlg) > 8:
-                                st.caption(f"(+{len(_err_wlg) - 8} más)")
-                        if _ok_wlg:
+                        except Exception as _e_wlg:
+                            _err_wlg = str(_e_wlg)
+                            st.error(f"No se pudieron guardar los cambios: {_err_wlg}")
+                        if _ok_wlg and _err_wlg is None:
                             st.cache_data.clear()
-                        if _ok_wlg and not _err_wlg:
                             st.rerun()
 
 
@@ -12969,6 +13002,69 @@ elif modulo.startswith("📊"):
                             _aliva_a = _vget_exp(_df_exp_aliva_acum, _aloc)
                             _ws_out.cell(_ar, 5).value = round(_aliva_d, 2) if _aliva_d else 0
                             _ws_out.cell(_ar, 7).value = round(_aliva_a, 2) if _aliva_a else 0
+
+                        # ════════ AÑO ANTERIOR (columna AG = 33) ════════
+                        # Mismo mes del año anterior (mes completo).
+                        #  · Locales (Alemán 6-35), totales (37/38/42) y apps (39-41):
+                        #    en vivo desde `ventas` (año -1).
+                        #  · Aliva (45-54): desde el archivo mensual de Aliva provisto
+                        #    (Total Factura de deudores por RUT→local). Actualizar
+                        #    _ALIVA_AY cuando cambie el mes de año anterior evaluado.
+                        _ay_ini = _exp_fi.replace(year=_exp_año - 1)
+                        _ay_fin = _ay_ini.replace(
+                            day=_dias_calendario_mes(_exp_año - 1, _exp_mes))
+                        # Encabezado columna año anterior (secciones Alemán y Aliva)
+                        _ws_out.cell(5, 33).value  = f' {_mes_exp_str} {_exp_año - 1}'
+                        _ws_out.cell(44, 33).value = f' {_mes_exp_str} {_exp_año - 1}'
+
+                        _df_ay = run_query("""
+                            SELECT local, origen, SUM(monto_venta_real) AS venta
+                            FROM ventas WHERE fecha_venta BETWEEN :fi AND :ff
+                              AND local IS NOT NULL
+                            GROUP BY local, origen
+                        """, {'fi': str(_ay_ini), 'ff': str(_ay_fin)})
+
+                        # Alemán por local (salón base, delivery base+1; total base+2 = fórmula del template)
+                        _ay_gt_s = 0.0; _ay_gt_d = 0.0
+                        for _base_r, _loc in _EXP_LOCAL_ROWS.items():
+                            _ay_s = _vget_exp(_df_ay, _loc, 'salon')
+                            _ay_d = _vget_exp(_df_ay, _loc, 'delivery')
+                            _ws_out.cell(_base_r,     33).value = round(_ay_s) if _ay_s else 0
+                            _ws_out.cell(_base_r + 1, 33).value = round(_ay_d) if _ay_d else 0
+                            _ay_gt_s += _ay_s; _ay_gt_d += _ay_d
+
+                        # Totales agrupados (salón 37, delivery 38, general 42)
+                        _ws_out.cell(37, 33).value = round(_ay_gt_s)
+                        _ws_out.cell(38, 33).value = round(_ay_gt_d)
+                        _ws_out.cell(42, 33).value = round(_ay_gt_s) + round(_ay_gt_d)
+
+                        # Apps delivery año anterior (39=Uber, 40=PedidosYa, 41=Rappi)
+                        for _app_row, _fp_list in _APPS.items():
+                            _fp_in = "','".join(_fp_list)
+                            _df_ay_app = run_query(f"""
+                                SELECT SUM(monto_venta_real) AS venta FROM ventas
+                                WHERE fecha_venta BETWEEN :fi AND :ff
+                                  AND forma_pago IN ('{_fp_in}')
+                            """, {'fi': str(_ay_ini), 'ff': str(_ay_fin)})
+                            _ay_app = float(_df_ay_app['venta'].iloc[0]) \
+                                if not _df_ay_app.empty and _df_ay_app['venta'].iloc[0] else 0
+                            _ws_out.cell(_app_row, 33).value = round(_ay_app)
+
+                        # Aliva año anterior (45-54) — Total Factura de deudores del archivo Aliva
+                        _ALIVA_AY = {
+                            'Vitacura': 78367883,          # 76439807-6
+                            'Las Condes': 73986664,        # 77009575-1
+                            'Chicureo': 67909090,          # 77116729-2
+                            'Macul': 61159633,             # 77531748-5
+                            'La Dehesa': 57786393,         # 76450253-1
+                            'La Reina': 59879273,          # 77726513-K
+                            'Quilin': 45016657,            # 77773363-K
+                            'Providencia': 46515543,       # 76376098-7
+                            'Nueva Providencia': 43056829, # 77887201-3
+                            'Los Trapenses': 54243824,     # 77847982-6
+                        }
+                        for _ar, _aloc in _ALIVA_ROWS.items():
+                            _ws_out.cell(_ar, 33).value = _ALIVA_AY.get(_aloc, 0)
 
 
                         # ── GENERAR GRÁFICOS CON MATPLOTLIB ─────────────────
@@ -15125,6 +15221,23 @@ elif modulo.startswith("📊"):
                 _cr_pdia, _cr_modo
             )
 
+            # Días trabajados (turnos>0) en que un local NO registró colación → señal simple
+            _cr_sincol = {}
+            try:
+                _tur_d = _cr_tur[_cr_tur["turnos"] > 0][["local", "fecha"]].drop_duplicates()
+                _col_ok = set()
+                if _cr_col is not None and not _cr_col.empty:
+                    _cc = _cr_col[_cr_col["colaciones"] > 0]
+                    _col_ok = set(zip(_cc["local"].astype(str), _cc["fecha"].astype(str)))
+                for _loc_sc, _grp_sc in _tur_d.groupby("local"):
+                    _falt = [_f for _f in _grp_sc["fecha"].astype(str).tolist()
+                             if (str(_loc_sc), _f) not in _col_ok]
+                    if _falt:
+                        _fd = sorted(pd.to_datetime(_f) for _f in _falt)
+                        _cr_sincol[str(_loc_sc)] = [d.strftime("%d-%m") for d in _fd]
+            except Exception:
+                _cr_sincol = {}
+
             _cr_pb1, _cr_pb2, _cr_pb3 = st.columns(3)
             with _cr_pb1:
                 if _cr_loc_sel == "Todos":
@@ -15180,7 +15293,8 @@ elif modulo.startswith("📊"):
             with _cr_pb2:
                 try:
                     _pdf_emp = generar_pdf_colaciones_empresa(
-                        _cr_comp, _cr_modo, _cr_meta["fi"], _cr_meta["ff"], _cr_pdia)
+                        _cr_comp, _cr_modo, _cr_meta["fi"], _cr_meta["ff"], _cr_pdia,
+                        dias_sin_col=_cr_sincol)
                     st.download_button(
                         "🏢 PDF resumen empresa",
                         _pdf_emp,
