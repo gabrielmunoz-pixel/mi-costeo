@@ -4927,9 +4927,6 @@ def generar_pdf_colaciones_empresa(comp, modo, fi, ff, df_pers_dia=None, dias_si
     hdr.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),
         ('LINEBELOW',(0,0),(-1,0),1.5,pal["CG"]), ('BOTTOMPADDING',(0,0),(-1,-1),5)]))
     story += [hdr, Spacer(1, 4*mm)]
-    story += _cr_metodologia_flow(R, modo, fi, ff, umbral=_CR_EMP_VERDE, bandas=(_CR_EMP_VERDE, _CR_EMP_AMBAR))
-    story += [Spacer(1, 3*mm), HRFlowable(width="100%", color=pal["CBo"], thickness=0.5),
-              Spacer(1, 3*mm)]
 
     periodos = sorted(comp["periodo"].unique())
     ult = periodos[-1]
@@ -4998,6 +4995,11 @@ def generar_pdf_colaciones_empresa(comp, modo, fi, ff, df_pers_dia=None, dias_si
     if bar:
         story += [Paragraph(f"RANKING DE LOCALES — {ult}", s(11, pal["CG"], bold=True)),
                   Spacer(1, 2*mm), _cr_img_flow(bar, R, 165), Spacer(1, 4*mm)]
+
+    # Metodología al final (referencia; lo prioritario es el resumen ejecutivo)
+    story += [Spacer(1, 2*mm), HRFlowable(width="100%", color=pal["CBo"], thickness=0.5),
+              Spacer(1, 3*mm)]
+    story += _cr_metodologia_flow(R, modo, fi, ff, umbral=_CR_EMP_VERDE, bandas=(_CR_EMP_VERDE, _CR_EMP_AMBAR))
 
     # (Gráfico de Evolución, Tabla Consolidado y Conclusiones removidos del informe
     #  empresa para dejarlo en una sola página; el ranking con semáforo es el foco.)
