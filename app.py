@@ -5988,10 +5988,10 @@ def _sg_orden_colores(df_acum, dias_periodo, local=None):
         })
     if not g:
         return [], None
-    rvp = _sg_rank_dense_desc([x["vdp"] for x in g])
-    r2 = _sg_rank_dense_desc([x["p_total"] for x in g])
-    comp = [(rvp[i] + r2[i] - g[i]["venta"] / 1e10) / 2 for i in range(len(g))]
-    orden = sorted(range(len(g)), key=lambda i: comp[i])
+    # Clasificación: 1er lugar = mayor % total (adicionales) — criterio universal.
+    # Desempate: mayor venta diaria promedio; y como último criterio, mayor venta total.
+    orden = sorted(range(len(g)),
+                   key=lambda i: (-g[i]["p_total"], -g[i]["vdp"], -g[i]["venta"]))
     filas = [g[i] for i in orden]
     nv, na, nr = _sg_bandas_local(local, len(filas))
     colores = ["verde"] * nv + ["amar"] * na + ["rojo"] * nr
