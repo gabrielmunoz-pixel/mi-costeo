@@ -4265,6 +4265,116 @@ _ALIVA_RUT_LOCAL = {
     '77895019-7': 'La Casona',
 }
 
+
+# ============================================================
+# INFORME LA CASONA — resumen de ventas del día por categoría
+# ⬇️ EDITAR SOLO AQUÍ para agregar/quitar SKU. Se cuentan EXACTAMENTE
+#    estos códigos (una opción con otro SKU, ej. "sin azúcar", queda fuera).
+# ============================================================
+_LC_CAT_SKUS = {
+    "Bebidas": ["BEB-001", "BEB-002", "BEB-003", "BEB-004", "BEB-005", "BEB-006",
+                "BEB-007", "BEB-009", "BEB-010", "BEB-011", "BEB-012", "BEB-013",
+                "BEB-014", "BEB-015", "BEB-016", "BEB-017", "BEB-019"],
+    "Cafetería": ["CAF-001", "CAF-002", "CAF-003", "CAF-004",
+                  "CAF-005", "CAF-006", "CAF-007", "CAF-008"],
+    "Cervezas": ["CER-004", "CER-006", "CER-009", "CER-013", "CER-019", "CER-029"],
+    "Jugos Naturales": ["JUG-001", "JUG-002", "JUG-003", "JUG-005", "JUG-006"],
+    "Limonadas": ["LIM-003", "LIM-006", "LIM-007"],
+    "Postres": ["POS-001", "POS-002", "POS-003", "POS-004", "POS-005", "POS-006",
+                "POS-007", "POS-008", "POS-010", "POS-011", "POS-013", "POS-014",
+                "POS-016", "POS-018", "POS-019", "POS-020", "POS-021", "POS-022", "POS-023"],
+    "Tragos Sin Alcohol": ["TSA-001", "TSA-002", "TSA-003", "TSA-004", "TSA-005"],
+}
+
+
+def _lc_generar_pdf_bytes(fecha):
+    """PDF resumen de ventas del día de La Casona por categoría (monto + cantidad).
+    Cuenta EXACTAMENTE los SKU de _LC_CAT_SKUS (todos los orígenes del día).
+    Devuelve bytes del PDF."""
+    import io as _lc_io
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import mm as _mm
+    from reportlab.lib import colors as _rc
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.enums import TA_LEFT, TA_CENTER
+
+    _sku2cat = {}
+    for _cat, _skus in _LC_CAT_SKUS.items():
+        for _s in _skus:
+            _sku2cat[_s] = _cat
+    _todos = list(_sku2cat.keys())
+
+    _df = run_query("""
+        SELECT sku_producto,
+               SUM(monto_venta_real) AS monto,
+               SUM(cantidad_vendida) AS cantidad
+        FROM ventas
+        WHERE UPPER(TRIM(local)) = 'LA CASONA'
+          AND fecha_venta = :f
+          AND sku_producto = ANY(:skus)
+        GROUP BY sku_producto
+    """, {"f": str(fecha), "skus": _todos})
+
+    _acum = {c: {"cant": 0.0, "monto": 0.0} for c in _LC_CAT_SKUS}
+    if _df is not None and not _df.empty:
+        for _r in _df.itertuples(index=False):
+            _cat = _sku2cat.get(_r.sku_producto)
+            if _cat:
+                _acum[_cat]["cant"]  += float(_r.cantidad or 0)
+                _acum[_cat]["monto"] += float(_r.monto or 0)
+
+    def _clp(v):  return "$" + f"{int(round(v or 0)):,}".replace(",", ".")
+    def _qint(v): return f"{int(round(v or 0)):,}".replace(",", ".")
+
+    _GOLD = _rc.HexColor("#b8862b"); _DARK = _rc.HexColor("#1a1a1a")
+    _GRAY = _rc.HexColor("#555555"); _ROW = _rc.HexColor("#f4efe6")
+    _buf = _lc_io.BytesIO()
+    _doc = SimpleDocTemplate(_buf, pagesize=A4, leftMargin=18*_mm, rightMargin=18*_mm,
+                             topMargin=16*_mm, bottomMargin=16*_mm)
+    _story = [
+        Paragraph("LA CASONA", ParagraphStyle('t', fontSize=20, textColor=_GOLD,
+                  fontName='Helvetica-Bold', alignment=TA_CENTER)),
+        Paragraph(f"Resumen de ventas del día · {fecha.strftime('%d-%m-%Y')}",
+                  ParagraphStyle('s', fontSize=10, textColor=_GRAY, alignment=TA_CENTER, spaceBefore=2)),
+        Spacer(1, 8*_mm),
+    ]
+    _rows = [["Categoría", "Cantidad", "Monto"]]
+    _tot_c = 0.0; _tot_m = 0.0
+    for _cat in _LC_CAT_SKUS:
+        _c = _acum[_cat]["cant"]; _m = _acum[_cat]["monto"]
+        _tot_c += _c; _tot_m += _m
+        _rows.append([_cat, _qint(_c), _clp(_m)])
+    _rows.append(["TOTAL", _qint(_tot_c), _clp(_tot_m)])
+
+    _t = Table(_rows, colWidths=[80*_mm, 40*_mm, 54*_mm])
+    _t.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), _GOLD),
+        ('TEXTCOLOR', (0, 0), (-1, 0), _rc.white),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 10.5),
+        ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
+        ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+        ('ALIGN', (1, 0), (-1, 0), 'CENTER'),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -2), [_rc.white, _ROW]),
+        ('TEXTCOLOR', (0, 1), (-1, -1), _DARK),
+        ('GRID', (0, 0), (-1, -1), 0.4, _rc.HexColor("#d9cdb5")),
+        ('TOPPADDING', (0, 0), (-1, -1), 6), ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ('LEFTPADDING', (0, 0), (-1, -1), 8), ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+        ('BACKGROUND', (0, -1), (-1, -1), _DARK),
+        ('TEXTCOLOR', (0, -1), (-1, -1), _rc.white),
+        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+    ]))
+    _story.append(_t)
+    _story.append(Spacer(1, 6*_mm))
+    _story.append(Paragraph(
+        "Considera solo los códigos definidos para el control de La Casona. "
+        "Montos en venta real; cantidades en unidades vendidas del día.",
+        ParagraphStyle('n', fontSize=7.5, textColor=_GRAY, alignment=TA_LEFT)))
+    _doc.build(_story)
+    _buf.seek(0)
+    return _buf.getvalue()
+
 # ============================================================
 # PDF COLACIONES RRHH — informe por local y resumen empresa
 # Comparación adaptativa: ≥2 meses → mes a mes; si no → semana a semana.
@@ -13223,6 +13333,14 @@ elif modulo.startswith("📊"):
 
                         st.session_state['vd_excel_data']    = _buf_exp.getvalue()
                         st.session_state['vd_excel_filename'] = f"Informe_Ventas_{_exp_fecha.strftime('%d%m%Y')}.xlsx"
+
+                        # Informe La Casona (PDF) en paralelo
+                        try:
+                            st.session_state['lc_pdf_data'] = _lc_generar_pdf_bytes(_exp_fecha)
+                            st.session_state['lc_pdf_filename'] = f"Informe_LaCasona_{_exp_fecha.strftime('%d%m%Y')}.pdf"
+                        except Exception as _e_lc:
+                            st.session_state['lc_pdf_data'] = None
+                            st.warning(f"No se pudo generar el informe La Casona: {_e_lc}")
                         st.rerun()
                     except Exception as _e_exp:
                         st.error(f"Error generando Excel: {_e_exp}")
@@ -13238,6 +13356,14 @@ elif modulo.startswith("📊"):
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key="dl_informe_excel"
                 )
+                if st.session_state.get('lc_pdf_data') is not None:
+                    st.download_button(
+                        label=f"⬇️ {st.session_state.get('lc_pdf_filename', 'Informe_LaCasona.pdf')}",
+                        data=st.session_state['lc_pdf_data'],
+                        file_name=st.session_state.get('lc_pdf_filename', 'Informe_LaCasona.pdf'),
+                        mime="application/pdf",
+                        key="dl_lacasona_pdf"
+                    )
 
 
     elif informe_sel == "Garzones":
