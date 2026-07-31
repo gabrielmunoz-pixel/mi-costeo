@@ -4288,10 +4288,12 @@ _LC_CAT_SKUS = {
 
 
 def _lc_generar_pdf_bytes(fecha):
-    """PDF resumen de ventas del día de La Casona por categoría (monto + cantidad).
-    Cuenta EXACTAMENTE los SKU de _LC_CAT_SKUS (todos los orígenes del día).
-    Devuelve bytes del PDF."""
+    """PDF de La Casona: resumen del día por categoría (cantidad, promedio días
+    anteriores, variación y monto) + corrida diaria completa. Cuenta EXACTAMENTE
+    los SKU de _LC_CAT_SKUS."""
     import io as _lc_io
+    import datetime as _lc_dt
+    import pandas as _lc_pd
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.units import mm as _mm
     from reportlab.lib import colors as _rc
@@ -4304,73 +4306,145 @@ def _lc_generar_pdf_bytes(fecha):
         for _s in _skus:
             _sku2cat[_s] = _cat
     _todos = list(_sku2cat.keys())
+    _cats = list(_LC_CAT_SKUS.keys())
 
+    _ini = fecha - _lc_dt.timedelta(days=30)
     _df = run_query("""
-        SELECT sku_producto,
+        SELECT fecha_venta, sku_producto,
                SUM(monto_venta_real) AS monto,
                SUM(cantidad_vendida) AS cantidad
         FROM ventas
         WHERE UPPER(TRIM(local)) = 'LA CASONA'
-          AND fecha_venta = :f
+          AND fecha_venta BETWEEN :i AND :f
           AND sku_producto = ANY(:skus)
-        GROUP BY sku_producto
-    """, {"f": str(fecha), "skus": _todos})
+        GROUP BY fecha_venta, sku_producto
+    """, {"i": str(_ini), "f": str(fecha), "skus": _todos})
 
-    _acum = {c: {"cant": 0.0, "monto": 0.0} for c in _LC_CAT_SKUS}
+    # (fecha, categoria) -> {cant, monto}
+    _por = {}
+    _dias = set()
     if _df is not None and not _df.empty:
         for _r in _df.itertuples(index=False):
             _cat = _sku2cat.get(_r.sku_producto)
-            if _cat:
-                _acum[_cat]["cant"]  += float(_r.cantidad or 0)
-                _acum[_cat]["monto"] += float(_r.monto or 0)
+            if not _cat:
+                continue
+            _d = _lc_pd.to_datetime(_r.fecha_venta).date()
+            _dias.add(_d)
+            _k = (_d, _cat)
+            _acc = _por.setdefault(_k, {"cant": 0.0, "monto": 0.0})
+            _acc["cant"] += float(_r.cantidad or 0)
+            _acc["monto"] += float(_r.monto or 0)
+
+    _dias = sorted(_dias)
+    _prev = [d for d in _dias if d < fecha]
+    _n_prev = len(_prev)
 
     def _clp(v):  return "$" + f"{int(round(v or 0)):,}".replace(",", ".")
     def _qint(v): return f"{int(round(v or 0)):,}".replace(",", ".")
 
     _GOLD = _rc.HexColor("#b8862b"); _DARK = _rc.HexColor("#1a1a1a")
     _GRAY = _rc.HexColor("#555555"); _ROW = _rc.HexColor("#f4efe6")
+    _GREENv = _rc.HexColor("#2e7d32"); _REDv = _rc.HexColor("#c62828")
+
     _buf = _lc_io.BytesIO()
     _doc = SimpleDocTemplate(_buf, pagesize=A4, leftMargin=18*_mm, rightMargin=18*_mm,
                              topMargin=16*_mm, bottomMargin=16*_mm)
     _story = [
-        Paragraph("LA CASONA", ParagraphStyle('t', fontSize=20, textColor=_GOLD,
+        Paragraph("LA CASONA", ParagraphStyle('t', fontSize=22, leading=26, textColor=_GOLD,
                   fontName='Helvetica-Bold', alignment=TA_CENTER)),
-        Paragraph(f"Resumen de ventas del día · {fecha.strftime('%d-%m-%Y')}",
-                  ParagraphStyle('s', fontSize=10, textColor=_GRAY, alignment=TA_CENTER, spaceBefore=2)),
-        Spacer(1, 8*_mm),
+        Spacer(1, 3*_mm),
+        Paragraph(f"Resumen de ventas del d\u00eda \u00b7 {fecha.strftime('%d-%m-%Y')}",
+                  ParagraphStyle('s', fontSize=10.5, leading=13, textColor=_GRAY, alignment=TA_CENTER)),
+        Spacer(1, 9*_mm),
     ]
-    _rows = [["Categoría", "Cantidad", "Monto"]]
-    _tot_c = 0.0; _tot_m = 0.0
-    for _cat in _LC_CAT_SKUS:
-        _c = _acum[_cat]["cant"]; _m = _acum[_cat]["monto"]
-        _tot_c += _c; _tot_m += _m
-        _rows.append([_cat, _qint(_c), _clp(_m)])
-    _rows.append(["TOTAL", _qint(_tot_c), _clp(_tot_m)])
 
-    _t = Table(_rows, colWidths=[80*_mm, 40*_mm, 54*_mm])
-    _t.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), _GOLD),
-        ('TEXTCOLOR', (0, 0), (-1, 0), _rc.white),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, -1), 10.5),
-        ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
-        ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+    # ── Tabla 1: resumen del día con comparativa ──
+    _story.append(Paragraph("Resumen del d\u00eda por categor\u00eda",
+                  ParagraphStyle('h', fontSize=11, leading=14, textColor=_DARK,
+                                 fontName='Helvetica-Bold', spaceAfter=3)))
+    _rows = [["Categor\u00eda", "Cant. hoy", "Prom. d\u00edas ant.", "Var.", "Monto hoy"]]
+    _var_colors = []   # (fila_idx, color)
+    _tc = _tm = 0.0
+    for _i, _cat in enumerate(_cats):
+        _hoy = _por.get((fecha, _cat), {"cant": 0.0, "monto": 0.0})
+        _ch = _hoy["cant"]; _mh = _hoy["monto"]
+        _tc += _ch; _tm += _mh
+        _sum_prev = sum(_por.get((d, _cat), {"cant": 0.0})["cant"] for d in _prev)
+        _prom = (_sum_prev / _n_prev) if _n_prev else 0.0
+        if _n_prev == 0:
+            _var_txt = "\u2014"
+        elif _prom == 0:
+            _var_txt = "nuevo" if _ch > 0 else "\u2014"
+        else:
+            _pct = (_ch - _prom) / _prom * 100.0
+            _var_txt = f"{'+' if _pct >= 0 else ''}{_pct:.0f}%"
+            _var_colors.append((_i + 1, _GREENv if _pct >= 0 else _REDv))
+        _rows.append([_cat, _qint(_ch), (f"{_prom:.1f}" if _n_prev else "\u2014"),
+                      _var_txt, _clp(_mh)])
+    # promedio total de días anteriores
+    _prom_tot = (sum(_por.get((d, c), {"cant": 0.0})["cant"] for d in _prev for c in _cats) / _n_prev) if _n_prev else 0.0
+    _rows.append(["TOTAL", _qint(_tc), (f"{_prom_tot:.1f}" if _n_prev else "\u2014"), "", _clp(_tm)])
+
+    _t1 = Table(_rows, colWidths=[52*_mm, 26*_mm, 34*_mm, 22*_mm, 40*_mm])
+    _st1 = [
+        ('BACKGROUND', (0, 0), (-1, 0), _GOLD), ('TEXTCOLOR', (0, 0), (-1, 0), _rc.white),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'), ('FONTSIZE', (0, 0), (-1, -1), 10),
+        ('ALIGN', (1, 0), (-1, -1), 'RIGHT'), ('ALIGN', (0, 0), (0, -1), 'LEFT'),
         ('ALIGN', (1, 0), (-1, 0), 'CENTER'),
         ('ROWBACKGROUNDS', (0, 1), (-1, -2), [_rc.white, _ROW]),
         ('TEXTCOLOR', (0, 1), (-1, -1), _DARK),
         ('GRID', (0, 0), (-1, -1), 0.4, _rc.HexColor("#d9cdb5")),
         ('TOPPADDING', (0, 0), (-1, -1), 6), ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
         ('LEFTPADDING', (0, 0), (-1, -1), 8), ('RIGHTPADDING', (0, 0), (-1, -1), 8),
-        ('BACKGROUND', (0, -1), (-1, -1), _DARK),
-        ('TEXTCOLOR', (0, -1), (-1, -1), _rc.white),
+        ('BACKGROUND', (0, -1), (-1, -1), _DARK), ('TEXTCOLOR', (0, -1), (-1, -1), _rc.white),
         ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+    ]
+    for _ri, _col in _var_colors:
+        _st1.append(('TEXTCOLOR', (3, _ri), (3, _ri), _col))
+    _t1.setStyle(TableStyle(_st1))
+    _story.append(_t1)
+    _story.append(Spacer(1, 10*_mm))
+
+    # ── Tabla 2: corrida diaria completa (cantidades por categoría) ──
+    _story.append(Paragraph(f"Corrida diaria \u00b7 {len(_dias)} d\u00eda(s) con venta",
+                  ParagraphStyle('h2', fontSize=11, leading=14, textColor=_DARK,
+                                 fontName='Helvetica-Bold', spaceAfter=3)))
+    _abbr = {"Bebidas": "Beb", "Cafeter\u00eda": "Caf", "Cervezas": "Cerv",
+             "Jugos Naturales": "Jugos", "Limonadas": "Lim", "Postres": "Post",
+             "Tragos Sin Alcohol": "T.S/A"}
+    _head2 = ["Fecha"] + [_abbr.get(c, c) for c in _cats] + ["Total", "Monto"]
+    _rows2 = [_head2]
+    for _d in _dias:
+        _fila = [_d.strftime('%d-%m')]
+        _tot_d = 0.0; _tot_m = 0.0
+        for _cat in _cats:
+            _cc = _por.get((_d, _cat), {"cant": 0.0, "monto": 0.0})
+            _fila.append(_qint(_cc["cant"]))
+            _tot_d += _cc["cant"]; _tot_m += _cc["monto"]
+        _fila.append(_qint(_tot_d)); _fila.append(_clp(_tot_m))
+        _rows2.append(_fila)
+    if len(_dias) == 0:
+        _rows2.append(["\u2014"] + ["0"] * len(_cats) + ["0", "$0"])
+
+    _cw2 = [18*_mm] + [16*_mm]*len(_cats) + [18*_mm, 26*_mm]
+    _t2 = Table(_rows2, colWidths=_cw2)
+    _t2.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), _GOLD), ('TEXTCOLOR', (0, 0), (-1, 0), _rc.white),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'), ('FONTSIZE', (0, 0), (-1, -1), 8),
+        ('ALIGN', (1, 0), (-1, -1), 'RIGHT'), ('ALIGN', (0, 0), (0, -1), 'CENTER'),
+        ('ALIGN', (1, 0), (-1, 0), 'CENTER'),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [_rc.white, _ROW]),
+        ('TEXTCOLOR', (0, 1), (-1, -1), _DARK),
+        ('GRID', (0, 0), (-1, -1), 0.4, _rc.HexColor("#d9cdb5")),
+        ('TOPPADDING', (0, 0), (-1, -1), 4), ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
     ]))
-    _story.append(_t)
+    _story.append(_t2)
     _story.append(Spacer(1, 6*_mm))
     _story.append(Paragraph(
-        "Considera solo los códigos definidos para el control de La Casona. "
-        "Montos en venta real; cantidades en unidades vendidas del día.",
-        ParagraphStyle('n', fontSize=7.5, textColor=_GRAY, alignment=TA_LEFT)))
+        "Considera solo los c\u00f3digos definidos para el control de La Casona. "
+        "Montos en venta real; cantidades en unidades. Promedio y variaci\u00f3n calculados "
+        "sobre los d\u00edas anteriores con venta.",
+        ParagraphStyle('n', fontSize=7.5, leading=10, textColor=_GRAY, alignment=TA_LEFT)))
     _doc.build(_story)
     _buf.seek(0)
     return _buf.getvalue()
