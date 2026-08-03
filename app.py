@@ -13195,28 +13195,58 @@ elif modulo.startswith("📊"):
                         #   MAY 2026 -> Y(25) monto, Z(26) %
                         #   JUN 2026 -> AA(27) monto, AB(28) %
                         #   JUL 2026 -> AC(29) monto, AD(30) %
-                        # Montos de los mismos queries mensuales (Alemán desde `ventas`,
-                        # Aliva desde `ventas_aliva`), mes calendario completo. Los %
-                        # replican el criterio del histórico: en Alemán = tipo/total del
-                        # local (fila base+2); en Aliva = monto/total Alemán del local.
-                        # No se tocan E..X ni AE en adelante ni fórmula alguna existente.
+                        # Los % replican el criterio del histórico: en Alemán = tipo/total
+                        # del local (fila base+2); en Aliva = monto/total Alemán del local.
+                        # Perf: se traen los 3 meses en 3 queries agrupadas por mes
+                        # (date_trunc) y el desglose por mes se hace en memoria — NO una
+                        # query por mes. No se tocan E..X ni AE en adelante ni fórmulas.
                         _MESES_YAC = [(5, 2026, 25, 26), (6, 2026, 27, 28), (7, 2026, 29, 30)]
+                        _rango_ini = date(2026, 5, 1)
+                        _rango_fin = date(2026, 7, _dias_calendario_mes(2026, 7))
+
+                        # 1 query Alemán (local/origen/mes), 1 apps (forma_pago/mes), 1 Aliva
+                        _df_yac = run_query("""
+                            SELECT local, origen,
+                                   EXTRACT(MONTH FROM fecha_venta)::int AS mes,
+                                   SUM(monto_venta_real) AS venta
+                            FROM ventas WHERE fecha_venta BETWEEN :fi AND :ff
+                              AND local IS NOT NULL
+                            GROUP BY local, origen, EXTRACT(MONTH FROM fecha_venta)
+                        """, {'fi': str(_rango_ini), 'ff': str(_rango_fin)})
+                        _fp_all = [fp for lst in _APPS.values() for fp in lst]
+                        _fp_all_in = "','".join(_fp_all)
+                        _df_yac_app = run_query(f"""
+                            SELECT forma_pago,
+                                   EXTRACT(MONTH FROM fecha_venta)::int AS mes,
+                                   SUM(monto_venta_real) AS venta
+                            FROM ventas WHERE fecha_venta BETWEEN :fi AND :ff
+                              AND forma_pago IN ('{_fp_all_in}')
+                            GROUP BY forma_pago, EXTRACT(MONTH FROM fecha_venta)
+                        """, {'fi': str(_rango_ini), 'ff': str(_rango_fin)})
+                        _df_yac_al = run_query("""
+                            SELECT local,
+                                   EXTRACT(MONTH FROM fecha)::int AS mes,
+                                   SUM(monto_total) AS venta
+                            FROM ventas_aliva WHERE fecha BETWEEN :fi AND :ff
+                              AND local IS NOT NULL
+                            GROUP BY local, EXTRACT(MONTH FROM fecha)
+                        """, {'fi': str(_rango_ini), 'ff': str(_rango_fin)})
+
+                        _ALIVA_TOTAL_ROW = {
+                            48: 8, 49: 11, 50: 14, 51: 17, 52: 20, 53: 23,
+                            54: 26, 55: 29, 56: 32, 57: 35, 58: 38
+                        }
+
                         for _m_num, _m_año, _c_monto, _c_pct in _MESES_YAC:
-                            _m_ini = date(_m_año, _m_num, 1)
-                            _m_fin = date(_m_año, _m_num,
-                                           _dias_calendario_mes(_m_año, _m_num))
                             # Encabezados (mismo formato que el resto de la fila 5/47)
                             _m_str = _MESES_EXP[_m_num]
                             _ws_out.cell(5,  _c_monto).value = f' {_m_str}  {_m_año}'
                             _ws_out.cell(47, _c_monto).value = f' {_m_str}  {_m_año}'
 
-                            # Alemán por local (salón / delivery) + apps
-                            _df_m = run_query("""
-                                SELECT local, origen, SUM(monto_venta_real) AS venta
-                                FROM ventas WHERE fecha_venta BETWEEN :fi AND :ff
-                                  AND local IS NOT NULL
-                                GROUP BY local, origen
-                            """, {'fi': str(_m_ini), 'ff': str(_m_fin)})
+                            # Subconjuntos del mes (en memoria)
+                            _df_m    = _df_yac[_df_yac['mes'] == _m_num] if not _df_yac.empty else _df_yac
+                            _df_mapp = _df_yac_app[_df_yac_app['mes'] == _m_num] if not _df_yac_app.empty else _df_yac_app
+                            _df_mal  = _df_yac_al[_df_yac_al['mes'] == _m_num] if not _df_yac_al.empty else _df_yac_al
 
                             _m_gt_s = 0.0; _m_gt_d = 0.0
                             for _base_r, _loc in _EXP_LOCAL_ROWS.items():
@@ -13229,7 +13259,6 @@ elif modulo.startswith("📊"):
                                 _ws_out.cell(_base_r,     _c_monto).value = round(_m_s) if _m_s else 0
                                 _ws_out.cell(_base_r + 1, _c_monto).value = round(_m_d) if _m_d else 0
                                 _ws_out.cell(_r_tot,      _c_monto).value = round(_m_t) if _m_t else 0
-                                # % por tipo sobre total del local
                                 _ws_out.cell(_base_r,     _c_pct).value = (_m_s / _m_t) if _m_t else 0
                                 _ws_out.cell(_base_r + 1, _c_pct).value = (_m_d / _m_t) if _m_t else 0
                                 _m_gt_s += _m_s; _m_gt_d += _m_d
@@ -13244,32 +13273,19 @@ elif modulo.startswith("📊"):
 
                             # Apps delivery (42=Uber, 43=PedidosYa, 44=Rappi): % sobre delivery
                             for _app_row, _fp_list in _APPS.items():
-                                _fp_in = "','".join(_fp_list)
-                                _df_m_app = run_query(f"""
-                                    SELECT SUM(monto_venta_real) AS venta FROM ventas
-                                    WHERE fecha_venta BETWEEN :fi AND :ff
-                                      AND forma_pago IN ('{_fp_in}')
-                                """, {'fi': str(_m_ini), 'ff': str(_m_fin)})
-                                _m_app = float(_df_m_app['venta'].iloc[0]) \
-                                    if not _df_m_app.empty and _df_m_app['venta'].iloc[0] else 0
+                                if _df_mapp.empty:
+                                    _m_app = 0.0
+                                else:
+                                    _mask_app = _df_mapp['forma_pago'].isin(_fp_list)
+                                    _m_app = float(_df_mapp[_mask_app]['venta'].sum())
                                 _ws_out.cell(_app_row, _c_monto).value = round(_m_app)
                                 _ws_out.cell(_app_row, _c_pct).value = (_m_app / _m_gt_d) if _m_gt_d else 0
 
-                            # Aliva por local (filas 48-58): monto + % sobre total Alemán del local
-                            _df_m_al = run_query("""
-                                SELECT local, SUM(monto_total) AS venta FROM ventas_aliva
-                                WHERE fecha BETWEEN :fi AND :ff AND local IS NOT NULL
-                                GROUP BY local
-                            """, {'fi': str(_m_ini), 'ff': str(_m_fin)})
-                            # Fila TOTAL Alemán de cada local (para el %): base+2
-                            _ALIVA_TOTAL_ROW = {
-                                48: 8, 49: 11, 50: 14, 51: 17, 52: 20, 53: 23,
-                                54: 26, 55: 29, 56: 32, 57: 35, 58: 38
-                            }
+                            # Aliva por local (48-58): monto + % sobre total Alemán del local
                             for _ar, _aloc in _ALIVA_ROWS.items():
                                 if _aloc == 'La Casona':
                                     continue
-                                _m_av = _vget_exp(_df_m_al, _aloc)
+                                _m_av = _vget_exp(_df_mal, _aloc)
                                 _ws_out.cell(_ar, _c_monto).value = round(_m_av, 2) if _m_av else 0
                                 _tot_row = _ALIVA_TOTAL_ROW.get(_ar)
                                 _base_tot = _ws_out.cell(_tot_row, _c_monto).value if _tot_row else 0
