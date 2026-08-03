@@ -21192,6 +21192,33 @@ buildTree(data, 1, null);
         _SG_EXCL = ('Menu Ejecutivo','COLACIONES','PROTEINA ALMUERZO',
                     'ENSALADAS ALMUERZO','ACOMPANAMIENTO ALMUERZO')
 
+        # ── Reglas EXCLUSIVAS del resumen de colores (NO afectan el Informe B) ──
+        # (1) SKUs de venta cero revisados manualmente: no se consideran adicional
+        #     en el resumen. Exclusión global dentro de la query del resumen.
+        _SG_RES_SKU_EXCL = (
+            'AGR-001','AGR-003','AGR-014','AGR-019','AGR-023','AGR-028','AGR-057',
+            'AJIX-001','AJIX-002','AJIX-003','ALQX-001','ALQX-002','AVEX-020',
+            'BEB-004','BEB-010','BETX-001','BETX-002','BETX-003','BETX-006','BETX-008',
+            'BETX-009','BETX-010','BETX-011','BETX-012','BETX-013','BETX-015','BETX-016',
+            'BETX-017','BOLNX-01','CAM-001','CAM-002','CER-041','CHUX-020','CHUX-021',
+            'CPC-001','CPC-002','CPC-003','CPC-004','CPC-005','CPC-006','CPC-007',
+            'CPC-009','CPC-010','CPC-012','CPC-014','CPC-016','CPC-017','CPC-018',
+            'CPC-019','CPC-020','CPC-021','CPC-022','CPC-023','CPC-024',
+            'DULX-001','DULX-002','DULX-003','ENSQ-001','ENSQ-002',
+            'HAMX-020','HAMX-021','HAQX-020','LIM-009','LOMX-020','LOMX-021',
+            'MCAF-001','MCAF-002','MODX-001','MODX-002','MODX-006','MODX-007','MODX-008',
+            'MODX-009','MODX-013','MODX-014','MODX-015','MODX-016',
+            'PANX-001','PANX-002','PANX-003','PANX-004','PANX-005','POS-023',
+            'PTOX-001','PTOX-002','PTOX-003','PTOX-005',
+            'SINX-001','SINX-002','SINX-004','SINX-007','SINX-008','SINX-009','SINX-010',
+            'SINX-012','SINX-013','SINX-015','SINX-016','VIN-011','WHI-008',
+        )
+        # (2) Los SKU con prefijo 'AGREX' solo cuentan cuando origen IS NULL (Salón)
+        #     y el garzón está en la whitelist. En la query del resumen esa condición
+        #     ya es parte del WHERE base, así que se cumple; el CASE de abajo la deja
+        #     explícita para que un AGREX nunca sume fuera de esa condición.
+        _SG_RES_AGREX_PREFIX = 'AGREX'
+
         # Normalización de nombre para mostrar: quitar prefijo 'palabra_' al inicio
         def _sg_limpia_nombre(n):
             s = str(n or "")
@@ -21599,8 +21626,47 @@ buildTree(data, 1, null);
                         st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True)
                 return _rows, _df
 
+            # ── Sección 5 SOLO para el RESUMEN DE COLORES ──
+            # Idéntica a _sg_seccion5 pero con las reglas exclusivas del resumen:
+            #   (1) excluye los SKUs de _SG_RES_SKU_EXCL (venta cero, no son adicional)
+            #   (2) los SKU 'AGREX%' solo suman con origen IS NULL + garzón en whitelist
+            #       (el WHERE base ya lo garantiza; la exclusión (1) opera antes de agrupar)
+            # NO se usa en el Informe B, que sigue con _sg_seccion5 intacta.
+            def _sg_seccion5_resumen(rango_i, rango_f, p=None):
+                _p5 = dict(p if p is not None else _sg_p); _p5["r_i"] = str(rango_i); _p5["r_f"] = str(rango_f)
+                _sku_excl_sql = "','".join(_SG_RES_SKU_EXCL)
+                _df = run_query(f"""
+                    with d as (
+                      select v.garzon, v.fecha_venta, v.categoria_menu as cat,
+                        v.monto_venta_real + coalesce(v.descuento,0) as venta,
+                        v.cantidad_vendida as q,
+                        {_SG_GRP_CASE} as grp_cat, {_SG_BUCKET} as liq_bucket
+                      from ventas v {_SG_LIQ_JOIN}
+                      where v.local = :loc and v.origen is null and v.garzon = any(:wl)
+                        and v.categoria_menu not in ('{_sg_excl_sql}')
+                        and v.sku_producto not in ('{_sku_excl_sql}')
+                        and v.fecha_venta between :r_i and :r_f
+                    )
+                    select garzon, count(distinct fecha_venta) as dias, sum(venta) as venta_total,
+                      sum(case when grp_cat='AGREGADOS' then venta else 0 end) as v_agr,
+                      sum(case when grp_cat='AGREGADOS' then q else 0 end) as q_agr,
+                      sum(case when cat='Agregados' then venta else 0 end) as v_agr_solo,
+                      sum(case when grp_cat='CAFETERIA' then venta else 0 end) as v_caf,
+                      sum(case when grp_cat='CAFETERIA' then q else 0 end) as q_caf,
+                      sum(case when grp_cat='POSTRES' then venta else 0 end) as v_pos,
+                      sum(case when grp_cat='POSTRES' then q else 0 end) as q_pos,
+                      sum(case when liq_bucket='LIQ_SA' then venta else 0 end) as v_lsa,
+                      sum(case when liq_bucket='LIQ_SA' then q else 0 end) as q_lsa,
+                      sum(case when liq_bucket='LIQ_CA' then venta else 0 end) as v_lca,
+                      sum(case when liq_bucket='LIQ_CA' then q else 0 end) as q_lca
+                    from d group by garzon having sum(venta) > 0 order by venta_total desc
+                """, _p5)
+                return _df
+
             _rows5, _df5_acum = _sg_seccion5(_sg_mes_ini, _sg_fin, "acumulado mensual")
             _rows5_sem, _df5_sem = _sg_seccion5(_sg_ini, _sg_fin, "semanal")
+            # DF filtrado exclusivo para el resumen de colores (semana completa)
+            _df5_sem_resumen = _sg_seccion5_resumen(_sg_ini, _sg_fin)
 
             # ═══════════ SECCIÓN 6 — ADICIONALES POR LOCAL (red, acum mensual) ═══════════
             _sg_s6 = run_query(f"""
@@ -21841,9 +21907,10 @@ buildTree(data, 1, null);
                         st.warning(f"Informe B pendiente: {_e_b}")
                 with _sg_cols_btn[2]:
                     try:
-                        # Resumen (colores) = SEMANA COMPLETA (usa _df5_sem y _sg_dias_sem,
-                        # no el acumulado mensual). Los otros informes siguen en mensual.
-                        _df5r = locals().get("_df5_sem")
+                        # Resumen (colores) = SEMANA COMPLETA. Usa el DF FILTRADO
+                        # (_df5_sem_resumen: sin los SKUs excluidos + regla AGREX),
+                        # no el _df5_sem del Informe B. Los otros informes van en mensual.
+                        _df5r = locals().get("_df5_sem_resumen")
                         if _df5r is not None and not _df5r.empty:
                             _pdf_res = _sg_resumen_colores_pdf(_df5r, _sg_local, _sg_dias_sem,
                                                               logo_path=LOGO_PATH)
@@ -21956,9 +22023,12 @@ buildTree(data, 1, null);
                                   "$ Diario": _sg_fmt_money(_t4a / _sg_dias_acum),
                                   "$ Semanal": _sg_fmt_money(_t4s),
                                   "%": f"{(_t4s / tot_eval * 100) if tot_eval else 0:.1f}%"})
-                    # Sección 5 (acum + semanal), sin pintar en pantalla
+                    # Sección 5 (acum + semanal), sin pintar en pantalla.
+                    # df5_sem (sin filtrar) sigue alimentando el Informe B.
                     rows5, _ = _sg_seccion5(_sg_mes_ini, _sg_fin, "", p=_pl, mostrar=False)
                     rows5_sem, df5_sem = _sg_seccion5(_sg_ini, _sg_fin, "", p=_pl, mostrar=False)
+                    # DF FILTRADO exclusivo del resumen de colores para este local
+                    df5_sem_resumen = _sg_seccion5_resumen(_sg_ini, _sg_fin, p=_pl)
                     # Sección 9 (raw, por local)
                     s9 = run_query(f"""
                         with d as (
@@ -21989,7 +22059,7 @@ buildTree(data, 1, null);
                         _s6, _sg_s7, [], [],
                         s9_raw=s9, s11s=_sg_s11s, s11m=_sg_s11m,
                     )
-                    return ctx, df5_sem   # 2º valor = df SEMANAL → resumen de colores
+                    return ctx, df5_sem_resumen   # 2º valor = df SEMANAL FILTRADO → resumen de colores
 
                 _locales_todos = list(_SG_JEFATURAS.keys())
                 if st.button(f"📦 Generar los {len(_locales_todos)} locales (ZIP)",
