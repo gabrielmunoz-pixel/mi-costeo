@@ -6164,12 +6164,26 @@ def _sg_orden_colores(df_acum, dias_periodo, local=None):
         vc, vp = float(r["v_caf"]), float(r["v_pos"])
         vsa, vca = float(r["v_lsa"]), float(r["v_lca"])
         adic = va + vc + vp + vsa + vca
+        # Cantidades (Q) por grupo. Agregados usa q_agr_solo (solo 'Agregados',
+        # coherente con el monto v_agr_solo). Si el df no trae Q, quedan en 0.
+        def _qget(col, alt=None):
+            if col in r.index and pd.notna(r[col]):
+                return int(r[col])
+            if alt is not None and alt in r.index and pd.notna(r[alt]):
+                return int(r[alt])
+            return 0
+        qa = _qget("q_agr_solo", "q_agr")
+        qc = _qget("q_caf"); qp = _qget("q_pos")
+        qsa = _qget("q_lsa"); qca = _qget("q_lca")
         g.append({
             "nombre": _limpia(r["garzon"]),
             "venta": vt, "propina": vt * 0.10, "vdp": vt / dias, "dias": dias,
-            "v_agr": va, "p_agr": va / vt, "v_caf": vc, "p_caf": vc / vt,
-            "v_pos": vp, "p_pos": vp / vt, "v_lsa": vsa, "p_sa": vsa / vt,
-            "v_lca": vca, "p_ca": vca / vt, "p_total": adic / vt,
+            "v_agr": va, "q_agr": qa, "p_agr": va / vt,
+            "v_caf": vc, "q_caf": qc, "p_caf": vc / vt,
+            "v_pos": vp, "q_pos": qp, "p_pos": vp / vt,
+            "v_lsa": vsa, "q_lsa": qsa, "p_sa": vsa / vt,
+            "v_lca": vca, "q_lca": qca, "p_ca": vca / vt,
+            "q_total": qa + qc + qp + qsa + qca, "p_total": adic / vt,
         })
     if not g:
         return [], None
@@ -6188,7 +6202,11 @@ def _sg_orden_colores(df_acum, dias_periodo, local=None):
            "vdp": (sv / dias_periodo) if dias_periodo else 0, "dias": dias_periodo,
            "v_agr": sum(f["v_agr"] for f in filas), "v_caf": sum(f["v_caf"] for f in filas),
            "v_pos": sum(f["v_pos"] for f in filas), "v_lsa": sum(f["v_lsa"] for f in filas),
-           "v_lca": sum(f["v_lca"] for f in filas)}
+           "v_lca": sum(f["v_lca"] for f in filas),
+           "q_agr": sum(f["q_agr"] for f in filas), "q_caf": sum(f["q_caf"] for f in filas),
+           "q_pos": sum(f["q_pos"] for f in filas), "q_lsa": sum(f["q_lsa"] for f in filas),
+           "q_lca": sum(f["q_lca"] for f in filas),
+           "q_total": sum(f["q_total"] for f in filas)}
     for kv, kp in [("v_agr", "p_agr"), ("v_caf", "p_caf"), ("v_pos", "p_pos"),
                    ("v_lsa", "p_sa"), ("v_lca", "p_ca")]:
         tot[kp] = (tot[kv] / sv) if sv else 0
@@ -6227,20 +6245,29 @@ def _sg_resumen_colores_pdf(df_acum, local, dias_periodo, logo_path=None):
     P = lambda s, e=st_c: _Par(str(s), e)
 
     headers = ["Rank", "NOMBRE GARZON", "VENTA", "APORTE<br/>PROPINA",
-               "VENTA DIARIA<br/>PROMEDIO", "DIAS<br/>TRAB", "VENTA<br/>AGREGADOS",
-               "%<br/>AGREGADO", "VENTA<br/>CAFETERIA", "%<br/>CAFETERIA",
-               "VENTA<br/>POSTRES", "%<br/>POSTRES", "VENTA LIQ<br/>S/A", "% LIQ<br/>S/A",
-               "VENTA LIQ<br/>C/A", "% LIQ<br/>C/A", "% TOTAL"]
+               "VENTA DIARIA<br/>PROMEDIO", "DIAS<br/>TRAB",
+               "VENTA<br/>AGREGADOS", "Q<br/>AGREG", "%<br/>AGREGADO",
+               "VENTA<br/>CAFETERIA", "Q<br/>CAF", "%<br/>CAFETERIA",
+               "VENTA<br/>POSTRES", "Q<br/>POS", "%<br/>POSTRES",
+               "VENTA LIQ<br/>S/A", "Q<br/>S/A", "% LIQ<br/>S/A",
+               "VENTA LIQ<br/>C/A", "Q<br/>C/A", "% LIQ<br/>C/A",
+               "Q<br/>TOTAL", "% TOTAL"]
     head = [P(h, st_h) for h in headers]
+
+    def _fq(v):
+        try: return f"{int(round(float(v))):,}".replace(",", ".")
+        except: return "0"
 
     def fila_de(f, bold=False):
         e = st_b if bold else st_c
         return [P(f.get("rank", ""), e), P(f["nombre"], e), P(_fm(f["venta"]), e),
                 P(_fm(f["propina"]), e), P(_fm(f["vdp"]), e), P(f["dias"], e),
-                P(_fm(f["v_agr"]), e), P(_fp(f["p_agr"]), e), P(_fm(f["v_caf"]), e),
-                P(_fp(f["p_caf"]), e), P(_fm(f["v_pos"]), e), P(_fp(f["p_pos"]), e),
-                P(_fm(f["v_lsa"]), e), P(_fp(f["p_sa"]), e), P(_fm(f["v_lca"]), e),
-                P(_fp(f["p_ca"]), e), P(_fp(f["p_total"]), e)]
+                P(_fm(f["v_agr"]), e), P(_fq(f.get("q_agr", 0)), e), P(_fp(f["p_agr"]), e),
+                P(_fm(f["v_caf"]), e), P(_fq(f.get("q_caf", 0)), e), P(_fp(f["p_caf"]), e),
+                P(_fm(f["v_pos"]), e), P(_fq(f.get("q_pos", 0)), e), P(_fp(f["p_pos"]), e),
+                P(_fm(f["v_lsa"]), e), P(_fq(f.get("q_lsa", 0)), e), P(_fp(f["p_sa"]), e),
+                P(_fm(f["v_lca"]), e), P(_fq(f.get("q_lca", 0)), e), P(_fp(f["p_ca"]), e),
+                P(_fq(f.get("q_total", 0)), e), P(_fp(f["p_total"]), e)]
 
     data = [head]
     for f in filas:
@@ -6251,7 +6278,8 @@ def _sg_resumen_colores_pdf(df_acum, local, dias_periodo, logo_path=None):
     PAG_W = _landscape(_letter)[0]
     MX = 22
     util = PAG_W - 2 * MX
-    pesos = [3.2, 12, 7.2, 6.6, 7.2, 3.6, 6.6, 5, 6.6, 5, 6.6, 5, 6.6, 5, 6.6, 5, 5.6]
+    #        Rk  Nom  Vta  Prop VDP  Días  Vag  Qag  %ag  Vcf  Qcf  %cf  Vps  Qps  %ps  Vsa  Qsa  %sa  Vca  Qca  %ca  Qtot %tot
+    pesos = [2.8, 9.5, 6.2, 5.4, 6.0, 3.0, 5.6, 3.4, 4.0, 5.6, 3.4, 4.0, 5.6, 3.4, 4.0, 5.6, 3.4, 4.0, 5.6, 3.4, 4.0, 3.6, 4.6]
     sp = sum(pesos)
     wcols = [util * p / sp for p in pesos]
 
@@ -21651,6 +21679,7 @@ buildTree(data, 1, null);
                       sum(case when grp_cat='AGREGADOS' then venta else 0 end) as v_agr,
                       sum(case when grp_cat='AGREGADOS' then q else 0 end) as q_agr,
                       sum(case when cat='Agregados' then venta else 0 end) as v_agr_solo,
+                      sum(case when cat='Agregados' then q else 0 end) as q_agr_solo,
                       sum(case when grp_cat='CAFETERIA' then venta else 0 end) as v_caf,
                       sum(case when grp_cat='CAFETERIA' then q else 0 end) as q_caf,
                       sum(case when grp_cat='POSTRES' then venta else 0 end) as v_pos,
