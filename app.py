@@ -13237,21 +13237,25 @@ elif modulo.startswith("📊"):
                                 if not _df_ay_app.empty and _df_ay_app['venta'].iloc[0] else 0
                             _ws_out.cell(_app_row, 33).value = round(_ay_app)
 
-                        # Aliva año anterior (45-54) — Total Factura de deudores del archivo Aliva
-                        _ALIVA_AY = {
-                            'Vitacura': 78367883,          # 76439807-6
-                            'Las Condes': 73986664,        # 77009575-1
-                            'Chicureo': 67909090,          # 77116729-2
-                            'Macul': 61159633,             # 77531748-5
-                            'La Dehesa': 57786393,         # 76450253-1
-                            'La Reina': 59879273,          # 77726513-K
-                            'Quilin': 45016657,            # 77773363-K
-                            'Providencia': 46515543,       # 76376098-7
-                            'Nueva Providencia': 43056829, # 77887201-3
-                            'Los Trapenses': 54243824,     # 77847982-6
+                        # Aliva año anterior (filas 48-58): desde ventas_aliva del MISMO mes del
+                        # año pasado. Se carga con la pestaña "Cargar Venta Aliva" fechando en 2025.
+                        _df_ay_al = run_query("""
+                            SELECT local, SUM(monto_total) AS venta FROM ventas_aliva
+                            WHERE fecha BETWEEN :fi AND :ff
+                            GROUP BY local
+                        """, {'fi': str(_ay_ini), 'ff': str(_ay_fin)})
+                        # Respaldo SOLO para julio 2025 (valores del archivo original), por si aún no se cargó
+                        _ALIVA_AY_JUL25 = {
+                            'Vitacura': 78367883, 'Las Condes': 73986664, 'Chicureo': 67909090,
+                            'Macul': 61159633, 'La Dehesa': 57786393, 'La Reina': 59879273,
+                            'Quilin': 45016657, 'Providencia': 46515543,
+                            'Nueva Providencia': 43056829, 'Los Trapenses': 54243824,
                         }
                         for _ar, _aloc in _ALIVA_ROWS.items():
-                            _ws_out.cell(_ar, 33).value = _ALIVA_AY.get(_aloc, 0)
+                            _av = _vget_exp(_df_ay_al, _aloc)
+                            if not _av and _ay_ini.year == 2025 and _ay_ini.month == 7:
+                                _av = _ALIVA_AY_JUL25.get(_aloc, 0)
+                            _ws_out.cell(_ar, 33).value = round(_av) if _av else 0
 
 
                         # ── GENERAR GRÁFICOS CON MATPLOTLIB ─────────────────
