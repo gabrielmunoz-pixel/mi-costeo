@@ -6304,7 +6304,13 @@ def _sg_resumen_colores_pdf(df_acum, local, dias_periodo, logo_path=None):
     MX = 22
     util = PAG_W - 2 * MX
 
-    def _mk_estilo(filas_orden):
+    # Secuencia de colores ESTÁTICA por posición (patrón de bandas del local):
+    # posición 1 -> filas[0]["color"], posición 2 -> filas[1]["color"], etc.
+    # El color pertenece a la POSICIÓN de la fila, no al garzón. Por eso ambas
+    # tablas usan el mismo patrón aunque el orden de garzones difiera.
+    _colores_pos = [f["color"] for f in filas]
+
+    def _mk_estilo(n_filas):
         est = [
             ("GRID", (0, 0), (-1, -1), 0.5, BORDE),
             ("BACKGROUND", (0, 0), (-1, 0), GRIS),
@@ -6315,10 +6321,11 @@ def _sg_resumen_colores_pdf(df_acum, local, dias_periodo, logo_path=None):
             ("LEFTPADDING", (0, 0), (-1, -1), 2),
             ("RIGHTPADDING", (0, 0), (-1, -1), 2),
         ]
-        for i, f in enumerate(filas_orden):
-            est.append(("BACKGROUND", (0, i + 1), (-1, i + 1), _cmap.get(f["color"], ROJO)))
+        for i in range(n_filas):
+            col = _colores_pos[i] if i < len(_colores_pos) else "rojo"
+            est.append(("BACKGROUND", (0, i + 1), (-1, i + 1), _cmap.get(col, ROJO)))
         if tot:
-            est.append(("BACKGROUND", (0, len(filas_orden) + 1), (-1, len(filas_orden) + 1), GRIS))
+            est.append(("BACKGROUND", (0, n_filas + 1), (-1, n_filas + 1), GRIS))
         return est
 
     # Tabla 1 (venta): 6 columnas
@@ -6326,14 +6333,14 @@ def _sg_resumen_colores_pdf(df_acum, local, dias_periodo, logo_path=None):
     pesos1 = [3.0, 14.0, 8.0, 7.0, 8.0, 4.0]
     w1 = [util * p / sum(pesos1) for p in pesos1]
     t1 = _Table(data1, colWidths=w1, repeatRows=1)
-    t1.setStyle(_TS(_mk_estilo(filas_v)))
+    t1.setStyle(_TS(_mk_estilo(len(filas_v))))
 
     # Tabla 2 (adicionales): 19 columnas
     #         Rk   Nom  Vag  Qag  %ag  Vcf  Qcf  %cf  Vps  Qps  %ps  Vsa  Qsa  %sa  Vca  Qca  %ca  Qtot %tot
     pesos2 = [3.0, 10.5, 6.2, 3.8, 4.4, 6.2, 3.8, 4.4, 6.2, 3.8, 4.4, 6.2, 3.8, 4.4, 6.2, 3.8, 4.4, 4.0, 5.0]
     w2 = [util * p / sum(pesos2) for p in pesos2]
     t2 = _Table(data2, colWidths=w2, repeatRows=1)
-    t2.setStyle(_TS(_mk_estilo(filas)))
+    t2.setStyle(_TS(_mk_estilo(len(filas))))
 
     st_sub = _PS("sub", fontName="Helvetica-Bold", fontSize=8.5, alignment=_TAC, leading=10)
 
