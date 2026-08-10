@@ -21270,43 +21270,21 @@ buildTree(data, 1, null);
 
     elif informe_sel == "SeguimientoGarzones":
         # ══════════════════════════════════════════════════════════════════
-        #  INFORME DE CONTROL DE VENTAS SALÓN  (replica PDF Vitacura)
-        #  Lógica validada en Informe_Salon_definiciones.md.
-        #  Reglas base: salón = origen IS NULL; venta = monto_venta_real +
-        #  coalesce(descuento,0); exclusiones de colación; whitelist 94 garzones.
-        #  Constantes/funciones con sufijo _SG, autónomas.
+        #  RESUMEN DE COLORES — versión mínima (solo generación masiva ZIP).
+        #  Genera los 11 resúmenes de colores (10 locales + La Casona) en un
+        #  ZIP, sin vista en pantalla, sin informe B, sin gráficos ni preview.
+        #  Toda la lógica de cálculo del resumen se conserva intacta:
+        #    - salón (origen IS NULL), whitelist activa, venta = mvr + descuento
+        #    - exclusión de colaciones + 100 SKUs venta cero (_SG_RES_SKU_EXCL)
+        #    - regla AGREX, grupos por categoria_menu + líquidos (clasif_liquidos)
+        #    - cantidades Q por grupo, bandas de color por local
+        #  Funciones a nivel módulo reutilizadas: _sg_orden_colores,
+        #  _sg_bandas_local, _sg_resumen_colores_pdf.
         # ══════════════════════════════════════════════════════════════════
         from datetime import date as _sg_date, timedelta as _sg_td
 
-        # ── Whitelist nominal de garzones evaluados (red completa) ──
-        _SG_WHITELIST_FALLBACK = [
-            'Francisco Navarro','Jeshaylin Molina',
-            'Yuscarlenaidu Martinezsulbaran','Yirfrey Alexander Valero Ramirez','Yurubi',
-            'Genesis Penafiel','Raul Figueroa','David Ramirez','Miguel Menacho Oliveira',
-            'Maria Campos','Alejandro Vergara','Sofia Andarcia','Jesus Rodriguez Molina',
-            'Jose Ricardo Valdes Contreras','Jose Tomas Mora Castillo','Eduard Cabrera',
-            'Enrique Jose Saavedra Briceno','Jose Daniel Vera','Manuel Chacon','Robert Duran',
-            'Felipe Hueiquil','Joaquin Arandia','Alexander Quintero','Eloy Sandoval',
-            'Carlos Alberto Abarca Suarez','Yuliana Valdebenito','Victor Escalona','Eliscar Torres',
-            'Mariely Karina Rivera Linares','Yovanny Duarte','Manuel Rodriguez','Jose Chacin',
-            'Jesus Alberto Segovia Aranguren','Pedro Ruiz','Pedro Maldonado','Jonnatha Araujo',
-            'Wilmer Causil','Pablo Oviedo','Carolina Rodriguez','Maria Paula Gonzalez Franco',
-            'Carlos David Colina','Yusney Jaimes','Marco Valdez','Rocio Gutierrez Opazo',
-            'David Alcivar Rosero','Magdalena Castro','Manuel Aguila','Nayiber Campos',
-            'Daniel Espinoza','Julio Gil','Lascano Gaming','Jhoiner Garcia','Ivan Mazaby',
-            'Kevin Gaitan','Ana Araque','Eduard Quinones Quinones Yepez','Jhonny Gomez',
-            'Prospero Alexis Gutierrez Ramirez','Charlotte Gonzalez','Juan Agudelo',
-            'BERNARDO CASTRO Castro','Wilmer Alfonso','Evelyn jaque','Frettzy Lucena Querales',
-            'Ivan Eduardo Salazar Alvarez','Jeremit Orlando Asicle Suarez','Gustavo Alvarado',
-            'Lisette Morell Coloma','Junior Mora','Yenifer Pabon','Jose Aquiles Mora Ramirez',
-            'Gustavo Saldias','Jorge Grandon','Rodrigo Alejandro Romero Castillo','NICOLAS TERRAZA',
-            'Jose Castillo','Juan Rodriguez','Cindy Santander','Abelmary Romero','Diegorkn',
-            'Roy Lopez Prado','Edwar Pernalete','Jimmy Gallo','Jesus Antonio Ramirez','Yosman Rangel',
-            'Jonathan Araujo','Nasslo Beltran','Keiber Eduardo Munoz Urribarri','Jose Pacheco',
-            'Nestor Rosas','dubuc_juan Dubuc Martinez','Jackson Moreno','Richard Gonzalez',
-        ]
-
-        # Whitelist desde tabla garzones_whitelist (activo=true). Respaldo: lista fija.
+        # ── Whitelist (activo=true); respaldo lista fija ──
+        _SG_WHITELIST_FALLBACK = ['Alejandro Vergara','Junior Mora']
         try:
             _wl_df = run_query("select garzon from garzones_whitelist where activo = true order by garzon")
             _SG_WHITELIST = (_wl_df["garzon"].tolist()
@@ -21315,31 +21293,10 @@ buildTree(data, 1, null);
         except Exception:
             _SG_WHITELIST = list(_SG_WHITELIST_FALLBACK)
 
-        # ── Categorías macro (sección 1 y 2) ──
-        # ── Jefaturas por local (supervisor / jefe salón / sub jefe salón) ──
-        _SG_JEFATURAS = {
-            'La Reina': ('Cristian Ramirez','Jose Mendoza Escalante','Gerardo Delgado Villalobos'),
-            'Quilin': ('Cristian Ramirez','Jose Gil Romero','Giovanni Rojas'),
-            'La Dehesa': ('Cristian Ramirez','Miguel Quintero Rodriguez','Oscar Barrera Valdebenito'),
-            'Macul': ('Cristian Ramirez','Alexander Marin Torrealba','Nathaly Papa Colmenares'),
-            'Los Trapenses': ('Cristian Ramirez','Elicmer Uzcategui Rondon','Rodrigo Montt Creixell'),
-            'Providencia': ('Luis Mendoza','Jose Mora Carrero','Oscar Loyola Sepulveda'),
-            'Nueva Providencia': ('Luis Mendoza','Rodrigo Calderon Villaseca','Angel Seidel Caldero'),
-            'Chicureo': ('Luis Mendoza','Angel Molina Contreras','Maria Espina Cairasco'),
-            'Vitacura': ('Luis Mendoza','Sergio Salas Cazorla','Michelle Maleville Muñoz'),
-            'Las Condes': ('Luis Mendoza','Yuleidi Zambrano Hernandez','Johelvi Pineda Salas'),
-        }
-
-        _SG_BAR_CATS = ('Bajativos','Cervezas','Cocteles','Espumantes','Piscos','Ron',
-                        'Tequila','Vinos','Vodka','Whisky',
-                        'Bebidas','Jugos Naturales','Limonadas','Tragos Sin Alcohol')
-        _SG_CAFE_CATS = ('Cafeteria','Postres')
         _SG_EXCL = ('Menu Ejecutivo','COLACIONES','PROTEINA ALMUERZO',
                     'ENSALADAS ALMUERZO','ACOMPANAMIENTO ALMUERZO')
 
-        # ── Reglas EXCLUSIVAS del resumen de colores (NO afectan el Informe B) ──
-        # (1) SKUs de venta cero revisados manualmente: no se consideran adicional
-        #     en el resumen. Exclusión global dentro de la query del resumen.
+        # SKUs de venta cero excluidos del resumen (revisados manualmente)
         _SG_RES_SKU_EXCL = (
             'AGR-001','AGR-003','AGR-014','AGR-019','AGR-023','AGR-028','AGR-057',
             'AJIX-001','AJIX-002','AJIX-003','ALQX-001','ALQX-002','AVEX-020',
@@ -21358,890 +21315,106 @@ buildTree(data, 1, null);
             'SINX-001','SINX-002','SINX-004','SINX-007','SINX-008','SINX-009','SINX-010',
             'SINX-012','SINX-013','SINX-015','SINX-016','VIN-011','WHI-008',
         )
-        # (2) Los SKU con prefijo 'AGREX' solo cuentan cuando origen IS NULL (Salón)
-        #     y el garzón está en la whitelist. En la query del resumen esa condición
-        #     ya es parte del WHERE base, así que se cumple; el CASE de abajo la deja
-        #     explícita para que un AGREX nunca sume fuera de esa condición.
-        _SG_RES_AGREX_PREFIX = 'AGREX'
 
-        # Normalización de nombre para mostrar: quitar prefijo 'palabra_' al inicio
-        def _sg_limpia_nombre(n):
-            s = str(n or "")
-            import re as _re
-            return _re.sub(r'^\S+_', '', s).strip()
+        # Fragmentos SQL: join de líquidos, bucket y grupos por categoría
+        _SG_LIQ_JOIN = """
+            left join clasif_liquidos cn
+                   on cn.match_tipo='nombre' and cn.match_valor = lower(trim(v.nombre_producto))
+            left join clasif_liquidos cs
+                   on cs.match_tipo='sku' and cs.match_valor = v.sku_producto
+        """
+        _SG_BUCKET = "coalesce(cn.bucket, cs.bucket)"
+        _SG_GRP_CASE = """
+            case
+              when categoria_menu in ('Agregados','Acompanamientos') then 'AGREGADOS'
+              when categoria_menu = 'Cafeteria' then 'CAFETERIA'
+              when categoria_menu = 'Postres' then 'POSTRES'
+              else null
+            end
+        """
+        _sg_excl_sql = "','".join(_SG_EXCL)
 
-        st.markdown("# 📋 Informe de Control de Ventas Salón")
+        # Los 11 locales a generar (10 + La Casona)
+        _SG_LOCALES_ZIP = ['Vitacura','Las Condes','Chicureo','La Dehesa','Macul',
+                           'La Reina','Quilin','Nueva Providencia','Providencia',
+                           'Los Trapenses','La Casona']
 
-        # ── Selectores: local + semana ──
-        _sg_locales = ['Vitacura','Las Condes','Chicureo','La Dehesa','Macul',
-                       'La Reina','Quilin','Nueva Providencia','Providencia','Los Trapenses',
-                       'La Casona']
-        _sg_c1, _sg_c2, _sg_c3 = st.columns([1.3, 1.3, 1])
-        with _sg_c1:
-            _sg_local = st.selectbox("📍 Local", _sg_locales, key="sg_local")
-        with _sg_c2:
-            # Semana: por defecto la del informe (01-07 jun 2026)
-            _sg_lun = st.date_input("Lunes de la semana", value=_sg_date(2026, 6, 1), key="sg_lunes")
-        with _sg_c3:
-            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-            _sg_go = st.button("📊 Generar", type="primary", use_container_width=True, key="sg_go")
+        st.markdown("# 🎨 Resúmenes de Colores — Generación masiva")
 
-        # Rango semanal: lunes elegido → domingo
-        _sg_ini = _sg_lun - _sg_td(days=_sg_lun.weekday())  # asegura lunes
-        _sg_fin = _sg_ini + _sg_td(days=6)
-        # Acumulado mensual: solo el "presente mes" = mes del cierre de semana (domingo).
-        # Cuando la semana cruza dos meses (ej. lun 29-jun → dom 05-jul), lo semanal
-        # conserva los 7 días (29→05) pero lo mensual parte del 1° del mes del domingo
-        # (01-jul) para no mezclar meses. Si la semana no cruza, equivale al 1° del mes.
-        _sg_mes_ini = _sg_fin.replace(day=1)
+        _sg_lun = st.date_input("Lunes de la semana", value=_sg_date(2026, 6, 1), key="sg_lunes")
+        _sg_ini = _sg_lun - _sg_td(days=_sg_lun.weekday())   # asegura lunes
+        _sg_fin = _sg_ini + _sg_td(days=6)                   # domingo
         _sg_dias_sem = 7
-        _sg_dias_acum = (_sg_fin - _sg_mes_ini).days + 1
+        st.caption(f"Semana {_sg_ini.strftime('%d-%m')} al {_sg_fin.strftime('%d-%m-%Y')} "
+                   f"· {len(_SG_LOCALES_ZIP)} locales")
 
-        if _sg_go or st.session_state.get("sg_data_ok"):
-            st.session_state["sg_data_ok"] = True
-            _sg_p = {
-                "loc": _sg_local, "si": str(_sg_ini), "sf": str(_sg_fin),
-                "ai": str(_sg_mes_ini), "af": str(_sg_fin),
-                "wl": _SG_WHITELIST,
-            }
-            _sg_excl_sql = "','".join(_SG_EXCL)
-            _sg_bar_sql = "','".join(_SG_BAR_CATS)
-            _sg_cafe_sql = "','".join(_SG_CAFE_CATS)
-
-            st.caption(f"**{_sg_local}** · Semana {_sg_ini.strftime('%d-%m')} al "
-                       f"{_sg_fin.strftime('%d-%m-%Y')} · Acumulado desde "
-                       f"{_sg_mes_ini.strftime('%d-%m')}")
-
-            # ═══════════ SECCIÓN 1 — VENTAS TOTALES SALÓN (sin whitelist) ═══════════
-            _sg_s1 = run_query(f"""
-                with base as (
-                  select
-                    monto_venta_real + coalesce(descuento,0) as venta,
-                    cantidad_vendida as q,
-                    case
-                      when categoria_menu in ('{_sg_bar_sql}') then 'BAR'
-                      when categoria_menu in ('{_sg_cafe_sql}') then 'CAFETERÍA Y POSTRES'
-                      else 'ALIMENTOS'
-                    end as macro,
-                    fecha_venta
-                  from ventas
-                  where local = :loc
-                    and origen is null
-                    and categoria_menu not in ('{_sg_excl_sql}')
-                )
-                select coalesce(macro,'TOTAL') as macro,
-                  sum(case when fecha_venta between :ai and :af then venta else 0 end) as venta_acum,
-                  sum(case when fecha_venta between :ai and :af then q else 0 end) as q_acum,
-                  sum(case when fecha_venta between :si and :sf then venta else 0 end) as venta_sem,
-                  sum(case when fecha_venta between :si and :sf then q else 0 end) as q_sem
-                from base
-                group by rollup(macro)
-                order by macro
-            """, _sg_p)
-
-            # ═══════════ SECCIÓN 2 — VENTAS POR CATEGORÍA (whitelist) ═══════════
-            _sg_s2 = run_query(f"""
-                with base as (
-                  select
-                    monto_venta_real + coalesce(descuento,0) as venta,
-                    cantidad_vendida as q,
-                    case
-                      when categoria_menu in ('{_sg_bar_sql}') then 'BAR'
-                      when categoria_menu in ('{_sg_cafe_sql}') then 'CAFETERÍA Y POSTRES'
-                      else 'ALIMENTOS'
-                    end as macro,
-                    fecha_venta
-                  from ventas
-                  where local = :loc
-                    and origen is null
-                    and categoria_menu not in ('{_sg_excl_sql}')
-                    and garzon = any(:wl)
-                )
-                select coalesce(macro,'TOTAL') as macro,
-                  sum(case when fecha_venta between :ai and :af then venta else 0 end) as venta_acum,
-                  sum(case when fecha_venta between :ai and :af then q else 0 end) as q_acum,
-                  sum(case when fecha_venta between :si and :sf then venta else 0 end) as venta_sem,
-                  sum(case when fecha_venta between :si and :sf then q else 0 end) as q_sem
-                from base
-                group by rollup(macro)
-                order by macro
-            """, _sg_p)
-
-            # ── nº garzones whitelist con venta en el local (para promedios) ──
-            _sg_ng_df = run_query("""
-                select count(distinct garzon) as n
-                from ventas
-                where local = :loc and origen is null
-                  and garzon = any(:wl)
-                  and fecha_venta between :ai and :af
-            """, _sg_p)
-            _sg_ngarz = int(_sg_ng_df["n"].iloc[0]) if (_sg_ng_df is not None and not _sg_ng_df.empty) else 0
-
-            def _sg_fmt_money(v):
-                try: return f"${int(round(float(v))):,}".replace(",", ".")
-                except: return "$0"
-
-            # ── Render Sección 1 ──
-            st.markdown("### 1 · Ventas Totales Salón")
-            if _sg_s1 is not None and not _sg_s1.empty:
-                _tot1_acum = float(_sg_s1[_sg_s1["macro"]=="TOTAL"]["venta_acum"].iloc[0]) if not _sg_s1[_sg_s1["macro"]=="TOTAL"].empty else 0
-                _tot1_sem = float(_sg_s1[_sg_s1["macro"]=="TOTAL"]["venta_sem"].iloc[0]) if not _sg_s1[_sg_s1["macro"]=="TOTAL"].empty else 0
-                _rows1 = []
-                _order = ["ALIMENTOS","BAR","CAFETERÍA Y POSTRES","TOTAL"]
-                _s1i = _sg_s1.set_index("macro")
-                for m in _order:
-                    if m not in _s1i.index: continue
-                    r = _s1i.loc[m]
-                    vacum = float(r["venta_acum"]); vsem = float(r["venta_sem"])
-                    qacum = float(r["q_acum"]); qsem = float(r["q_sem"])
-                    pct_a = (vacum/_tot1_acum*100) if _tot1_acum else 0
-                    pct_s = (vsem/_tot1_sem*100) if _tot1_sem else 0
-                    _rows1.append({
-                        "Ítem": m,
-                        "$ Acumulado": _sg_fmt_money(vacum),
-                        "Q Acum": int(qacum), "% Ac": f"{pct_a:.1f}%",
-                        "$ Diario": _sg_fmt_money(vacum/_sg_dias_acum),
-                        "Q Diario": int(round(qacum/_sg_dias_acum)),
-                        "$ Semanal": _sg_fmt_money(vsem),
-                        "Q Sem": int(qsem), "% Sem": f"{pct_s:.1f}%",
-                    })
-                _tot1v = _tot1_sem
-                st.dataframe(pd.DataFrame(_rows1), use_container_width=True, hide_index=True)
-
-            # ── Render Sección 2 ──
-            st.markdown(f"### 2 · Ventas por Categoría — garzones evaluados ({_sg_ngarz})")
-            if _sg_s2 is not None and not _sg_s2.empty:
-                _tot2_acum = float(_sg_s2[_sg_s2["macro"]=="TOTAL"]["venta_acum"].iloc[0]) if not _sg_s2[_sg_s2["macro"]=="TOTAL"].empty else 0
-                _tot2_sem = float(_sg_s2[_sg_s2["macro"]=="TOTAL"]["venta_sem"].iloc[0]) if not _sg_s2[_sg_s2["macro"]=="TOTAL"].empty else 0
-                _rows2 = []
-                _s2i = _sg_s2.set_index("macro")
-                for m in ["ALIMENTOS","BAR","CAFETERÍA Y POSTRES","TOTAL"]:
-                    if m not in _s2i.index: continue
-                    r = _s2i.loc[m]
-                    vacum = float(r["venta_acum"]); vsem = float(r["venta_sem"])
-                    qacum = float(r["q_acum"]); qsem = float(r["q_sem"])
-                    pct_a = (vacum/_tot2_acum*100) if _tot2_acum else 0
-                    pct_s = (vsem/_tot2_sem*100) if _tot2_sem else 0
-                    _rows2.append({
-                        "Ítem": m,
-                        "$ Acumulado": _sg_fmt_money(vacum),
-                        "Q Acum": int(qacum), "% Ac": f"{pct_a:.1f}%",
-                        "$ Diario": _sg_fmt_money(vacum/_sg_dias_acum),
-                        "Q Diario": int(round(qacum/_sg_dias_acum)),
-                        "$ Semanal": _sg_fmt_money(vsem),
-                        "Q Sem": int(qsem), "% Sem": f"{pct_s:.1f}%",
-                    })
-                _tot2v = _tot2_sem
-                st.dataframe(pd.DataFrame(_rows2), use_container_width=True, hide_index=True)
-                st.caption(f"Total venta salón evaluada: {_sg_fmt_money(_tot2v)} "
-                           f"(esperado Vitacura sem 01-07: $59.216.110)")
-
-            # ═══════════ SECCIÓN 3 — DETALLE POR SUBCATEGORÍA (whitelist) ═══════════
-            # % = sobre el total venta salón evaluado (sección 2). Q prom × garzón = Q ÷ nº garzones.
-            _sg_tot_eval = _tot2v if (_sg_s2 is not None and not _sg_s2.empty) else 0
-            _sg_ng = _sg_ngarz if _sg_ngarz else 1
-
-            def _sg_bloque3(titulo, casos, df_data, total_titulo="TOTAL"):
-                """casos: lista de (etiqueta, [categorias_menu]). Tabla sección 3 con
-                bloques Acumulado / Diario / Semanal, cada uno con Q prom×garzón y %."""
-                if df_data is None or df_data.empty:
-                    return
-                _di = df_data.set_index("categoria_menu")
-                filas = []
-                tot_sem = tot_acum = tot_q_acum = tot_q_sem = 0
-                def _qpg(q): return round(q / _sg_ng, 0)
-                for etiqueta, cats in casos:
-                    vsem = vacum = qacum = qsem = 0
-                    for c in cats:
-                        if c in _di.index:
-                            r = _di.loc[c]
-                            vsem += float(r["venta_sem"]); vacum += float(r["venta_acum"])
-                            qacum += float(r["q_acum"]); qsem += float(r["q_sem"])
-                    pct_a = (vacum / _sg_tot_eval * 100) if _sg_tot_eval else 0
-                    pct_s = (vsem / _sg_tot_eval * 100) if _sg_tot_eval else 0
-                    filas.append({
-                        "Ítem": etiqueta,
-                        "$ Acumulado": _sg_fmt_money(vacum),
-                        "Q prom×gz Ac": _qpg(qacum), "% Ac": f"{pct_a:.1f}%",
-                        "$ Diario": _sg_fmt_money(vacum / _sg_dias_acum),
-                        "Q prom×gz Diario": _qpg(qacum / _sg_dias_acum),
-                        "$ Semanal": _sg_fmt_money(vsem),
-                        "Q prom×gz Sem": _qpg(qsem), "% Sem": f"{pct_s:.1f}%",
-                    })
-                    tot_sem += vsem; tot_acum += vacum; tot_q_acum += qacum; tot_q_sem += qsem
-                pct_ta = (tot_acum / _sg_tot_eval * 100) if _sg_tot_eval else 0
-                pct_ts = (tot_sem / _sg_tot_eval * 100) if _sg_tot_eval else 0
-                filas.append({
-                    "Ítem": total_titulo,
-                    "$ Acumulado": _sg_fmt_money(tot_acum),
-                    "Q prom×gz Ac": _qpg(tot_q_acum), "% Ac": f"{pct_ta:.1f}%",
-                    "$ Diario": _sg_fmt_money(tot_acum / _sg_dias_acum),
-                    "Q prom×gz Diario": _qpg(tot_q_acum / _sg_dias_acum),
-                    "$ Semanal": _sg_fmt_money(tot_sem),
-                    "Q prom×gz Sem": _qpg(tot_q_sem), "% Sem": f"{pct_ts:.1f}%",
-                })
-                st.markdown(f"**{titulo}**")
-                st.dataframe(pd.DataFrame(filas), use_container_width=True, hide_index=True)
-
-            st.markdown("### 3 · Ventas por Categoría (detalle)")
-
-            # Query base: venta por categoria_menu (whitelist, salón), acum + semanal
-            _sg_s3 = run_query(f"""
-                select categoria_menu,
-                  sum(case when fecha_venta between :ai and :af
-                           then monto_venta_real + coalesce(descuento,0) else 0 end) as venta_acum,
-                  sum(case when fecha_venta between :ai and :af then cantidad_vendida else 0 end) as q_acum,
-                  sum(case when fecha_venta between :si and :sf
-                           then monto_venta_real + coalesce(descuento,0) else 0 end) as venta_sem,
-                  sum(case when fecha_venta between :si and :sf then cantidad_vendida else 0 end) as q_sem
-                from ventas
-                where local = :loc and origen is null
-                  and categoria_menu not in ('{_sg_excl_sql}')
-                  and garzon = any(:wl)
-                group by categoria_menu
-            """, _sg_p)
-
-            # 3.1 Alimentos (rollup grueso del MD, sección 5.2)
-            _sg_bloque3("VENTAS ALIMENTOS", [
-                ("PARA COMPARTIR", ["Para Compartir"]),
-                ("SANDWICH Y HAMBURGUESAS", [
-                    "Sandwich Clasicos","Churrasco Clasico","Pernil Clasico",
-                    "Hamburguesa De La Casa","Hamburguesa De Quinoa","Hamburguesa Clasica",
-                    "Mechada Clasica","Filete Clasico","Lomito Clasico","Ave Clasica"]),
-                ("PLATOS", ["Platos Clasicos","Platos Alemanes"]),
-                ("AGREGADOS Y ACOMPAÑAMIENTOS", ["Agregados","Acompanamientos"]),
-                ("ENSALADAS Y OTROS", ["Ensaladas Y Otros"]),
-                ("NIÑOS", ["Ninos"]),
-            ], _sg_s3)
-
-            # 3.2 Cafetería y Postres
-            _sg_bloque3("VENTAS CAFETERÍA Y POSTRES", [
-                ("CAFETERÍA", ["Cafeteria"]),
-                ("POSTRES", ["Postres"]),
-            ], _sg_s3)
-
-            # 3.3 Líquidos C/A (por categoria_menu, MD 5.6)
-            _sg_bloque3("VENTAS LÍQUIDOS C/A", [
-                ("CERVEZAS", ["Cervezas"]),
-                ("TRAGOS Y COCTAILS", ["Cocteles","Piscos","Ron","Tequila","Vodka","Whisky","Bajativos"]),
-                ("VINOS Y ESPUMANTES", ["Vinos","Espumantes"]),
-            ], _sg_s3)
-
-            # 3.4 Líquidos S/A (por categoria_menu, MD 5.7)
-            _sg_bloque3("VENTAS LÍQUIDOS S/A", [
-                ("BEBIDAS Y AGUAS", ["Bebidas"]),
-                ("JUGOS, LIMONADAS Y TRAGOS S/A", ["Jugos Naturales","Limonadas","Tragos Sin Alcohol"]),
-            ], _sg_s3)
-
-            # ═══════════ SECCIÓN 4 — CONTROL DE PRODUCTOS ESTRATÉGICOS ═══════════
-            # Por nombre_producto EXACTO (no like). Whitelist + salón. Q prom = Q ÷ nº garzones.
-            _SG_ESTRAT = [
-                ("ALCAPARRAS", "Alcaparra"),
-                ("AJI VERDE", "Aji Verde"),
-                ("MAYONESA TRUFADA", "Mayonesa Trufada"),
-                ("SALSA A LA PIMIENTA", "Salsa a la pimienta"),
-                ("SALSA DE QUESO AZUL", "Salsa Queso Azul"),
-            ]
-            _sg_estrat_nombres = [n for _, n in _SG_ESTRAT]
-            _sg_pe = dict(_sg_p); _sg_pe["nombres"] = _sg_estrat_nombres
-            _sg_s4 = run_query("""
-                select nombre_producto,
-                  sum(case when fecha_venta between :ai and :af
-                           then monto_venta_real + coalesce(descuento,0) else 0 end) as venta_acum,
-                  sum(case when fecha_venta between :ai and :af then cantidad_vendida else 0 end) as q_acum,
-                  sum(case when fecha_venta between :si and :sf
-                           then monto_venta_real + coalesce(descuento,0) else 0 end) as venta_sem,
-                  sum(case when fecha_venta between :si and :sf then cantidad_vendida else 0 end) as q_sem
-                from ventas
-                where local = :loc and origen is null
-                  and garzon = any(:wl)
-                  and nombre_producto = any(:nombres)
-                group by nombre_producto
-            """, _sg_pe)
-
-            st.markdown("### 4 · Control de Productos Estratégicos")
-            _s4i = _sg_s4.set_index("nombre_producto") if (_sg_s4 is not None and not _sg_s4.empty) else None
-            _rows4 = []
-            _t4_sem = _t4_acum = _t4_qacum = 0
-            for etiqueta, nombre in _SG_ESTRAT:
-                if _s4i is not None and nombre in _s4i.index:
-                    r = _s4i.loc[nombre]
-                    vsem = float(r["venta_sem"]); vacum = float(r["venta_acum"]); qacum = float(r["q_acum"])
-                else:
-                    vsem = vacum = qacum = 0
-                pct = (vsem / _sg_tot_eval * 100) if _sg_tot_eval else 0
-                _rows4.append({
-                    "Ítem": etiqueta,
-                    "$ Acumulado": _sg_fmt_money(vacum),
-                    "Q": int(qacum),
-                    "Q prom × garzón": round(qacum / _sg_ng, 0),
-                    "$ Diario": _sg_fmt_money(vacum / _sg_dias_acum),
-                    "$ Semanal": _sg_fmt_money(vsem),
-                    "%": f"{pct:.1f}%",
-                })
-                _t4_sem += vsem; _t4_acum += vacum; _t4_qacum += qacum
-            _rows4.append({
-                "Ítem": "TOTAL",
-                "$ Acumulado": _sg_fmt_money(_t4_acum),
-                "Q": int(_t4_qacum),
-                "Q prom × garzón": round(_t4_qacum / _sg_ng, 0),
-                "$ Diario": _sg_fmt_money(_t4_acum / _sg_dias_acum),
-                "$ Semanal": _sg_fmt_money(_t4_sem),
-                "%": f"{(_t4_sem / _sg_tot_eval * 100) if _sg_tot_eval else 0:.1f}%",
-            })
-            st.dataframe(pd.DataFrame(_rows4), use_container_width=True, hide_index=True)
-            st.caption(f"Total estratégicos: {_sg_fmt_money(_t4_sem)} "
-                       "(esperado Vitacura sem 01-07: $213.700)")
-
-
-            # ════════════════════════════════════════════════════════════════
-            #  ADICIONALES — clasificación de líquidos por nombre (prio) + SKU
-            #  Grupos adicionales: Agregados, Cafetería, Postres (por categoria_menu)
-            #  + Líq C/A y Líq S/A (por clasif_liquidos).
-            # ════════════════════════════════════════════════════════════════
-            # Expresión de bucket de líquido reutilizable
-            _SG_LIQ_JOIN = """
-                left join clasif_liquidos cn
-                       on cn.match_tipo='nombre' and cn.match_valor = lower(trim(v.nombre_producto))
-                left join clasif_liquidos cs
-                       on cs.match_tipo='sku' and cs.match_valor = v.sku_producto
-            """
-            _SG_BUCKET = "coalesce(cn.bucket, cs.bucket)"  # LIQ_CA / LIQ_SA / null
-            # Grupos por categoria_menu (adicionales no-líquido)
-            _SG_GRP_CASE = """
-                case
-                  when categoria_menu in ('Agregados','Acompanamientos') then 'AGREGADOS'
-                  when categoria_menu = 'Cafeteria' then 'CAFETERIA'
-                  when categoria_menu = 'Postres' then 'POSTRES'
-                  else null
-                end
-            """
-
-            # ═══════════ SECCIÓN 5 — ADICIONALES POR GARZÓN ═══════════
-            def _sg_seccion5(rango_i, rango_f, etiqueta, p=None, mostrar=True):
-                _p5 = dict(p if p is not None else _sg_p); _p5["r_i"] = str(rango_i); _p5["r_f"] = str(rango_f)
-                _df = run_query(f"""
-                    with d as (
-                      select v.garzon, v.fecha_venta, v.categoria_menu as cat,
-                        v.monto_venta_real + coalesce(v.descuento,0) as venta,
-                        v.cantidad_vendida as q,
-                        {_SG_GRP_CASE} as grp_cat, {_SG_BUCKET} as liq_bucket
-                      from ventas v {_SG_LIQ_JOIN}
-                      where v.local = :loc and v.origen is null and v.garzon = any(:wl)
-                        and v.categoria_menu not in ('{_sg_excl_sql}')
-                        and v.fecha_venta between :r_i and :r_f
-                    )
-                    select garzon, count(distinct fecha_venta) as dias, sum(venta) as venta_total,
-                      sum(case when grp_cat='AGREGADOS' then venta else 0 end) as v_agr,
-                      sum(case when grp_cat='AGREGADOS' then q else 0 end) as q_agr,
-                      sum(case when cat='Agregados' then venta else 0 end) as v_agr_solo,
-                      sum(case when grp_cat='CAFETERIA' then venta else 0 end) as v_caf,
-                      sum(case when grp_cat='CAFETERIA' then q else 0 end) as q_caf,
-                      sum(case when grp_cat='POSTRES' then venta else 0 end) as v_pos,
-                      sum(case when grp_cat='POSTRES' then q else 0 end) as q_pos,
-                      sum(case when liq_bucket='LIQ_SA' then venta else 0 end) as v_lsa,
-                      sum(case when liq_bucket='LIQ_SA' then q else 0 end) as q_lsa,
-                      sum(case when liq_bucket='LIQ_CA' then venta else 0 end) as v_lca,
-                      sum(case when liq_bucket='LIQ_CA' then q else 0 end) as q_lca
-                    from d group by garzon having sum(venta) > 0 order by venta_total desc
-                """, _p5)
-                if mostrar:
-                    st.markdown(f"### 5 · Adicionales por Garzón ({etiqueta})")
-                _rows = []
-                if _df is not None and not _df.empty:
-                    for _, r in _df.iterrows():
-                        vt = float(r["venta_total"]) or 1
-                        dias = int(r["dias"]) or 1
-                        def _pg(v): return f"{v/vt*100:.1f}%"
-                        pct_total = (float(r["v_agr"])+float(r["v_caf"])+float(r["v_pos"])
-                                     +float(r["v_lsa"])+float(r["v_lca"])) / vt * 100
-                        _rows.append({
-                            "Garzón": _sg_limpia_nombre(r["garzon"]),
-                            "Venta": _sg_fmt_money(r["venta_total"]),
-                            "Aporte Propina": _sg_fmt_money(float(r["venta_total"])*0.10),
-                            "Vta Diaria Prom": _sg_fmt_money(float(r["venta_total"])/dias),
-                            "Días": dias,
-                            "Agreg.": _sg_fmt_money(r["v_agr"]), "Q Ag": int(r["q_agr"]), "%Ag": _pg(float(r["v_agr"])),
-                            "Café": _sg_fmt_money(r["v_caf"]), "Q Cf": int(r["q_caf"]), "%Cf": _pg(float(r["v_caf"])),
-                            "Postres": _sg_fmt_money(r["v_pos"]), "Q Po": int(r["q_pos"]), "%Po": _pg(float(r["v_pos"])),
-                            "Líq S/A": _sg_fmt_money(r["v_lsa"]), "Q SA": int(r["q_lsa"]), "%SA": _pg(float(r["v_lsa"])),
-                            "Líq C/A": _sg_fmt_money(r["v_lca"]), "Q CA": int(r["q_lca"]), "%CA": _pg(float(r["v_lca"])),
-                            "%Total": f"{pct_total:.1f}%",
-                        })
-                    if mostrar:
-                        st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True)
-                return _rows, _df
-
-            # ── Sección 5 SOLO para el RESUMEN DE COLORES ──
-            # Idéntica a _sg_seccion5 pero con las reglas exclusivas del resumen:
-            #   (1) excluye los SKUs de _SG_RES_SKU_EXCL (venta cero, no son adicional)
-            #   (2) los SKU 'AGREX%' solo suman con origen IS NULL + garzón en whitelist
-            #       (el WHERE base ya lo garantiza; la exclusión (1) opera antes de agrupar)
-            # NO se usa en el Informe B, que sigue con _sg_seccion5 intacta.
-            def _sg_seccion5_resumen(rango_i, rango_f, p=None):
-                _p5 = dict(p if p is not None else _sg_p); _p5["r_i"] = str(rango_i); _p5["r_f"] = str(rango_f)
-                _sku_excl_sql = "','".join(_SG_RES_SKU_EXCL)
-                _df = run_query(f"""
-                    with d as (
-                      select v.garzon, v.fecha_venta, v.categoria_menu as cat,
-                        v.monto_venta_real + coalesce(v.descuento,0) as venta,
-                        v.cantidad_vendida as q,
-                        {_SG_GRP_CASE} as grp_cat, {_SG_BUCKET} as liq_bucket
-                      from ventas v {_SG_LIQ_JOIN}
-                      where v.local = :loc and v.origen is null and v.garzon = any(:wl)
-                        and v.categoria_menu not in ('{_sg_excl_sql}')
-                        and v.sku_producto not in ('{_sku_excl_sql}')
-                        and v.fecha_venta between :r_i and :r_f
-                    )
-                    select garzon, count(distinct fecha_venta) as dias, sum(venta) as venta_total,
-                      sum(case when grp_cat='AGREGADOS' then venta else 0 end) as v_agr,
-                      sum(case when grp_cat='AGREGADOS' then q else 0 end) as q_agr,
-                      sum(case when cat='Agregados' then venta else 0 end) as v_agr_solo,
-                      sum(case when cat='Agregados' then q else 0 end) as q_agr_solo,
-                      sum(case when grp_cat='CAFETERIA' then venta else 0 end) as v_caf,
-                      sum(case when grp_cat='CAFETERIA' then q else 0 end) as q_caf,
-                      sum(case when grp_cat='POSTRES' then venta else 0 end) as v_pos,
-                      sum(case when grp_cat='POSTRES' then q else 0 end) as q_pos,
-                      sum(case when liq_bucket='LIQ_SA' then venta else 0 end) as v_lsa,
-                      sum(case when liq_bucket='LIQ_SA' then q else 0 end) as q_lsa,
-                      sum(case when liq_bucket='LIQ_CA' then venta else 0 end) as v_lca,
-                      sum(case when liq_bucket='LIQ_CA' then q else 0 end) as q_lca
-                    from d group by garzon having sum(venta) > 0 order by venta_total desc
-                """, _p5)
-                return _df
-
-            _rows5, _df5_acum = _sg_seccion5(_sg_mes_ini, _sg_fin, "acumulado mensual")
-            _rows5_sem, _df5_sem = _sg_seccion5(_sg_ini, _sg_fin, "semanal")
-            # DF filtrado exclusivo para el resumen de colores (semana completa)
-            _df5_sem_resumen = _sg_seccion5_resumen(_sg_ini, _sg_fin)
-
-            # ═══════════ SECCIÓN 6 — ADICIONALES POR LOCAL (red, acum mensual) ═══════════
-            _sg_s6 = run_query(f"""
+        # Query del resumen (por local): réplica exacta de _sg_seccion5_resumen.
+        def _sg_resumen_df(loc):
+            _p5 = {"loc": loc, "wl": _SG_WHITELIST,
+                   "r_i": str(_sg_ini), "r_f": str(_sg_fin)}
+            _sku_excl_sql = "','".join(_SG_RES_SKU_EXCL)
+            return run_query(f"""
                 with d as (
-                  select
-                    v.local,
+                  select v.garzon, v.fecha_venta, v.categoria_menu as cat,
                     v.monto_venta_real + coalesce(v.descuento,0) as venta,
-                    {_SG_GRP_CASE} as grp_cat,
-                    {_SG_BUCKET} as liq_bucket
-                  from ventas v
-                  {_SG_LIQ_JOIN}
-                  where v.origen is null and v.garzon = any(:wl)
+                    v.cantidad_vendida as q,
+                    {_SG_GRP_CASE} as grp_cat, {_SG_BUCKET} as liq_bucket
+                  from ventas v {_SG_LIQ_JOIN}
+                  where v.local = :loc and v.origen is null and v.garzon = any(:wl)
                     and v.categoria_menu not in ('{_sg_excl_sql}')
-                    and v.fecha_venta between :ai and :af
+                    and v.sku_producto not in ('{_sku_excl_sql}')
+                    and v.fecha_venta between :r_i and :r_f
                 )
-                select local,
-                  sum(venta) as venta_total,
+                select garzon, count(distinct fecha_venta) as dias, sum(venta) as venta_total,
                   sum(case when grp_cat='AGREGADOS' then venta else 0 end) as v_agr,
+                  sum(case when grp_cat='AGREGADOS' then q else 0 end) as q_agr,
+                  sum(case when cat='Agregados' then venta else 0 end) as v_agr_solo,
+                  sum(case when cat='Agregados' then q else 0 end) as q_agr_solo,
                   sum(case when grp_cat='CAFETERIA' then venta else 0 end) as v_caf,
+                  sum(case when grp_cat='CAFETERIA' then q else 0 end) as q_caf,
                   sum(case when grp_cat='POSTRES' then venta else 0 end) as v_pos,
+                  sum(case when grp_cat='POSTRES' then q else 0 end) as q_pos,
                   sum(case when liq_bucket='LIQ_SA' then venta else 0 end) as v_lsa,
-                  sum(case when liq_bucket='LIQ_CA' then venta else 0 end) as v_lca
-                from d group by local having sum(venta) > 0
-            """, _sg_p)
+                  sum(case when liq_bucket='LIQ_SA' then q else 0 end) as q_lsa,
+                  sum(case when liq_bucket='LIQ_CA' then venta else 0 end) as v_lca,
+                  sum(case when liq_bucket='LIQ_CA' then q else 0 end) as q_lca
+                from d group by garzon having sum(venta) > 0 order by venta_total desc
+            """, _p5)
 
-            st.markdown("### 6 · Adicionales por Local (acumulado mensual)")
-            _sg_rank = None
-            if _sg_s6 is not None and not _sg_s6.empty:
-                _s6 = _sg_s6.copy()
-                for c in ["venta_total","v_agr","v_caf","v_pos","v_lsa","v_lca"]:
-                    _s6[c] = pd.to_numeric(_s6[c], errors="coerce").fillna(0)
-                _s6["pct_ag"] = _s6["v_agr"]/_s6["venta_total"]*100
-                _s6["pct_cf"] = _s6["v_caf"]/_s6["venta_total"]*100
-                _s6["pct_po"] = _s6["v_pos"]/_s6["venta_total"]*100
-                _s6["pct_sa"] = _s6["v_lsa"]/_s6["venta_total"]*100
-                _s6["pct_ca"] = _s6["v_lca"]/_s6["venta_total"]*100
-                _s6["pct_total"] = _s6[["v_agr","v_caf","v_pos","v_lsa","v_lca"]].sum(axis=1)/_s6["venta_total"]*100
-                _s6 = _s6.sort_values("pct_total", ascending=False).reset_index(drop=True)
-                _s6["Local"] = _s6["local"].apply(lambda x: "Pedro de Valdivia" if x=="Providencia" else x)
-                _sg_rank = _s6[["local","pct_total"]].copy()
-                _show6 = pd.DataFrame({
-                    "Local": _s6["Local"],
-                    "% Agregados": _s6["pct_ag"].map("{:.1f}%".format),
-                    "% Cafetería": _s6["pct_cf"].map("{:.1f}%".format),
-                    "% Postres": _s6["pct_po"].map("{:.1f}%".format),
-                    "% Líq S/A": _s6["pct_sa"].map("{:.1f}%".format),
-                    "% Líq C/A": _s6["pct_ca"].map("{:.1f}%".format),
-                    "% Total": _s6["pct_total"].map("{:.1f}%".format),
-                })
-                st.dataframe(_show6, use_container_width=True, hide_index=True)
-
-            # ── Encabezado RANKING x/10 (basado en sección 6) ──
-            if _sg_rank is not None and not _sg_rank.empty:
-                _sg_rank = _sg_rank.sort_values("pct_total", ascending=False).reset_index(drop=True)
-                _pos = _sg_rank.index[_sg_rank["local"] == _sg_local].tolist()
-                _ranking_txt = f"{_pos[0]+1}/{len(_sg_rank)}" if _pos else "—"
-                st.metric(f"🏆 Ranking de {_sg_local}", _ranking_txt,
-                          help="Posición por % Total adicionales (acum. mensual), de mayor a menor.")
-
-            # ═══════════ SECCIÓN 7 — ESTRATÉGICOS POR LOCAL (Q ÷ nº garzones) ═══════════
-            _sg_s7 = run_query("""
-                with vt as (
-                  select v.local, v.nombre_producto, sum(v.cantidad_vendida) as q
-                  from ventas v
-                  where v.origen is null and v.garzon = any(:wl)
-                    and v.nombre_producto = any(:nombres)
-                    and v.fecha_venta between :ai and :af
-                  group by v.local, v.nombre_producto
-                ),
-                ng as (
-                  select local, count(distinct garzon) as n
-                  from ventas where origen is null and garzon = any(:wl)
-                    and fecha_venta between :ai and :af
-                  group by local
-                )
-                select vt.local, vt.nombre_producto,
-                       vt.q / nullif(ng.n,0)::numeric as q_x_garzon
-                from vt join ng on ng.local = vt.local
-            """, _sg_pe)
-
-            st.markdown("### 7 · Estratégicos por Local (Q ÷ nº garzones)")
-            if _sg_s7 is not None and not _sg_s7.empty:
-                _piv7 = _sg_s7.pivot_table(index="local", columns="nombre_producto",
-                                           values="q_x_garzon", aggfunc="sum", fill_value=0)
-                _piv7 = _piv7.round(0).astype(int)
-                _piv7.index = [("Pedro de Valdivia" if x=="Providencia" else x) for x in _piv7.index]
-                st.dataframe(_piv7, use_container_width=True)
-
-            # ═══════════ SECCIÓN 9 — EVOLUCIÓN POR GARZÓN (semanas ISO 20-23) ═══════════
-            _sg_s9 = run_query(f"""
-                with d as (
-                  select
-                    v.garzon,
-                    extract(week from v.fecha_venta)::int as iso_week,
-                    v.monto_venta_real + coalesce(v.descuento,0) as venta,
-                    {_SG_GRP_CASE} as grp_cat,
-                    {_SG_BUCKET} as liq_bucket
-                  from ventas v
-                  {_SG_LIQ_JOIN}
-                  where v.local = :loc and v.origen is null
-                    and v.garzon = any(:wl)
-                    and v.categoria_menu not in ('{_sg_excl_sql}')
-                    and extract(week from v.fecha_venta)::int between 20 and 23
-                    and extract(year from v.fecha_venta)::int = 2026
-                )
-                select garzon, iso_week,
-                  sum(venta) as venta,
-                  sum(case when grp_cat is not null or liq_bucket is not null then venta else 0 end) as adic
-                from d group by garzon, iso_week
-            """, _sg_p)
-
-            st.markdown("### 9 · Evolución por Garzón (semanas 20–23)")
-            if _sg_s9 is not None and not _sg_s9.empty:
-                _s9 = _sg_s9.copy()
-                _s9["venta"] = pd.to_numeric(_s9["venta"], errors="coerce").fillna(0)
-                _s9["adic"] = pd.to_numeric(_s9["adic"], errors="coerce").fillna(0)
-                _gar = sorted(_s9["garzon"].unique())
-                _rows9 = []
-                for g in _gar:
-                    sub = _s9[_s9["garzon"] == g]
-                    fila = {"Garzón": _sg_limpia_nombre(g)}
-                    tot_v = tot_a = 0
-                    for wk in [20,21,22,23]:
-                        w = sub[sub["iso_week"] == wk]
-                        v = float(w["venta"].iloc[0]) if not w.empty else 0
-                        a = float(w["adic"].iloc[0]) if not w.empty else 0
-                        fila[f"S{wk} Venta"] = _sg_fmt_money(v) if v else "—"
-                        fila[f"S{wk} %"] = f"{a/v*100:.1f}%" if v else "—"
-                        tot_v += v; tot_a += a
-                    fila["Total Venta"] = _sg_fmt_money(tot_v)
-                    fila["% Total"] = f"{tot_a/tot_v*100:.1f}%" if tot_v else "—"
-                    _rows9.append(fila)
-                st.dataframe(pd.DataFrame(_rows9), use_container_width=True, hide_index=True)
-
-            # ═══════════ SECCIÓN 11 — COMPORTAMIENTO SEMANAL Y MENSUAL POR LOCAL ═══════════
-            st.markdown("### 11 · Comportamiento por Local")
-            # Semanal (ISO 20-23)
-            _sg_s11s = run_query(f"""
-                with d as (
-                  select v.local,
-                    extract(week from v.fecha_venta)::int as iso_week,
-                    v.monto_venta_real + coalesce(v.descuento,0) as venta,
-                    {_SG_GRP_CASE} as grp_cat, {_SG_BUCKET} as liq_bucket
-                  from ventas v {_SG_LIQ_JOIN}
-                  where v.origen is null and v.garzon = any(:wl)
-                    and v.categoria_menu not in ('{_sg_excl_sql}')
-                    and extract(week from v.fecha_venta)::int between 20 and 23
-                    and extract(year from v.fecha_venta)::int = 2026
-                )
-                select local, iso_week, sum(venta) as venta,
-                  sum(case when grp_cat is not null or liq_bucket is not null then venta else 0 end) as adic
-                from d group by local, iso_week
-            """, _sg_p)
-            if _sg_s11s is not None and not _sg_s11s.empty:
-                _s = _sg_s11s.copy()
-                _s["pct"] = pd.to_numeric(_s["adic"],errors="coerce")/pd.to_numeric(_s["venta"],errors="coerce")*100
-                _piv = _s.pivot_table(index="local", columns="iso_week", values="pct", aggfunc="sum")
-                _piv.columns = [f"S{c}" for c in _piv.columns]
-                _piv.index = [("Pedro de Valdivia" if x=="Providencia" else x) for x in _piv.index]
-                _piv = _piv.sort_values(_piv.columns[-1], ascending=False)
-                st.markdown("**Comportamiento semanal (% Total adicionales)**")
-                st.dataframe(_piv.round(1).astype(str)+"%", use_container_width=True)
-
-            # Mensual (mar-jun, jun hasta el 07)
-            _sg_s11m = run_query(f"""
-                with d as (
-                  select v.local,
-                    to_char(v.fecha_venta,'YYYY-MM') as mes,
-                    v.monto_venta_real + coalesce(v.descuento,0) as venta,
-                    {_SG_GRP_CASE} as grp_cat, {_SG_BUCKET} as liq_bucket
-                  from ventas v {_SG_LIQ_JOIN}
-                  where v.origen is null and v.garzon = any(:wl)
-                    and v.categoria_menu not in ('{_sg_excl_sql}')
-                    and v.fecha_venta >= date '2026-03-01'
-                    and v.fecha_venta <= :af
-                )
-                select local, mes, sum(venta) as venta,
-                  sum(case when grp_cat is not null or liq_bucket is not null then venta else 0 end) as adic
-                from d group by local, mes
-            """, _sg_p)
-            if _sg_s11m is not None and not _sg_s11m.empty:
-                _m = _sg_s11m.copy()
-                _m["pct"] = pd.to_numeric(_m["adic"],errors="coerce")/pd.to_numeric(_m["venta"],errors="coerce")*100
-                _pm = _m.pivot_table(index="local", columns="mes", values="pct", aggfunc="sum")
-                _pm.index = [("Pedro de Valdivia" if x=="Providencia" else x) for x in _pm.index]
-                _pm = _pm.sort_values(_pm.columns[-1], ascending=False)
-                st.markdown("**Comportamiento mensual (% Total adicionales)**")
-                st.dataframe(_pm.round(1).astype(str)+"%", use_container_width=True)
-
-            # ═══════════ BOTÓN PDF ═══════════
-            st.markdown("---")
-            try:
-                _sg_jef = _SG_JEFATURAS.get(_sg_local, ("","",""))
-                # Datos para gráfico 10 (adicionales por local) y 8 (evolución garzón)
-                _g10 = []
-                if locals().get("_s6") is not None and not _s6.empty:
-                    _g10 = [(("Pedro de Valdivia" if r["local"]=="Providencia" else r["local"]),
-                             float(r["pct_total"])) for _, r in _s6.iterrows()]
-                _sg_ctx = {
-                    "local": _sg_local,
-                    "ranking": locals().get("_ranking_txt", "—"),
-                    "ng": _sg_ngarz, "ini": _sg_ini, "fin": _sg_fin,
-                    "supervisor": _sg_jef[0], "jefe": _sg_jef[1], "subjefe": _sg_jef[2],
-                    "rows1": locals().get("_rows1", []),
-                    "rows2": locals().get("_rows2", []),
-                    "rows4": locals().get("_rows4", []),
-                    "rows5": locals().get("_rows5", []),
-                    "rows5_sem": locals().get("_rows5_sem", []),
-                    "rows9": locals().get("_rows9", []),
-                    "graf10": _g10,
-                    "graf8": locals().get("_rows9", []),
-                }
-                _sg_pdf = generar_pdf_garzones(_sg_ctx)
-                _sg_cols_btn = st.columns(3)
-                with _sg_cols_btn[0]:
-                    st.download_button("📄 Descargar informe PDF", _sg_pdf,
-                        file_name=f"control_ventas_salon_{_sg_local}_{_sg_ini}.pdf",
-                        mime="application/pdf", use_container_width=True, key="sg_pdf")
-                with _sg_cols_btn[1]:
+        if st.button(f"📦 Generar los {len(_SG_LOCALES_ZIP)} resúmenes de colores (ZIP)",
+                     type="primary", use_container_width=True, key="sg_zip_btn"):
+            import zipfile as _zipf, gc as _gc
+            _buf_zip = io.BytesIO()
+            _errs = []; _ok = 0
+            _prog = st.progress(0.0, text="Generando resúmenes…")
+            with _zipf.ZipFile(_buf_zip, "w", _zipf.ZIP_DEFLATED) as _zf:
+                for _i, _loc in enumerate(_SG_LOCALES_ZIP):
                     try:
-                        _ctx_b = _sg_construir_ctx_b(
-                            _sg_local, _sg_ini, _sg_fin, _sg_ngarz,
-                            _SG_JEFATURAS.get(_sg_local, ("","","")),
-                            locals().get("_ranking_txt","—"),
-                            _sg_s1, _sg_s2, _sg_s3, locals().get("_rows4", []),
-                            locals().get("_rows5", []), locals().get("_rows5_sem", []),
-                            locals().get("_s6"), _sg_s7,
-                            locals().get("_rows9", []), _g10,
-                            s9_raw=locals().get("_sg_s9"),
-                            s11s=locals().get("_sg_s11s"),
-                            s11m=locals().get("_sg_s11m"),
-                        )
-                        _pdf_b = generar_pdf_garzones_b(_ctx_b, logo_path=LOGO_PATH)
-                        st.download_button("📄 Descargar informe B (réplica fiel)", _pdf_b,
-                            file_name=f"informe_B_{_sg_local}_{_sg_ini}.pdf",
-                            mime="application/pdf", use_container_width=True, key="sg_pdf_b")
-                    except Exception as _e_b:
-                        st.warning(f"Informe B pendiente: {_e_b}")
-                with _sg_cols_btn[2]:
-                    try:
-                        # Resumen (colores) = SEMANA COMPLETA. Usa el DF FILTRADO
-                        # (_df5_sem_resumen: sin los SKUs excluidos + regla AGREX),
-                        # no el _df5_sem del Informe B. Los otros informes van en mensual.
-                        _df5r = locals().get("_df5_sem_resumen")
-                        if _df5r is not None and not _df5r.empty:
-                            _pdf_res = _sg_resumen_colores_pdf(_df5r, _sg_local, _sg_dias_sem,
-                                                              logo_path=LOGO_PATH)
-                            st.download_button("🎨 Descargar resumen (colores)", _pdf_res,
-                                file_name=f"resumen_{_sg_local}_{_sg_ini}.pdf",
-                                mime="application/pdf", use_container_width=True, key="sg_pdf_res")
-                        else:
-                            st.caption("Resumen sin datos.")
-                    except Exception as _e_r:
-                        st.warning(f"Resumen pendiente: {_e_r}")
-
-                # ═══════════ GENERAR LOS 10 LOCALES (ZIP) ═══════════
-                st.markdown("---")
-                st.markdown("**Generar los 10 locales de una vez**")
-                _s6 = locals().get("_s6")  # asegura binding (sección 6 compartida)
-
-                def _sg_calc_local(loc):
-                    """Recalcula el informe B + df del resumen para un local cualquiera.
-                    Reusa s6/s7/s11 (compartidos, todos los locales) y _sg_seccion5.
-                    Devuelve (ctx_b, df5_sem)  # 2º valor = df SEMANAL (resumen colores)."""
-                    _pl = dict(_sg_p); _pl["loc"] = loc
-                    _pe = dict(_pl); _pe["nombres"] = _sg_estrat_nombres
-                    # Sección 1 (raw)
-                    s1 = run_query(f"""
-                        with base as (
-                          select monto_venta_real + coalesce(descuento,0) as venta,
-                            cantidad_vendida as q,
-                            case when categoria_menu in ('{_sg_bar_sql}') then 'BAR'
-                                 when categoria_menu in ('{_sg_cafe_sql}') then 'CAFETERÍA Y POSTRES'
-                                 else 'ALIMENTOS' end as macro,
-                            fecha_venta
-                          from ventas where local = :loc and origen is null
-                            and categoria_menu not in ('{_sg_excl_sql}')
-                        )
-                        select coalesce(macro,'TOTAL') as macro,
-                          sum(case when fecha_venta between :ai and :af then venta else 0 end) as venta_acum,
-                          sum(case when fecha_venta between :ai and :af then q else 0 end) as q_acum,
-                          sum(case when fecha_venta between :si and :sf then venta else 0 end) as venta_sem,
-                          sum(case when fecha_venta between :si and :sf then q else 0 end) as q_sem
-                        from base group by rollup(macro) order by macro
-                    """, _pl)
-                    # Sección 2 (raw, whitelist)
-                    s2 = run_query(f"""
-                        with base as (
-                          select monto_venta_real + coalesce(descuento,0) as venta,
-                            cantidad_vendida as q,
-                            case when categoria_menu in ('{_sg_bar_sql}') then 'BAR'
-                                 when categoria_menu in ('{_sg_cafe_sql}') then 'CAFETERÍA Y POSTRES'
-                                 else 'ALIMENTOS' end as macro,
-                            fecha_venta
-                          from ventas where local = :loc and origen is null
-                            and categoria_menu not in ('{_sg_excl_sql}') and garzon = any(:wl)
-                        )
-                        select coalesce(macro,'TOTAL') as macro,
-                          sum(case when fecha_venta between :ai and :af then venta else 0 end) as venta_acum,
-                          sum(case when fecha_venta between :ai and :af then q else 0 end) as q_acum,
-                          sum(case when fecha_venta between :si and :sf then venta else 0 end) as venta_sem,
-                          sum(case when fecha_venta between :si and :sf then q else 0 end) as q_sem
-                        from base group by rollup(macro) order by macro
-                    """, _pl)
-                    tot_eval = 0.0
-                    if s2 is not None and not s2.empty:
-                        _t = s2[s2["macro"] == "TOTAL"]
-                        tot_eval = float(_t["venta_sem"].iloc[0]) if not _t.empty else 0.0
-                    # nº garzones del local
-                    _ngdf = run_query("""
-                        select count(distinct garzon) as n from ventas
-                        where local = :loc and origen is null and garzon = any(:wl)
-                          and fecha_venta between :ai and :af
-                    """, _pl)
-                    ng = int(_ngdf["n"].iloc[0]) if (_ngdf is not None and not _ngdf.empty) else 0
-                    ng_div = ng if ng else 1
-                    # Sección 3 (raw)
-                    s3 = run_query(f"""
-                        select categoria_menu,
-                          sum(case when fecha_venta between :ai and :af then monto_venta_real + coalesce(descuento,0) else 0 end) as venta_acum,
-                          sum(case when fecha_venta between :ai and :af then cantidad_vendida else 0 end) as q_acum,
-                          sum(case when fecha_venta between :si and :sf then monto_venta_real + coalesce(descuento,0) else 0 end) as venta_sem,
-                          sum(case when fecha_venta between :si and :sf then cantidad_vendida else 0 end) as q_sem
-                        from ventas where local = :loc and origen is null
-                          and categoria_menu not in ('{_sg_excl_sql}') and garzon = any(:wl)
-                        group by categoria_menu
-                    """, _pl)
-                    # Sección 4 -> rows4
-                    s4 = run_query("""
-                        select nombre_producto,
-                          sum(case when fecha_venta between :ai and :af then monto_venta_real + coalesce(descuento,0) else 0 end) as venta_acum,
-                          sum(case when fecha_venta between :ai and :af then cantidad_vendida else 0 end) as q_acum,
-                          sum(case when fecha_venta between :si and :sf then monto_venta_real + coalesce(descuento,0) else 0 end) as venta_sem,
-                          sum(case when fecha_venta between :si and :sf then cantidad_vendida else 0 end) as q_sem
-                        from ventas where local = :loc and origen is null and garzon = any(:wl)
-                          and nombre_producto = any(:nombres)
-                        group by nombre_producto
-                    """, _pe)
-                    _s4i = s4.set_index("nombre_producto") if (s4 is not None and not s4.empty) else None
-                    rows4 = []; _t4s = _t4a = _t4q = 0.0
-                    for _etq, _nom in _SG_ESTRAT:
-                        if _s4i is not None and _nom in _s4i.index:
-                            _r = _s4i.loc[_nom]; _vs = float(_r["venta_sem"]); _va = float(_r["venta_acum"]); _qa = float(_r["q_acum"])
-                        else:
-                            _vs = _va = _qa = 0.0
-                        _pct = (_vs / tot_eval * 100) if tot_eval else 0
-                        rows4.append({"Ítem": _etq, "$ Acumulado": _sg_fmt_money(_va), "Q": int(_qa),
-                                      "Q prom × garzón": round(_qa / ng_div, 0),
-                                      "$ Diario": _sg_fmt_money(_va / _sg_dias_acum),
-                                      "$ Semanal": _sg_fmt_money(_vs), "%": f"{_pct:.1f}%"})
-                        _t4s += _vs; _t4a += _va; _t4q += _qa
-                    rows4.append({"Ítem": "TOTAL", "$ Acumulado": _sg_fmt_money(_t4a), "Q": int(_t4q),
-                                  "Q prom × garzón": round(_t4q / ng_div, 0),
-                                  "$ Diario": _sg_fmt_money(_t4a / _sg_dias_acum),
-                                  "$ Semanal": _sg_fmt_money(_t4s),
-                                  "%": f"{(_t4s / tot_eval * 100) if tot_eval else 0:.1f}%"})
-                    # Sección 5 (acum + semanal), sin pintar en pantalla.
-                    # df5_sem (sin filtrar) sigue alimentando el Informe B.
-                    rows5, _ = _sg_seccion5(_sg_mes_ini, _sg_fin, "", p=_pl, mostrar=False)
-                    rows5_sem, df5_sem = _sg_seccion5(_sg_ini, _sg_fin, "", p=_pl, mostrar=False)
-                    # DF FILTRADO exclusivo del resumen de colores para este local
-                    df5_sem_resumen = _sg_seccion5_resumen(_sg_ini, _sg_fin, p=_pl)
-                    # Sección 9 (raw, por local)
-                    s9 = run_query(f"""
-                        with d as (
-                          select v.garzon, extract(week from v.fecha_venta)::int as iso_week,
-                            v.monto_venta_real + coalesce(v.descuento,0) as venta,
-                            {_SG_GRP_CASE} as grp_cat, {_SG_BUCKET} as liq_bucket
-                          from ventas v {_SG_LIQ_JOIN}
-                          where v.local = :loc and v.origen is null and v.garzon = any(:wl)
-                            and v.categoria_menu not in ('{_sg_excl_sql}')
-                            and extract(week from v.fecha_venta)::int between 20 and 23
-                            and extract(year from v.fecha_venta)::int = 2026
-                        )
-                        select garzon, iso_week, sum(venta) as venta,
-                          sum(case when grp_cat is not null or liq_bucket is not null then venta else 0 end) as adic
-                        from d group by garzon, iso_week
-                    """, _pl)
-                    # Ranking x/10 (compartido, sección 6)
-                    rk = "—"
-                    _rk_df = _sg_rank
-                    if _rk_df is not None and not _rk_df.empty:
-                        _rs = _rk_df.sort_values("pct_total", ascending=False).reset_index(drop=True)
-                        _pos = _rs.index[_rs["local"] == loc].tolist()
-                        rk = f"{_pos[0]+1}/{len(_rs)}" if _pos else "—"
-                    jef = _SG_JEFATURAS.get(loc, ("", "", ""))
-                    ctx = _sg_construir_ctx_b(
-                        loc, _sg_ini, _sg_fin, ng, jef, rk,
-                        s1, s2, s3, rows4, rows5, rows5_sem,
-                        _s6, _sg_s7, [], [],
-                        s9_raw=s9, s11s=_sg_s11s, s11m=_sg_s11m,
-                    )
-                    return ctx, df5_sem_resumen   # 2º valor = df SEMANAL FILTRADO → resumen de colores
-
-                _locales_todos = list(_SG_JEFATURAS.keys())
-                if st.button(f"📦 Generar los {len(_locales_todos)} locales (ZIP)",
-                             use_container_width=True, key="sg_zip_btn"):
-                    import zipfile as _zipf
-                    _buf_zip = io.BytesIO()
-                    _errs = []; _ok = 0
-                    _prog = st.progress(0.0, text="Generando informes…")
-                    with _zipf.ZipFile(_buf_zip, "w", _zipf.ZIP_DEFLATED) as _zf:
-                        for _i, _loc in enumerate(_locales_todos):
-                            try:
-                                _ctx_l, _df5_l = _sg_calc_local(_loc)
-                                _pdf_l = generar_pdf_garzones_b(_ctx_l, logo_path=LOGO_PATH)
-                                _zf.writestr(f"informe_B_{_loc}_{_sg_ini}.pdf", _pdf_l)
-                                if _df5_l is not None and not _df5_l.empty:
-                                    _res_l = _sg_resumen_colores_pdf(_df5_l, _loc, _sg_dias_sem,
-                                                                    logo_path=LOGO_PATH)
-                                    _zf.writestr(f"resumen_{_loc}_{_sg_ini}.pdf", _res_l)
-                                _ok += 1
-                            except Exception as _e_loc:
-                                _errs.append(f"{_loc}: {_e_loc}")
-                            _prog.progress((_i + 1) / len(_locales_todos),
-                                           text=f"{_loc} ({_i+1}/{len(_locales_todos)})")
-                    _prog.empty()
-                    _buf_zip.seek(0)
-                    if _ok:
-                        st.success(f"Listo: {_ok}/{len(_locales_todos)} locales generados.")
-                        st.download_button("⬇️ Descargar ZIP (10 informes + 10 resúmenes)",
-                            _buf_zip.getvalue(),
-                            file_name=f"informes_garzones_{_sg_ini}.zip",
-                            mime="application/zip", use_container_width=True, key="sg_zip_dl")
-                    if _errs:
-                        st.warning("Locales con problemas:\n- " + "\n- ".join(_errs))
-            except Exception as _e_sg:
-                st.warning(f"PDF pendiente de ajuste: {_e_sg}")
+                        _df_r = _sg_resumen_df(_loc)
+                        if _df_r is not None and not _df_r.empty:
+                            _pdf_r = _sg_resumen_colores_pdf(_df_r, _loc, _sg_dias_sem,
+                                                             logo_path=LOGO_PATH)
+                            _zf.writestr(f"resumen_{_loc}_{_sg_ini}.pdf", _pdf_r)
+                            _ok += 1
+                            del _pdf_r
+                        del _df_r
+                        _gc.collect()   # liberar memoria entre locales (evita caída)
+                    except Exception as _e_loc:
+                        _errs.append(f"{_loc}: {_e_loc}")
+                    _prog.progress((_i + 1) / len(_SG_LOCALES_ZIP),
+                                   text=f"{_loc} ({_i+1}/{len(_SG_LOCALES_ZIP)})")
+            _prog.empty()
+            _buf_zip.seek(0)
+            if _ok:
+                st.success(f"Listo: {_ok}/{len(_SG_LOCALES_ZIP)} resúmenes generados.")
+                st.download_button(f"⬇️ Descargar ZIP ({_ok} resúmenes)",
+                    _buf_zip.getvalue(),
+                    file_name=f"resumenes_colores_{_sg_ini}.zip",
+                    mime="application/zip", use_container_width=True, key="sg_zip_dl")
+            else:
+                st.error("No se generó ningún resumen.")
+            if _errs:
+                st.warning("Locales con problemas:\n- " + "\n- ".join(_errs))
 
 elif informe_sel == "Auditor":
     from datetime import date as _date2
