@@ -6248,45 +6248,20 @@ def _sg_resumen_colores_pdf(df_acum, local, dias_periodo, logo_path=None):
         try: return f"{int(round(float(v))):,}".replace(",", ".")
         except: return "0"
 
-    # ══════════ TABLA 1 — RANKING POR VENTA ══════════
-    # Datos de venta general. Orden propio: por venta total del período (desc).
-    # Rank propio segun venta. Colores: se conservan tal cual (el color estático
-    # de cada garzon en el resumen) y el TOTAL en gris.
-    head1 = [P(h, st_h) for h in
-             ["Rank", "NOMBRE GARZON", "VENTA", "APORTE<br/>PROPINA",
-              "VENTA DIARIA<br/>PROMEDIO", "DIAS<br/>TRAB"]]
+    headers = ["Rank", "NOMBRE GARZON", "VENTA", "APORTE<br/>PROPINA",
+               "VENTA DIARIA<br/>PROMEDIO", "DIAS<br/>TRAB",
+               "VENTA<br/>AGREGADOS", "Q<br/>AGREG", "%<br/>AGREGADO",
+               "VENTA<br/>CAFETERIA", "Q<br/>CAF", "%<br/>CAFETERIA",
+               "VENTA<br/>POSTRES", "Q<br/>POS", "%<br/>POSTRES",
+               "VENTA LIQ<br/>S/A", "Q<br/>S/A", "% LIQ<br/>S/A",
+               "VENTA LIQ<br/>C/A", "Q<br/>C/A", "% LIQ<br/>C/A",
+               "Q<br/>TOTAL", "% TOTAL"]
+    head = [P(h, st_h) for h in headers]
 
-    def fila1_de(f, rk, bold=False):
+    def fila_de(f, bold=False):
         e = st_b if bold else st_c
-        return [P(rk, e), P(f["nombre"], e), P(_fm(f["venta"]), e),
-                P(_fm(f["propina"]), e), P(_fm(f["vdp"]), e), P(f["dias"], e)]
-
-    # Orden por venta total (desc); guardamos el color original de cada fila.
-    orden_v = sorted(range(len(filas)), key=lambda i: -filas[i]["venta"])
-    filas_v = [filas[i] for i in orden_v]
-
-    data1 = [head1]
-    for k, f in enumerate(filas_v):
-        data1.append(fila1_de(f, k + 1))
-    if tot:
-        data1.append(fila1_de(tot, "", bold=True))
-
-    # ══════════ TABLA 2 — DETALLE DE ADICIONALES ══════════
-    # Grupos evaluados (Agregados, Cafetería, Postres, Líq S/A, Líq C/A) en tríos
-    # Venta/Q/%, + Q Total + % Total. Orden: por % de venta adicional (p_total),
-    # que es el orden que ya trae `filas`. Rank + Nombre para identificar cada fila.
-    head2 = [P(h, st_h) for h in
-             ["Rank", "NOMBRE GARZON",
-              "VENTA<br/>AGREGADOS", "Q<br/>AGREG", "%<br/>AGREGADO",
-              "VENTA<br/>CAFETERIA", "Q<br/>CAF", "%<br/>CAFETERIA",
-              "VENTA<br/>POSTRES", "Q<br/>POS", "%<br/>POSTRES",
-              "VENTA LIQ<br/>S/A", "Q<br/>S/A", "% LIQ<br/>S/A",
-              "VENTA LIQ<br/>C/A", "Q<br/>C/A", "% LIQ<br/>C/A",
-              "Q<br/>TOTAL", "% TOTAL"]]
-
-    def fila2_de(f, bold=False):
-        e = st_b if bold else st_c
-        return [P(f.get("rank", ""), e), P(f["nombre"], e),
+        return [P(f.get("rank", ""), e), P(f["nombre"], e), P(_fm(f["venta"]), e),
+                P(_fm(f["propina"]), e), P(_fm(f["vdp"]), e), P(f["dias"], e),
                 P(_fm(f["v_agr"]), e), P(_fq(f.get("q_agr", 0)), e), P(_fp(f["p_agr"]), e),
                 P(_fm(f["v_caf"]), e), P(_fq(f.get("q_caf", 0)), e), P(_fp(f["p_caf"]), e),
                 P(_fm(f["v_pos"]), e), P(_fq(f.get("q_pos", 0)), e), P(_fp(f["p_pos"]), e),
@@ -6294,65 +6269,41 @@ def _sg_resumen_colores_pdf(df_acum, local, dias_periodo, logo_path=None):
                 P(_fm(f["v_lca"]), e), P(_fq(f.get("q_lca", 0)), e), P(_fp(f["p_ca"]), e),
                 P(_fq(f.get("q_total", 0)), e), P(_fp(f["p_total"]), e)]
 
-    data2 = [head2]
-    for f in filas:  # ya ordenadas por p_total
-        data2.append(fila2_de(f))
+    data = [head]
+    for f in filas:
+        data.append(fila_de(f))
     if tot:
-        data2.append(fila2_de(tot, bold=True))
+        data.append(fila_de(tot, bold=True))
 
     PAG_W = _landscape(_letter)[0]
     MX = 22
     util = PAG_W - 2 * MX
+    #        Rk  Nom  Vta  Prop VDP  Días  Vag  Qag  %ag  Vcf  Qcf  %cf  Vps  Qps  %ps  Vsa  Qsa  %sa  Vca  Qca  %ca  Qtot %tot
+    pesos = [2.8, 9.5, 6.2, 5.4, 6.0, 3.0, 5.6, 3.4, 4.0, 5.6, 3.4, 4.0, 5.6, 3.4, 4.0, 5.6, 3.4, 4.0, 5.6, 3.4, 4.0, 3.6, 4.6]
+    wcols = [util * p / sum(pesos) for p in pesos]
 
-    # Secuencia de colores ESTÁTICA por posición (patrón de bandas del local):
-    # posición 1 -> filas[0]["color"], posición 2 -> filas[1]["color"], etc.
-    # El color pertenece a la POSICIÓN de la fila, no al garzón. Por eso ambas
-    # tablas usan el mismo patrón aunque el orden de garzones difiera.
-    _colores_pos = [f["color"] for f in filas]
-
-    def _mk_estilo(n_filas):
-        est = [
-            ("GRID", (0, 0), (-1, -1), 0.5, BORDE),
-            ("BACKGROUND", (0, 0), (-1, 0), GRIS),
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-            ("TOPPADDING", (0, 0), (-1, -1), 2.5),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
-            ("LEFTPADDING", (0, 0), (-1, -1), 2),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 2),
-        ]
-        for i in range(n_filas):
-            col = _colores_pos[i] if i < len(_colores_pos) else "rojo"
-            est.append(("BACKGROUND", (0, i + 1), (-1, i + 1), _cmap.get(col, ROJO)))
-        if tot:
-            est.append(("BACKGROUND", (0, n_filas + 1), (-1, n_filas + 1), GRIS))
-        return est
-
-    # Tabla 1 (venta): 6 columnas
-    #         Rk   Nom   Vta   Prop  VDP   Días
-    pesos1 = [3.0, 14.0, 8.0, 7.0, 8.0, 4.0]
-    w1 = [util * p / sum(pesos1) for p in pesos1]
-    t1 = _Table(data1, colWidths=w1, repeatRows=1)
-    t1.setStyle(_TS(_mk_estilo(len(filas_v))))
-
-    # Tabla 2 (adicionales): 19 columnas
-    #         Rk   Nom  Vag  Qag  %ag  Vcf  Qcf  %cf  Vps  Qps  %ps  Vsa  Qsa  %sa  Vca  Qca  %ca  Qtot %tot
-    pesos2 = [3.0, 10.5, 6.2, 3.8, 4.4, 6.2, 3.8, 4.4, 6.2, 3.8, 4.4, 6.2, 3.8, 4.4, 6.2, 3.8, 4.4, 4.0, 5.0]
-    w2 = [util * p / sum(pesos2) for p in pesos2]
-    t2 = _Table(data2, colWidths=w2, repeatRows=1)
-    t2.setStyle(_TS(_mk_estilo(len(filas))))
-
-    st_sub = _PS("sub", fontName="Helvetica-Bold", fontSize=8.5, alignment=_TAC, leading=10)
+    t = _Table(data, colWidths=wcols, repeatRows=1)
+    estilo = [
+        ("GRID", (0, 0), (-1, -1), 0.5, BORDE),
+        ("BACKGROUND", (0, 0), (-1, 0), GRIS),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("TOPPADDING", (0, 0), (-1, -1), 2.5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
+        ("LEFTPADDING", (0, 0), (-1, -1), 2),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+    ]
+    for i, f in enumerate(filas):
+        estilo.append(("BACKGROUND", (0, i + 1), (-1, i + 1), _cmap.get(f["color"], ROJO)))
+    if tot:
+        estilo.append(("BACKGROUND", (0, len(filas) + 1), (-1, len(filas) + 1), GRIS))
+    t.setStyle(_TS(estilo))
 
     buf = _io.BytesIO()
     doc = _Doc(buf, pagesize=_landscape(_letter),
                leftMargin=MX, rightMargin=MX, topMargin=18, bottomMargin=18)
     _titulo_loc = "Pedro de Valdivia" if str(local) == "Providencia" else str(local)
-    doc.build([
-        _Par(_titulo_loc.upper(), st_t), _Sp(1, 6),
-        _Par("RANKING POR VENTA", st_sub), _Sp(1, 4), t1, _Sp(1, 14),
-        _Par("DETALLE DE ADICIONALES", st_sub), _Sp(1, 4), t2,
-    ])
+    doc.build([_Par(_titulo_loc.upper(), st_t), _Sp(1, 6), t])
     buf.seek(0)
     return buf.getvalue()
 
