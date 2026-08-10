@@ -1087,6 +1087,30 @@ def run_query(sql, params=None):
 
 
 @st.cache_data(ttl=300, show_spinner=False)
+def _wlg_ultimo_local(garzones: tuple):
+    """Último local conocido (por MAX fecha_venta) de cada garzón dado, en TODO
+    el histórico de ventas. Para ubicar a garzones marcados en whitelist que no
+    tuvieron venta en el período seleccionado."""
+    if not garzones:
+        return pd.DataFrame(columns=["garzon", "local", "ultima_venta", "registros"])
+    _lst = list(garzones)
+    return run_query("""
+        SELECT DISTINCT ON (garzon)
+               garzon, local, ultima_venta, registros
+        FROM (
+            SELECT garzon, local,
+                   MAX(fecha_venta) AS ultima_venta,
+                   COUNT(*)         AS registros
+            FROM ventas
+            WHERE garzon = ANY(:gs)
+              AND btrim(garzon) <> ''
+            GROUP BY garzon, local
+        ) t
+        ORDER BY garzon, ultima_venta DESC, registros DESC
+    """, {"gs": _lst})
+
+
+@st.cache_data(ttl=300, show_spinner=False)
 def _wlg_universo_ventas(solo_salon: bool, fecha_ini=None, fecha_fin=None):
     """Universo de garzones (por local) desde ventas. Cacheado: cambia poco y es
     una consulta pesada; evita re-consultar en cada interacción del módulo.
@@ -12324,10 +12348,11 @@ if modulo.startswith("📦"):
 
         st.markdown(
             "<div class='info-box'>Marca qué garzones entran al informe <b>Seguimiento Garzones</b> "
-            "(único lugar donde se usa esta whitelist). El universo se arma con los garzones de "
-            "<b>ventas</b> en el <b>período seleccionado</b>; cada garzón aparece <b>una vez</b>, en su "
-            "<b>local más reciente</b> del rango. Un <b>⚠️</b> indica que el garzón tuvo venta en "
-            "<b>2+ locales</b> en el período (pasa el mouse para ver el detalle). "
+            "(único lugar donde se usa esta whitelist). El universo es la <b>unión</b> de: los garzones "
+            "con venta en el <b>período seleccionado</b> (en su <b>local más reciente</b>) y los que ya "
+            "están <b>marcados en whitelist</b> (se muestran siempre, en su último local conocido, con "
+            "<b>💤</b> si no vendieron en el período). Un <b>⚠️</b> indica venta en <b>2+ locales</b> en "
+            "el período (pasa el mouse para el detalle). "
             "Marcar = <b>en whitelist</b> (<code>activo = true</code>); desmarcar = fuera "
             "(<code>activo = false</code>, no borra la fila). La marca es por <b>nombre de garzón</b>. "
             "Puedes modificar varios locales y <b>guardar todo junto</b> al final.</div>",
@@ -12362,9 +12387,11 @@ if modulo.startswith("📦"):
             )
         _wlg_raw = _wlg_universo_ventas(_wlg_solo_salon, _wlg_f_ini, _wlg_f_fin)
 
+        # Aunque no haya ventas en el rango, seguimos: los garzones marcados en
+        # whitelist se muestran igual (más abajo se agregan). Normalizamos a DF.
         if _wlg_raw is None or _wlg_raw.empty:
-            st.warning("No se encontraron garzones en la tabla de ventas con los filtros actuales.")
-        else:
+            _wlg_raw = pd.DataFrame(columns=["local", "garzon", "registros", "ultima_venta"])
+        if True:
             _wlg_raw = _wlg_raw.copy()
             _wlg_raw["garzon"] = _wlg_raw["garzon"].astype(str)
             _wlg_raw["local"] = _wlg_raw["local"].astype(str)
@@ -12405,6 +12432,37 @@ if modulo.startswith("📦"):
             if _wlg_marks_df is not None and not _wlg_marks_df.empty:
                 for _g, _a in zip(_wlg_marks_df["garzon"], _wlg_marks_df["activo"]):
                     _wlg_marks[str(_g)] = bool(_a) if _a is not None else False
+
+            # ── UNIÓN: garzones ACTIVOS en whitelist que NO aparecieron en el rango ──
+            # Se muestran igual (criterio: si está marcado, va sí o sí), ubicados en
+            # su ÚLTIMO local conocido (histórico) y marcados como "sin venta en el
+            # período" (💤) para distinguirlos.
+            _wlg_sin_venta = set()   # garzones marcados que no vendieron en el rango
+            _wlg_ya = set(_wlg_univ["garzon"].tolist())
+            _wlg_activos = [_g for _g, _a in _wlg_marks.items() if _a]
+            _wlg_faltan = [_g for _g in _wlg_activos if _g not in _wlg_ya]
+            if _wlg_faltan:
+                _wlg_ul = _wlg_ultimo_local(tuple(sorted(_wlg_faltan)))
+                _wlg_ul_map = {}
+                if _wlg_ul is not None and not _wlg_ul.empty:
+                    for _, _r in _wlg_ul.iterrows():
+                        _wlg_ul_map[str(_r["garzon"])] = str(_r["local"])
+                _wlg_extra = []
+                for _g in _wlg_faltan:
+                    _wlg_sin_venta.add(_g)
+                    _wlg_extra.append({
+                        "garzon": _g,
+                        "registros": 0,
+                        "ultima_venta": pd.NaT,
+                        "local": _wlg_ul_map.get(_g, "— Sin local conocido"),
+                    })
+                if _wlg_extra:
+                    _wlg_univ = pd.concat(
+                        [_wlg_univ, pd.DataFrame(_wlg_extra)], ignore_index=True
+                    )
+
+            if _wlg_univ.empty:
+                st.warning("No hay garzones con venta en el período ni marcados en la whitelist.")
 
             # Estado original por garzón — base del diff
             _wlg_orig = {_g: _wlg_marks.get(_g, False) for _g in _wlg_univ["garzon"]}
@@ -12460,10 +12518,19 @@ if modulo.startswith("📦"):
                                 _g = _row["garzon"]
                                 _reg = int(_row["registros"]) if pd.notna(_row["registros"]) else 0
                                 _mult = _wlg_multi.get(_g)
-                                # Etiqueta con ⚠️ si el garzón vendió en 2+ locales en el rango
-                                _label = f"⚠️ {_g}" if _mult else f"{_g}"
-                                # Tooltip: si es multi-local, detalla dónde vendió para evaluar
-                                if _mult:
+                                _dormido = _g in _wlg_sin_venta
+                                # Etiqueta: ⚠️ si multi-local; 💤 si marcado pero sin venta en el rango
+                                if _dormido:
+                                    _label = f"💤 {_g}"
+                                elif _mult:
+                                    _label = f"⚠️ {_g}"
+                                else:
+                                    _label = f"{_g}"
+                                # Tooltip según caso
+                                if _dormido:
+                                    _help = ("En whitelist, sin venta en el período. "
+                                             "Se muestra en su último local conocido.")
+                                elif _mult:
                                     _help = (f"⚠️ Vendió en {_mult['n']} locales en el período. "
                                              f"{_mult['detalle']}. "
                                              f"Revisa antes de desmarcar: puede afectar el informe.")
