@@ -1087,10 +1087,17 @@ def run_query(sql, params=None):
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def _wlg_universo_ventas(solo_salon: bool):
+def _wlg_universo_ventas(solo_salon: bool, fecha_ini=None, fecha_fin=None):
     """Universo de garzones (por local) desde ventas. Cacheado: cambia poco y es
-    una consulta pesada; evita re-consultar en cada interacción del módulo."""
+    una consulta pesada; evita re-consultar en cada interacción del módulo.
+    fecha_ini/fecha_fin: acotan el universo por fecha_venta (para ver el local
+    reciente de cada garzón, no el histórico)."""
     _filtro = "AND origen IS NULL" if solo_salon else ""
+    _fecha = ""
+    _params = {}
+    if fecha_ini is not None and fecha_fin is not None:
+        _fecha = "AND fecha_venta BETWEEN :f_ini AND :f_fin"
+        _params = {"f_ini": str(fecha_ini), "f_fin": str(fecha_fin)}
     return run_query(f"""
         SELECT local,
                garzon,
@@ -1100,9 +1107,10 @@ def _wlg_universo_ventas(solo_salon: bool):
         WHERE garzon IS NOT NULL
           AND btrim(garzon) <> ''
           {_filtro}
+          {_fecha}
         GROUP BY local, garzon
         ORDER BY local, garzon
-    """)
+    """, _params)
 
 
 # ============================================================
@@ -12317,7 +12325,9 @@ if modulo.startswith("📦"):
         st.markdown(
             "<div class='info-box'>Marca qué garzones entran al informe <b>Seguimiento Garzones</b> "
             "(único lugar donde se usa esta whitelist). El universo se arma con los garzones de "
-            "<b>ventas</b>; cada garzón aparece <b>una vez</b>, en el local donde más vende. "
+            "<b>ventas</b> en el <b>período seleccionado</b>; cada garzón aparece <b>una vez</b>, en su "
+            "<b>local más reciente</b> del rango. Un <b>⚠️</b> indica que el garzón tuvo venta en "
+            "<b>2+ locales</b> en el período (pasa el mouse para ver el detalle). "
             "Marcar = <b>en whitelist</b> (<code>activo = true</code>); desmarcar = fuera "
             "(<code>activo = false</code>, no borra la fila). La marca es por <b>nombre de garzón</b>. "
             "Puedes modificar varios locales y <b>guardar todo junto</b> al final.</div>",
@@ -12335,7 +12345,22 @@ if modulo.startswith("📦"):
                 "Solo salón (origen IS NULL)", value=False, key="wlg_solo_salon",
                 help="Oculta garzones que solo aparecen en ventas con origen (delivery).",
             )
-        _wlg_raw = _wlg_universo_ventas(_wlg_solo_salon)
+        # Selector de fechas: acota el universo para ver el local RECIENTE de cada
+        # garzón (default: últimos 7 días). Evita desactivar a alguien por su local
+        # histórico cuando ya se movió a otro local.
+        from datetime import timedelta as _wlg_td
+        _wlg_hoy = date.today()
+        _wlg_fc1, _wlg_fc2 = st.columns(2)
+        with _wlg_fc1:
+            _wlg_f_ini = st.date_input(
+                "Desde", value=_wlg_hoy - _wlg_td(days=7), key="wlg_f_ini",
+                help="Inicio del período para determinar el local reciente del garzón.",
+            )
+        with _wlg_fc2:
+            _wlg_f_fin = st.date_input(
+                "Hasta", value=_wlg_hoy, key="wlg_f_fin",
+            )
+        _wlg_raw = _wlg_universo_ventas(_wlg_solo_salon, _wlg_f_ini, _wlg_f_fin)
 
         if _wlg_raw is None or _wlg_raw.empty:
             st.warning("No se encontraron garzones en la tabla de ventas con los filtros actuales.")
@@ -12344,16 +12369,32 @@ if modulo.startswith("📦"):
             _wlg_raw["garzon"] = _wlg_raw["garzon"].astype(str)
             _wlg_raw["local"] = _wlg_raw["local"].astype(str)
 
-            # ── Colapsar a UNA fila por garzón: local principal = más ventas ──
+            # ── Colapsar a UNA fila por garzón ──
+            # Local mostrado = el MÁS RECIENTE en el rango (mayor ultima_venta;
+            # desempate por más registros). Antes era "el de más ventas histórico".
             _wlg_tot_reg = _wlg_raw.groupby("garzon", as_index=False).agg(
                 registros=("registros", "sum"),
                 ultima_venta=("ultima_venta", "max"),
             )
             _wlg_prim = (
-                _wlg_raw.sort_values(["registros", "local"], ascending=[False, True])
+                _wlg_raw.sort_values(["ultima_venta", "registros", "local"],
+                                     ascending=[False, False, True])
                         .drop_duplicates("garzon")[["garzon", "local"]]
             )
             _wlg_univ = _wlg_tot_reg.merge(_wlg_prim, on="garzon", how="left")
+
+            # ── Señalizador multi-local: garzones con venta en 2+ locales en el rango ──
+            # Guardamos, por garzón: nº de locales y un detalle (local · registros · última).
+            _wlg_multi = {}   # garzon -> {"n": int, "detalle": "..."}
+            for _g, _grp in _wlg_raw.groupby("garzon"):
+                _locs = _grp.sort_values("ultima_venta", ascending=False)
+                _n = _locs["local"].nunique()
+                if _n >= 2:
+                    _partes = []
+                    for _, _r in _locs.iterrows():
+                        _uv = str(_r["ultima_venta"])[:10]
+                        _partes.append(f"{_r['local']}: {int(_r['registros'])} reg (última {_uv})")
+                    _wlg_multi[_g] = {"n": _n, "detalle": " | ".join(_partes)}
 
             # ── Marcas actuales desde garzones_whitelist ──
             try:
@@ -12418,12 +12459,22 @@ if modulo.startswith("📦"):
                             for _idx, (_, _row) in enumerate(_sub.iterrows()):
                                 _g = _row["garzon"]
                                 _reg = int(_row["registros"]) if pd.notna(_row["registros"]) else 0
+                                _mult = _wlg_multi.get(_g)
+                                # Etiqueta con ⚠️ si el garzón vendió en 2+ locales en el rango
+                                _label = f"⚠️ {_g}" if _mult else f"{_g}"
+                                # Tooltip: si es multi-local, detalla dónde vendió para evaluar
+                                if _mult:
+                                    _help = (f"⚠️ Vendió en {_mult['n']} locales en el período. "
+                                             f"{_mult['detalle']}. "
+                                             f"Revisa antes de desmarcar: puede afectar el informe.")
+                                else:
+                                    _help = f"{_reg} venta(s) registradas"
                                 with _cols[_idx % 3]:
                                     st.checkbox(
-                                        f"{_g}",
+                                        _label,
                                         value=_wlg_orig.get(_g, False),
                                         key=f"wlg_chk::{_g}",
-                                        help=f"{_reg} venta(s) registradas",
+                                        help=_help,
                                     )
                     st.divider()
                     _wlg_guardar = st.form_submit_button("💾 Guardar marcadores", type="primary")
