@@ -6340,6 +6340,196 @@ def _sg_resumen_colores_pdf(df_acum, local, dias_periodo, logo_path=None):
     return buf.getvalue()
 
 
+def _sg_resumen_colores_pdf_v2(df_acum, local, dias_periodo, con_tercer_cuadro=False,
+                               logo_path=None):
+    """Forma B con cuartetos. Dos tablas:
+      T1 RANKING POR VENTA (orden venta desc)
+      T2 DETALLE DE ADICIONALES con CUARTETOS por grupo: Venta / Q / Q-prom-día / %
+         (Q-prom-día = Q del grupo / días trabajados del garzón)
+    Si con_tercer_cuadro=True agrega:
+      T3 PROMEDIO DIARIO POR TRAMO: por grupo, prom L-J y prom V-D
+         (Q del tramo / días trabajados en ese tramo)
+    Colores estáticos por posición (idénticos a la versión base). df_acum es el
+    DF extendido de _sg_resumen_df (con q_*_lj / q_*_vd y dias_lj / dias_vd)."""
+    import io as _io
+    from reportlab.lib.pagesizes import letter as _letter, landscape as _landscape
+    from reportlab.lib import colors as _colors
+    from reportlab.lib.styles import ParagraphStyle as _PS
+    from reportlab.lib.enums import TA_CENTER as _TAC
+    from reportlab.platypus import (SimpleDocTemplate as _Doc, Table as _Table,
+                                    TableStyle as _TS, Paragraph as _Par, Spacer as _Sp)
+
+    def _fm(v):
+        try: return f"${int(round(float(v))):,}".replace(",", ".")
+        except: return "$0"
+    def _fp(v):
+        try: return f"{float(v)*100:.1f}%"
+        except: return "0,0%"
+    def _fq(v):
+        try: return f"{int(round(float(v))):,}".replace(",", ".")
+        except: return "0"
+    def _fd(v):
+        try: return f"{float(v):.1f}".replace(".", ",")
+        except: return "0,0"
+
+    VERDE = _colors.HexColor("#63BE7B"); AMAR = _colors.HexColor("#FFEB84")
+    ROJO = _colors.HexColor("#F8696B"); GRIS = _colors.HexColor("#D9D9D9")
+    BORDE = _colors.HexColor("#808080")
+    _cmap = {"verde": VERDE, "amar": AMAR, "rojo": ROJO}
+
+    st_h = _PS("h", fontName="Helvetica-Bold", fontSize=6.2, alignment=_TAC, leading=7.2)
+    st_c = _PS("c", fontName="Helvetica", fontSize=6.4, alignment=_TAC, leading=7.6)
+    st_b = _PS("b", fontName="Helvetica-Bold", fontSize=6.4, alignment=_TAC, leading=7.6)
+    st_t = _PS("t", fontName="Helvetica-Bold", fontSize=12, alignment=_TAC, leading=14)
+    st_sub = _PS("sub", fontName="Helvetica-Bold", fontSize=9, alignment=_TAC, leading=11)
+    P = lambda s, e=st_c: _Par(str(s), e)
+
+    # Filas ordenadas por % adicional + color por posición (misma lógica base)
+    filas, tot = _sg_orden_colores(df_acum, dias_periodo, local=local)
+    # Índice por nombre para recuperar campos extra (tramos) del df crudo
+    _raw = {str(r["garzon"]): r for _, r in df_acum.iterrows()} if df_acum is not None else {}
+
+    _colores_pos = [f["color"] for f in filas]
+
+    def _mk_estilo(n):
+        est = [
+            ("GRID", (0, 0), (-1, -1), 0.5, BORDE),
+            ("BACKGROUND", (0, 0), (-1, 0), GRIS),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("TOPPADDING", (0, 0), (-1, -1), 2.5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
+            ("LEFTPADDING", (0, 0), (-1, -1), 2),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+        ]
+        for i in range(n):
+            col = _colores_pos[i] if i < len(_colores_pos) else "rojo"
+            est.append(("BACKGROUND", (0, i + 1), (-1, i + 1), _cmap.get(col, ROJO)))
+        if tot:
+            est.append(("BACKGROUND", (0, n + 1), (-1, n + 1), GRIS))
+        return est
+
+    PAG_W = _landscape(_letter)[0]; MX = 22; util = PAG_W - 2 * MX
+
+    # ── T1: RANKING POR VENTA ──
+    head1 = [P(h, st_h) for h in ["Rank", "NOMBRE GARZON", "VENTA", "APORTE<br/>PROPINA",
+             "VENTA DIARIA<br/>PROMEDIO", "DIAS<br/>TRAB"]]
+    orden_v = sorted(range(len(filas)), key=lambda i: -filas[i]["venta"])
+    filas_v = [filas[i] for i in orden_v]
+    data1 = [head1]
+    for k, f in enumerate(filas_v):
+        data1.append([P(k + 1), P(f["nombre"]), P(_fm(f["venta"])),
+                      P(_fm(f["propina"])), P(_fm(f["vdp"])), P(f["dias"])])
+    if tot:
+        data1.append([P("", st_b), P(tot["nombre"], st_b), P(_fm(tot["venta"]), st_b),
+                      P(_fm(tot["propina"]), st_b), P(_fm(tot["vdp"]), st_b), P(tot["dias"], st_b)])
+    pesos1 = [3.0, 14.0, 8.0, 7.0, 8.0, 4.0]
+    w1 = [util * p / sum(pesos1) for p in pesos1]
+    t1 = _Table(data1, colWidths=w1, repeatRows=1); t1.setStyle(_TS(_mk_estilo(len(filas_v))))
+
+    # ── T2: DETALLE DE ADICIONALES con CUARTETOS (Venta / Q / Q-prom-día / %) ──
+    def _pd(qtot, dias):   # promedio diario = Q / días trabajados
+        try:
+            d = float(dias)
+            return (float(qtot) / d) if d else 0.0
+        except: return 0.0
+
+    head2 = [P(h, st_h) for h in ["Rank", "NOMBRE GARZON",
+             "VENTA<br/>AGREGADOS", "Q<br/>AGREG", "Q/DÍA<br/>AGREG", "%<br/>AGREGADO",
+             "VENTA<br/>CAFETERIA", "Q<br/>CAF", "Q/DÍA<br/>CAF", "%<br/>CAFETERIA",
+             "VENTA<br/>POSTRES", "Q<br/>POS", "Q/DÍA<br/>POS", "%<br/>POSTRES",
+             "VENTA LIQ<br/>S/A", "Q<br/>S/A", "Q/DÍA<br/>S/A", "% LIQ<br/>S/A",
+             "VENTA LIQ<br/>C/A", "Q<br/>C/A", "Q/DÍA<br/>C/A", "% LIQ<br/>C/A",
+             "Q<br/>TOTAL", "% TOTAL"]]
+
+    def fila2(f, rk, e=st_c):
+        d = f["dias"]
+        return [P(rk, e), P(f["nombre"], e),
+                P(_fm(f["v_agr"]), e), P(_fq(f.get("q_agr", 0)), e), P(_fd(_pd(f.get("q_agr", 0), d)), e), P(_fp(f["p_agr"]), e),
+                P(_fm(f["v_caf"]), e), P(_fq(f.get("q_caf", 0)), e), P(_fd(_pd(f.get("q_caf", 0), d)), e), P(_fp(f["p_caf"]), e),
+                P(_fm(f["v_pos"]), e), P(_fq(f.get("q_pos", 0)), e), P(_fd(_pd(f.get("q_pos", 0), d)), e), P(_fp(f["p_pos"]), e),
+                P(_fm(f["v_lsa"]), e), P(_fq(f.get("q_lsa", 0)), e), P(_fd(_pd(f.get("q_lsa", 0), d)), e), P(_fp(f["p_sa"]), e),
+                P(_fm(f["v_lca"]), e), P(_fq(f.get("q_lca", 0)), e), P(_fd(_pd(f.get("q_lca", 0), d)), e), P(_fp(f["p_ca"]), e),
+                P(_fq(f.get("q_total", 0)), e), P(_fp(f["p_total"]), e)]
+
+    data2 = [head2]
+    for i, f in enumerate(filas):
+        data2.append(fila2(f, i + 1))
+    if tot:
+        data2.append(fila2(tot, "", st_b))
+    #         Rk   Nom  [Vag Qag Q/d %ag] x5 grupos              Qtot %tot
+    pesos2 = [2.6, 8.5,
+              4.6, 3.0, 3.2, 3.4, 4.6, 3.0, 3.2, 3.4, 4.6, 3.0, 3.2, 3.4,
+              4.6, 3.0, 3.2, 3.4, 4.6, 3.0, 3.2, 3.4, 3.2, 4.0]
+    w2 = [util * p / sum(pesos2) for p in pesos2]
+    t2 = _Table(data2, colWidths=w2, repeatRows=1); t2.setStyle(_TS(_mk_estilo(len(filas)))) 
+
+    elementos = [
+        _Par(("Pedro de Valdivia" if str(local) == "Providencia" else str(local)).upper(), st_t),
+        _Sp(1, 6),
+        _Par("RANKING POR VENTA", st_sub), _Sp(1, 4), t1, _Sp(1, 14),
+        _Par("DETALLE DE ADICIONALES", st_sub), _Sp(1, 4), t2,
+    ]
+
+    # ── T3 (solo versión B): PROMEDIO DIARIO POR TRAMO (L-J y V-D) ──
+    if con_tercer_cuadro:
+        def _pdt(qtramo, dtramo):   # prom diario del tramo = Q tramo / días trabajados en tramo
+            try:
+                d = float(dtramo)
+                return (float(qtramo) / d) if d else 0.0
+            except: return 0.0
+
+        head3 = [P(h, st_h) for h in ["Rank", "NOMBRE GARZON",
+                 "AGREG<br/>L-J", "AGREG<br/>V-D", "CAF<br/>L-J", "CAF<br/>V-D",
+                 "POS<br/>L-J", "POS<br/>V-D", "LIQ S/A<br/>L-J", "LIQ S/A<br/>V-D",
+                 "LIQ C/A<br/>L-J", "LIQ C/A<br/>V-D"]]
+
+        def fila3(f, rk, e=st_c, es_total=False):
+            g = f["nombre"]
+            r = _raw.get(g)
+            if es_total or r is None:
+                # Para el TOTAL sumamos desde el df crudo
+                import pandas as _pd_mod
+                dfc = df_acum
+                def _S(col): 
+                    try: return float(dfc[col].sum())
+                    except: return 0.0
+                dlj = _S("dias_lj"); dvd = _S("dias_vd")
+                pares = [("q_agr_lj","q_agr_vd"),("q_caf_lj","q_caf_vd"),("q_pos_lj","q_pos_vd"),
+                         ("q_lsa_lj","q_lsa_vd"),("q_lca_lj","q_lca_vd")]
+                celdas = []
+                for clj, cvd in pares:
+                    celdas.append(P(_fd(_pdt(_S(clj), dlj)), e))
+                    celdas.append(P(_fd(_pdt(_S(cvd), dvd)), e))
+                return [P(rk, e), P(g, e)] + celdas
+            dlj = r.get("dias_lj", 0); dvd = r.get("dias_vd", 0)
+            pares = [("q_agr_lj","q_agr_vd"),("q_caf_lj","q_caf_vd"),("q_pos_lj","q_pos_vd"),
+                     ("q_lsa_lj","q_lsa_vd"),("q_lca_lj","q_lca_vd")]
+            celdas = []
+            for clj, cvd in pares:
+                celdas.append(P(_fd(_pdt(r.get(clj, 0), dlj)), e))
+                celdas.append(P(_fd(_pdt(r.get(cvd, 0), dvd)), e))
+            return [P(rk, e), P(g, e)] + celdas
+
+        data3 = [head3]
+        for i, f in enumerate(filas):
+            data3.append(fila3(f, i + 1))
+        if tot:
+            data3.append(fila3(tot, "", st_b, es_total=True))
+        pesos3 = [3.0, 12.0] + [5.5] * 10
+        w3 = [util * p / sum(pesos3) for p in pesos3]
+        t3 = _Table(data3, colWidths=w3, repeatRows=1); t3.setStyle(_TS(_mk_estilo(len(filas))))
+        elementos += [_Sp(1, 14), _Par("PROMEDIO DIARIO POR TRAMO (Lun-Jue / Vie-Dom)", st_sub),
+                      _Sp(1, 4), t3]
+
+    buf = _io.BytesIO()
+    doc = _Doc(buf, pagesize=_landscape(_letter),
+               leftMargin=MX, rightMargin=MX, topMargin=18, bottomMargin=18)
+    doc.build(elementos)
+    buf.seek(0)
+    return buf.getvalue()
+
+
 def _sg_construir_ctx_b(local, ini, fin, ng, jef, ranking,
                         s1, s2, s3, s4, rows5, rows5_sem, s6_raw, s7, rows9, g10,
                         s9_raw=None, s11s=None, s11m=None):
@@ -21353,12 +21543,16 @@ buildTree(data, 1, null);
             _p5 = {"loc": loc, "wl": _SG_WHITELIST,
                    "r_i": str(_sg_ini), "r_f": str(_sg_fin)}
             _sku_excl_sql = "','".join(_SG_RES_SKU_EXCL)
+            # tramo: LJ = lunes a jueves (DOW 1-4), VD = viernes a domingo (DOW 5,6,0)
+            # DOW postgres: 0=domingo .. 6=sábado
             return run_query(f"""
                 with d as (
                   select v.garzon, v.fecha_venta, v.categoria_menu as cat,
                     v.monto_venta_real + coalesce(v.descuento,0) as venta,
                     v.cantidad_vendida as q,
-                    {_SG_GRP_CASE} as grp_cat, {_SG_BUCKET} as liq_bucket
+                    {_SG_GRP_CASE} as grp_cat, {_SG_BUCKET} as liq_bucket,
+                    case when extract(dow from v.fecha_venta) in (1,2,3,4)
+                         then 'LJ' else 'VD' end as tramo
                   from ventas v {_SG_LIQ_JOIN}
                   where v.local = :loc and v.origen is null and v.garzon = any(:wl)
                     and v.categoria_menu not in ('{_sg_excl_sql}')
@@ -21366,24 +21560,36 @@ buildTree(data, 1, null);
                     and v.fecha_venta between :r_i and :r_f
                 )
                 select garzon, count(distinct fecha_venta) as dias, sum(venta) as venta_total,
+                  count(distinct fecha_venta) filter (where tramo='LJ') as dias_lj,
+                  count(distinct fecha_venta) filter (where tramo='VD') as dias_vd,
                   sum(case when grp_cat='AGREGADOS' then venta else 0 end) as v_agr,
                   sum(case when grp_cat='AGREGADOS' then q else 0 end) as q_agr,
                   sum(case when cat='Agregados' then venta else 0 end) as v_agr_solo,
                   sum(case when cat='Agregados' then q else 0 end) as q_agr_solo,
+                  sum(case when cat='Agregados' and tramo='LJ' then q else 0 end) as q_agr_lj,
+                  sum(case when cat='Agregados' and tramo='VD' then q else 0 end) as q_agr_vd,
                   sum(case when grp_cat='CAFETERIA' then venta else 0 end) as v_caf,
                   sum(case when grp_cat='CAFETERIA' then q else 0 end) as q_caf,
+                  sum(case when grp_cat='CAFETERIA' and tramo='LJ' then q else 0 end) as q_caf_lj,
+                  sum(case when grp_cat='CAFETERIA' and tramo='VD' then q else 0 end) as q_caf_vd,
                   sum(case when grp_cat='POSTRES' then venta else 0 end) as v_pos,
                   sum(case when grp_cat='POSTRES' then q else 0 end) as q_pos,
+                  sum(case when grp_cat='POSTRES' and tramo='LJ' then q else 0 end) as q_pos_lj,
+                  sum(case when grp_cat='POSTRES' and tramo='VD' then q else 0 end) as q_pos_vd,
                   sum(case when liq_bucket='LIQ_SA' then venta else 0 end) as v_lsa,
                   sum(case when liq_bucket='LIQ_SA' then q else 0 end) as q_lsa,
+                  sum(case when liq_bucket='LIQ_SA' and tramo='LJ' then q else 0 end) as q_lsa_lj,
+                  sum(case when liq_bucket='LIQ_SA' and tramo='VD' then q else 0 end) as q_lsa_vd,
                   sum(case when liq_bucket='LIQ_CA' then venta else 0 end) as v_lca,
-                  sum(case when liq_bucket='LIQ_CA' then q else 0 end) as q_lca
+                  sum(case when liq_bucket='LIQ_CA' then q else 0 end) as q_lca,
+                  sum(case when liq_bucket='LIQ_CA' and tramo='LJ' then q else 0 end) as q_lca_lj,
+                  sum(case when liq_bucket='LIQ_CA' and tramo='VD' then q else 0 end) as q_lca_vd
                 from d group by garzon having sum(venta) > 0 order by venta_total desc
             """, _p5)
 
-        if st.button(f"📦 Generar los {len(_SG_LOCALES_ZIP)} resúmenes de colores (ZIP)",
-                     type="primary", use_container_width=True, key="sg_zip_btn"):
-            import zipfile as _zipf, gc as _gc
+        import zipfile as _zipf, gc as _gc
+
+        def _sg_generar_zip(con_tercer):
             _buf_zip = io.BytesIO()
             _errs = []; _ok = 0
             _prog = st.progress(0.0, text="Generando resúmenes…")
@@ -21392,25 +21598,39 @@ buildTree(data, 1, null);
                     try:
                         _df_r = _sg_resumen_df(_loc)
                         if _df_r is not None and not _df_r.empty:
-                            _pdf_r = _sg_resumen_colores_pdf(_df_r, _loc, _sg_dias_sem,
-                                                             logo_path=LOGO_PATH)
+                            _pdf_r = _sg_resumen_colores_pdf_v2(
+                                _df_r, _loc, _sg_dias_sem,
+                                con_tercer_cuadro=con_tercer, logo_path=LOGO_PATH)
                             _zf.writestr(f"resumen_{_loc}_{_sg_ini}.pdf", _pdf_r)
                             _ok += 1
                             del _pdf_r
                         del _df_r
-                        _gc.collect()   # liberar memoria entre locales (evita caída)
+                        _gc.collect()
                     except Exception as _e_loc:
                         _errs.append(f"{_loc}: {_e_loc}")
                     _prog.progress((_i + 1) / len(_SG_LOCALES_ZIP),
                                    text=f"{_loc} ({_i+1}/{len(_SG_LOCALES_ZIP)})")
             _prog.empty()
             _buf_zip.seek(0)
+            return _buf_zip.getvalue(), _ok, _errs
+
+        st.markdown("**Versión A** — 2 tablas (venta + adicionales con Q promedio diaria)")
+        _sg_bA = st.button(f"📦 Generar Versión A — {len(_SG_LOCALES_ZIP)} locales (ZIP)",
+                           type="primary", use_container_width=True, key="sg_zipA")
+        st.markdown("**Versión B** — igual que A + tercer cuadro (promedio diario Lun-Jue / Vie-Dom)")
+        _sg_bB = st.button(f"📦 Generar Versión B — {len(_SG_LOCALES_ZIP)} locales (ZIP)",
+                           use_container_width=True, key="sg_zipB")
+
+        if _sg_bA or _sg_bB:
+            _con_tercer = bool(_sg_bB)
+            _ver = "B" if _con_tercer else "A"
+            _zbytes, _ok, _errs = _sg_generar_zip(_con_tercer)
             if _ok:
-                st.success(f"Listo: {_ok}/{len(_SG_LOCALES_ZIP)} resúmenes generados.")
-                st.download_button(f"⬇️ Descargar ZIP ({_ok} resúmenes)",
-                    _buf_zip.getvalue(),
-                    file_name=f"resumenes_colores_{_sg_ini}.zip",
-                    mime="application/zip", use_container_width=True, key="sg_zip_dl")
+                st.success(f"Versión {_ver} lista: {_ok}/{len(_SG_LOCALES_ZIP)} resúmenes.")
+                st.download_button(f"⬇️ Descargar ZIP Versión {_ver} ({_ok} resúmenes)",
+                    _zbytes,
+                    file_name=f"resumenes_colores_v{_ver}_{_sg_ini}.zip",
+                    mime="application/zip", use_container_width=True, key=f"sg_dl_{_ver}")
             else:
                 st.error("No se generó ningún resumen.")
             if _errs:
