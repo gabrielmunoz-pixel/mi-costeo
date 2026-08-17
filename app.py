@@ -21543,16 +21543,12 @@ buildTree(data, 1, null);
             _p5 = {"loc": loc, "wl": _SG_WHITELIST,
                    "r_i": str(_sg_ini), "r_f": str(_sg_fin)}
             _sku_excl_sql = "','".join(_SG_RES_SKU_EXCL)
-            # tramo: LJ = lunes a jueves (DOW 1-4), VD = viernes a domingo (DOW 5,6,0)
-            # DOW postgres: 0=domingo .. 6=sábado
             return run_query(f"""
                 with d as (
                   select v.garzon, v.fecha_venta, v.categoria_menu as cat,
                     v.monto_venta_real + coalesce(v.descuento,0) as venta,
                     v.cantidad_vendida as q,
-                    {_SG_GRP_CASE} as grp_cat, {_SG_BUCKET} as liq_bucket,
-                    case when extract(dow from v.fecha_venta) in (1,2,3,4)
-                         then 'LJ' else 'VD' end as tramo
+                    {_SG_GRP_CASE} as grp_cat, {_SG_BUCKET} as liq_bucket
                   from ventas v {_SG_LIQ_JOIN}
                   where v.local = :loc and v.origen is null and v.garzon = any(:wl)
                     and v.categoria_menu not in ('{_sg_excl_sql}')
@@ -21560,36 +21556,24 @@ buildTree(data, 1, null);
                     and v.fecha_venta between :r_i and :r_f
                 )
                 select garzon, count(distinct fecha_venta) as dias, sum(venta) as venta_total,
-                  count(distinct fecha_venta) filter (where tramo='LJ') as dias_lj,
-                  count(distinct fecha_venta) filter (where tramo='VD') as dias_vd,
                   sum(case when grp_cat='AGREGADOS' then venta else 0 end) as v_agr,
                   sum(case when grp_cat='AGREGADOS' then q else 0 end) as q_agr,
                   sum(case when cat='Agregados' then venta else 0 end) as v_agr_solo,
                   sum(case when cat='Agregados' then q else 0 end) as q_agr_solo,
-                  sum(case when cat='Agregados' and tramo='LJ' then q else 0 end) as q_agr_lj,
-                  sum(case when cat='Agregados' and tramo='VD' then q else 0 end) as q_agr_vd,
                   sum(case when grp_cat='CAFETERIA' then venta else 0 end) as v_caf,
                   sum(case when grp_cat='CAFETERIA' then q else 0 end) as q_caf,
-                  sum(case when grp_cat='CAFETERIA' and tramo='LJ' then q else 0 end) as q_caf_lj,
-                  sum(case when grp_cat='CAFETERIA' and tramo='VD' then q else 0 end) as q_caf_vd,
                   sum(case when grp_cat='POSTRES' then venta else 0 end) as v_pos,
                   sum(case when grp_cat='POSTRES' then q else 0 end) as q_pos,
-                  sum(case when grp_cat='POSTRES' and tramo='LJ' then q else 0 end) as q_pos_lj,
-                  sum(case when grp_cat='POSTRES' and tramo='VD' then q else 0 end) as q_pos_vd,
                   sum(case when liq_bucket='LIQ_SA' then venta else 0 end) as v_lsa,
                   sum(case when liq_bucket='LIQ_SA' then q else 0 end) as q_lsa,
-                  sum(case when liq_bucket='LIQ_SA' and tramo='LJ' then q else 0 end) as q_lsa_lj,
-                  sum(case when liq_bucket='LIQ_SA' and tramo='VD' then q else 0 end) as q_lsa_vd,
                   sum(case when liq_bucket='LIQ_CA' then venta else 0 end) as v_lca,
-                  sum(case when liq_bucket='LIQ_CA' then q else 0 end) as q_lca,
-                  sum(case when liq_bucket='LIQ_CA' and tramo='LJ' then q else 0 end) as q_lca_lj,
-                  sum(case when liq_bucket='LIQ_CA' and tramo='VD' then q else 0 end) as q_lca_vd
+                  sum(case when liq_bucket='LIQ_CA' then q else 0 end) as q_lca
                 from d group by garzon having sum(venta) > 0 order by venta_total desc
             """, _p5)
 
-        import zipfile as _zipf, gc as _gc
-
-        def _sg_generar_zip(con_tercer):
+        if st.button(f"📦 Generar los {len(_SG_LOCALES_ZIP)} resúmenes de colores (ZIP)",
+                     type="primary", use_container_width=True, key="sg_zip_btn"):
+            import zipfile as _zipf, gc as _gc
             _buf_zip = io.BytesIO()
             _errs = []; _ok = 0
             _prog = st.progress(0.0, text="Generando resúmenes…")
@@ -21598,39 +21582,25 @@ buildTree(data, 1, null);
                     try:
                         _df_r = _sg_resumen_df(_loc)
                         if _df_r is not None and not _df_r.empty:
-                            _pdf_r = _sg_resumen_colores_pdf_v2(
-                                _df_r, _loc, _sg_dias_sem,
-                                con_tercer_cuadro=con_tercer, logo_path=LOGO_PATH)
+                            _pdf_r = _sg_resumen_colores_pdf(_df_r, _loc, _sg_dias_sem,
+                                                             logo_path=LOGO_PATH)
                             _zf.writestr(f"resumen_{_loc}_{_sg_ini}.pdf", _pdf_r)
                             _ok += 1
                             del _pdf_r
                         del _df_r
-                        _gc.collect()
+                        _gc.collect()   # liberar memoria entre locales (evita caída)
                     except Exception as _e_loc:
                         _errs.append(f"{_loc}: {_e_loc}")
                     _prog.progress((_i + 1) / len(_SG_LOCALES_ZIP),
                                    text=f"{_loc} ({_i+1}/{len(_SG_LOCALES_ZIP)})")
             _prog.empty()
             _buf_zip.seek(0)
-            return _buf_zip.getvalue(), _ok, _errs
-
-        st.markdown("**Versión A** — 2 tablas (venta + adicionales con Q promedio diaria)")
-        _sg_bA = st.button(f"📦 Generar Versión A — {len(_SG_LOCALES_ZIP)} locales (ZIP)",
-                           type="primary", use_container_width=True, key="sg_zipA")
-        st.markdown("**Versión B** — igual que A + tercer cuadro (promedio diario Lun-Jue / Vie-Dom)")
-        _sg_bB = st.button(f"📦 Generar Versión B — {len(_SG_LOCALES_ZIP)} locales (ZIP)",
-                           use_container_width=True, key="sg_zipB")
-
-        if _sg_bA or _sg_bB:
-            _con_tercer = bool(_sg_bB)
-            _ver = "B" if _con_tercer else "A"
-            _zbytes, _ok, _errs = _sg_generar_zip(_con_tercer)
             if _ok:
-                st.success(f"Versión {_ver} lista: {_ok}/{len(_SG_LOCALES_ZIP)} resúmenes.")
-                st.download_button(f"⬇️ Descargar ZIP Versión {_ver} ({_ok} resúmenes)",
-                    _zbytes,
-                    file_name=f"resumenes_colores_v{_ver}_{_sg_ini}.zip",
-                    mime="application/zip", use_container_width=True, key=f"sg_dl_{_ver}")
+                st.success(f"Listo: {_ok}/{len(_SG_LOCALES_ZIP)} resúmenes generados.")
+                st.download_button(f"⬇️ Descargar ZIP ({_ok} resúmenes)",
+                    _buf_zip.getvalue(),
+                    file_name=f"resumenes_colores_{_sg_ini}.zip",
+                    mime="application/zip", use_container_width=True, key="sg_zip_dl")
             else:
                 st.error("No se generó ningún resumen.")
             if _errs:
