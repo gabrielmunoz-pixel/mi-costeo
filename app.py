@@ -4558,8 +4558,10 @@ def _cr_clasificar(ct, cp, cp_red):
             "normal respecto a la red.")
 
 
-def _cr_chart_barras(comp, periodo, pal_hex):
-    """Gráfico de barras: ranking de locales por col/turno en un período. Devuelve PNG bytes."""
+def _cr_chart_barras(comp, periodo, pal_hex, titulo_periodo=None):
+    """Gráfico de barras: ranking de locales por col/turno en un período. Devuelve PNG bytes.
+    titulo_periodo: texto a mostrar en el título del gráfico (ej. rango de fechas);
+    si es None usa `periodo`."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -4579,7 +4581,7 @@ def _cr_chart_barras(comp, periodo, pal_hex):
     for i, v in enumerate(sub["col_x_turno"]):
         ax.text(v + 0.03, i, f"{v:.2f}", va="center", fontsize=8, color="#222")
     ax.set_xlabel("Colaciones por turno", fontsize=9)
-    ax.set_title(f"Ranking por local — {periodo}", fontsize=10, color="#1a1a1a")
+    ax.set_title(f"Ranking por local — {titulo_periodo or periodo}", fontsize=10, color="#1a1a1a")
     from matplotlib.patches import Patch as _Patch
     _leg = [_Patch(color="#4caf7d", label="≤ 2,5  ok"),
             _Patch(color="#d4a853", label="2,5–3  alerta"),
@@ -5137,13 +5139,17 @@ def generar_pdf_colaciones_empresa(comp, modo, fi, ff, df_pers_dia=None, dias_si
     logo = Spacer(24*mm, 20*mm)
     if R["os"].path.exists(LOGO_PATH):
         logo = RLImage(LOGO_PATH, width=22*mm, height=22*mm)
-    hdr = Table([[logo,
-        [Paragraph("COLACIONES RRHH — RESUMEN EMPRESA", s(15, pal["CG"], bold=True, align=TA_CENTER)),
-         Paragraph("Consolidado de la red · Alemán Experto", s(8.5, pal["CM"], align=TA_CENTER))]]],
-        colWidths=[26*mm, 154*mm])
-    hdr.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),
-        ('LINEBELOW',(0,0),(-1,0),1.5,pal["CG"]), ('BOTTOMPADDING',(0,0),(-1,-1),5)]))
-    story += [hdr, Spacer(1, 4*mm)]
+    # Título centrado respecto al ancho COMPLETO de la página (no dentro de una
+    # celda junto al logo). El logo va centrado arriba y el título debajo.
+    _logo_tab = Table([[logo]], colWidths=[180*mm])
+    _logo_tab.setStyle(TableStyle([('ALIGN',(0,0),(-1,-1),'CENTER'),
+        ('BOTTOMPADDING',(0,0),(-1,-1),2)]))
+    story += [_logo_tab,
+        Paragraph("COLACIONES RRHH — RESUMEN EMPRESA", s(15, pal["CG"], bold=True, align=TA_CENTER)),
+        Paragraph("Consolidado de la red · Alemán Experto", s(8.5, pal["CM"], align=TA_CENTER)),
+        Spacer(1, 2*mm),
+        HRFlowable(width="100%", color=pal["CG"], thickness=1.5),
+        Spacer(1, 4*mm)]
 
     periodos = sorted(comp["periodo"].unique())
     ult = periodos[-1]
@@ -5166,57 +5172,36 @@ def generar_pdf_colaciones_empresa(comp, modo, fi, ff, df_pers_dia=None, dias_si
     red["col_x_turno"] = (red["colaciones"] / red["turnos"].replace(0, _pd.NA)).round(2)
     red["col_x_persona"] = (red["colaciones"] / red["personas"].replace(0, _pd.NA)).round(2)
 
-    # Resumen ejecutivo (texto, arriba)
-    story += [Paragraph("RESUMEN EJECUTIVO", s(11, pal["CG"], bold=True)), Spacer(1, 2*mm)]
-    for txt in _cr_resumen_ejecutivo(comp, red, periodos, modo, cp_red):
-        story += [Paragraph(txt, s(9, pal["CM"], align=TA_JUSTIFY)), Spacer(1, 1.5*mm)]
-    story += [Spacer(1, 3*mm)]
+    # Rango de fechas del informe, formato DD-MM-AAAA al DD-MM-AAAA
+    def _cr_fmt_fecha(d):
+        try:
+            return _pd.to_datetime(d).strftime("%d-%m-%Y")
+        except Exception:
+            return str(d)
+    _rango_txt = f"{_cr_fmt_fecha(fi)} al {_cr_fmt_fecha(ff)}"
 
-    # ── Datos críticos (bloque compacto): peores/mejores, bandas y faltantes ──
-    _dc = comp[comp["periodo"] == ult].copy()
-    _dc_val = (_dc[_dc["col_x_turno"].notna() & (_dc["col_x_turno"] > 0)]
-               .sort_values("col_x_turno", ascending=False))
-    _dc_sin = _dc[_dc["colaciones"].fillna(0) == 0]["local"].astype(str).tolist()
-    _dc_lineas = []
-    if not _dc_val.empty:
-        _peor = _dc_val.head(2)
-        _mejor = _dc_val.tail(2).iloc[::-1]
-        _peor_txt = ", ".join(f"{r.local} ({r.col_x_turno:.2f})" for r in _peor.itertuples())
-        _mejor_txt = ", ".join(f"{r.local} ({r.col_x_turno:.2f})" for r in _mejor.itertuples())
-        _n_rojo = int((_dc_val["col_x_turno"] > _CR_EMP_AMBAR).sum())
-        _n_amar = int(((_dc_val["col_x_turno"] > _CR_EMP_VERDE) &
-                       (_dc_val["col_x_turno"] <= _CR_EMP_AMBAR)).sum())
-        _dc_lineas.append(f"<b>Más crítico (mayor col/turno):</b> {_peor_txt}")
-        _dc_lineas.append(f"<b>Mejor (menor col/turno):</b> {_mejor_txt}")
-        _dc_lineas.append(
-            f"<b>En rojo (&gt;{_CR_EMP_AMBAR:.1f}):</b> {_n_rojo}"
-            f" &nbsp;·&nbsp; <b>en amarillo ({_CR_EMP_VERDE:.1f}–{_CR_EMP_AMBAR:.1f}):</b> {_n_amar}")
-    _dc_lineas.append(
-        "<b>Sin colaciones registradas:</b> "
-        + (", ".join(_dc_sin) if _dc_sin else "ninguno"))
-    # Señal simple: días trabajados en que un local no registró colación
+    # ── LOCALES SIN COLACIÓN ──
+    # Detalla, en cascada (una línea por local), los días trabajados en que el
+    # local no registró colación. Reemplaza el resumen ejecutivo y datos críticos.
+    story += [Paragraph("LOCALES SIN COLACIÓN", s(11, pal["CG"], bold=True)), Spacer(1, 2*mm)]
     if dias_sin_col:
-        _sc_parts = []
+        _sc_flows = []
         for _lc in sorted(dias_sin_col):
             _ds = dias_sin_col[_lc]
-            _shown = ", ".join(_ds[:8]) + (f" +{len(_ds) - 8}" if len(_ds) > 8 else "")
-            _sc_parts.append(f"{_lc} ({_shown})")
-        _dc_lineas.append("<b>Días trabajados sin colación:</b> " + "; ".join(_sc_parts))
+            _ds_txt = ", ".join(_ds)
+            _sc_flows.append(Paragraph(f"• <b>{_lc}</b>: {_ds_txt}", s(9, pal["CM"])))
+            _sc_flows.append(Spacer(1, 1*mm))
+        story += _sc_flows
     else:
-        _dc_lineas.append("<b>Días trabajados sin colación:</b> ninguno")
-    story += [Paragraph("DATOS CRÍTICOS", s(11, pal["CG"], bold=True)), Spacer(1, 2*mm),
-              Paragraph("<br/>".join(_dc_lineas), s(9, pal["CM"])), Spacer(1, 3*mm)]
+        story += [Paragraph("Ningún local quedó sin registrar colación en el período.",
+                            s(9, pal["CM"]))]
+    story += [Spacer(1, 4*mm)]
 
     # Gráfico barras ranking último período
-    bar = _cr_chart_barras(comp, ult, pal)
+    bar = _cr_chart_barras(comp, ult, pal, titulo_periodo=_rango_txt)
     if bar:
-        story += [Paragraph(f"RANKING DE LOCALES — {ult}", s(11, pal["CG"], bold=True)),
+        story += [Paragraph(f"RANKING DE LOCALES — {_rango_txt}", s(11, pal["CG"], bold=True)),
                   Spacer(1, 2*mm), _cr_img_flow(bar, R, 165), Spacer(1, 4*mm)]
-
-    # Metodología al final (referencia; lo prioritario es el resumen ejecutivo)
-    story += [Spacer(1, 2*mm), HRFlowable(width="100%", color=pal["CBo"], thickness=0.5),
-              Spacer(1, 3*mm)]
-    story += _cr_metodologia_flow(R, modo, fi, ff, umbral=_CR_EMP_VERDE, bandas=(_CR_EMP_VERDE, _CR_EMP_AMBAR))
 
     # (Gráfico de Evolución, Tabla Consolidado y Conclusiones removidos del informe
     #  empresa para dejarlo en una sola página; el ranking con semáforo es el foco.)
