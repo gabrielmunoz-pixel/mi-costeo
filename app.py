@@ -5145,8 +5145,7 @@ def generar_pdf_colaciones_empresa(comp, modo, fi, ff, df_pers_dia=None, dias_si
     _logo_tab.setStyle(TableStyle([('ALIGN',(0,0),(-1,-1),'CENTER'),
         ('BOTTOMPADDING',(0,0),(-1,-1),2)]))
     story += [_logo_tab,
-        Paragraph("COLACIONES RRHH — RESUMEN EMPRESA", s(15, pal["CG"], bold=True, align=TA_CENTER)),
-        Paragraph("Consolidado de la red · Alemán Experto", s(8.5, pal["CM"], align=TA_CENTER)),
+        Paragraph("Control de colaciones semanal", s(15, pal["CG"], bold=True, align=TA_CENTER)),
         Spacer(1, 2*mm),
         HRFlowable(width="100%", color=pal["CG"], thickness=1.5),
         Spacer(1, 4*mm)]
