@@ -6415,11 +6415,14 @@ def _sg_resumen_colores_pdf(df_acum, local, dias_periodo, logo_path=None):
 
 
 def _sg_consolidado_locales_pdf(pct_act, pct_ant, rango_act, rango_ant, logo_path=None):
-    """Reporte consolidado: una fila por local con % AGREGADO por categoría
-    (venta adicional del local / venta total del local) + % total, comparando
-    la semana actual vs la anterior. Por categoría: 3 columnas ANT / ACT / DIF.
-    Semáforo por local sobre % TOTAL: 3 mejores verde; del resto, en/ sobre el
-    promedio (11 locales) amarillo, bajo el promedio rojo.
+    """Reporte consolidado con DOS cuadros en el mismo PDF:
+      CUADRO 1 — Ranking por local: % AGREGADO de cada categoría + % total
+                 (venta adicional del local / venta total). Solo semana actual.
+                 Filas ORDENADAS por % total desc → semáforo en cascada.
+      CUADRO 2 — Comparativo vs semana anterior: por categoría Ant/Act/Dif.
+                 Mismo orden (por % total actual).
+    Semáforo por local sobre % TOTAL (11 locales): 3 mejores verde; del resto,
+    en/sobre el promedio amarillo, bajo el promedio rojo.
       pct_act / pct_ant: dict {local: {'agr','caf','pos','lsa','lca','total'}} en fracción.
     """
     import io as _io
@@ -6434,7 +6437,6 @@ def _sg_consolidado_locales_pdf(pct_act, pct_ant, rango_act, rango_ant, logo_pat
         try: return f"{float(v)*100:.1f}%".replace(".", ",")
         except: return "—"
     def _fdif(a, b):
-        # diferencia en puntos porcentuales (actual - anterior)
         try:
             d = (float(a) - float(b)) * 100
             s = "+" if d >= 0 else "−"
@@ -6443,98 +6445,112 @@ def _sg_consolidado_locales_pdf(pct_act, pct_ant, rango_act, rango_ant, logo_pat
 
     VERDE = _colors.HexColor("#63BE7B"); AMAR = _colors.HexColor("#FFEB84")
     ROJO = _colors.HexColor("#F8696B"); GRIS = _colors.HexColor("#D9D9D9")
-    GRIS2 = _colors.HexColor("#ECECEC"); BORDE = _colors.HexColor("#808080")
+    BORDE = _colors.HexColor("#808080")
 
     st_h = _PS("h", fontName="Helvetica-Bold", fontSize=6.6, alignment=_TAC, leading=7.6)
     st_c = _PS("c", fontName="Helvetica", fontSize=6.8, alignment=_TAC, leading=8)
     st_l = _PS("l", fontName="Helvetica", fontSize=6.8, alignment=_TAL, leading=8)
+    st_b = _PS("cb", fontName="Helvetica-Bold", fontSize=6.8, alignment=_TAC, leading=8)
+    st_lb = _PS("lb", fontName="Helvetica-Bold", fontSize=6.8, alignment=_TAL, leading=8)
     st_t = _PS("t", fontName="Helvetica-Bold", fontSize=12, alignment=_TAC, leading=14)
     st_sub = _PS("sub", fontName="Helvetica", fontSize=8, alignment=_TAC, leading=10)
+    st_cua = _PS("cua", fontName="Helvetica-Bold", fontSize=9, alignment=_TAC, leading=11)
     P = lambda s, e=st_c: _Par(str(s), e)
 
-    _ORDEN = ['Vitacura','Las Condes','Chicureo','La Dehesa','Macul','La Reina',
-              'Quilin','Nueva Providencia','Providencia','Los Trapenses','La Casona']
     _nom_disp = lambda l: "Pedro de Valdivia" if l == "Providencia" else l
-    _locales = [l for l in _ORDEN if l in pct_act]
+    _locales = list(pct_act.keys())
 
-    # ── Semáforo por local sobre % TOTAL ──
-    _tot_por_loc = {l: (pct_act[l].get("total") or 0.0) for l in _locales}
-    _prom = (sum(_tot_por_loc.values()) / len(_tot_por_loc)) if _tot_por_loc else 0.0
-    _rank_tot = sorted(_locales, key=lambda l: -_tot_por_loc[l])
-    _top3 = set(_rank_tot[:3])
-    _color_loc = {}
-    for l in _locales:
-        if l in _top3:
-            _color_loc[l] = VERDE
-        elif _tot_por_loc[l] >= _prom:
-            _color_loc[l] = AMAR
-        else:
-            _color_loc[l] = ROJO
+    # ── ORDEN por % total desc (ranking). Base del semáforo en cascada. ──
+    _tot = {l: (pct_act[l].get("total") or 0.0) for l in _locales}
+    _prom = (sum(_tot.values()) / len(_tot)) if _tot else 0.0
+    _orden = sorted(_locales, key=lambda l: -_tot[l])   # mejor arriba
+    _top3 = set(_orden[:3])
+    def _color_de(l):
+        if l in _top3: return VERDE
+        if _tot[l] >= _prom: return AMAR
+        return ROJO
+    _colores = [_color_de(l) for l in _orden]
 
-    # ── Encabezados: 2 filas (categoría / ANT-ACT-DIF) ──
     _cats = [("AGREGADOS","agr"), ("CAFETERÍA","caf"), ("POSTRES","pos"),
              ("LIQ S/A","lsa"), ("LIQ C/A","lca"), ("TOTAL","total")]
-    # Fila 0: LOCAL (span 2 filas) + por categoría el nombre en la 1ª de sus 3 celdas
-    fila_cat = [P("LOCAL", st_h)]
+
+    PAG_W = _landscape(_letter)[0]; MX = 20; util = PAG_W - 2 * MX
+
+    # ══════════ CUADRO 1 — RANKING POR LOCAL (% por categoría, semana actual) ══════════
+    head1 = [P("Rank", st_h), P("LOCAL", st_h)] + [P(nom, st_h) for nom, _ in _cats]
+    data1 = [head1]
+    for i, l in enumerate(_orden):
+        fila = [P(i + 1), P(_nom_disp(l), st_l)]
+        for _, k in _cats:
+            v = pct_act.get(l, {}).get(k)
+            fila.append(P(_fp(v) if v is not None else "—",
+                          st_b if k == "total" else st_c))
+        data1.append(fila)
+    #         Rk    Loc    6 categorías
+    w1 = [util*0.05, util*0.19] + [util*0.76/6]*6
+    t1 = _Table(data1, colWidths=w1, repeatRows=1)
+    est1 = [
+        ("GRID", (0, 0), (-1, -1), 0.4, BORDE),
+        ("BACKGROUND", (0, 0), (-1, 0), GRIS),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("ALIGN", (1, 0), (1, -1), "LEFT"),
+        ("TOPPADDING", (0, 0), (-1, -1), 2.5), ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
+        ("LEFTPADDING", (0, 0), (-1, -1), 3), ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+    ]
+    for i in range(len(_orden)):
+        est1.append(("BACKGROUND", (0, i + 1), (-1, i + 1), _colores[i]))
+    t1.setStyle(_TS(est1))
+
+    # ══════════ CUADRO 2 — COMPARATIVO vs SEMANA ANTERIOR ══════════
+    # Header 2 filas: categoría (span 3) / Ant-Act-Dif
+    fila_cat = [P("Rank", st_h), P("LOCAL", st_h)]
     for nom, _ in _cats:
         fila_cat += [P(nom, st_h), P("", st_h), P("", st_h)]
-    # Fila 1: vacío bajo LOCAL + Ant/Act/Dif por categoría
-    fila_sub = [P("", st_h)]
+    fila_sub = [P("", st_h), P("", st_h)]
     for nom, _ in _cats:
         fila_sub += [P("Ant", st_h), P("Act", st_h), P("Dif", st_h)]
-
-    data = [fila_cat, fila_sub]
-    for l in _locales:
-        fila = [P(_nom_disp(l), st_l)]
-        for nom, k in _cats:
+    data2 = [fila_cat, fila_sub]
+    for i, l in enumerate(_orden):
+        fila = [P(i + 1), P(_nom_disp(l), st_l)]
+        for _, k in _cats:
             a = pct_ant.get(l, {}).get(k)
             c = pct_act.get(l, {}).get(k)
             fila += [P(_fp(a) if a is not None else "—"),
                      P(_fp(c) if c is not None else "—"),
                      P(_fdif(c, a) if (a is not None and c is not None) else "—")]
-        data.append(fila)
-
-    # Anchos: LOCAL + 6 categorías × 3 col
-    PAG_W = _landscape(_letter)[0]; MX = 20; util = PAG_W - 2 * MX
-    w_loc = util * 0.14
-    w_cat = (util - w_loc) / 18.0
-    wcols = [w_loc] + [w_cat] * 18
-
-    t = _Table(data, colWidths=wcols, repeatRows=2)
-    estilo = [
+        data2.append(fila)
+    w_rk = util*0.045; w_loc = util*0.15
+    w_cel = (util - w_rk - w_loc) / 18.0
+    w2 = [w_rk, w_loc] + [w_cel]*18
+    t2 = _Table(data2, colWidths=w2, repeatRows=2)
+    est2 = [
         ("GRID", (0, 0), (-1, -1), 0.4, BORDE),
         ("BACKGROUND", (0, 0), (-1, 1), GRIS),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("ALIGN", (1, 0), (-1, -1), "CENTER"),
-        ("ALIGN", (0, 0), (0, -1), "LEFT"),
-        ("TOPPADDING", (0, 0), (-1, -1), 2.5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
-        ("LEFTPADDING", (0, 0), (-1, -1), 3),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 2),
-        ("SPAN", (0, 0), (0, 1)),   # LOCAL abarca las 2 filas de header
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("ALIGN", (1, 0), (1, -1), "LEFT"),
+        ("TOPPADDING", (0, 0), (-1, -1), 2.2), ("BOTTOMPADDING", (0, 0), (-1, -1), 2.2),
+        ("LEFTPADDING", (0, 0), (-1, -1), 3), ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+        ("SPAN", (0, 0), (0, 1)), ("SPAN", (1, 0), (1, 1)),
     ]
-    # SPAN horizontal de cada categoría en la fila 0 (3 columnas por categoría)
-    _c0 = 1
+    _c0 = 2
     for _ in _cats:
-        estilo.append(("SPAN", (_c0, 0), (_c0 + 2, 0)))
+        est2.append(("SPAN", (_c0, 0), (_c0 + 2, 0)))
         _c0 += 3
-    # Color de la columna LOCAL (col 0) por semáforo, filas de datos empiezan en 2
-    for i, l in enumerate(_locales):
-        estilo.append(("BACKGROUND", (0, i + 2), (0, i + 2), _color_loc[l]))
-        # bandas suaves alternas en el resto para lectura
-        if i % 2 == 1:
-            estilo.append(("BACKGROUND", (1, i + 2), (-1, i + 2), GRIS2))
-    t.setStyle(_TS(estilo))
+    for i in range(len(_orden)):
+        est2.append(("BACKGROUND", (0, i + 2), (1, i + 2), _colores[i]))
+    t2.setStyle(_TS(est2))
 
     buf = _io.BytesIO()
     doc = _Doc(buf, pagesize=_landscape(_letter),
                leftMargin=MX, rightMargin=MX, topMargin=18, bottomMargin=18)
-    logo_flow = []
     doc.build([
-        _Par("CONSOLIDADO POR LOCAL — % ADICIONALES POR CATEGORÍA", st_t),
-        _Sp(1, 3),
+        _Par("CONSOLIDADO POR LOCAL — % ADICIONALES", st_t), _Sp(1, 3),
         _Par(f"Semana actual: {rango_act}  ·  Semana anterior: {rango_ant}", st_sub),
-        _Sp(1, 8), t,
+        _Sp(1, 8),
+        _Par("RANKING POR LOCAL (semana actual)", st_cua), _Sp(1, 4), t1, _Sp(1, 14),
+        _Par("COMPARATIVO vs SEMANA ANTERIOR", st_cua), _Sp(1, 4), t2,
     ])
     buf.seek(0)
     return buf.getvalue()
@@ -21812,13 +21828,18 @@ buildTree(data, 1, null);
         # resumen (salón, whitelist, exclusiones SKU/categoría, líquidos).
         def _sg_pct_local_rango(r_i, r_f):
             _sku_excl_sql = "','".join(_SG_RES_SKU_EXCL)
+            # Match de garzón robusto: normaliza espacios (bordes y dobles) en ambos
+            # lados, para que nombres sucios (ej. 'Diegorkn ', 'Lady Carolina   Rodriguez')
+            # matcheen igual con la whitelist. Así La Casona no se cae por espacios.
+            _wl_norm = [ " ".join(str(g).split()) for g in _SG_WHITELIST ]
             _df = run_query(f"""
                 with d as (
                   select v.local, v.categoria_menu as cat,
                     v.monto_venta_real + coalesce(v.descuento,0) as venta,
                     {_SG_GRP_CASE} as grp_cat, {_SG_BUCKET} as liq_bucket
                   from ventas v {_SG_LIQ_JOIN}
-                  where v.origen is null and v.garzon = any(:wl)
+                  where v.origen is null
+                    and regexp_replace(btrim(v.garzon), '\\s+', ' ', 'g') = any(:wl)
                     and v.categoria_menu not in ('{_sg_excl_sql}')
                     and v.sku_producto not in ('{_sku_excl_sql}')
                     and v.fecha_venta between :r_i and :r_f
@@ -21831,7 +21852,7 @@ buildTree(data, 1, null);
                   sum(case when liq_bucket='LIQ_SA' then venta else 0 end) as v_lsa,
                   sum(case when liq_bucket='LIQ_CA' then venta else 0 end) as v_lca
                 from d group by local having sum(venta) > 0
-            """, {"wl": _SG_WHITELIST, "r_i": str(r_i), "r_f": str(r_f)})
+            """, {"wl": _wl_norm, "r_i": str(r_i), "r_f": str(r_f)})
             _out = {}
             if _df is not None and not _df.empty:
                 for _, r in _df.iterrows():
