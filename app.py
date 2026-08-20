@@ -6414,6 +6414,132 @@ def _sg_resumen_colores_pdf(df_acum, local, dias_periodo, logo_path=None):
     return buf.getvalue()
 
 
+def _sg_consolidado_locales_pdf(pct_act, pct_ant, rango_act, rango_ant, logo_path=None):
+    """Reporte consolidado: una fila por local con % AGREGADO por categoría
+    (venta adicional del local / venta total del local) + % total, comparando
+    la semana actual vs la anterior. Por categoría: 3 columnas ANT / ACT / DIF.
+    Semáforo por local sobre % TOTAL: 3 mejores verde; del resto, en/ sobre el
+    promedio (11 locales) amarillo, bajo el promedio rojo.
+      pct_act / pct_ant: dict {local: {'agr','caf','pos','lsa','lca','total'}} en fracción.
+    """
+    import io as _io
+    from reportlab.lib.pagesizes import letter as _letter, landscape as _landscape
+    from reportlab.lib import colors as _colors
+    from reportlab.lib.styles import ParagraphStyle as _PS
+    from reportlab.lib.enums import TA_CENTER as _TAC, TA_LEFT as _TAL
+    from reportlab.platypus import (SimpleDocTemplate as _Doc, Table as _Table,
+                                    TableStyle as _TS, Paragraph as _Par, Spacer as _Sp)
+
+    def _fp(v):
+        try: return f"{float(v)*100:.1f}%".replace(".", ",")
+        except: return "—"
+    def _fdif(a, b):
+        # diferencia en puntos porcentuales (actual - anterior)
+        try:
+            d = (float(a) - float(b)) * 100
+            s = "+" if d >= 0 else "−"
+            return f"{s}{abs(d):.1f}".replace(".", ",")
+        except: return "—"
+
+    VERDE = _colors.HexColor("#63BE7B"); AMAR = _colors.HexColor("#FFEB84")
+    ROJO = _colors.HexColor("#F8696B"); GRIS = _colors.HexColor("#D9D9D9")
+    GRIS2 = _colors.HexColor("#ECECEC"); BORDE = _colors.HexColor("#808080")
+
+    st_h = _PS("h", fontName="Helvetica-Bold", fontSize=6.6, alignment=_TAC, leading=7.6)
+    st_c = _PS("c", fontName="Helvetica", fontSize=6.8, alignment=_TAC, leading=8)
+    st_l = _PS("l", fontName="Helvetica", fontSize=6.8, alignment=_TAL, leading=8)
+    st_t = _PS("t", fontName="Helvetica-Bold", fontSize=12, alignment=_TAC, leading=14)
+    st_sub = _PS("sub", fontName="Helvetica", fontSize=8, alignment=_TAC, leading=10)
+    P = lambda s, e=st_c: _Par(str(s), e)
+
+    _ORDEN = ['Vitacura','Las Condes','Chicureo','La Dehesa','Macul','La Reina',
+              'Quilin','Nueva Providencia','Providencia','Los Trapenses','La Casona']
+    _nom_disp = lambda l: "Pedro de Valdivia" if l == "Providencia" else l
+    _locales = [l for l in _ORDEN if l in pct_act]
+
+    # ── Semáforo por local sobre % TOTAL ──
+    _tot_por_loc = {l: (pct_act[l].get("total") or 0.0) for l in _locales}
+    _prom = (sum(_tot_por_loc.values()) / len(_tot_por_loc)) if _tot_por_loc else 0.0
+    _rank_tot = sorted(_locales, key=lambda l: -_tot_por_loc[l])
+    _top3 = set(_rank_tot[:3])
+    _color_loc = {}
+    for l in _locales:
+        if l in _top3:
+            _color_loc[l] = VERDE
+        elif _tot_por_loc[l] >= _prom:
+            _color_loc[l] = AMAR
+        else:
+            _color_loc[l] = ROJO
+
+    # ── Encabezados: 2 filas (categoría / ANT-ACT-DIF) ──
+    _cats = [("AGREGADOS","agr"), ("CAFETERÍA","caf"), ("POSTRES","pos"),
+             ("LIQ S/A","lsa"), ("LIQ C/A","lca"), ("TOTAL","total")]
+    # Fila 0: LOCAL (span 2 filas) + por categoría el nombre en la 1ª de sus 3 celdas
+    fila_cat = [P("LOCAL", st_h)]
+    for nom, _ in _cats:
+        fila_cat += [P(nom, st_h), P("", st_h), P("", st_h)]
+    # Fila 1: vacío bajo LOCAL + Ant/Act/Dif por categoría
+    fila_sub = [P("", st_h)]
+    for nom, _ in _cats:
+        fila_sub += [P("Ant", st_h), P("Act", st_h), P("Dif", st_h)]
+
+    data = [fila_cat, fila_sub]
+    for l in _locales:
+        fila = [P(_nom_disp(l), st_l)]
+        for nom, k in _cats:
+            a = pct_ant.get(l, {}).get(k)
+            c = pct_act.get(l, {}).get(k)
+            fila += [P(_fp(a) if a is not None else "—"),
+                     P(_fp(c) if c is not None else "—"),
+                     P(_fdif(c, a) if (a is not None and c is not None) else "—")]
+        data.append(fila)
+
+    # Anchos: LOCAL + 6 categorías × 3 col
+    PAG_W = _landscape(_letter)[0]; MX = 20; util = PAG_W - 2 * MX
+    w_loc = util * 0.14
+    w_cat = (util - w_loc) / 18.0
+    wcols = [w_loc] + [w_cat] * 18
+
+    t = _Table(data, colWidths=wcols, repeatRows=2)
+    estilo = [
+        ("GRID", (0, 0), (-1, -1), 0.4, BORDE),
+        ("BACKGROUND", (0, 0), (-1, 1), GRIS),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+        ("ALIGN", (0, 0), (0, -1), "LEFT"),
+        ("TOPPADDING", (0, 0), (-1, -1), 2.5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
+        ("LEFTPADDING", (0, 0), (-1, -1), 3),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+        ("SPAN", (0, 0), (0, 1)),   # LOCAL abarca las 2 filas de header
+    ]
+    # SPAN horizontal de cada categoría en la fila 0 (3 columnas por categoría)
+    _c0 = 1
+    for _ in _cats:
+        estilo.append(("SPAN", (_c0, 0), (_c0 + 2, 0)))
+        _c0 += 3
+    # Color de la columna LOCAL (col 0) por semáforo, filas de datos empiezan en 2
+    for i, l in enumerate(_locales):
+        estilo.append(("BACKGROUND", (0, i + 2), (0, i + 2), _color_loc[l]))
+        # bandas suaves alternas en el resto para lectura
+        if i % 2 == 1:
+            estilo.append(("BACKGROUND", (1, i + 2), (-1, i + 2), GRIS2))
+    t.setStyle(_TS(estilo))
+
+    buf = _io.BytesIO()
+    doc = _Doc(buf, pagesize=_landscape(_letter),
+               leftMargin=MX, rightMargin=MX, topMargin=18, bottomMargin=18)
+    logo_flow = []
+    doc.build([
+        _Par("CONSOLIDADO POR LOCAL — % ADICIONALES POR CATEGORÍA", st_t),
+        _Sp(1, 3),
+        _Par(f"Semana actual: {rango_act}  ·  Semana anterior: {rango_ant}", st_sub),
+        _Sp(1, 8), t,
+    ])
+    buf.seek(0)
+    return buf.getvalue()
+
+
 def _sg_resumen_colores_pdf_v2(df_acum, local, dias_periodo, con_tercer_cuadro=False,
                                logo_path=None):
     """Forma B con cuartetos. Dos tablas:
@@ -21679,6 +21805,70 @@ buildTree(data, 1, null);
                 st.error("No se generó ningún resumen.")
             if _errs:
                 st.warning("Locales con problemas:\n- " + "\n- ".join(_errs))
+
+        # ── Query: % AGREGADO por local (venta adicional / venta total) en un rango ──
+        # Devuelve, por local, el % de cada categoría y el % total, calculado como
+        # venta agregada del local (NO promedio de garzones). Base: misma lógica del
+        # resumen (salón, whitelist, exclusiones SKU/categoría, líquidos).
+        def _sg_pct_local_rango(r_i, r_f):
+            _sku_excl_sql = "','".join(_SG_RES_SKU_EXCL)
+            _df = run_query(f"""
+                with d as (
+                  select v.local, v.categoria_menu as cat,
+                    v.monto_venta_real + coalesce(v.descuento,0) as venta,
+                    {_SG_GRP_CASE} as grp_cat, {_SG_BUCKET} as liq_bucket
+                  from ventas v {_SG_LIQ_JOIN}
+                  where v.origen is null and v.garzon = any(:wl)
+                    and v.categoria_menu not in ('{_sg_excl_sql}')
+                    and v.sku_producto not in ('{_sku_excl_sql}')
+                    and v.fecha_venta between :r_i and :r_f
+                )
+                select local,
+                  sum(venta) as venta_total,
+                  sum(case when cat='Agregados' then venta else 0 end) as v_agr,
+                  sum(case when grp_cat='CAFETERIA' then venta else 0 end) as v_caf,
+                  sum(case when grp_cat='POSTRES' then venta else 0 end) as v_pos,
+                  sum(case when liq_bucket='LIQ_SA' then venta else 0 end) as v_lsa,
+                  sum(case when liq_bucket='LIQ_CA' then venta else 0 end) as v_lca
+                from d group by local having sum(venta) > 0
+            """, {"wl": _SG_WHITELIST, "r_i": str(r_i), "r_f": str(r_f)})
+            _out = {}
+            if _df is not None and not _df.empty:
+                for _, r in _df.iterrows():
+                    vt = float(r["venta_total"]) or 0.0
+                    if vt <= 0:
+                        continue
+                    _agr = float(r["v_agr"]); _caf = float(r["v_caf"])
+                    _pos = float(r["v_pos"]); _lsa = float(r["v_lsa"]); _lca = float(r["v_lca"])
+                    _adic = _agr + _caf + _pos + _lsa + _lca
+                    _out[str(r["local"])] = {
+                        "agr": _agr / vt, "caf": _caf / vt, "pos": _pos / vt,
+                        "lsa": _lsa / vt, "lca": _lca / vt, "total": _adic / vt,
+                    }
+            return _out
+
+        st.markdown("---")
+        st.markdown("**Consolidado por local** — % de adicionales por categoría, "
+                    "comparando la semana seleccionada vs la anterior.")
+        if st.button("📄 Descargar consolidado por local (PDF)",
+                     use_container_width=True, key="sg_consol_btn"):
+            _ini_ant = _sg_ini - _sg_td(days=7)
+            _fin_ant = _sg_fin - _sg_td(days=7)
+            _rango_act = f"{_sg_ini.strftime('%d-%m-%Y')} al {_sg_fin.strftime('%d-%m-%Y')}"
+            _rango_ant = f"{_ini_ant.strftime('%d-%m-%Y')} al {_fin_ant.strftime('%d-%m-%Y')}"
+            with st.spinner("Calculando consolidado…"):
+                _pct_act = _sg_pct_local_rango(_sg_ini, _sg_fin)
+                _pct_ant = _sg_pct_local_rango(_ini_ant, _fin_ant)
+                if not _pct_act:
+                    st.error("No hay datos para la semana seleccionada.")
+                else:
+                    _pdf_cons = _sg_consolidado_locales_pdf(
+                        _pct_act, _pct_ant, _rango_act, _rango_ant, logo_path=LOGO_PATH)
+                    st.success(f"Consolidado listo · {len(_pct_act)} locales.")
+                    st.download_button("⬇️ Descargar consolidado (PDF)",
+                        _pdf_cons,
+                        file_name=f"consolidado_locales_{_sg_ini}.pdf",
+                        mime="application/pdf", use_container_width=True, key="sg_consol_dl")
 
 elif informe_sel == "Auditor":
     from datetime import date as _date2
