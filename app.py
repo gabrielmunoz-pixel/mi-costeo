@@ -15,7 +15,7 @@ def _inject_mobile_css():
     section[data-testid="stSidebar"] { min-width:210px !important; max-width:230px !important; }
     section[data-testid="stSidebar"] button { min-height:46px !important; font-size:0.92rem !important; }
     .main .block-container { padding-left:1rem !important; padding-right:1rem !important; padding-top:1.2rem !important; max-width:100% !important; }
-    .kpi-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottaom:1.25rem; }
+    .kpi-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:1.25rem; }
     .kpi-box { background:#1a1a1a; border-radius:10px; padding:14px 16px; }
     .kpi-box.alerta { background:#1e1010; }
     .kpi-box .k-label { font-size:0.68rem; color:#ffffff; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:5px; }
@@ -6328,26 +6328,31 @@ def _sg_resumen_colores_pdf(df_acum, local, dias_periodo, logo_path=None):
     w1 = [util * p / sum(pesos1) for p in pesos1]
     t1 = _Table(data1, colWidths=w1, repeatRows=1); t1.setStyle(_TS(_mk_estilo(len(filas))))
 
-    # ══════════ CUADRO 2 — RANKING POR VENTA (+ ventas $ por categoría) ══════════
+    # ══════════ CUADRO 2 — RANKING POR VENTA (+ venta $ y % por categoría) ══════════
     head2 = [P(h, st_h) for h in ["Rank", "NOMBRE GARZON", "VENTA", "APORTE<br/>PROPINA",
              "VENTA DIARIA<br/>PROMEDIO", "DIAS<br/>TRAB",
-             "$ AGREG", "$ CAF", "$ POS", "$ LIQ<br/>S/A", "$ LIQ<br/>C/A"]]
+             "$ AGREG", "%<br/>AGREG", "$ CAF", "%<br/>CAF", "$ POS", "%<br/>POS",
+             "$ LIQ<br/>S/A", "% LIQ<br/>S/A", "$ LIQ<br/>C/A", "% LIQ<br/>C/A"]]
     orden_v = sorted(range(len(filas)), key=lambda i: -filas[i]["venta"])
     filas_v = [filas[i] for i in orden_v]
 
     def fila2(f, rk, e=st_c):
         return [P(rk, e), P(f["nombre"], e), P(_fm(f["venta"]), e),
                 P(_fm(f["propina"]), e), P(_fm(f["vdp"]), e), P(f["dias"], e),
-                P(_fm(f["v_agr"]), e), P(_fm(f["v_caf"]), e), P(_fm(f["v_pos"]), e),
-                P(_fm(f["v_lsa"]), e), P(_fm(f["v_lca"]), e)]
+                P(_fm(f["v_agr"]), e), P(_fp(f["p_agr"]), e),
+                P(_fm(f["v_caf"]), e), P(_fp(f["p_caf"]), e),
+                P(_fm(f["v_pos"]), e), P(_fp(f["p_pos"]), e),
+                P(_fm(f["v_lsa"]), e), P(_fp(f["p_sa"]), e),
+                P(_fm(f["v_lca"]), e), P(_fp(f["p_ca"]), e)]
 
     data2 = [head2]
     for k, f in enumerate(filas_v):
         data2.append(fila2(f, k + 1))
     if tot:
         data2.append(fila2(tot, "", st_b))
-    #         Rk   Nom  Vta  Prop VDP  Días $ag  $cf  $ps  $sa  $ca
-    pesos2 = [3.0, 12.0, 7.0, 6.2, 7.0, 3.6, 5.6, 5.6, 5.6, 5.6, 5.6]
+    #         Rk   Nom  Vta  Prop VDP  Días [$  %]x5 categorías
+    pesos2 = [2.6, 9.5, 6.0, 5.2, 6.0, 3.0,
+              5.0, 3.4, 5.0, 3.4, 5.0, 3.4, 5.0, 3.4, 5.0, 3.4]
     w2 = [util * p / sum(pesos2) for p in pesos2]
     t2 = _Table(data2, colWidths=w2, repeatRows=1)
     # Cuadro 2 tiene ORDEN por venta: el color por posición sigue siendo estático
