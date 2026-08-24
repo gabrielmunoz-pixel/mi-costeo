@@ -6231,13 +6231,9 @@ def _sg_orden_colores(df_acum, dias_periodo, local=None):
 
 
 def _sg_resumen_colores_pdf(df_acum, local, dias_periodo, logo_path=None):
-    """Genera el resumen con 3 cuadros (1 página horizontal) y devuelve bytes PDF:
-      C1 RANKING POR CATEGORÍAS  — Q semanal y Q diaria por categoría (orden % total)
-      C2 RANKING POR VENTA       — venta + criterios + ventas $ por categoría (orden venta)
-      C3 RANKING DEFINITIVO      — puntaje por posición en C(venta) y C(% adic.):
-         cada garzón suma (N-pos+1) de cada ranking; gana el de mayor puntaje;
-         desempate por mayor % total de adicionales.
-    Colores estáticos por posición (verde/amarillo/rojo) idénticos al resumen previo."""
+    """Genera el cuadro resumen con colores (1 página horizontal, TABLA ÚNICA) y
+    devuelve bytes PDF. Columnas: venta general + por categoría trío Venta/Q/% +
+    Q total + % total. Colores estáticos por posición. Orden por % total."""
     import io as _io
     from reportlab.lib.pagesizes import letter as _letter, landscape as _landscape
     from reportlab.lib import colors as _colors
@@ -6255,11 +6251,7 @@ def _sg_resumen_colores_pdf(df_acum, local, dias_periodo, logo_path=None):
     def _fq(v):
         try: return f"{int(round(float(v))):,}".replace(",", ".")
         except: return "0"
-    def _fd(v):
-        try: return f"{float(v):.1f}".replace(".", ",")
-        except: return "0,0"
 
-    # filas: orden base por % total (p_total) + color estático por posición
     filas, tot = _sg_orden_colores(df_acum, dias_periodo, local=local)
 
     VERDE = _colors.HexColor("#63BE7B"); AMAR = _colors.HexColor("#FFEB84")
@@ -6267,149 +6259,68 @@ def _sg_resumen_colores_pdf(df_acum, local, dias_periodo, logo_path=None):
     BORDE = _colors.HexColor("#808080")
     _cmap = {"verde": VERDE, "amar": AMAR, "rojo": ROJO}
 
-    st_h = _PS("h", fontName="Helvetica-Bold", fontSize=6.4, alignment=_TAC, leading=7.4)
-    st_c = _PS("c", fontName="Helvetica", fontSize=6.6, alignment=_TAC, leading=7.8)
-    st_b = _PS("b", fontName="Helvetica-Bold", fontSize=6.6, alignment=_TAC, leading=7.8)
-    st_t = _PS("t", fontName="Helvetica-Bold", fontSize=12, alignment=_TAC, leading=14)
-    st_sub = _PS("sub", fontName="Helvetica-Bold", fontSize=9, alignment=_TAC, leading=11)
+    st_h = _PS("h", fontName="Helvetica-Bold", fontSize=6.2, alignment=_TAC, leading=7)
+    st_c = _PS("c", fontName="Helvetica", fontSize=6.4, alignment=_TAC, leading=7.6)
+    st_b = _PS("b", fontName="Helvetica-Bold", fontSize=6.4, alignment=_TAC, leading=7.6)
+    st_t = _PS("t", fontName="Helvetica-Bold", fontSize=11, alignment=_TAC, leading=13)
     P = lambda s, e=st_c: _Par(str(s), e)
 
-    PAG_W = _landscape(_letter)[0]; MX = 22; util = PAG_W - 2 * MX
+    headers = ["Rank", "NOMBRE GARZON", "VENTA", "APORTE<br/>PROPINA",
+               "VENTA DIARIA<br/>PROMEDIO", "DIAS<br/>TRAB",
+               "VENTA<br/>AGREGADOS", "Q<br/>AGREG", "%<br/>AGREGADO",
+               "VENTA<br/>CAFETERIA", "Q<br/>CAF", "%<br/>CAFETERIA",
+               "VENTA<br/>POSTRES", "Q<br/>POS", "%<br/>POSTRES",
+               "VENTA LIQ<br/>S/A", "Q<br/>S/A", "% LIQ<br/>S/A",
+               "VENTA LIQ<br/>C/A", "Q<br/>C/A", "% LIQ<br/>C/A",
+               "Q<br/>TOTAL", "% TOTAL"]
+    head = [P(h, st_h) for h in headers]
 
-    # Secuencia de color estática por posición (misma para los 3 cuadros)
-    _colores_pos = [f["color"] for f in filas]
-
-    def _mk_estilo(n):
-        est = [
-            ("GRID", (0, 0), (-1, -1), 0.5, BORDE),
-            ("BACKGROUND", (0, 0), (-1, 0), GRIS),
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-            ("TOPPADDING", (0, 0), (-1, -1), 2.5),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
-            ("LEFTPADDING", (0, 0), (-1, -1), 2),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 2),
-        ]
-        for i in range(n):
-            col = _colores_pos[i] if i < len(_colores_pos) else "rojo"
-            est.append(("BACKGROUND", (0, i + 1), (-1, i + 1), _cmap.get(col, ROJO)))
-        if tot:
-            est.append(("BACKGROUND", (0, n + 1), (-1, n + 1), GRIS))
-        return est
-
-    def _pd(qtot, dias):   # promedio diario = Q / días trabajados
-        try:
-            d = float(dias); return (float(qtot) / d) if d else 0.0
-        except: return 0.0
-
-    # ══════════ CUADRO 1 — RANKING POR CATEGORÍAS (Q sem / Q día) ══════════
-    head1 = [P(h, st_h) for h in ["Rank", "NOMBRE GARZON",
-             "AGREG<br/>Q SEM", "AGREG<br/>Q DÍA", "CAF<br/>Q SEM", "CAF<br/>Q DÍA",
-             "POS<br/>Q SEM", "POS<br/>Q DÍA", "LIQ S/A<br/>Q SEM", "LIQ S/A<br/>Q DÍA",
-             "LIQ C/A<br/>Q SEM", "LIQ C/A<br/>Q DÍA", "Q TOTAL<br/>SEM", "% TOTAL"]]
-
-    def fila1(f, rk, e=st_c):
-        d = f["dias"]
-        return [P(rk, e), P(f["nombre"], e),
-                P(_fq(f.get("q_agr", 0)), e), P(_fd(_pd(f.get("q_agr", 0), d)), e),
-                P(_fq(f.get("q_caf", 0)), e), P(_fd(_pd(f.get("q_caf", 0), d)), e),
-                P(_fq(f.get("q_pos", 0)), e), P(_fd(_pd(f.get("q_pos", 0), d)), e),
-                P(_fq(f.get("q_lsa", 0)), e), P(_fd(_pd(f.get("q_lsa", 0), d)), e),
-                P(_fq(f.get("q_lca", 0)), e), P(_fd(_pd(f.get("q_lca", 0), d)), e),
+    def fila_de(f, bold=False):
+        e = st_b if bold else st_c
+        return [P(f.get("rank", ""), e), P(f["nombre"], e), P(_fm(f["venta"]), e),
+                P(_fm(f["propina"]), e), P(_fm(f["vdp"]), e), P(f["dias"], e),
+                P(_fm(f["v_agr"]), e), P(_fq(f.get("q_agr", 0)), e), P(_fp(f["p_agr"]), e),
+                P(_fm(f["v_caf"]), e), P(_fq(f.get("q_caf", 0)), e), P(_fp(f["p_caf"]), e),
+                P(_fm(f["v_pos"]), e), P(_fq(f.get("q_pos", 0)), e), P(_fp(f["p_pos"]), e),
+                P(_fm(f["v_lsa"]), e), P(_fq(f.get("q_lsa", 0)), e), P(_fp(f["p_sa"]), e),
+                P(_fm(f["v_lca"]), e), P(_fq(f.get("q_lca", 0)), e), P(_fp(f["p_ca"]), e),
                 P(_fq(f.get("q_total", 0)), e), P(_fp(f["p_total"]), e)]
 
-    data1 = [head1]
-    for i, f in enumerate(filas):
-        data1.append(fila1(f, i + 1))
-    if tot:
-        data1.append(fila1(tot, "", st_b))
-    #         Rk   Nom  [Qsem Qdía]x5                              Qtot  %tot
-    pesos1 = [3.0, 11.0, 4.6, 4.6, 4.6, 4.6, 4.6, 4.6, 4.6, 4.6, 4.6, 4.6, 4.8, 4.6]
-    w1 = [util * p / sum(pesos1) for p in pesos1]
-    t1 = _Table(data1, colWidths=w1, repeatRows=1); t1.setStyle(_TS(_mk_estilo(len(filas))))
-
-    # ══════════ CUADRO 2 — RANKING POR VENTA (+ venta $ y % por categoría) ══════════
-    head2 = [P(h, st_h) for h in ["Rank", "NOMBRE GARZON", "VENTA", "APORTE<br/>PROPINA",
-             "VENTA DIARIA<br/>PROMEDIO", "DIAS<br/>TRAB",
-             "$ AGREG", "%<br/>AGREG", "$ CAF", "%<br/>CAF", "$ POS", "%<br/>POS",
-             "$ LIQ<br/>S/A", "% LIQ<br/>S/A", "$ LIQ<br/>C/A", "% LIQ<br/>C/A"]]
-    orden_v = sorted(range(len(filas)), key=lambda i: -filas[i]["venta"])
-    filas_v = [filas[i] for i in orden_v]
-
-    def fila2(f, rk, e=st_c):
-        return [P(rk, e), P(f["nombre"], e), P(_fm(f["venta"]), e),
-                P(_fm(f["propina"]), e), P(_fm(f["vdp"]), e), P(f["dias"], e),
-                P(_fm(f["v_agr"]), e), P(_fp(f["p_agr"]), e),
-                P(_fm(f["v_caf"]), e), P(_fp(f["p_caf"]), e),
-                P(_fm(f["v_pos"]), e), P(_fp(f["p_pos"]), e),
-                P(_fm(f["v_lsa"]), e), P(_fp(f["p_sa"]), e),
-                P(_fm(f["v_lca"]), e), P(_fp(f["p_ca"]), e)]
-
-    data2 = [head2]
-    for k, f in enumerate(filas_v):
-        data2.append(fila2(f, k + 1))
-    if tot:
-        data2.append(fila2(tot, "", st_b))
-    #         Rk   Nom  Vta  Prop VDP  Días [$  %]x5 categorías
-    pesos2 = [2.6, 9.5, 6.0, 5.2, 6.0, 3.0,
-              5.0, 3.4, 5.0, 3.4, 5.0, 3.4, 5.0, 3.4, 5.0, 3.4]
-    w2 = [util * p / sum(pesos2) for p in pesos2]
-    t2 = _Table(data2, colWidths=w2, repeatRows=1)
-    # Cuadro 2 tiene ORDEN por venta: el color por posición sigue siendo estático
-    # (posición 1 el primer color, etc.), igual que los otros cuadros.
-    t2.setStyle(_TS(_mk_estilo(len(filas_v))))
-
-    # ══════════ CUADRO 3 — RANKING DEFINITIVO ══════════
-    # Puntaje por posición en dos rankings (N garzones):
-    #   - R_venta: posición por mayor venta  -> puntos = N - pos + 1
-    #   - R_pct:   posición por mayor % total -> puntos = N - pos + 1
-    # Puntaje final = pts_venta + pts_pct. Mayor puntaje gana.
-    # Desempate: mayor % total de adicionales.
-    N = len(filas)
-    _nombres = [f["nombre"] for f in filas]
-    # posición por venta (1 = mayor venta)
-    _ord_v = sorted(range(N), key=lambda i: -filas[i]["venta"])
-    _pos_v = {}
-    for _rank, _idx in enumerate(_ord_v, start=1):
-        _pos_v[_nombres[_idx]] = _rank
-    # posición por % total (1 = mayor %) — filas ya viene ordenada por p_total desc
-    _ord_p = sorted(range(N), key=lambda i: -float(filas[i]["p_total"]))
-    _pos_p = {}
-    for _rank, _idx in enumerate(_ord_p, start=1):
-        _pos_p[_nombres[_idx]] = _rank
-
-    _def = []
+    data = [head]
     for f in filas:
-        g = f["nombre"]
-        pv = _pos_v[g]; pp = _pos_p[g]
-        pts = (N - pv + 1) + (N - pp + 1)
-        _def.append({"nombre": g, "pos_v": pv, "pos_p": pp, "pts": pts,
-                     "p_total": float(f["p_total"])})
-    # orden: mayor puntaje; desempate mayor % total
-    _def_ord = sorted(_def, key=lambda d: (-d["pts"], -d["p_total"]))
+        data.append(fila_de(f))
+    if tot:
+        data.append(fila_de(tot, bold=True))
 
-    head3 = [P(h, st_h) for h in ["Rank", "NOMBRE GARZON", "POS.<br/>VENTA",
-             "POS.<br/>% ADIC.", "PUNTAJE<br/>TOTAL", "% TOTAL"]]
-    data3 = [head3]
-    for k, d in enumerate(_def_ord):
-        data3.append([P(k + 1), P(d["nombre"]), P(d["pos_v"]), P(d["pos_p"]),
-                      P(d["pts"]), P(_fp(d["p_total"]))])
-    # Nota: el color por posición aquí también es estático (posición del ranking
-    # definitivo). Mantiene la misma secuencia verde/amarillo/rojo.
-    pesos3 = [3.0, 14.0, 5.0, 5.0, 5.5, 5.0]
-    w3 = [util * p / sum(pesos3) for p in pesos3]
-    t3 = _Table(data3, colWidths=w3, repeatRows=1); t3.setStyle(_TS(_mk_estilo(len(_def_ord))))
+    PAG_W = _landscape(_letter)[0]
+    MX = 22
+    util = PAG_W - 2 * MX
+    #        Rk  Nom  Vta  Prop VDP  Dias  Vag  Qag  %ag  Vcf  Qcf  %cf  Vps  Qps  %ps  Vsa  Qsa  %sa  Vca  Qca  %ca  Qtot %tot
+    pesos = [2.8, 9.5, 6.2, 5.4, 6.0, 3.0, 5.6, 3.4, 4.0, 5.6, 3.4, 4.0, 5.6, 3.4, 4.0, 5.6, 3.4, 4.0, 5.6, 3.4, 4.0, 3.6, 4.6]
+    wcols = [util * p / sum(pesos) for p in pesos]
 
-    _titulo_loc = "Pedro de Valdivia" if str(local) == "Providencia" else str(local)
+    t = _Table(data, colWidths=wcols, repeatRows=1)
+    estilo = [
+        ("GRID", (0, 0), (-1, -1), 0.5, BORDE),
+        ("BACKGROUND", (0, 0), (-1, 0), GRIS),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("TOPPADDING", (0, 0), (-1, -1), 2.5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
+        ("LEFTPADDING", (0, 0), (-1, -1), 2),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+    ]
+    for i, f in enumerate(filas):
+        estilo.append(("BACKGROUND", (0, i + 1), (-1, i + 1), _cmap.get(f["color"], ROJO)))
+    if tot:
+        estilo.append(("BACKGROUND", (0, len(filas) + 1), (-1, len(filas) + 1), GRIS))
+    t.setStyle(_TS(estilo))
+
     buf = _io.BytesIO()
     doc = _Doc(buf, pagesize=_landscape(_letter),
                leftMargin=MX, rightMargin=MX, topMargin=18, bottomMargin=18)
-    doc.build([
-        _Par(_titulo_loc.upper(), st_t), _Sp(1, 6),
-        _Par("RANKING POR CATEGORÍAS (Q semanal / Q diaria)", st_sub), _Sp(1, 4), t1, _Sp(1, 12),
-        _Par("RANKING POR VENTA", st_sub), _Sp(1, 4), t2, _Sp(1, 12),
-        _Par("RANKING DEFINITIVO (venta + % adicionales)", st_sub), _Sp(1, 4), t3,
-    ])
+    _titulo_loc = "Pedro de Valdivia" if str(local) == "Providencia" else str(local)
+    doc.build([_Par(_titulo_loc.upper(), st_t), _Sp(1, 6), t])
     buf.seek(0)
     return buf.getvalue()
 
@@ -21880,6 +21791,13 @@ buildTree(data, 1, null);
             with st.spinner("Calculando consolidado…"):
                 _pct_act = _sg_pct_local_rango(_sg_ini, _sg_fin)
                 _pct_ant = _sg_pct_local_rango(_ini_ant, _fin_ant)
+                # Diagnóstico: qué locales trajo la semana actual (para verificar La Casona)
+                st.caption("Locales en la semana actual: " +
+                           (", ".join(sorted(_pct_act.keys())) if _pct_act else "ninguno"))
+                if "La Casona" not in _pct_act:
+                    st.warning("⚠️ La Casona no trae ventas de salón (whitelist) en la "
+                               f"semana {_sg_ini} al {_sg_fin}. Verifica que sea una semana "
+                               "con operación del local.")
                 if not _pct_act:
                     st.error("No hay datos para la semana seleccionada.")
                 else:
