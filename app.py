@@ -5289,7 +5289,8 @@ def _cr_conclusiones_empresa(comp, red, periodos, modo, cp_red):
 
 # ===========================================================================
 #  RESUMEN DE COLORES (réplica de la foto) — 1 página horizontal
-#  Ranking triple (DAX): (rankVdp + rankPctTotal - venta/1e10)/2, ascendente.
+#  Puntaje compartido: rankVdp + rankPctTotal, ascendente (menor = mejor).
+#  Desempate: mayor % total.
 #  Colores por posición de ranking: verde (mejores) / amarillo (medio) / rojo.
 # ===========================================================================
 # ===========================================================================
@@ -6159,7 +6160,10 @@ def _sg_rank_dense_desc(valores):
 
 
 def _sg_orden_colores(df_acum, dias_periodo, local=None):
-    """Ordena garzones por el ranking triple y asigna color por posición.
+    """Ordena garzones por PUNTAJE COMPARTIDO y asigna color por posición.
+
+    Puntaje = rango por venta diaria promedio + rango por % total (ambos
+    descendentes y densos). Menor puntaje = mejor. Empate -> mayor % total.
 
     df_acum: DataFrame crudo de la sección 5 acumulado
              (cols: garzon, dias, venta_total, v_agr, v_caf, v_pos, v_lsa, v_lca).
@@ -6203,10 +6207,22 @@ def _sg_orden_colores(df_acum, dias_periodo, local=None):
         })
     if not g:
         return [], None
-    # Clasificación: 1er lugar = mayor % total (adicionales) — criterio universal.
-    # Desempate: mayor venta diaria promedio; y como último criterio, mayor venta total.
+    # ── Clasificación: PUNTAJE COMPARTIDO entre venta diaria promedio y % total ──
+    # Cada métrica se rankea por separado sobre la lista completa de garzones del
+    # local (1 = mejor, descendente, denso => igual que RANKX(...; DESC; DENSE)).
+    # El puntaje es la suma de ambos rangos, por lo que MENOR puntaje = mejor
+    # clasificación. Dividir por 2 (fórmula DAX original) no altera el orden.
+    # Desempate: mayor % total. Si persiste, mayor vdp y luego mayor venta total,
+    # solo para garantizar un orden determinista.
+    _r_vdp = _sg_rank_dense_desc([x["vdp"] for x in g])
+    _r_pto = _sg_rank_dense_desc([x["p_total"] for x in g])
+    for _i, _x in enumerate(g):
+        _x["rank_vdp"] = _r_vdp[_i]
+        _x["rank_ptot"] = _r_pto[_i]
+        _x["puntaje"] = _r_vdp[_i] + _r_pto[_i]
     orden = sorted(range(len(g)),
-                   key=lambda i: (-g[i]["p_total"], -g[i]["vdp"], -g[i]["venta"]))
+                   key=lambda i: (g[i]["puntaje"], -g[i]["p_total"],
+                                  -g[i]["vdp"], -g[i]["venta"]))
     filas = [g[i] for i in orden]
     nv, na, nr = _sg_bandas_local(local, len(filas))
     colores = ["verde"] * nv + ["amar"] * na + ["rojo"] * nr
@@ -6233,7 +6249,8 @@ def _sg_orden_colores(df_acum, dias_periodo, local=None):
 def _sg_resumen_colores_pdf(df_acum, local, dias_periodo, logo_path=None):
     """Genera el cuadro resumen con colores (1 página horizontal, TABLA ÚNICA) y
     devuelve bytes PDF. Columnas: venta general + por categoría trío Venta/Q/% +
-    Q total + % total. Colores estáticos por posición. Orden por % total."""
+    Q total + % total. Colores estáticos por posición. Orden por puntaje
+    compartido (rango vdp + rango % total)."""
     import io as _io
     from reportlab.lib.pagesizes import letter as _letter, landscape as _landscape
     from reportlab.lib import colors as _colors
@@ -6511,7 +6528,7 @@ def _sg_resumen_colores_pdf_v2(df_acum, local, dias_periodo, con_tercer_cuadro=F
     st_sub = _PS("sub", fontName="Helvetica-Bold", fontSize=9, alignment=_TAC, leading=11)
     P = lambda s, e=st_c: _Par(str(s), e)
 
-    # Filas ordenadas por % adicional + color por posición (misma lógica base)
+    # Filas ordenadas por puntaje compartido + color por posición (misma lógica base)
     filas, tot = _sg_orden_colores(df_acum, dias_periodo, local=local)
     # Índice por nombre para recuperar campos extra (tramos) del df crudo
     _raw = {str(r["garzon"]): r for _, r in df_acum.iterrows()} if df_acum is not None else {}
