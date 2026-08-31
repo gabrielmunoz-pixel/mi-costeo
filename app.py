@@ -6207,13 +6207,12 @@ def _sg_orden_colores(df_acum, dias_periodo, local=None):
         })
     if not g:
         return [], None
-    # ── Clasificación: PUNTAJE COMPARTIDO entre venta diaria promedio y % total ──
-    # Cada métrica se rankea por separado sobre la lista completa de garzones del
-    # local (1 = mejor, descendente, denso => igual que RANKX(...; DESC; DENSE)).
-    # El puntaje es la suma de ambos rangos, por lo que MENOR puntaje = mejor
-    # clasificación. Dividir por 2 (fórmula DAX original) no altera el orden.
-    # Desempate: mayor % total. Si persiste, mayor vdp y luego mayor venta total,
-    # solo para garantizar un orden determinista.
+    # ── Clasificación: SOLO por % TOTAL de categorías (adicionales) ──
+    # [TEMPORAL] Cambiado desde el "puntaje compartido" (rango vdp + rango % total)
+    # a pedido del usuario, para imprimir esta semana ordenado solo por % total.
+    # Para volver al puntaje compartido: restaurar el bloque _r_vdp/_r_pto/puntaje
+    # y ordenar por (puntaje, -p_total, -vdp, -venta).
+    # Desempate: mayor venta diaria promedio; luego mayor venta total.
     _r_vdp = _sg_rank_dense_desc([x["vdp"] for x in g])
     _r_pto = _sg_rank_dense_desc([x["p_total"] for x in g])
     for _i, _x in enumerate(g):
@@ -6221,8 +6220,7 @@ def _sg_orden_colores(df_acum, dias_periodo, local=None):
         _x["rank_ptot"] = _r_pto[_i]
         _x["puntaje"] = _r_vdp[_i] + _r_pto[_i]
     orden = sorted(range(len(g)),
-                   key=lambda i: (g[i]["puntaje"], -g[i]["p_total"],
-                                  -g[i]["vdp"], -g[i]["venta"]))
+                   key=lambda i: (-g[i]["p_total"], -g[i]["vdp"], -g[i]["venta"]))
     filas = [g[i] for i in orden]
     nv, na, nr = _sg_bandas_local(local, len(filas))
     colores = ["verde"] * nv + ["amar"] * na + ["rojo"] * nr
