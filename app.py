@@ -13765,71 +13765,11 @@ elif modulo.startswith("📊"):
 
                         # ════════ AÑO ANTERIOR (columna AG = 33) ════════
                         # Mismo mes del año anterior (mes completo).
-                        #  · Locales (Alemán 6-35), totales (37/38/42) y apps (39-41):
-                        #    en vivo desde `ventas` (año -1).
-                        #  · Aliva (45-54): desde el archivo mensual de Aliva provisto
-                        #    (Total Factura de deudores por RUT→local). Actualizar
-                        #    _ALIVA_AY cuando cambie el mes de año anterior evaluado.
-                        _ay_ini = _exp_fi.replace(year=_exp_año - 1)
-                        _ay_fin = _ay_ini.replace(
-                            day=_dias_calendario_mes(_exp_año - 1, _exp_mes))
-                        # Encabezado columna año anterior (secciones Alemán y Aliva)
-                        _ws_out.cell(5, 33).value  = f' {_mes_exp_str} {_exp_año - 1}'
-                        _ws_out.cell(47, 33).value = f' {_mes_exp_str} {_exp_año - 1}'
-
-                        _df_ay = run_query("""
-                            SELECT local, origen, SUM(monto_venta_real) AS venta
-                            FROM ventas WHERE fecha_venta BETWEEN :fi AND :ff
-                              AND local IS NOT NULL
-                            GROUP BY local, origen
-                        """, {'fi': str(_ay_ini), 'ff': str(_ay_fin)})
-
-                        # Alemán por local (salón base, delivery base+1; total base+2 = fórmula del template)
-                        _ay_gt_s = 0.0; _ay_gt_d = 0.0
-                        for _base_r, _loc in _EXP_LOCAL_ROWS.items():
-                            _ay_s = _vget_exp(_df_ay, _loc, 'salon')
-                            _ay_d = _vget_exp(_df_ay, _loc, 'delivery')
-                            _ws_out.cell(_base_r,     33).value = round(_ay_s) if _ay_s else 0
-                            _ws_out.cell(_base_r + 1, 33).value = round(_ay_d) if _ay_d else 0
-                            _ay_gt_s += _ay_s; _ay_gt_d += _ay_d
-
-                        # Totales agrupados (salón 37, delivery 38, general 42)
-                        _ws_out.cell(40, 33).value = round(_ay_gt_s)
-                        _ws_out.cell(41, 33).value = round(_ay_gt_d)
-                        _ws_out.cell(45, 33).value = round(_ay_gt_s) + round(_ay_gt_d)
-
-                        # Apps delivery año anterior (39=Uber, 40=PedidosYa, 41=Rappi)
-                        for _app_row, _fp_list in _APPS.items():
-                            _fp_in = "','".join(_fp_list)
-                            _df_ay_app = run_query(f"""
-                                SELECT SUM(monto_venta_real) AS venta FROM ventas
-                                WHERE fecha_venta BETWEEN :fi AND :ff
-                                  AND forma_pago IN ('{_fp_in}')
-                            """, {'fi': str(_ay_ini), 'ff': str(_ay_fin)})
-                            _ay_app = float(_df_ay_app['venta'].iloc[0]) \
-                                if not _df_ay_app.empty and _df_ay_app['venta'].iloc[0] else 0
-                            _ws_out.cell(_app_row, 33).value = round(_ay_app)
-
-                        # Aliva año anterior (filas 48-58): desde ventas_aliva del MISMO mes del
-                        # año pasado. Se carga con la pestaña "Cargar Venta Aliva" fechando en 2025.
-                        _df_ay_al = run_query("""
-                            SELECT local, SUM(monto_total) AS venta FROM ventas_aliva
-                            WHERE fecha BETWEEN :fi AND :ff
-                            GROUP BY local
-                        """, {'fi': str(_ay_ini), 'ff': str(_ay_fin)})
-                        # Respaldo SOLO para julio 2025 (valores del archivo original), por si aún no se cargó
-                        _ALIVA_AY_JUL25 = {
-                            'Vitacura': 78367883, 'Las Condes': 73986664, 'Chicureo': 67909090,
-                            'Macul': 61159633, 'La Dehesa': 57786393, 'La Reina': 59879273,
-                            'Quilin': 45016657, 'Providencia': 46515543,
-                            'Nueva Providencia': 43056829, 'Los Trapenses': 54243824,
-                        }
-                        for _ar, _aloc in _ALIVA_ROWS.items():
-                            _av = _vget_exp(_df_ay_al, _aloc)
-                            if not _av and _ay_ini.year == 2025 and _ay_ini.month == 7:
-                                _av = _ALIVA_AY_JUL25.get(_aloc, 0)
-                            _ws_out.cell(_ar, 33).value = round(_av) if _av else 0
-
+                        # ════════ COLUMNA AG (33) = SEP 2025 — FIJA, NO SE TOCA ════════
+                        # Esta columna es un mes histórico ESTÁTICO cargado manualmente en
+                        # el template. El script NO la escribe (antes la pisaba con el
+                        # "año anterior" del mes en curso, borrando SEP 2025). Se conserva
+                        # tal cual venga en el template.
 
                         # ── GENERAR GRÁFICOS CON MATPLOTLIB ─────────────────
                         import matplotlib
