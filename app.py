@@ -13667,19 +13667,16 @@ elif modulo.startswith("📊"):
                             _ws_out.cell(_ar, 5).value = round(_aliva_d, 2) if _aliva_d else 0
                             _ws_out.cell(_ar, 7).value = round(_aliva_a, 2) if _aliva_a else 0
 
-                        # ════════ MESES MAY / JUN / JUL 2026 (cols Y/AA/AC) ════════
-                        # Rellena ÚNICAMENTE las 3 columnas vacías del template:
-                        #   MAY 2026 -> Y(25) monto, Z(26) %
-                        #   JUN 2026 -> AA(27) monto, AB(28) %
-                        #   JUL 2026 -> AC(29) monto, AD(30) %
+                        # ════════ MES AGOSTO 2026 (col AC=29 monto, AD=30 %) ════════
+                        # DECISIÓN: may/jun/jul 2026 son datos ESTÁTICOS ya cargados en
+                        # el template (cols W/Y/AA). El script NO los reescribe para no
+                        # pisar históricos cerrados. Solo se llena AGOSTO 2026 en AC/AD.
                         # Los % replican el criterio del histórico: en Alemán = tipo/total
                         # del local (fila base+2); en Aliva = monto/total Alemán del local.
-                        # Perf: se traen los 3 meses en 3 queries agrupadas por mes
-                        # (date_trunc) y el desglose por mes se hace en memoria — NO una
-                        # query por mes. No se tocan E..X ni AE en adelante ni fórmulas.
-                        _MESES_YAC = [(5, 2026, 25, 26), (6, 2026, 27, 28), (7, 2026, 29, 30)]
-                        _rango_ini = date(2026, 5, 1)
-                        _rango_fin = date(2026, 7, _dias_calendario_mes(2026, 7))
+                        # No se tocan E..AB ni AE en adelante ni fórmulas.
+                        _MESES_YAC = [(8, 2026, 29, 30)]
+                        _rango_ini = date(2026, 8, 1)
+                        _rango_fin = date(2026, 8, _dias_calendario_mes(2026, 8))
 
                         # 1 query Alemán (local/origen/mes), 1 apps (forma_pago/mes), 1 Aliva
                         _df_yac = run_query("""
@@ -13715,10 +13712,11 @@ elif modulo.startswith("📊"):
                         }
 
                         for _m_num, _m_año, _c_monto, _c_pct in _MESES_YAC:
-                            # Encabezados (mismo formato que el resto de la fila 5/47)
+                            # Encabezado como TEXTO PLANO uniforme (evita que Excel lo
+                            # interprete como fecha). Mismo formato que el resto de fila 5/47.
                             _m_str = _MESES_EXP[_m_num]
-                            _ws_out.cell(5,  _c_monto).value = f' {_m_str}  {_m_año}'
-                            _ws_out.cell(47, _c_monto).value = f' {_m_str}  {_m_año}'
+                            _ws_out.cell(5,  _c_monto).value = f' {_m_str} {_m_año}'
+                            _ws_out.cell(47, _c_monto).value = f' {_m_str} {_m_año}'
 
                             # Subconjuntos del mes (en memoria)
                             _df_m    = _df_yac[_df_yac['mes'] == _m_num] if not _df_yac.empty else _df_yac
@@ -13727,8 +13725,6 @@ elif modulo.startswith("📊"):
 
                             _m_gt_s = 0.0; _m_gt_d = 0.0
                             for _base_r, _loc in _EXP_LOCAL_ROWS.items():
-                                if _loc == 'La Casona':
-                                    continue  # local nuevo: sin datos en estos meses
                                 _m_s = _vget_exp(_df_m, _loc, 'salon')
                                 _m_d = _vget_exp(_df_m, _loc, 'delivery')
                                 _m_t = _m_s + _m_d
@@ -13760,8 +13756,6 @@ elif modulo.startswith("📊"):
 
                             # Aliva por local (48-58): monto + % sobre total Alemán del local
                             for _ar, _aloc in _ALIVA_ROWS.items():
-                                if _aloc == 'La Casona':
-                                    continue
                                 _m_av = _vget_exp(_df_mal, _aloc)
                                 _ws_out.cell(_ar, _c_monto).value = round(_m_av, 2) if _m_av else 0
                                 _tot_row = _ALIVA_TOTAL_ROW.get(_ar)
