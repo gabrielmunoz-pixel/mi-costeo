@@ -6368,9 +6368,11 @@ def _sg_resumen_colores_pdf(df_acum, local, dias_periodo, logo_path=None,
     # ══════════ CUADRO 3 — RANKING TOTAL ══════════
     # Modelo: puntaje = posición en venta + posición en % adicionales (1 = mejor en
     # cada tabla). MENOR puntaje = mejor. Orden de filas por menor puntaje; en EMPATE
-    # gana quien tenga MAYOR % de adicionales (p_total). La columna "Ranking" usa
-    # numeración con empates (dense: dos que empatan comparten posición).
-    pos_venta = {id(filas[i]): r + 1 for r, i in enumerate(orden_v)}
+    # gana quien tenga MAYOR % de adicionales (p_total).
+    # NOTA: el "Ranking Venta" se calcula por VENTA DIARIA PROMEDIO (vdp), no por
+    # venta total, para no castigar a quien trabajó menos días.
+    _orden_vdp = sorted(range(len(filas)), key=lambda i: -filas[i]["vdp"])
+    pos_venta = {id(filas[_orden_vdp[r]]): r + 1 for r in range(len(_orden_vdp))}
     orden_pct = sorted(range(len(filas)), key=lambda i: -filas[i]["p_total"])
     pos_pct = {id(filas[i]): r + 1 for r, i in enumerate(orden_pct)}
 
@@ -6383,34 +6385,33 @@ def _sg_resumen_colores_pdf(df_acum, local, dias_periodo, logo_path=None,
     _def_ord = sorted(range(len(filas)),
                       key=lambda i: (filas[i]["_puntaje"], -filas[i]["p_total"]))
 
-    # Numeración de ranking con empates (misma posición si mismo puntaje Y mismo
-    # criterio de desempate; en la práctica: mismo puntaje => se comparan por % adic.,
-    # si aún así empatan comparten número).
+    # Numeración de ranking: cada garzón lleva su número correlativo. Solo comparten
+    # número si tienen idéntico puntaje E idéntico % adicionales (empate total).
     _rank_num = {}
     _prev_key = None
     _prev_rank = 0
     for _pos, _i in enumerate(_def_ord):
         _key = (filas[_i]["_puntaje"], round(filas[_i]["p_total"], 6))
         if _key == _prev_key:
-            _rank_num[_i] = _prev_rank          # empate real: comparte número
+            _rank_num[_i] = _prev_rank
         else:
             _rank_num[_i] = _pos + 1
             _prev_rank = _pos + 1
             _prev_key = _key
 
     head3 = [P(h, st_h) for h in ["RANKING<br/>TOTAL", "NOMBRE GARZON", "RANKING<br/>VENTA",
-             "RANKING<br/>% ADIC."]]
+             "RANKING<br/>% ADIC.", "PUNTAJE<br/>TOTAL"]]
 
     def fila3(f, rk, e=st_c):
         return [P(rk, e), P(f["nombre"], e), P(f.get("_pv", ""), e),
-                P(f.get("_pp", ""), e)]
+                P(f.get("_pp", ""), e), P(f.get("_puntaje", ""), e)]
 
     data3 = [head3]
     for i in _def_ord:
         data3.append(fila3(filas[i], _rank_num[i]))
     if tot:
         data3.append(fila3(tot, "", st_b))
-    pesos3 = [3.0, 14.0, 6.0, 6.0]
+    pesos3 = [3.0, 13.0, 6.0, 6.0, 6.0]
     w3 = [util * p / sum(pesos3) for p in pesos3]
     # Colores del C3: por su propio orden (menor puntaje arriba), no el de 'filas'
     _est3 = [
