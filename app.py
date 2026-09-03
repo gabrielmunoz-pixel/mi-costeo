@@ -6365,29 +6365,72 @@ def _sg_resumen_colores_pdf(df_acum, local, dias_periodo, logo_path=None,
     w2 = [util * p / sum(pesos2) for p in pesos2]
     t2 = _Table(data2, colWidths=w2, repeatRows=1); t2.setStyle(_TS(_mk_estilo(len(filas))))
 
-    # ══════════ CUADRO 3 — RANKING DEFINITIVO ══════════
-    # Posición en venta + posición en % adicionales; puntaje = suma de posiciones.
-    _def_ord = list(range(len(filas)))  # 'filas' ya viene en el orden definitivo
+    # ══════════ CUADRO 3 — RANKING TOTAL ══════════
+    # Modelo: puntaje = posición en venta + posición en % adicionales (1 = mejor en
+    # cada tabla). MENOR puntaje = mejor. Orden de filas por menor puntaje; en EMPATE
+    # gana quien tenga MAYOR % de adicionales (p_total). La columna "Ranking" usa
+    # numeración con empates (dense: dos que empatan comparten posición).
     pos_venta = {id(filas[i]): r + 1 for r, i in enumerate(orden_v)}
     orden_pct = sorted(range(len(filas)), key=lambda i: -filas[i]["p_total"])
     pos_pct = {id(filas[i]): r + 1 for r, i in enumerate(orden_pct)}
 
+    for f in filas:
+        f["_pv"] = pos_venta.get(id(f), 0)
+        f["_pp"] = pos_pct.get(id(f), 0)
+        f["_puntaje"] = f["_pv"] + f["_pp"]
+
+    # Orden definitivo: menor puntaje primero; desempate por mayor % adicionales
+    _def_ord = sorted(range(len(filas)),
+                      key=lambda i: (filas[i]["_puntaje"], -filas[i]["p_total"]))
+
+    # Numeración de ranking con empates (misma posición si mismo puntaje Y mismo
+    # criterio de desempate; en la práctica: mismo puntaje => se comparan por % adic.,
+    # si aún así empatan comparten número).
+    _rank_num = {}
+    _prev_key = None
+    _prev_rank = 0
+    for _pos, _i in enumerate(_def_ord):
+        _key = (filas[_i]["_puntaje"], round(filas[_i]["p_total"], 6))
+        if _key == _prev_key:
+            _rank_num[_i] = _prev_rank          # empate real: comparte número
+        else:
+            _rank_num[_i] = _pos + 1
+            _prev_rank = _pos + 1
+            _prev_key = _key
+
     head3 = [P(h, st_h) for h in ["Ranking", "NOMBRE GARZON", "RANKING<br/>VENTA",
-             "RANKING<br/>% ADIC."]]
+             "RANKING<br/>% ADIC.", "RANKING<br/>TOTAL"]]
 
     def fila3(f, rk, e=st_c):
-        pv = pos_venta.get(id(f), "")
-        pp = pos_pct.get(id(f), "")
-        return [P(rk, e), P(f["nombre"], e), P(pv, e), P(pp, e)]
+        return [P(rk, e), P(f["nombre"], e), P(f.get("_pv", ""), e),
+                P(f.get("_pp", ""), e), P(f.get("_puntaje", ""), e)]
 
     data3 = [head3]
     for i in _def_ord:
-        data3.append(fila3(filas[i], i + 1))
+        data3.append(fila3(filas[i], _rank_num[i]))
     if tot:
         data3.append(fila3(tot, "", st_b))
-    pesos3 = [3.0, 14.0, 6.0, 6.0]
+    pesos3 = [3.0, 13.0, 6.0, 6.0, 6.0]
     w3 = [util * p / sum(pesos3) for p in pesos3]
-    t3 = _Table(data3, colWidths=w3, repeatRows=1); t3.setStyle(_TS(_mk_estilo(len(filas))))
+    # Colores del C3: por su propio orden (menor puntaje arriba), no el de 'filas'
+    _est3 = [
+        ("GRID", (0, 0), (-1, -1), 0.5, BORDE),
+        ("BACKGROUND", (0, 0), (-1, 0), GRIS),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("TOPPADDING", (0, 0), (-1, -1), 2.5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
+        ("LEFTPADDING", (0, 0), (-1, -1), 2),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+    ]
+    _nv3, _na3, _nr3 = _sg_bandas_local(local, len(_def_ord))
+    _cols3 = ["verde"] * _nv3 + ["amar"] * _na3 + ["rojo"] * _nr3
+    for _r3 in range(len(_def_ord)):
+        _est3.append(("BACKGROUND", (0, _r3 + 1), (-1, _r3 + 1),
+                      _cmap.get(_cols3[_r3] if _r3 < len(_cols3) else "rojo", ROJO)))
+    if tot:
+        _est3.append(("BACKGROUND", (0, len(_def_ord) + 1), (-1, len(_def_ord) + 1), GRIS))
+    t3 = _Table(data3, colWidths=w3, repeatRows=1); t3.setStyle(_TS(_est3))
 
     # ── Bajada de título: "Análisis semanal - DD-MM-YYYY al DD-MM-YYYY" ──
     def _fdate(d):
@@ -6407,7 +6450,7 @@ def _sg_resumen_colores_pdf(df_acum, local, dias_periodo, logo_path=None,
         _Par(_bajada, st_baj), _Sp(1, 8),
         _Par("VENTA POR GARZON", st_sub), _Sp(1, 4), t1, _Sp(1, 12),
         _Par("VENTA DE CATEGORÍAS POR GARZON", st_sub), _Sp(1, 4), t2, _Sp(1, 12),
-        _Par("RANKING DEFINITIVO (Venta por Garzón + Venta de Categoría de Garzón)", st_sub),
+        _Par("RANKING TOTAL (Venta por Garzón + Venta de Categoría de Garzón)", st_sub),
         _Sp(1, 4), t3,
     ])
     buf.seek(0)
