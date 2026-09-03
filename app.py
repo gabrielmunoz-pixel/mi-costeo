@@ -6398,19 +6398,19 @@ def _sg_resumen_colores_pdf(df_acum, local, dias_periodo, logo_path=None,
             _prev_rank = _pos + 1
             _prev_key = _key
 
-    head3 = [P(h, st_h) for h in ["Ranking", "NOMBRE GARZON", "RANKING<br/>VENTA",
-             "RANKING<br/>% ADIC.", "RANKING<br/>TOTAL"]]
+    head3 = [P(h, st_h) for h in ["RANKING<br/>TOTAL", "NOMBRE GARZON", "RANKING<br/>VENTA",
+             "RANKING<br/>% ADIC."]]
 
     def fila3(f, rk, e=st_c):
         return [P(rk, e), P(f["nombre"], e), P(f.get("_pv", ""), e),
-                P(f.get("_pp", ""), e), P(f.get("_puntaje", ""), e)]
+                P(f.get("_pp", ""), e)]
 
     data3 = [head3]
     for i in _def_ord:
         data3.append(fila3(filas[i], _rank_num[i]))
     if tot:
         data3.append(fila3(tot, "", st_b))
-    pesos3 = [3.0, 13.0, 6.0, 6.0, 6.0]
+    pesos3 = [3.0, 14.0, 6.0, 6.0]
     w3 = [util * p / sum(pesos3) for p in pesos3]
     # Colores del C3: por su propio orden (menor puntaje arriba), no el de 'filas'
     _est3 = [
