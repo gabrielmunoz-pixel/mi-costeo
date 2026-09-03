@@ -6317,7 +6317,10 @@ def _sg_resumen_colores_pdf(df_acum, local, dias_periodo, logo_path=None,
     # ══════════ CUADRO 1 — VENTA POR GARZON (solo venta) ══════════
     head1 = [P(h, st_h) for h in ["Ranking", "NOMBRE GARZON", "VENTA", "APORTE<br/>PROPINA",
              "VENTA DIARIA<br/>PROMEDIO", "DIAS<br/>TRAB"]]
-    orden_v = sorted(range(len(filas)), key=lambda i: -filas[i]["venta"])
+    # El "Ranking Venta" se mide por VENTA DIARIA PROMEDIO (vdp), no por venta total,
+    # para no castigar a quien trabajó menos días. Este mismo orden alimenta el
+    # Ranking Venta del cuadro 3.
+    orden_v = sorted(range(len(filas)), key=lambda i: -filas[i]["vdp"])
     filas_v = [filas[i] for i in orden_v]
 
     def fila1(f, rk, e=st_c):
@@ -6369,10 +6372,9 @@ def _sg_resumen_colores_pdf(df_acum, local, dias_periodo, logo_path=None,
     # Modelo: puntaje = posición en venta + posición en % adicionales (1 = mejor en
     # cada tabla). MENOR puntaje = mejor. Orden de filas por menor puntaje; en EMPATE
     # gana quien tenga MAYOR % de adicionales (p_total).
-    # NOTA: el "Ranking Venta" se calcula por VENTA DIARIA PROMEDIO (vdp), no por
-    # venta total, para no castigar a quien trabajó menos días.
-    _orden_vdp = sorted(range(len(filas)), key=lambda i: -filas[i]["vdp"])
-    pos_venta = {id(filas[_orden_vdp[r]]): r + 1 for r in range(len(_orden_vdp))}
+    # El "Ranking Venta" TOMA la posición del CUADRO 1 (orden_v, por venta diaria
+    # promedio) — no recalcula nada aquí. El "Ranking % Adic." toma el orden del C2.
+    pos_venta = {id(filas[i]): r + 1 for r, i in enumerate(orden_v)}
     orden_pct = sorted(range(len(filas)), key=lambda i: -filas[i]["p_total"])
     pos_pct = {id(filas[i]): r + 1 for r, i in enumerate(orden_pct)}
 
