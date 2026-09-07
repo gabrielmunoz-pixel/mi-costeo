@@ -21749,6 +21749,7 @@ buildTree(data, 1, null);
                   where v.local = :loc and v.origen is null and v.garzon = any(:wl)
                     and v.categoria_menu not in ('{_sg_excl_sql}')
                     and v.sku_producto not in ('{_sku_excl_sql}')
+                    and (v.monto_venta_real + coalesce(v.descuento,0)) <> 0
                     and v.fecha_venta between :r_i and :r_f
                 )
                 select garzon, count(distinct fecha_venta) as dias, sum(venta) as venta_total,
