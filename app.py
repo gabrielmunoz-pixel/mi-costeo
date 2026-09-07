@@ -21709,9 +21709,17 @@ buildTree(data, 1, null);
             left join clasif_liquidos cs
                    on cs.match_tipo='sku' and cs.match_valor = v.sku_producto
         """
+        # SKUs AGREX (es_opcion=true) que SÍ deben contar como AGREGADOS aunque su
+        # categoria_menu sea el plato base. Lista cerrada, provista por Nicolás.
+        _SG_AGREX_OK = ('AGREX-004','AGREX-010','AGREX-012','AGREX-015','AGREX-016',
+                        'AGREX-018','AGREX-021','AGREX-022','AGREX-027','AGREX-030',
+                        'AGREX-032','AGREX-033','AGREX-034','AGREX-035','AGREX-036',
+                        'AGREX-049','AGREX-052','AGREX-053','AGREX-054','AGREX-055')
+        _sg_agrex_sql = "','".join(_SG_AGREX_OK)
         _SG_BUCKET = "coalesce(cn.bucket, cs.bucket)"
-        _SG_GRP_CASE = """
+        _SG_GRP_CASE = f"""
             case
+              when v.sku_producto in ('{_sg_agrex_sql}') then 'AGREGADOS'
               when categoria_menu in ('Agregados','Acompanamientos') then 'AGREGADOS'
               when categoria_menu = 'Cafeteria' then 'CAFETERIA'
               when categoria_menu = 'Postres' then 'POSTRES'
@@ -21749,7 +21757,10 @@ buildTree(data, 1, null);
                   where v.local = :loc and v.origen is null and v.garzon = any(:wl)
                     and v.categoria_menu not in ('{_sg_excl_sql}')
                     and v.sku_producto not in ('{_sku_excl_sql}')
-                    and (v.monto_venta_real + coalesce(v.descuento,0)) <> 0
+                    and (
+                      (v.monto_venta_real + coalesce(v.descuento,0)) <> 0
+                      or v.sku_producto in ('{_sg_agrex_sql}')
+                    )
                     and v.fecha_venta between :r_i and :r_f
                 )
                 select garzon, count(distinct fecha_venta) as dias, sum(venta) as venta_total,
