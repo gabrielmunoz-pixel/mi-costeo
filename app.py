@@ -21752,6 +21752,7 @@ buildTree(data, 1, null);
                   select v.garzon, v.fecha_venta, v.categoria_menu as cat,
                     v.monto_venta_real + coalesce(v.descuento,0) as venta,
                     v.cantidad_vendida as q,
+                    case when v.sku_producto in ('{_sg_agrex_sql}') then 1 else 0 end as es_agrex,
                     {_SG_GRP_CASE} as grp_cat, {_SG_BUCKET} as liq_bucket
                   from ventas v {_SG_LIQ_JOIN}
                   where v.local = :loc and v.origen is null and v.garzon = any(:wl)
@@ -21766,8 +21767,8 @@ buildTree(data, 1, null);
                 select garzon, count(distinct fecha_venta) as dias, sum(venta) as venta_total,
                   sum(case when grp_cat='AGREGADOS' then venta else 0 end) as v_agr,
                   sum(case when grp_cat='AGREGADOS' then q else 0 end) as q_agr,
-                  sum(case when cat='Agregados' then venta else 0 end) as v_agr_solo,
-                  sum(case when cat='Agregados' then q else 0 end) as q_agr_solo,
+                  sum(case when cat='Agregados' or es_agrex=1 then venta else 0 end) as v_agr_solo,
+                  sum(case when cat='Agregados' or es_agrex=1 then q else 0 end) as q_agr_solo,
                   sum(case when grp_cat='CAFETERIA' then venta else 0 end) as v_caf,
                   sum(case when grp_cat='CAFETERIA' then q else 0 end) as q_caf,
                   sum(case when grp_cat='POSTRES' then venta else 0 end) as v_pos,
@@ -21830,6 +21831,7 @@ buildTree(data, 1, null);
                 with d as (
                   select v.local, v.categoria_menu as cat,
                     v.monto_venta_real + coalesce(v.descuento,0) as venta,
+                    case when v.sku_producto in ('{_sg_agrex_sql}') then 1 else 0 end as es_agrex,
                     {_SG_GRP_CASE} as grp_cat, {_SG_BUCKET} as liq_bucket
                   from ventas v {_SG_LIQ_JOIN}
                   where v.origen is null
@@ -21840,7 +21842,7 @@ buildTree(data, 1, null);
                 )
                 select local,
                   sum(venta) as venta_total,
-                  sum(case when cat='Agregados' then venta else 0 end) as v_agr,
+                  sum(case when cat='Agregados' or es_agrex=1 then venta else 0 end) as v_agr,
                   sum(case when grp_cat='CAFETERIA' then venta else 0 end) as v_caf,
                   sum(case when grp_cat='POSTRES' then venta else 0 end) as v_pos,
                   sum(case when liq_bucket='LIQ_SA' then venta else 0 end) as v_lsa,
@@ -26173,6 +26175,3 @@ elif modulo.startswith("📈 Resumen Ventas"):
 
 elif modulo.startswith("👥"):
     _render_gestion_usuarios()
-
-
-##
