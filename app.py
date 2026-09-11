@@ -445,7 +445,7 @@ def _render_gestion_usuarios():
             for _, row in df_users.iterrows():
                 with st.expander(f"👤 {row['username']} {('· ' + str(row.get('local','')) ) if row.get('local') else ''}"):
                     permisos_act = row['permisos'] if row['permisos'] else ""
-                    opciones_mod = ["📦 Gestión de Datos", "📊 Informes", "📋 Notas de Crédito", "📥 Stock Cierre", "🧾 Facturas y Stock", "👷 Costo de Personal", "🎯 Config Producción", "🏅 Panel Garzones", "🏭 Proyecto Producción", "📈 Resumen Ventas"]
+                    opciones_mod = ["📦 Gestión de Datos", "📊 Informes", "📋 Notas de Crédito", "📥 Stock Cierre", "🧾 Facturas y Stock", "👷 Costo de Personal", "🎯 Config Producción", "🏅 Panel Garzones", "🔍 Detalle Garzones", "🏭 Proyecto Producción", "📈 Resumen Ventas"]
                     sel = st.multiselect(
                         "Módulos habilitados",
                         opciones_mod,
@@ -504,7 +504,7 @@ def _render_gestion_usuarios():
             st.success(_msg_nu)
         nu_user = st.text_input("Usuario", key="nu_user")
         nu_pw   = st.text_input("Contraseña", type="password", key="nu_pw")
-        opciones_mod2 = ["📦 Gestión de Datos", "📊 Informes", "📋 Notas de Crédito", "📥 Stock Cierre", "🧾 Facturas y Stock", "👷 Costo de Personal", "🎯 Config Producción", "🏅 Panel Garzones", "🏭 Proyecto Producción", "📈 Resumen Ventas"]
+        opciones_mod2 = ["📦 Gestión de Datos", "📊 Informes", "📋 Notas de Crédito", "📥 Stock Cierre", "🧾 Facturas y Stock", "👷 Costo de Personal", "🎯 Config Producción", "🏅 Panel Garzones", "🔍 Detalle Garzones", "🏭 Proyecto Producción", "📈 Resumen Ventas"]
         nu_perm = st.multiselect("Módulos habilitados", opciones_mod2, key="nu_perm")
         _locales_nu_list = ["— Sin restricción —", "Vitacura", "Las Condes", "Chicureo", "La Dehesa", "Macul", "La Reina", "Quilin", "Nueva Providencia", "Providencia", "Los Trapenses"]
         nu_local = st.selectbox("Local asignado", _locales_nu_list, key="nu_local")
@@ -3749,6 +3749,8 @@ with st.sidebar:
         menu_items["🎯 Config Producción"] = []
     if _is_admin or _user_puede("🏅 Panel Garzones"):
         menu_items["🏅 Panel Garzones"] = []
+    if _is_admin or _user_puede("🔍 Detalle Garzones"):
+        menu_items["🔍 Detalle Garzones"] = []
     if _is_admin or _user_puede("🏭 Proyecto Producción"):
         menu_items["🏭 Proyecto Producción"] = []
     if _is_admin or _user_puede("📈 Resumen Ventas"):
@@ -26065,6 +26067,256 @@ elif modulo.startswith("📈 Resumen Ventas"):
             )
         else:
             st.info("No se encontraron ventas para el período seleccionado.")
+
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  MÓDULO: 🔍 DETALLE GARZONES  (drill-down interactivo del informe de colores)
+#  Misma consistencia que el informe: salón, whitelist, exclusiones, AGREX,
+#  precio<>0, categorías por categoria_menu + líquidos por clasif_liquidos.
+#  Una sola query (a nivel garzón→categoría→producto→día) cacheada en memoria;
+#  el drill-down se arma agrupando el DataFrame, sin re-consultar la BD.
+# ══════════════════════════════════════════════════════════════════════════
+elif modulo.startswith("🔍 Detalle Garzones"):
+    from datetime import date as _dg_date, timedelta as _dg_td
+
+    st.markdown("""
+    <div style="margin-bottom:1.5rem">
+        <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#ffffff;margin-bottom:4px">Exploración</div>
+        <div style="font-family:'DM Serif Display',serif;font-size:2rem;color:#f0ede8;letter-spacing:-0.02em;line-height:1.1">
+            🔍 Detalle Garzones
+        </div>
+        <div style="width:40px;height:2px;background:#d4a853;margin-top:8px;border-radius:2px"></div>
+    </div>""", unsafe_allow_html=True)
+
+    # ── Réplica EXACTA de los filtros del informe de colores ──
+    _DG_EXCL = ('Menu Ejecutivo','COLACIONES','PROTEINA ALMUERZO',
+                'ENSALADAS ALMUERZO','ACOMPANAMIENTO ALMUERZO')
+    _DG_SKU_EXCL = (
+        'AGR-001','AGR-003','AGR-014','AGR-019','AGR-023','AGR-028','AGR-057',
+        'AJIX-001','AJIX-002','AJIX-003','ALQX-001','ALQX-002','AVEX-020',
+        'BEB-004','BEB-010','BETX-001','BETX-002','BETX-003','BETX-006','BETX-008',
+        'BETX-009','BETX-010','BETX-011','BETX-012','BETX-013','BETX-015','BETX-016',
+        'BETX-017','BOLNX-01','CAM-001','CAM-002','CER-041','CHUX-020','CHUX-021',
+        'CPC-001','CPC-002','CPC-003','CPC-004','CPC-005','CPC-006','CPC-007',
+        'CPC-009','CPC-010','CPC-012','CPC-014','CPC-016','CPC-017','CPC-018',
+        'CPC-019','CPC-020','CPC-021','CPC-022','CPC-023','CPC-024',
+        'DULX-001','DULX-002','DULX-003','ENSQ-001','ENSQ-002',
+        'HAMX-020','HAMX-021','HAQX-020','LIM-009','LOMX-020','LOMX-021',
+        'MCAF-001','MCAF-002','MODX-001','MODX-002','MODX-006','MODX-007','MODX-008',
+        'MODX-009','MODX-013','MODX-014','MODX-015','MODX-016',
+        'PANX-001','PANX-002','PANX-003','PANX-004','PANX-005','POS-023',
+        'PTOX-001','PTOX-002','PTOX-003','PTOX-005',
+        'SINX-001','SINX-002','SINX-004','SINX-007','SINX-008','SINX-009','SINX-010',
+        'SINX-012','SINX-013','SINX-015','SINX-016','VIN-011','WHI-008',
+    )
+    _DG_AGREX = ('AGREX-004','AGREX-010','AGREX-012','AGREX-015','AGREX-016',
+                 'AGREX-018','AGREX-021','AGREX-022','AGREX-027','AGREX-030',
+                 'AGREX-032','AGREX-033','AGREX-034','AGREX-035','AGREX-036',
+                 'AGREX-049','AGREX-052','AGREX-053','AGREX-054','AGREX-055')
+    _dg_excl_sql  = "','".join(_DG_EXCL)
+    _dg_sku_sql   = "','".join(_DG_SKU_EXCL)
+    _dg_agrex_sql = "','".join(_DG_AGREX)
+    _DG_GRP_CASE = f"""
+        case
+          when v.sku_producto in ('{_dg_agrex_sql}') then 'AGREGADOS'
+          when v.categoria_menu in ('Agregados','Acompanamientos') then 'AGREGADOS'
+          when v.categoria_menu = 'Cafeteria' then 'CAFETERIA'
+          when v.categoria_menu = 'Postres' then 'POSTRES'
+          when coalesce(cn.bucket, cs.bucket) = 'LIQ_SA' then 'LIQ S/A'
+          when coalesce(cn.bucket, cs.bucket) = 'LIQ_CA' then 'LIQ C/A'
+          else 'OTROS'
+        end
+    """
+
+    # ── Restricción de local por usuario (igual que el resto del app) ──
+    _dg_user_local = st.session_state.get("user_local")
+    _dg_is_admin = st.session_state.get("user_role") == "admin"
+    _DG_LOCALES = ['Vitacura','Las Condes','Chicureo','La Dehesa','Macul','La Reina',
+                   'Quilin','Nueva Providencia','Providencia','Los Trapenses','La Casona']
+
+    _dgc1, _dgc2, _dgc3 = st.columns([2, 1.2, 1.2])
+    with _dgc1:
+        if _dg_user_local and not _dg_is_admin:
+            # Usuario restringido: local fijo, solo lectura
+            st.text_input("📍 Local", value=_dg_user_local, disabled=True, key="dg_loc_fixed")
+            _dg_local = _dg_user_local
+        else:
+            _dg_local = st.selectbox("📍 Local", _DG_LOCALES, key="dg_local")
+    with _dgc2:
+        _dg_fi = st.date_input("Desde", value=_dg_date(2026, 8, 24), key="dg_fi")
+    with _dgc3:
+        _dg_ff = st.date_input("Hasta", value=_dg_date(2026, 8, 30), key="dg_ff")
+
+    if _dg_ff < _dg_fi:
+        st.error("La fecha 'Hasta' no puede ser anterior a 'Desde'.")
+        st.stop()
+
+    _dg_key = f"{_dg_local}|{_dg_fi}|{_dg_ff}"
+
+    if st.button("▶ Cargar detalle", type="primary", use_container_width=True, key="dg_load"):
+        with st.spinner("Cargando datos del período…"):
+            # ── Whitelist activa (misma que el informe) ──
+            _dg_wl_df = run_query("select garzon from garzones_whitelist where activo = true")
+            _dg_wl = (_dg_wl_df["garzon"].tolist()
+                      if _dg_wl_df is not None and not _dg_wl_df.empty else [])
+            _dg_wl_norm = [" ".join(str(g).split()) for g in _dg_wl]
+
+            # ── QUERY ÚNICA: detalle a nivel garzón→categoría→producto→día ──
+            _dg_df = run_query(f"""
+                select
+                    regexp_replace(btrim(v.garzon), '\\s+', ' ', 'g') as garzon,
+                    v.fecha_venta as fecha,
+                    v.sku_producto as sku,
+                    v.nombre_producto as producto,
+                    ({_DG_GRP_CASE}) as categoria,
+                    sum(v.cantidad_vendida) as q,
+                    sum(v.monto_venta_real + coalesce(v.descuento,0)) as venta
+                from ventas v
+                left join clasif_liquidos cn
+                       on cn.match_tipo='nombre' and cn.match_valor = lower(trim(v.nombre_producto))
+                left join clasif_liquidos cs
+                       on cs.match_tipo='sku' and cs.match_valor = v.sku_producto
+                where v.local = :loc
+                  and v.origen is null
+                  and regexp_replace(btrim(v.garzon), '\\s+', ' ', 'g') = any(:wl)
+                  and v.categoria_menu not in ('{_dg_excl_sql}')
+                  and v.sku_producto not in ('{_dg_sku_sql}')
+                  and (
+                        (v.monto_venta_real + coalesce(v.descuento,0)) <> 0
+                        or v.sku_producto in ('{_dg_agrex_sql}')
+                      )
+                  and v.fecha_venta between :fi and :ff
+                group by 1,2,3,4,5
+            """, {"loc": _dg_local, "wl": _dg_wl_norm,
+                  "fi": str(_dg_fi), "ff": str(_dg_ff)})
+
+            st.session_state["dg_data"] = _dg_df
+            st.session_state["dg_data_key"] = _dg_key
+
+    # ── Drill-down por niveles con estado (breadcrumb) ──
+    # Streamlit NO permite expanders anidados, así que navegamos por niveles:
+    # garzones -> categorías -> productos -> días, con botón "volver".
+    if st.session_state.get("dg_data_key") == _dg_key and "dg_data" in st.session_state:
+        _df = st.session_state["dg_data"]
+        if _df is None or _df.empty:
+            st.info("No hay ventas de salón (whitelist) para este local y período.")
+        else:
+            import pandas as _pd_dg
+            _df = _df.copy()
+            _df["q"] = _pd_dg.to_numeric(_df["q"], errors="coerce").fillna(0)
+            _df["venta"] = _pd_dg.to_numeric(_df["venta"], errors="coerce").fillna(0)
+            _CATS_INF = ['AGREGADOS','CAFETERIA','POSTRES','LIQ S/A','LIQ C/A']
+
+            def _fmoney(v):
+                try: return f"${int(round(float(v))):,}".replace(",", ".")
+                except: return "$0"
+            def _fpct(v):
+                try: return f"{float(v)*100:.1f}%".replace(".", ",")
+                except: return "0,0%"
+
+            _dg_dias = _df["fecha"].nunique()
+            st.caption(f"Período {_dg_fi.strftime('%d-%m-%Y')} al {_dg_ff.strftime('%d-%m-%Y')} "
+                       f"· {_dg_dias} día(s) con venta · {_df['garzon'].nunique()} garzón(es)")
+
+            # Estado de navegación
+            _nav = st.session_state.setdefault("dg_nav", {"gz": None, "cat": None, "sku": None})
+            # Si cambió el dataset, resetear navegación
+            if st.session_state.get("dg_nav_key") != _dg_key:
+                _nav = {"gz": None, "cat": None, "sku": None}
+                st.session_state["dg_nav"] = _nav
+                st.session_state["dg_nav_key"] = _dg_key
+
+            # ── Breadcrumb ──
+            _crumb = ["🏠 Garzones"]
+            if _nav["gz"]:  _crumb.append(f"👤 {_nav['gz']}")
+            if _nav["cat"]: _crumb.append(f"▸ {_nav['cat']}")
+            if _nav["sku"]: _crumb.append(f"• {_nav['sku']}")
+            st.markdown("**" + "  ›  ".join(_crumb) + "**")
+
+            # Botones de retroceso
+            if _nav["gz"]:
+                _bc1, _bc2, _bc3 = st.columns(3)
+                with _bc1:
+                    if st.button("← Garzones", key="dg_back_gz", use_container_width=True):
+                        st.session_state["dg_nav"] = {"gz": None, "cat": None, "sku": None}
+                        st.rerun()
+                if _nav["cat"]:
+                    with _bc2:
+                        if st.button(f"← {_nav['gz'][:18]}", key="dg_back_cat", use_container_width=True):
+                            st.session_state["dg_nav"] = {"gz": _nav["gz"], "cat": None, "sku": None}
+                            st.rerun()
+                if _nav["sku"]:
+                    with _bc3:
+                        if st.button(f"← {_nav['cat']}", key="dg_back_sku", use_container_width=True):
+                            st.session_state["dg_nav"] = {"gz": _nav["gz"], "cat": _nav["cat"], "sku": None}
+                            st.rerun()
+
+            st.markdown("---")
+
+            # ── NIVEL 0: lista de garzones ──
+            if not _nav["gz"]:
+                _vt_gz = _df.groupby("garzon")["venta"].sum().sort_values(ascending=False)
+                st.markdown("### Garzones")
+                for _gz in _vt_gz.index:
+                    _dfg = _df[_df["garzon"] == _gz]
+                    _vt = float(_dfg["venta"].sum())
+                    _v_adic = float(_dfg[_dfg["categoria"].isin(_CATS_INF)]["venta"].sum())
+                    _pct_adic = (_v_adic / _vt) if _vt else 0.0
+                    if st.button(f"👤 {_gz}    ·    Venta {_fmoney(_vt)}    ·    Adic. {_fpct(_pct_adic)}",
+                                 key=f"dg_gz_{_gz}", use_container_width=True):
+                        st.session_state["dg_nav"] = {"gz": _gz, "cat": None, "sku": None}
+                        st.rerun()
+
+            # ── NIVEL 1: categorías del garzón ──
+            elif not _nav["cat"]:
+                _dfg = _df[_df["garzon"] == _nav["gz"]]
+                _vt = float(_dfg["venta"].sum())
+                st.markdown(f"### Categorías · {_nav['gz']}")
+                st.caption(f"Venta total del garzón: {_fmoney(_vt)}")
+                for _cat in _CATS_INF:
+                    _dfc = _dfg[_dfg["categoria"] == _cat]
+                    if _dfc.empty:
+                        continue
+                    _vc = float(_dfc["venta"].sum()); _qc = int(_dfc["q"].sum())
+                    _pc = (_vc / _vt) if _vt else 0.0
+                    if st.button(f"▸ {_cat}    ·    {_fmoney(_vc)}    ·    Q {_qc}    ·    {_fpct(_pc)}",
+                                 key=f"dg_cat_{_cat}", use_container_width=True):
+                        st.session_state["dg_nav"]["cat"] = _cat
+                        st.rerun()
+
+            # ── NIVEL 2: productos de la categoría ──
+            elif not _nav["sku"]:
+                _dfc = _df[(_df["garzon"] == _nav["gz"]) & (_df["categoria"] == _nav["cat"])]
+                st.markdown(f"### Productos · {_nav['cat']}")
+                _prod = (_dfc.groupby(["sku","producto"])
+                         .agg(q=("q","sum"), venta=("venta","sum"))
+                         .reset_index().sort_values("venta", ascending=False))
+                for _, _rp in _prod.iterrows():
+                    if st.button(f"• {_rp['producto']} ({_rp['sku']})    ·    "
+                                 f"{_fmoney(_rp['venta'])}    ·    Q {int(_rp['q'])}",
+                                 key=f"dg_sku_{_rp['sku']}", use_container_width=True):
+                        st.session_state["dg_nav"]["sku"] = _rp["sku"]
+                        st.rerun()
+
+            # ── NIVEL 3: detalle por día del producto ──
+            else:
+                _dfp = _df[(_df["garzon"] == _nav["gz"]) & (_df["categoria"] == _nav["cat"])
+                           & (_df["sku"] == _nav["sku"])]
+                _nom = _dfp["producto"].iloc[0] if not _dfp.empty else _nav["sku"]
+                st.markdown(f"### Detalle diario · {_nom}")
+                _dia = (_dfp.groupby("fecha").agg(q=("q","sum"), venta=("venta","sum"))
+                        .reset_index().sort_values("fecha"))
+                _tot_q = int(_dia["q"].sum()); _tot_v = float(_dia["venta"].sum())
+                _dia["fecha"] = _pd_dg.to_datetime(_dia["fecha"]).dt.strftime("%d-%m-%Y")
+                _dia_disp = _dia.copy()
+                _dia_disp["venta"] = _dia_disp["venta"].apply(_fmoney)
+                _dia_disp["q"] = _dia_disp["q"].astype(int)
+                _dia_disp.columns = ["Fecha","Q","Venta"]
+                st.dataframe(_dia_disp, use_container_width=True, hide_index=True)
+                st.caption(f"Total período: Q {_tot_q} · {_fmoney(_tot_v)}")
+    elif st.session_state.get("dg_data_key") and st.session_state.get("dg_data_key") != _dg_key:
+        st.info("Cambiaste los filtros. Pulsa **Cargar detalle** para actualizar los datos.")
 
 
 elif modulo.startswith("👥"):
