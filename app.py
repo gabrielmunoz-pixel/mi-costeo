@@ -26325,13 +26325,20 @@ elif modulo.startswith("🔍 Detalle Garzones"):
             </div>
             """, unsafe_allow_html=True)
 
-            # ── Breadcrumb navegable (chips estilizados) ──
-            # Chips de navegación: niveles anteriores clickeables (sutiles pero legibles),
-            # nivel actual resaltado con fondo sólido. Estilo consistente con las tarjetas.
+            # ── Breadcrumb horizontal: chips clickeables conectados por → ──
+            # Se fuerza fila horizontal (no apilar en móvil) marcando el contenedor.
             st.markdown("""<style>
+            div[class*="st-key-dgbcrow-"]{
+                display:flex !important;flex-direction:row !important;flex-wrap:wrap !important;
+                align-items:center !important;gap:2px !important}
+            div[class*="st-key-dgbcrow-"] > div[data-testid="stHorizontalBlock"]{
+                display:flex !important;flex-direction:row !important;flex-wrap:wrap !important;
+                align-items:center !important;gap:2px !important;width:auto !important}
+            div[class*="st-key-dgbcrow-"] div[data-testid="column"]{
+                width:auto !important;flex:0 0 auto !important;min-width:0 !important}
             div[class*="st-key-dgbc-"] button{
                 border-radius:20px !important;min-height:0 !important;height:auto !important;
-                padding:6px 15px !important;font-size:0.8rem !important;font-weight:600 !important;
+                padding:5px 12px !important;font-size:0.76rem !important;font-weight:600 !important;
                 border:1px solid #333 !important;background:#1c1c1c !important;color:#c8c4be !important;
                 white-space:nowrap !important;width:auto !important}
             div[class*="st-key-dgbc-"] button:hover{
@@ -26339,6 +26346,7 @@ elif modulo.startswith("🔍 Detalle Garzones"):
             div[class*="st-key-dgbc-"] button:disabled{
                 background:#221d10 !important;border-color:#d4a853 !important;
                 color:#e8c76a !important;opacity:1 !important}
+            .dg-arrow{color:#6a6a6a;font-size:0.85rem;font-weight:700;padding:0 1px}
             </style>""", unsafe_allow_html=True)
 
             _crumbs = [("🏠 Garzones", "home")]
@@ -26349,21 +26357,34 @@ elif modulo.startswith("🔍 Detalle Garzones"):
                 _crumbs.append((f"{_ic} {_nav['cat'].capitalize()}", "cat"))
             if _nav["sku"]:
                 _crumbs.append(("🔍 Producto", "sku"))
-            # Renderizar chips en fila (columnas ajustadas al número de niveles)
-            _ncr = len(_crumbs)
-            _bc_cols = st.columns(_ncr + (1 if _ncr < 4 else 0))
-            for _i, (_lbl, _lvl) in enumerate(_crumbs):
-                _es_actual = (_i == _ncr - 1)
-                with _bc_cols[_i]:
-                    if st.button(_lbl, key=f"dgbc-{_lvl}", use_container_width=False,
-                                 disabled=_es_actual):
-                        if _lvl == "home":
-                            st.session_state["dg_nav"] = {"gz": None, "cat": None, "sku": None}
-                        elif _lvl == "gz":
-                            st.session_state["dg_nav"] = {"gz": _nav["gz"], "cat": None, "sku": None}
-                        elif _lvl == "cat":
-                            st.session_state["dg_nav"] = {"gz": _nav["gz"], "cat": _nav["cat"], "sku": None}
-                        st.rerun()
+
+            with st.container(key="dgbcrow-1"):
+                # columnas: un chip + una flecha por cada nivel (menos la última flecha)
+                _ncr = len(_crumbs)
+                _widths = []
+                for _i in range(_ncr):
+                    _widths.append(2)                    # chip
+                    if _i < _ncr - 1:
+                        _widths.append(0.4)              # flecha
+                _cols = st.columns(_widths)
+                _ci = 0
+                for _i, (_lbl, _lvl) in enumerate(_crumbs):
+                    _es_actual = (_i == _ncr - 1)
+                    with _cols[_ci]:
+                        if st.button(_lbl, key=f"dgbc-{_lvl}", use_container_width=False,
+                                     disabled=_es_actual):
+                            if _lvl == "home":
+                                st.session_state["dg_nav"] = {"gz": None, "cat": None, "sku": None}
+                            elif _lvl == "gz":
+                                st.session_state["dg_nav"] = {"gz": _nav["gz"], "cat": None, "sku": None}
+                            elif _lvl == "cat":
+                                st.session_state["dg_nav"] = {"gz": _nav["gz"], "cat": _nav["cat"], "sku": None}
+                            st.rerun()
+                    _ci += 1
+                    if _i < _ncr - 1:
+                        with _cols[_ci]:
+                            st.markdown("<div class='dg-arrow'>→</div>", unsafe_allow_html=True)
+                        _ci += 1
 
             st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
