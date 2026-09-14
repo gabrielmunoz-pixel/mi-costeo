@@ -26344,13 +26344,15 @@ elif modulo.startswith("🔍 Detalle Garzones"):
             st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
             # Helper: señalizador semáforo vs promedio (comparación de métricas)
-            def _sem(valor, prom, es_pct=False, unidad=""):
-                # Devuelve HTML de un badge pequeño con ▲/▼ y color según vs promedio
+            def _sem(valor, prom, es_pct=False, modo="money"):
+                # Badge ▲/▼ vs promedio. modo: "money" ($), "q" (unidades), o es_pct (pts)
                 if prom is None or prom == 0:
                     return ""
                 _dif = valor - prom
                 if es_pct:
                     _txt = f"{abs(_dif)*100:.1f}".replace(".", ",") + " pts"
+                elif modo == "q":
+                    _txt = f"{abs(_dif):.0f} un"
                 else:
                     _txt = _fmoney(abs(_dif))
                 if _dif > 0.0001:
@@ -26443,17 +26445,25 @@ elif modulo.startswith("🔍 Detalle Garzones"):
             elif not _nav["cat"]:
                 _dfg = _df[_df["garzon"] == _nav["gz"]]
                 _vt = float(_dfg["venta"].sum())
-                # Promedio del % de cada categoría entre TODOS los garzones del período
-                _prom_cat_pc = {}
+                # Promedios por categoría entre garzones del período:
+                #  - % : promedio del % de la categoría sobre la venta total de cada garzón
+                #  - venta y unidades: promedio ENTRE GARZONES QUE VENDIERON esa categoría
+                _prom_cat_pc = {}; _prom_cat_v = {}; _prom_cat_q = {}
                 _gz_list = _df["garzon"].unique()
                 for _cat in _CATS_INF:
-                    _acc = []
+                    _acc_pc = []; _acc_v = []; _acc_q = []
                     for _g in _gz_list:
                         _dgt = _df[_df["garzon"] == _g]
                         _vtg = float(_dgt["venta"].sum())
-                        _vcg = float(_dgt[_dgt["categoria"] == _cat]["venta"].sum())
-                        _acc.append((_vcg/_vtg) if _vtg else 0)
-                    _prom_cat_pc[_cat] = (sum(_acc)/len(_acc)) if _acc else 0
+                        _dctg = _dgt[_dgt["categoria"] == _cat]
+                        _vcg = float(_dctg["venta"].sum())
+                        _qcg = float(_dctg["q"].sum())
+                        _acc_pc.append((_vcg/_vtg) if _vtg else 0)
+                        if not _dctg.empty:   # solo garzones que vendieron la categoría
+                            _acc_v.append(_vcg); _acc_q.append(_qcg)
+                    _prom_cat_pc[_cat] = (sum(_acc_pc)/len(_acc_pc)) if _acc_pc else 0
+                    _prom_cat_v[_cat]  = (sum(_acc_v)/len(_acc_v)) if _acc_v else 0
+                    _prom_cat_q[_cat]  = (sum(_acc_q)/len(_acc_q)) if _acc_q else 0
 
                 st.markdown(f"<div style='color:#f0ede8;font-size:1.15rem;font-weight:600;margin-bottom:2px'>"
                             f"👤 {_nav['gz']}</div>"
@@ -26477,6 +26487,8 @@ elif modulo.startswith("🔍 Detalle Garzones"):
                     _col, _ico = _CAT_STYLE[_cat]
                     _empty = _dfc.empty
                     _sem_pc = _sem(_pc, _prom_cat_pc.get(_cat, 0), es_pct=True) if not _empty else ""
+                    _sem_vc = _sem(_vc, _prom_cat_v.get(_cat, 0)) if not _empty else ""
+                    _sem_qc = _sem(_qc, _prom_cat_q.get(_cat, 0), modo="q") if not _empty else ""
                     # borde inferior redondeado solo si NO hay botón debajo (categoría vacía)
                     _br = "12px" if _empty else "12px 12px 0 0"
                     _bb = "1px solid #262626" if _empty else "none"
@@ -26493,10 +26505,12 @@ elif modulo.startswith("🔍 Detalle Garzones"):
                         <div style="flex:1;background:#1c1c1c;border-radius:9px;padding:7px 9px">
                           <div style="color:#7a7a7a;font-size:0.6rem;text-transform:uppercase">Venta</div>
                           <div style="color:#f0ede8;font-size:0.9rem;font-weight:700">{_fmoney(_vc)}</div>
+                          {_sem_vc}
                         </div>
                         <div style="flex:1;background:#1c1c1c;border-radius:9px;padding:7px 9px">
                           <div style="color:#7a7a7a;font-size:0.6rem;text-transform:uppercase">Unidades</div>
                           <div style="color:#f0ede8;font-size:0.9rem;font-weight:700">{_fq(_qc)}</div>
+                          {_sem_qc}
                         </div>
                         <div style="flex:1;background:#1c1c1c;border-radius:9px;padding:7px 9px">
                           <div style="color:#7a7a7a;font-size:0.6rem;text-transform:uppercase">% venta</div>
@@ -26531,12 +26545,23 @@ elif modulo.startswith("🔍 Detalle Garzones"):
                 div[class*="st-key-dgsku-"] button:hover{
                     background:#221d10 !important;color:#e8c76a !important;border-color:#3a3320 !important}
                 </style>""", unsafe_allow_html=True)
+                # Promedio de venta y Q por SKU entre garzones que vendieron ese producto
+                # (en la misma categoría y período). Excluye ceros.
+                _dfcat_all = _df[_df["categoria"] == _nav["cat"]]
+                _prom_sku_v = {}; _prom_sku_q = {}
+                for _skg, _grp in _dfcat_all.groupby("sku"):
+                    _por_gz = _grp.groupby("garzon").agg(v=("venta","sum"), q=("q","sum"))
+                    _prom_sku_v[_skg] = float(_por_gz["v"].mean()) if not _por_gz.empty else 0
+                    _prom_sku_q[_skg] = float(_por_gz["q"].mean()) if not _por_gz.empty else 0
+
                 _prod = (_dfc.groupby(["sku","producto"])
                          .agg(q=("q","sum"), venta=("venta","sum"))
                          .reset_index().sort_values("venta", ascending=False))
                 _vmax = float(_prod["venta"].max()) if not _prod.empty else 1
                 for _ip, (_, _rp) in enumerate(_prod.iterrows()):
                     _bar = int(round((float(_rp["venta"])/_vmax)*100)) if _vmax else 0
+                    _sem_pv = _sem(float(_rp["venta"]), _prom_sku_v.get(_rp["sku"], 0))
+                    _sem_pq = _sem(float(_rp["q"]), _prom_sku_q.get(_rp["sku"], 0), modo="q")
                     st.markdown(f"""
                     <div style="background:#161616;border:1px solid #262626;border-left:3px solid {_col};
                                 border-radius:12px 12px 0 0;border-bottom:none;padding:11px 15px 14px 15px">
@@ -26549,8 +26574,14 @@ elif modulo.startswith("🔍 Detalle Garzones"):
                         <div style="flex:1;background:#0f0f0f;border-radius:6px;height:8px;overflow:hidden">
                           <div style="width:{_bar}%;height:100%;background:{_col};border-radius:6px"></div>
                         </div>
-                        <span style="color:#f0ede8;font-size:0.9rem;font-weight:600;min-width:80px;text-align:right">{_fmoney(_rp['venta'])}</span>
-                        <span style="color:#8a8a8a;font-size:0.8rem;min-width:52px;text-align:right">Q {int(_rp['q'])}</span>
+                        <div style="min-width:96px;text-align:right">
+                          <div style="color:#f0ede8;font-size:0.9rem;font-weight:600">{_fmoney(_rp['venta'])}</div>
+                          {_sem_pv}
+                        </div>
+                        <div style="min-width:60px;text-align:right">
+                          <div style="color:#c8c4be;font-size:0.85rem;font-weight:600">Q {int(_rp['q'])}</div>
+                          {_sem_pq}
+                        </div>
                       </div>
                     </div>""", unsafe_allow_html=True)
                     if st.button("Ver días →", key=f"dgsku-{_ip}", use_container_width=True):
@@ -26587,20 +26618,32 @@ elif modulo.startswith("🔍 Detalle Garzones"):
                     <div style="color:#c8c4be;font-size:1.2rem;font-weight:700">{(_tot_q/_dia['fecha'].nunique()):.1f}</div>
                   </div>
                 </div>""", unsafe_allow_html=True)
-                # Barras por día
+                # Barras por día + señalizador vs el PROMEDIO DIARIO del propio producto
                 _vmaxd = float(_dia["venta"].max()) if not _dia.empty else 1
+                _ndias = _dia["fecha"].nunique() or 1
+                _prom_dia_v = _tot_v / _ndias
+                _prom_dia_q = _tot_q / _ndias
                 for _, _rd in _dia.iterrows():
                     _fecha_txt = _pd_dg.to_datetime(_rd["fecha"]).strftime("%a %d-%m")
                     _bar = int(round((float(_rd["venta"])/_vmaxd)*100)) if _vmaxd else 0
+                    _sem_dv = _sem(float(_rd["venta"]), _prom_dia_v)
+                    _sem_dq = _sem(float(_rd["q"]), _prom_dia_q, modo="q")
                     st.markdown(f"""
-                    <div style="display:flex;align-items:center;gap:14px;padding:8px 4px;border-bottom:1px solid #1e1e1e">
-                      <span style="color:#c8c4be;font-size:0.82rem;min-width:80px;text-transform:capitalize">{_fecha_txt}</span>
+                    <div style="display:flex;align-items:center;gap:12px;padding:9px 4px;border-bottom:1px solid #1e1e1e">
+                      <span style="color:#c8c4be;font-size:0.82rem;min-width:74px;text-transform:capitalize">{_fecha_txt}</span>
                       <div style="flex:1;background:#0f0f0f;border-radius:6px;height:10px;overflow:hidden">
                         <div style="width:{_bar}%;height:100%;background:{_col};border-radius:6px"></div>
                       </div>
-                      <span style="color:#f0ede8;font-size:0.85rem;font-weight:600;min-width:80px;text-align:right">{_fmoney(_rd['venta'])}</span>
-                      <span style="color:#8a8a8a;font-size:0.8rem;min-width:44px;text-align:right">Q {int(_rd['q'])}</span>
+                      <div style="min-width:92px;text-align:right">
+                        <div style="color:#f0ede8;font-size:0.85rem;font-weight:600">{_fmoney(_rd['venta'])}</div>
+                        {_sem_dv}
+                      </div>
+                      <div style="min-width:56px;text-align:right">
+                        <div style="color:#c8c4be;font-size:0.82rem">Q {int(_rd['q'])}</div>
+                        {_sem_dq}
+                      </div>
                     </div>""", unsafe_allow_html=True)
+                st.caption("Señalizadores comparados contra el promedio diario de este producto en el período.")
     elif st.session_state.get("dg_data_key") and st.session_state.get("dg_data_key") != _dg_key:
         st.info("Cambiaste los filtros. Pulsa **Cargar detalle** para actualizar los datos.")
 
