@@ -26293,52 +26293,76 @@ elif modulo.startswith("🔍 Detalle Garzones"):
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True, key="dg_exp_det")
 
+            _pct_adic_tot = (_tot_adic / _tot_venta) if _tot_venta else 0
+            _venta_dia = (_tot_venta / _dg_dias) if _dg_dias else 0
+            _venta_gz  = (_tot_venta / _n_gz) if _n_gz else 0
             st.markdown(f"""
             <div style="display:flex;gap:12px;flex-wrap:wrap;margin:4px 0 18px 0">
               <div style="flex:1;min-width:150px;background:linear-gradient(135deg,#1c1c1c,#141414);
                           border:1px solid #2a2a2a;border-radius:14px;padding:14px 18px">
                 <div style="color:#8a8a8a;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.08em">Local</div>
                 <div style="color:#f0ede8;font-size:1.15rem;font-weight:600;margin-top:2px">{_dg_local}</div>
+                <div style="color:#6a6a6a;font-size:0.72rem;margin-top:3px">{_n_gz} garzón(es)</div>
               </div>
               <div style="flex:1;min-width:150px;background:linear-gradient(135deg,#1c1c1c,#141414);
                           border:1px solid #2a2a2a;border-radius:14px;padding:14px 18px">
                 <div style="color:#8a8a8a;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.08em">Período</div>
                 <div style="color:#f0ede8;font-size:1.05rem;font-weight:600;margin-top:2px">{_dg_fi.strftime('%d-%m')} → {_dg_ff.strftime('%d-%m')}</div>
-                <div style="color:#6a6a6a;font-size:0.72rem">{_dg_dias} día(s) · {_n_gz} garzón(es)</div>
+                <div style="color:#6a6a6a;font-size:0.72rem;margin-top:3px">{_dg_dias} día(s) con venta</div>
               </div>
               <div style="flex:1;min-width:150px;background:linear-gradient(135deg,#1f2b22,#16201a);
                           border:1px solid #2f5f45;border-radius:14px;padding:14px 18px">
                 <div style="color:#7db89a;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.08em">Venta total</div>
                 <div style="color:#8fe0b3;font-size:1.15rem;font-weight:700;margin-top:2px">{_fmoney(_tot_venta)}</div>
+                <div style="color:#5f9678;font-size:0.72rem;margin-top:3px">{_fmoney(_venta_dia)} /día</div>
               </div>
               <div style="flex:1;min-width:150px;background:linear-gradient(135deg,#2b2618,#201d14);
                           border:1px solid #5f5330;border-radius:14px;padding:14px 18px">
                 <div style="color:#c9a94a;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.08em">Adicionales</div>
                 <div style="color:#e8c76a;font-size:1.15rem;font-weight:700;margin-top:2px">{_fmoney(_tot_adic)}</div>
+                <div style="color:#a68b3f;font-size:0.72rem;margin-top:3px">{_fpct(_pct_adic_tot)} de la venta total</div>
               </div>
             </div>
             """, unsafe_allow_html=True)
 
-            # ── Breadcrumb navegable ──
-            _bc_cols = st.columns([1, 1, 1, 3])
-            with _bc_cols[0]:
-                if st.button("🏠 Garzones", key="dg_bc_home", use_container_width=True,
-                             disabled=(_nav["gz"] is None)):
-                    st.session_state["dg_nav"] = {"gz": None, "cat": None, "sku": None}
-                    st.rerun()
+            # ── Breadcrumb navegable (chips estilizados) ──
+            # Chips de navegación: niveles anteriores clickeables (sutiles pero legibles),
+            # nivel actual resaltado con fondo sólido. Estilo consistente con las tarjetas.
+            st.markdown("""<style>
+            div[class*="st-key-dgbc-"] button{
+                border-radius:20px !important;min-height:0 !important;height:auto !important;
+                padding:6px 15px !important;font-size:0.8rem !important;font-weight:600 !important;
+                border:1px solid #333 !important;background:#1c1c1c !important;color:#c8c4be !important;
+                white-space:nowrap !important;width:auto !important}
+            div[class*="st-key-dgbc-"] button:hover{
+                background:#262626 !important;border-color:#d4a853 !important;color:#f0ede8 !important}
+            div[class*="st-key-dgbc-"] button:disabled{
+                background:#221d10 !important;border-color:#d4a853 !important;
+                color:#e8c76a !important;opacity:1 !important}
+            </style>""", unsafe_allow_html=True)
+
+            _crumbs = [("🏠 Garzones", "home")]
             if _nav["gz"]:
-                with _bc_cols[1]:
-                    if st.button(f"👤 {_nav['gz'].split()[0]}", key="dg_bc_gz", use_container_width=True,
-                                 disabled=(_nav["cat"] is None)):
-                        st.session_state["dg_nav"]["cat"] = None
-                        st.session_state["dg_nav"]["sku"] = None
-                        st.rerun()
+                _crumbs.append((f"👤 {_nav['gz'].split()[0]}", "gz"))
             if _nav["cat"]:
-                with _bc_cols[2]:
-                    if st.button(f"{_CAT_STYLE.get(_nav['cat'],('','▸'))[1]} {_nav['cat']}",
-                                 key="dg_bc_cat", use_container_width=True,
-                                 disabled=(_nav["sku"] is None)):
-                        st.session_state["dg_nav"]["sku"] = None
+                _ic = _CAT_STYLE.get(_nav['cat'], ('', '▸'))[1]
+                _crumbs.append((f"{_ic} {_nav['cat']}", "cat"))
+            if _nav["sku"]:
+                _crumbs.append(("• producto", "sku"))
+            # Renderizar chips en fila (columnas ajustadas al número de niveles)
+            _ncr = len(_crumbs)
+            _bc_cols = st.columns(_ncr + (1 if _ncr < 4 else 0))
+            for _i, (_lbl, _lvl) in enumerate(_crumbs):
+                _es_actual = (_i == _ncr - 1)
+                with _bc_cols[_i]:
+                    if st.button(_lbl, key=f"dgbc-{_lvl}", use_container_width=False,
+                                 disabled=_es_actual):
+                        if _lvl == "home":
+                            st.session_state["dg_nav"] = {"gz": None, "cat": None, "sku": None}
+                        elif _lvl == "gz":
+                            st.session_state["dg_nav"] = {"gz": _nav["gz"], "cat": None, "sku": None}
+                        elif _lvl == "cat":
+                            st.session_state["dg_nav"] = {"gz": _nav["gz"], "cat": _nav["cat"], "sku": None}
                         st.rerun()
 
             st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
