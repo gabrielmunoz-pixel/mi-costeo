@@ -26252,19 +26252,31 @@ elif modulo.startswith("🔍 Detalle Garzones"):
                           .reset_index())
             _buf_cat = _io_dg.BytesIO()
             with _pd_dg.ExcelWriter(_buf_cat, engine="openpyxl") as _xw:
-                # Hoja 1: matriz garzón × categoría (venta)
+                # Hoja 1: DETALLE producto por producto (solo las 5 categorías evaluadas)
+                # Una fila por garzón + categoría + producto, con cantidad y monto.
+                _det_cat = (_exp_cat.groupby(["garzon","categoria","sku","producto"])
+                            .agg(cantidad=("q","sum"), monto=("venta","sum"))
+                            .reset_index())
+                # Ordenar por categoría (según orden del informe), luego garzón y monto
+                _cat_rank = {c: i for i, c in enumerate(_CATS_ORD)}
+                _det_cat["_ord"] = _det_cat["categoria"].map(_cat_rank).fillna(99)
+                _det_cat = _det_cat.sort_values(["garzon","_ord","monto"],
+                                                ascending=[True, True, False]).drop(columns="_ord")
+                _det_cat.columns = ["Garzón","Categoría","SKU","Producto","Cantidad","Monto"]
+                _det_cat.to_excel(_xw, index=False, sheet_name="Detalle x Producto")
+                # Hoja 2: matriz garzón × categoría (venta)
                 _mv = _pivot_cat.pivot_table(index="garzon", columns="categoria",
                                              values="venta", aggfunc="sum", fill_value=0)
                 _mv = _mv.reindex(columns=[c for c in _CATS_ORD if c in _mv.columns])
                 _mv["TOTAL categorías"] = _mv.sum(axis=1)
                 _mv.reset_index().to_excel(_xw, index=False, sheet_name="Venta x Categoría")
-                # Hoja 2: matriz garzón × categoría (cantidad)
+                # Hoja 3: matriz garzón × categoría (cantidad)
                 _mq = _pivot_cat.pivot_table(index="garzon", columns="categoria",
                                              values="q", aggfunc="sum", fill_value=0)
                 _mq = _mq.reindex(columns=[c for c in _CATS_ORD if c in _mq.columns])
                 _mq["TOTAL Q"] = _mq.sum(axis=1)
                 _mq.reset_index().to_excel(_xw, index=False, sheet_name="Cantidad x Categoría")
-                # Hoja 3: % de cada categoría sobre venta total del garzón
+                # Hoja 4: % de cada categoría sobre venta total del garzón
                 _vt_g = _df.groupby("garzon")["venta"].sum()
                 _mp = _mv.drop(columns=["TOTAL categorías"]).div(_vt_g, axis=0).fillna(0)
                 _mp.reset_index().to_excel(_xw, index=False, sheet_name="% x Categoría")
