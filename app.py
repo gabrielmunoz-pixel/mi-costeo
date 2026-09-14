@@ -26120,7 +26120,7 @@ elif modulo.startswith("🔍 Detalle Garzones"):
     _DG_GRP_CASE = f"""
         case
           when v.sku_producto in ('{_dg_agrex_sql}') then 'AGREGADOS'
-          when v.categoria_menu in ('Agregados','Acompanamientos') then 'AGREGADOS'
+          when v.categoria_menu = 'Agregados' then 'AGREGADOS'
           when v.categoria_menu = 'Cafeteria' then 'CAFETERIA'
           when v.categoria_menu = 'Postres' then 'POSTRES'
           when coalesce(cn.bucket, cs.bucket) = 'LIQ_SA' then 'LIQ S/A'
@@ -26240,6 +26240,35 @@ elif modulo.startswith("🔍 Detalle Garzones"):
             _tot_venta = float(_df["venta"].sum())
             _tot_adic  = float(_df[_df["categoria"].isin(_CATS_INF)]["venta"].sum())
             _n_gz = _df["garzon"].nunique()
+
+            # ── Botón de exportar la data cruda a Excel (para auditar) ──
+            _dg_exp = _df.copy()
+            _dg_exp["cuenta_adicional"] = _dg_exp["categoria"].isin(_CATS_INF)
+            _dg_exp = _dg_exp[["garzon", "fecha", "sku", "producto", "categoria",
+                               "cuenta_adicional", "q", "venta"]]
+            _dg_exp = _dg_exp.sort_values(["garzon", "categoria", "venta"],
+                                          ascending=[True, True, False])
+            import io as _io_dg
+            _buf_xlsx = _io_dg.BytesIO()
+            with _pd_dg.ExcelWriter(_buf_xlsx, engine="openpyxl") as _xw:
+                _dg_exp.to_excel(_xw, index=False, sheet_name="Detalle")
+                # Hoja resumen: venta y % adic por garzón
+                _res = (_df.groupby("garzon").agg(
+                            venta_total=("venta", "sum")).reset_index())
+                _adic_gz = (_df[_df["categoria"].isin(_CATS_INF)]
+                            .groupby("garzon")["venta"].sum()
+                            .rename("venta_adicionales").reset_index())
+                _res = _res.merge(_adic_gz, on="garzon", how="left").fillna(0)
+                _res["pct_adicionales"] = (_res["venta_adicionales"] /
+                                           _res["venta_total"]).fillna(0)
+                _res.to_excel(_xw, index=False, sheet_name="Resumen")
+            st.download_button(
+                "⬇️ Exportar data a Excel",
+                _buf_xlsx.getvalue(),
+                file_name=f"detalle_garzones_{_dg_local}_{_dg_fi}_{_dg_ff}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True, key="dg_export")
+
             st.markdown(f"""
             <div style="display:flex;gap:12px;flex-wrap:wrap;margin:4px 0 18px 0">
               <div style="flex:1;min-width:150px;background:linear-gradient(135deg,#1c1c1c,#141414);
