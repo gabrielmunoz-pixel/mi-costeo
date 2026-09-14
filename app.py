@@ -26241,33 +26241,57 @@ elif modulo.startswith("🔍 Detalle Garzones"):
             _tot_adic  = float(_df[_df["categoria"].isin(_CATS_INF)]["venta"].sum())
             _n_gz = _df["garzon"].nunique()
 
-            # ── Botón de exportar la data cruda a Excel (para auditar) ──
-            _dg_exp = _df.copy()
-            _dg_exp["cuenta_adicional"] = _dg_exp["categoria"].isin(_CATS_INF)
-            _dg_exp = _dg_exp[["garzon", "fecha", "sku", "producto", "categoria",
-                               "cuenta_adicional", "q", "venta"]]
-            _dg_exp = _dg_exp.sort_values(["garzon", "categoria", "venta"],
-                                          ascending=[True, True, False])
+            # ── Dos botones de exportación a Excel ──
             import io as _io_dg
-            _buf_xlsx = _io_dg.BytesIO()
-            with _pd_dg.ExcelWriter(_buf_xlsx, engine="openpyxl") as _xw:
-                _dg_exp.to_excel(_xw, index=False, sheet_name="Detalle")
-                # Hoja resumen: venta y % adic por garzón
-                _res = (_df.groupby("garzon").agg(
-                            venta_total=("venta", "sum")).reset_index())
-                _adic_gz = (_df[_df["categoria"].isin(_CATS_INF)]
-                            .groupby("garzon")["venta"].sum()
-                            .rename("venta_adicionales").reset_index())
-                _res = _res.merge(_adic_gz, on="garzon", how="left").fillna(0)
-                _res["pct_adicionales"] = (_res["venta_adicionales"] /
-                                           _res["venta_total"]).fillna(0)
-                _res.to_excel(_xw, index=False, sheet_name="Resumen")
-            st.download_button(
-                "⬇️ Exportar data a Excel",
-                _buf_xlsx.getvalue(),
-                file_name=f"detalle_garzones_{_dg_local}_{_dg_fi}_{_dg_ff}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True, key="dg_export")
+            _CATS_ORD = ['AGREGADOS','CAFETERIA','POSTRES','LIQ S/A','LIQ C/A']
+
+            # (1) RESUMEN POR CATEGORÍAS — solo las 5 categorías evaluadas (sin OTROS)
+            _exp_cat = _df[_df["categoria"].isin(_CATS_INF)].copy()
+            _pivot_cat = (_exp_cat.groupby(["garzon","categoria"])
+                          .agg(venta=("venta","sum"), q=("q","sum"))
+                          .reset_index())
+            _buf_cat = _io_dg.BytesIO()
+            with _pd_dg.ExcelWriter(_buf_cat, engine="openpyxl") as _xw:
+                # Hoja 1: matriz garzón × categoría (venta)
+                _mv = _pivot_cat.pivot_table(index="garzon", columns="categoria",
+                                             values="venta", aggfunc="sum", fill_value=0)
+                _mv = _mv.reindex(columns=[c for c in _CATS_ORD if c in _mv.columns])
+                _mv["TOTAL categorías"] = _mv.sum(axis=1)
+                _mv.reset_index().to_excel(_xw, index=False, sheet_name="Venta x Categoría")
+                # Hoja 2: matriz garzón × categoría (cantidad)
+                _mq = _pivot_cat.pivot_table(index="garzon", columns="categoria",
+                                             values="q", aggfunc="sum", fill_value=0)
+                _mq = _mq.reindex(columns=[c for c in _CATS_ORD if c in _mq.columns])
+                _mq["TOTAL Q"] = _mq.sum(axis=1)
+                _mq.reset_index().to_excel(_xw, index=False, sheet_name="Cantidad x Categoría")
+                # Hoja 3: % de cada categoría sobre venta total del garzón
+                _vt_g = _df.groupby("garzon")["venta"].sum()
+                _mp = _mv.drop(columns=["TOTAL categorías"]).div(_vt_g, axis=0).fillna(0)
+                _mp.reset_index().to_excel(_xw, index=False, sheet_name="% x Categoría")
+            _exp_c1, _exp_c2 = st.columns(2)
+            with _exp_c1:
+                st.download_button(
+                    "📊 Resumen por Categorías",
+                    _buf_cat.getvalue(),
+                    file_name=f"resumen_categorias_{_dg_local}_{_dg_fi}_{_dg_ff}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True, key="dg_exp_cat")
+
+            # (2) VENTA POR GARZÓN (detalle) — fecha, producto, cantidad, monto (todo)
+            _exp_det = _df.copy()[["garzon","fecha","sku","producto","q","venta"]]
+            _exp_det = _exp_det.sort_values(["garzon","fecha","venta"],
+                                            ascending=[True,True,False])
+            _exp_det.columns = ["Garzón","Fecha","SKU","Producto","Cantidad","Monto"]
+            _buf_det = _io_dg.BytesIO()
+            with _pd_dg.ExcelWriter(_buf_det, engine="openpyxl") as _xw:
+                _exp_det.to_excel(_xw, index=False, sheet_name="Detalle por Garzón")
+            with _exp_c2:
+                st.download_button(
+                    "🧾 Venta por Garzón (detalle)",
+                    _buf_det.getvalue(),
+                    file_name=f"venta_por_garzon_{_dg_local}_{_dg_fi}_{_dg_ff}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True, key="dg_exp_det")
 
             st.markdown(f"""
             <div style="display:flex;gap:12px;flex-wrap:wrap;margin:4px 0 18px 0">
@@ -26319,7 +26343,26 @@ elif modulo.startswith("🔍 Detalle Garzones"):
 
             st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
-            # ═══ NIVEL 0: GARZONES (tarjetas con KPIs) ═══
+            # Helper: señalizador semáforo vs promedio (comparación de métricas)
+            def _sem(valor, prom, es_pct=False, unidad=""):
+                # Devuelve HTML de un badge pequeño con ▲/▼ y color según vs promedio
+                if prom is None or prom == 0:
+                    return ""
+                _dif = valor - prom
+                if es_pct:
+                    _txt = f"{abs(_dif)*100:.1f}".replace(".", ",") + " pts"
+                else:
+                    _txt = _fmoney(abs(_dif))
+                if _dif > 0.0001:
+                    _c, _fl = "#8fe0b3", "▲"
+                elif _dif < -0.0001:
+                    _c, _fl = "#e88a8a", "▼"
+                else:
+                    _c, _fl = "#8a8a8a", "="
+                return (f"<span style='color:{_c};font-size:0.62rem;font-weight:600;"
+                        f"white-space:nowrap'>{_fl} {_txt}</span>")
+
+            # ═══ NIVEL 0: GARZONES (tarjeta clickeable, mobile-first) ═══
             if not _nav["gz"]:
                 _gz_stats = []
                 for _gz in _df["garzon"].unique():
@@ -26327,60 +26370,83 @@ elif modulo.startswith("🔍 Detalle Garzones"):
                     _vt = float(_dfg["venta"].sum())
                     _va = float(_dfg[_dfg["categoria"].isin(_CATS_INF)]["venta"].sum())
                     _dias_gz = _dfg["fecha"].nunique()
-                    _gz_stats.append((_gz, _vt, (_va/_vt if _vt else 0), _dias_gz,
-                                      (_vt/_dias_gz if _dias_gz else 0)))
-                _gz_stats.sort(key=lambda x: -x[2])  # ordenar por % adicionales (como el informe)
+                    _gz_stats.append({"gz": _gz, "vt": _vt, "pa": (_va/_vt if _vt else 0),
+                                      "dias": _dias_gz, "vdp": (_vt/_dias_gz if _dias_gz else 0)})
+                _gz_stats.sort(key=lambda x: -x["pa"])
+                # Promedios del período (para comparativa)
+                _n = len(_gz_stats) or 1
+                _prom_vt  = sum(g["vt"]  for g in _gz_stats) / _n
+                _prom_pa  = sum(g["pa"]  for g in _gz_stats) / _n
+                _prom_vdp = sum(g["vdp"] for g in _gz_stats) / _n
 
-                st.markdown("<div style='color:#8a8a8a;font-size:0.8rem;margin-bottom:10px'>"
-                            "Ordenados por % de adicionales. Toca un garzón para ver el detalle.</div>",
+                st.markdown(f"<div style='color:#8a8a8a;font-size:0.78rem;margin-bottom:10px'>"
+                            f"Ordenados por % de adicionales · comparados contra el promedio del período "
+                            f"(Adic. prom: <b style='color:#c8c4be'>{_fpct(_prom_pa)}</b>) · toca una tarjeta para ver el detalle</div>",
                             unsafe_allow_html=True)
-                for _rank, (_gz, _vt, _pa, _dgz, _vdp) in enumerate(_gz_stats, 1):
-                    # color del % según nivel
+
+                for _rank, _g in enumerate(_gz_stats, 1):
+                    _gz, _vt, _pa, _dgz, _vdp = _g["gz"], _g["vt"], _g["pa"], _g["dias"], _g["vdp"]
                     _pc_col = '#8fe0b3' if _pa >= 0.30 else ('#e8c76a' if _pa >= 0.20 else '#e88a8a')
-                    _c1, _c2 = st.columns([5, 1])
-                    with _c1:
-                        st.markdown(f"""
-                        <div style="background:#161616;border:1px solid #262626;border-left:3px solid #d4a853;
-                                    border-radius:12px;padding:12px 16px;margin-bottom:2px">
-                          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
-                            <div style="display:flex;align-items:center;gap:12px">
-                              <div style="background:#d4a853;color:#141414;width:26px;height:26px;border-radius:50%;
-                                          display:flex;align-items:center;justify-content:center;font-weight:700;font-size:0.8rem">{_rank}</div>
-                              <div>
-                                <div style="color:#f0ede8;font-size:1.0rem;font-weight:600">{_gz}</div>
-                                <div style="color:#6a6a6a;font-size:0.72rem">{_dgz} día(s) trabajados</div>
-                              </div>
-                            </div>
-                            <div style="display:flex;gap:22px;text-align:right">
-                              <div>
-                                <div style="color:#7a7a7a;font-size:0.66rem;text-transform:uppercase">Venta</div>
-                                <div style="color:#f0ede8;font-size:0.95rem;font-weight:600">{_fmoney(_vt)}</div>
-                              </div>
-                              <div>
-                                <div style="color:#7a7a7a;font-size:0.66rem;text-transform:uppercase">Prom/día</div>
-                                <div style="color:#c8c4be;font-size:0.95rem;font-weight:600">{_fmoney(_vdp)}</div>
-                              </div>
-                              <div>
-                                <div style="color:#7a7a7a;font-size:0.66rem;text-transform:uppercase">Adic.</div>
-                                <div style="color:{_pc_col};font-size:0.95rem;font-weight:700">{_fpct(_pa)}</div>
-                              </div>
-                            </div>
-                          </div>
-                        </div>""", unsafe_allow_html=True)
-                    with _c2:
-                        st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+                    _sem_vt  = _sem(_vt, _prom_vt)
+                    _sem_vdp = _sem(_vdp, _prom_vdp)
+                    _sem_pa  = _sem(_pa, _prom_pa, es_pct=True)
+                    # Tarjeta con toda la info; el botón "ver" va compacto abajo-derecha
+                    st.markdown(f"""
+                    <div style="background:#161616;border:1px solid #262626;border-left:3px solid #d4a853;
+                                border-radius:14px;padding:13px 15px 8px 15px;margin-bottom:1px">
+                      <div style="display:flex;align-items:center;gap:11px;margin-bottom:10px">
+                        <div style="background:#d4a853;color:#141414;min-width:24px;height:24px;border-radius:50%;
+                                    display:flex;align-items:center;justify-content:center;font-weight:700;font-size:0.78rem">{_rank}</div>
+                        <div style="flex:1">
+                          <div style="color:#f0ede8;font-size:1.02rem;font-weight:600;line-height:1.15">{_gz}</div>
+                          <div style="color:#6a6a6a;font-size:0.7rem">{_dgz} día(s) trabajados</div>
+                        </div>
+                      </div>
+                      <div style="display:flex;gap:8px;justify-content:space-between">
+                        <div style="flex:1;background:#1c1c1c;border-radius:9px;padding:7px 9px">
+                          <div style="color:#7a7a7a;font-size:0.6rem;text-transform:uppercase;letter-spacing:0.04em">Venta</div>
+                          <div style="color:#f0ede8;font-size:0.9rem;font-weight:700;line-height:1.2">{_fmoney(_vt)}</div>
+                          {_sem_vt}
+                        </div>
+                        <div style="flex:1;background:#1c1c1c;border-radius:9px;padding:7px 9px">
+                          <div style="color:#7a7a7a;font-size:0.6rem;text-transform:uppercase;letter-spacing:0.04em">Prom/día</div>
+                          <div style="color:#f0ede8;font-size:0.9rem;font-weight:700;line-height:1.2">{_fmoney(_vdp)}</div>
+                          {_sem_vdp}
+                        </div>
+                        <div style="flex:1;background:#1c1c1c;border-radius:9px;padding:7px 9px">
+                          <div style="color:#7a7a7a;font-size:0.6rem;text-transform:uppercase;letter-spacing:0.04em">Adic.</div>
+                          <div style="color:{_pc_col};font-size:0.9rem;font-weight:700;line-height:1.2">{_fpct(_pa)}</div>
+                          {_sem_pa}
+                        </div>
+                      </div>
+                    </div>""", unsafe_allow_html=True)
+                    # Botón compacto alineado a la derecha (columna estrecha)
+                    _bc1, _bc2 = st.columns([3, 1])
+                    with _bc2:
                         if st.button("Ver →", key=f"dg_gz_{_gz}", use_container_width=True):
                             st.session_state["dg_nav"] = {"gz": _gz, "cat": None, "sku": None}
                             st.rerun()
 
-            # ═══ NIVEL 1: CATEGORÍAS del garzón (tarjetas con color por categoría) ═══
+            # ═══ NIVEL 1: CATEGORÍAS del garzón (tarjeta, comparación vs promedio) ═══
             elif not _nav["cat"]:
                 _dfg = _df[_df["garzon"] == _nav["gz"]]
                 _vt = float(_dfg["venta"].sum())
-                st.markdown(f"<div style='color:#f0ede8;font-size:1.2rem;font-weight:600;margin-bottom:2px'>"
+                # Promedio del % de cada categoría entre TODOS los garzones del período
+                _prom_cat_pc = {}
+                _gz_list = _df["garzon"].unique()
+                for _cat in _CATS_INF:
+                    _acc = []
+                    for _g in _gz_list:
+                        _dgt = _df[_df["garzon"] == _g]
+                        _vtg = float(_dgt["venta"].sum())
+                        _vcg = float(_dgt[_dgt["categoria"] == _cat]["venta"].sum())
+                        _acc.append((_vcg/_vtg) if _vtg else 0)
+                    _prom_cat_pc[_cat] = (sum(_acc)/len(_acc)) if _acc else 0
+
+                st.markdown(f"<div style='color:#f0ede8;font-size:1.15rem;font-weight:600;margin-bottom:2px'>"
                             f"👤 {_nav['gz']}</div>"
-                            f"<div style='color:#8a8a8a;font-size:0.8rem;margin-bottom:14px'>"
-                            f"Venta total {_fmoney(_vt)} · toca una categoría para ver sus productos</div>",
+                            f"<div style='color:#8a8a8a;font-size:0.78rem;margin-bottom:12px'>"
+                            f"Venta total {_fmoney(_vt)} · % comparado vs promedio de los garzones · toca una categoría</div>",
                             unsafe_allow_html=True)
                 for _cat in _CATS_INF:
                     _dfc = _dfg[_dfg["categoria"] == _cat]
@@ -26388,29 +26454,33 @@ elif modulo.startswith("🔍 Detalle Garzones"):
                     _pc = (_vc/_vt if _vt else 0)
                     _col, _ico = _CAT_STYLE[_cat]
                     _empty = _dfc.empty
-                    _c1, _c2 = st.columns([5, 1])
-                    with _c1:
-                        st.markdown(f"""
-                        <div style="background:#161616;border:1px solid #262626;border-left:4px solid {_col};
-                                    border-radius:12px;padding:12px 16px;margin-bottom:2px;opacity:{'0.45' if _empty else '1'}">
-                          <div style="display:flex;justify-content:space-between;align-items:center">
-                            <div style="display:flex;align-items:center;gap:12px">
-                              <span style="font-size:1.3rem">{_ico}</span>
-                              <span style="color:{_col};font-size:1.0rem;font-weight:700;letter-spacing:0.02em">{_cat}</span>
-                            </div>
-                            <div style="display:flex;gap:22px;text-align:right">
-                              <div><div style="color:#7a7a7a;font-size:0.66rem;text-transform:uppercase">Venta</div>
-                                   <div style="color:#f0ede8;font-size:0.95rem;font-weight:600">{_fmoney(_vc)}</div></div>
-                              <div><div style="color:#7a7a7a;font-size:0.66rem;text-transform:uppercase">Unidades</div>
-                                   <div style="color:#c8c4be;font-size:0.95rem;font-weight:600">{_fq(_qc)}</div></div>
-                              <div><div style="color:#7a7a7a;font-size:0.66rem;text-transform:uppercase">% venta</div>
-                                   <div style="color:{_col};font-size:0.95rem;font-weight:700">{_fpct(_pc)}</div></div>
-                            </div>
-                          </div>
-                        </div>""", unsafe_allow_html=True)
-                    with _c2:
-                        st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
-                        if not _empty:
+                    _sem_pc = _sem(_pc, _prom_cat_pc.get(_cat, 0), es_pct=True) if not _empty else ""
+                    st.markdown(f"""
+                    <div style="background:#161616;border:1px solid #262626;border-left:4px solid {_col};
+                                border-radius:14px;padding:12px 15px 8px 15px;margin-bottom:1px;opacity:{'0.4' if _empty else '1'}">
+                      <div style="display:flex;align-items:center;gap:10px;margin-bottom:9px">
+                        <span style="font-size:1.25rem">{_ico}</span>
+                        <span style="color:{_col};font-size:0.98rem;font-weight:700;letter-spacing:0.02em">{_cat}</span>
+                      </div>
+                      <div style="display:flex;gap:8px;justify-content:space-between">
+                        <div style="flex:1;background:#1c1c1c;border-radius:9px;padding:7px 9px">
+                          <div style="color:#7a7a7a;font-size:0.6rem;text-transform:uppercase">Venta</div>
+                          <div style="color:#f0ede8;font-size:0.9rem;font-weight:700">{_fmoney(_vc)}</div>
+                        </div>
+                        <div style="flex:1;background:#1c1c1c;border-radius:9px;padding:7px 9px">
+                          <div style="color:#7a7a7a;font-size:0.6rem;text-transform:uppercase">Unidades</div>
+                          <div style="color:#f0ede8;font-size:0.9rem;font-weight:700">{_fq(_qc)}</div>
+                        </div>
+                        <div style="flex:1;background:#1c1c1c;border-radius:9px;padding:7px 9px">
+                          <div style="color:#7a7a7a;font-size:0.6rem;text-transform:uppercase">% venta</div>
+                          <div style="color:{_col};font-size:0.9rem;font-weight:700">{_fpct(_pc)}</div>
+                          {_sem_pc}
+                        </div>
+                      </div>
+                    </div>""", unsafe_allow_html=True)
+                    if not _empty:
+                        _cc1, _cc2 = st.columns([3, 1])
+                        with _cc2:
                             if st.button("Ver →", key=f"dg_cat_{_cat}", use_container_width=True):
                                 st.session_state["dg_nav"]["cat"] = _cat
                                 st.rerun()
