@@ -26460,6 +26460,16 @@ elif modulo.startswith("🔍 Detalle Garzones"):
                             f"<div style='color:#8a8a8a;font-size:0.78rem;margin-bottom:12px'>"
                             f"Venta total {_fmoney(_vt)} · % comparado vs promedio de los garzones · toca una categoría</div>",
                             unsafe_allow_html=True)
+                # CSS del botón "ver" full-width como pie de tarjeta (igual que garzones)
+                st.markdown("""<style>
+                div[class*="st-key-dgcat-"] button{
+                    background:#181818 !important;border:1px solid #262626 !important;
+                    border-top:none !important;border-radius:0 0 12px 12px !important;
+                    color:#9a8a5a !important;font-size:0.78rem !important;
+                    min-height:34px !important;height:34px !important;margin-top:-13px !important}
+                div[class*="st-key-dgcat-"] button:hover{
+                    background:#221d10 !important;color:#e8c76a !important;border-color:#3a3320 !important}
+                </style>""", unsafe_allow_html=True)
                 for _cat in _CATS_INF:
                     _dfc = _dfg[_dfg["categoria"] == _cat]
                     _vc = float(_dfc["venta"].sum()); _qc = int(_dfc["q"].sum())
@@ -26467,12 +26477,17 @@ elif modulo.startswith("🔍 Detalle Garzones"):
                     _col, _ico = _CAT_STYLE[_cat]
                     _empty = _dfc.empty
                     _sem_pc = _sem(_pc, _prom_cat_pc.get(_cat, 0), es_pct=True) if not _empty else ""
+                    # borde inferior redondeado solo si NO hay botón debajo (categoría vacía)
+                    _br = "12px" if _empty else "12px 12px 0 0"
+                    _bb = "1px solid #262626" if _empty else "none"
                     st.markdown(f"""
                     <div style="background:#161616;border:1px solid #262626;border-left:4px solid {_col};
-                                border-radius:14px;padding:12px 15px 8px 15px;margin-bottom:1px;opacity:{'0.4' if _empty else '1'}">
-                      <div style="display:flex;align-items:center;gap:10px;margin-bottom:9px">
+                                border-radius:{_br};border-bottom:{_bb};padding:12px 15px 14px 15px;
+                                margin-bottom:{'12px' if _empty else '0'};opacity:{'0.4' if _empty else '1'}">
+                      <div style="display:flex;align-items:center;gap:10px;margin-bottom:11px">
                         <span style="font-size:1.25rem">{_ico}</span>
-                        <span style="color:{_col};font-size:0.98rem;font-weight:700;letter-spacing:0.02em">{_cat}</span>
+                        <span style="flex:1;color:{_col};font-size:0.98rem;font-weight:700;letter-spacing:0.02em">{_cat}</span>
+                        {'' if _empty else f'<span style="color:{_col};font-size:1.4rem;font-weight:700;line-height:1">&rsaquo;</span>'}
                       </div>
                       <div style="display:flex;gap:8px;justify-content:space-between">
                         <div style="flex:1;background:#1c1c1c;border-radius:9px;padding:7px 9px">
@@ -26491,11 +26506,10 @@ elif modulo.startswith("🔍 Detalle Garzones"):
                       </div>
                     </div>""", unsafe_allow_html=True)
                     if not _empty:
-                        _cc1, _cc2 = st.columns([3, 1])
-                        with _cc2:
-                            if st.button("Ver →", key=f"dg_cat_{_cat}", use_container_width=True):
-                                st.session_state["dg_nav"]["cat"] = _cat
-                                st.rerun()
+                        if st.button("Ver →", key=f"dgcat-{_cat}", use_container_width=True):
+                            st.session_state["dg_nav"]["cat"] = _cat
+                            st.rerun()
+                        st.markdown("<div style='margin-bottom:12px'></div>", unsafe_allow_html=True)
 
             # ═══ NIVEL 2: PRODUCTOS de la categoría ═══
             elif not _nav["sku"]:
@@ -26507,34 +26521,42 @@ elif modulo.startswith("🔍 Detalle Garzones"):
                             f"<div style='color:#8a8a8a;font-size:0.8rem;margin-bottom:14px'>"
                             f"{_nav['gz']} · {_fmoney(_vc)} en esta categoría · toca un producto para ver el detalle diario</div>",
                             unsafe_allow_html=True)
+                # CSS del botón "días" full-width como pie de tarjeta de producto
+                st.markdown("""<style>
+                div[class*="st-key-dgsku-"] button{
+                    background:#181818 !important;border:1px solid #262626 !important;
+                    border-top:none !important;border-radius:0 0 12px 12px !important;
+                    color:#9a8a5a !important;font-size:0.78rem !important;
+                    min-height:32px !important;height:32px !important;margin-top:-13px !important}
+                div[class*="st-key-dgsku-"] button:hover{
+                    background:#221d10 !important;color:#e8c76a !important;border-color:#3a3320 !important}
+                </style>""", unsafe_allow_html=True)
                 _prod = (_dfc.groupby(["sku","producto"])
                          .agg(q=("q","sum"), venta=("venta","sum"))
                          .reset_index().sort_values("venta", ascending=False))
                 _vmax = float(_prod["venta"].max()) if not _prod.empty else 1
-                for _, _rp in _prod.iterrows():
+                for _ip, (_, _rp) in enumerate(_prod.iterrows()):
                     _bar = int(round((float(_rp["venta"])/_vmax)*100)) if _vmax else 0
-                    _c1, _c2 = st.columns([5, 1])
-                    with _c1:
-                        st.markdown(f"""
-                        <div style="background:#161616;border:1px solid #262626;border-radius:12px;
-                                    padding:11px 16px;margin-bottom:2px">
-                          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:7px">
-                            <span style="color:#f0ede8;font-size:0.95rem;font-weight:600">{_rp['producto']}</span>
-                            <span style="color:#6a6a6a;font-size:0.72rem;font-family:monospace">{_rp['sku']}</span>
-                          </div>
-                          <div style="display:flex;align-items:center;gap:12px">
-                            <div style="flex:1;background:#0f0f0f;border-radius:6px;height:8px;overflow:hidden">
-                              <div style="width:{_bar}%;height:100%;background:{_col};border-radius:6px"></div>
-                            </div>
-                            <span style="color:#f0ede8;font-size:0.9rem;font-weight:600;min-width:80px;text-align:right">{_fmoney(_rp['venta'])}</span>
-                            <span style="color:#8a8a8a;font-size:0.8rem;min-width:52px;text-align:right">Q {int(_rp['q'])}</span>
-                          </div>
-                        </div>""", unsafe_allow_html=True)
-                    with _c2:
-                        st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
-                        if st.button("Días →", key=f"dg_sku_{_rp['sku']}", use_container_width=True):
-                            st.session_state["dg_nav"]["sku"] = _rp["sku"]
-                            st.rerun()
+                    st.markdown(f"""
+                    <div style="background:#161616;border:1px solid #262626;border-left:3px solid {_col};
+                                border-radius:12px 12px 0 0;border-bottom:none;padding:11px 15px 14px 15px">
+                      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:9px">
+                        <span style="color:#f0ede8;font-size:0.95rem;font-weight:600;flex:1;min-width:0">{_rp['producto']}</span>
+                        <span style="color:#6a6a6a;font-size:0.72rem;font-family:monospace">{_rp['sku']}</span>
+                        <span style="color:{_col};font-size:1.3rem;font-weight:700;line-height:1">&rsaquo;</span>
+                      </div>
+                      <div style="display:flex;align-items:center;gap:12px">
+                        <div style="flex:1;background:#0f0f0f;border-radius:6px;height:8px;overflow:hidden">
+                          <div style="width:{_bar}%;height:100%;background:{_col};border-radius:6px"></div>
+                        </div>
+                        <span style="color:#f0ede8;font-size:0.9rem;font-weight:600;min-width:80px;text-align:right">{_fmoney(_rp['venta'])}</span>
+                        <span style="color:#8a8a8a;font-size:0.8rem;min-width:52px;text-align:right">Q {int(_rp['q'])}</span>
+                      </div>
+                    </div>""", unsafe_allow_html=True)
+                    if st.button("Ver días →", key=f"dgsku-{_ip}", use_container_width=True):
+                        st.session_state["dg_nav"]["sku"] = _rp["sku"]
+                        st.rerun()
+                    st.markdown("<div style='margin-bottom:10px'></div>", unsafe_allow_html=True)
 
             # ═══ NIVEL 3: DETALLE DIARIO del producto ═══
             else:
