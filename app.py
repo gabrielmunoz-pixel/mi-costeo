@@ -26325,66 +26325,60 @@ elif modulo.startswith("🔍 Detalle Garzones"):
             </div>
             """, unsafe_allow_html=True)
 
-            # ── Breadcrumb horizontal: chips clickeables conectados por → ──
-            # Se fuerza fila horizontal (no apilar en móvil) marcando el contenedor.
-            st.markdown("""<style>
-            div[class*="st-key-dgbcrow-"]{
-                display:flex !important;flex-direction:row !important;flex-wrap:wrap !important;
-                align-items:center !important;gap:2px !important}
-            div[class*="st-key-dgbcrow-"] > div[data-testid="stHorizontalBlock"]{
-                display:flex !important;flex-direction:row !important;flex-wrap:wrap !important;
-                align-items:center !important;gap:2px !important;width:auto !important}
-            div[class*="st-key-dgbcrow-"] div[data-testid="column"]{
-                width:auto !important;flex:0 0 auto !important;min-width:0 !important}
-            div[class*="st-key-dgbc-"] button{
-                border-radius:20px !important;min-height:0 !important;height:auto !important;
-                padding:5px 12px !important;font-size:0.76rem !important;font-weight:600 !important;
-                border:1px solid #333 !important;background:#1c1c1c !important;color:#c8c4be !important;
-                white-space:nowrap !important;width:auto !important}
-            div[class*="st-key-dgbc-"] button:hover{
-                background:#262626 !important;border-color:#d4a853 !important;color:#f0ede8 !important}
-            div[class*="st-key-dgbc-"] button:disabled{
-                background:#221d10 !important;border-color:#d4a853 !important;
-                color:#e8c76a !important;opacity:1 !important}
-            .dg-arrow{color:#6a6a6a;font-size:0.85rem;font-weight:700;padding:0 1px}
-            </style>""", unsafe_allow_html=True)
-
-            _crumbs = [("🏠 Garzones", "home")]
+            # ── Breadcrumb horizontal (HTML puro, siempre en fila) + botón "volver" ──
+            # HTML flex = se mantiene horizontal en cualquier pantalla (no se apila).
+            # La navegación hacia atrás se hace con un botón "← Volver" (sube un nivel).
+            _crumbs = []
+            _crumbs.append(("🏠", "Garzones", "home"))
             if _nav["gz"]:
-                _crumbs.append((f"👤 {_nav['gz'].split()[0]}", "gz"))
+                _crumbs.append(("👤", _nav['gz'].split()[0], "gz"))
             if _nav["cat"]:
                 _ic = _CAT_STYLE.get(_nav['cat'], ('', '▸'))[1]
-                _crumbs.append((f"{_ic} {_nav['cat'].capitalize()}", "cat"))
+                _crumbs.append((_ic, _nav['cat'].capitalize(), "cat"))
             if _nav["sku"]:
-                _crumbs.append(("🔍 Producto", "sku"))
+                _crumbs.append(("🔍", "Producto", "sku"))
+            _ncr = len(_crumbs)
 
-            with st.container(key="dgbcrow-1"):
-                # columnas: un chip + una flecha por cada nivel (menos la última flecha)
-                _ncr = len(_crumbs)
-                _widths = []
-                for _i in range(_ncr):
-                    _widths.append(2)                    # chip
-                    if _i < _ncr - 1:
-                        _widths.append(0.4)              # flecha
-                _cols = st.columns(_widths)
-                _ci = 0
-                for _i, (_lbl, _lvl) in enumerate(_crumbs):
-                    _es_actual = (_i == _ncr - 1)
-                    with _cols[_ci]:
-                        if st.button(_lbl, key=f"dgbc-{_lvl}", use_container_width=False,
-                                     disabled=_es_actual):
-                            if _lvl == "home":
-                                st.session_state["dg_nav"] = {"gz": None, "cat": None, "sku": None}
-                            elif _lvl == "gz":
-                                st.session_state["dg_nav"] = {"gz": _nav["gz"], "cat": None, "sku": None}
-                            elif _lvl == "cat":
-                                st.session_state["dg_nav"] = {"gz": _nav["gz"], "cat": _nav["cat"], "sku": None}
-                            st.rerun()
-                    _ci += 1
-                    if _i < _ncr - 1:
-                        with _cols[_ci]:
-                            st.markdown("<div class='dg-arrow'>→</div>", unsafe_allow_html=True)
-                        _ci += 1
+            _chips_html = ""
+            for _i, (_ic, _txt, _lvl) in enumerate(_crumbs):
+                _es_actual = (_i == _ncr - 1)
+                if _es_actual:
+                    _chips_html += (f"<span style='display:inline-flex;align-items:center;gap:4px;"
+                                    f"background:#221d10;border:1px solid #d4a853;border-radius:20px;"
+                                    f"padding:5px 13px;color:#e8c76a;font-size:0.8rem;font-weight:700;"
+                                    f"white-space:nowrap'>{_ic} {_txt}</span>")
+                else:
+                    _chips_html += (f"<span style='display:inline-flex;align-items:center;gap:4px;"
+                                    f"background:#1c1c1c;border:1px solid #333;border-radius:20px;"
+                                    f"padding:5px 13px;color:#c8c4be;font-size:0.8rem;font-weight:600;"
+                                    f"white-space:nowrap'>{_ic} {_txt}</span>")
+                if _i < _ncr - 1:
+                    _chips_html += "<span style='color:#6a6a6a;font-size:0.9rem;font-weight:700'>→</span>"
+
+            st.markdown(f"""
+            <div style="display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-bottom:10px">
+              {_chips_html}
+            </div>""", unsafe_allow_html=True)
+
+            # Botón "← Volver" (sube un nivel) — solo si no estamos en la raíz
+            if _nav["gz"]:
+                st.markdown("""<style>
+                div[class*="st-key-dgback"] button{
+                    border-radius:9px !important;min-height:0 !important;height:auto !important;
+                    padding:5px 14px !important;font-size:0.8rem !important;
+                    border:1px solid #333 !important;background:#181818 !important;
+                    color:#c8c4be !important;width:auto !important}
+                div[class*="st-key-dgback"] button:hover{
+                    background:#262626 !important;border-color:#d4a853 !important;color:#f0ede8 !important}
+                </style>""", unsafe_allow_html=True)
+                if st.button("← Volver", key="dgback", use_container_width=False):
+                    if _nav["sku"]:
+                        st.session_state["dg_nav"]["sku"] = None
+                    elif _nav["cat"]:
+                        st.session_state["dg_nav"]["cat"] = None
+                    else:
+                        st.session_state["dg_nav"] = {"gz": None, "cat": None, "sku": None}
+                    st.rerun()
 
             st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
