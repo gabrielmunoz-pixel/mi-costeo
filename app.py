@@ -26384,22 +26384,17 @@ elif modulo.startswith("🔍 Detalle Garzones"):
                             f"(Adic. prom: <b style='color:#c8c4be'>{_fpct(_prom_pa)}</b>) · toca una tarjeta para ver el detalle</div>",
                             unsafe_allow_html=True)
 
-                # CSS: (1) estilo del botón, (2) FORZAR que el header no se apile en móvil.
-                # Streamlit apila columnas en pantallas angostas; lo evitamos marcando el
-                # bloque del header y forzando flex horizontal con anchos fijos.
+                # CSS: botón "ver" sutil y full-width bajo cada tarjeta (funciona igual
+                # en móvil y PC porque NO usa columnas, que Streamlit apila en pantallas
+                # angostas). La flecha › va dentro del HTML de la tarjeta (no se apila).
                 st.markdown("""<style>
-                div[class*="st-key-dghdr-"]{
-                    display:flex !important;flex-direction:row !important;
-                    flex-wrap:nowrap !important;align-items:center !important;gap:6px}
-                div[class*="st-key-dghdr-"] > div:first-child{flex:1 1 auto;min-width:0}
-                div[class*="st-key-dghdr-"] > div:last-child{flex:0 0 auto}
                 div[class*="st-key-dggz-"] button{
-                    width:auto !important;min-height:0 !important;height:auto !important;
-                    border-radius:9px !important;border:1px solid #3a3320 !important;
-                    background:#221d10 !important;color:#e8c76a !important;white-space:nowrap !important;
-                    font-size:0.82rem !important;padding:6px 16px !important}
+                    background:#181818 !important;border:1px solid #262626 !important;
+                    border-top:none !important;border-radius:0 0 12px 12px !important;
+                    color:#9a8a5a !important;font-size:0.78rem !important;
+                    min-height:34px !important;height:34px !important;margin-top:-13px !important}
                 div[class*="st-key-dggz-"] button:hover{
-                    background:#2e2714 !important;border-color:#d4a853 !important;color:#f0d98a !important}
+                    background:#221d10 !important;color:#e8c76a !important;border-color:#3a3320 !important}
                 </style>""", unsafe_allow_html=True)
 
                 for _rank, _g in enumerate(_gz_stats, 1):
@@ -26408,27 +26403,19 @@ elif modulo.startswith("🔍 Detalle Garzones"):
                     _sem_vt  = _sem(_vt, _prom_vt)
                     _sem_vdp = _sem(_vdp, _prom_vdp)
                     _sem_pa  = _sem(_pa, _prom_pa, es_pct=True)
-                    # Header en contenedor marcado (dghdr) para forzar fila horizontal en móvil
-                    with st.container(key=f"dghdr-{_rank}"):
-                        _hc1, _hc2 = st.columns([3, 1])
-                        with _hc1:
-                            st.markdown(f"""
-                            <div style="display:flex;align-items:center;gap:11px">
-                              <div style="background:#d4a853;color:#141414;min-width:24px;height:24px;border-radius:50%;
-                                          display:flex;align-items:center;justify-content:center;font-weight:700;font-size:0.78rem">{_rank}</div>
-                              <div>
-                                <div style="color:#f0ede8;font-size:1.02rem;font-weight:600;line-height:1.15">{_gz}</div>
-                                <div style="color:#6a6a6a;font-size:0.7rem">{_dgz} día(s) trabajados</div>
-                              </div>
-                            </div>""", unsafe_allow_html=True)
-                        with _hc2:
-                            if st.button("Ver →", key=f"dggz-{_rank}", use_container_width=False):
-                                st.session_state["dg_nav"] = {"gz": _gz, "cat": None, "sku": None}
-                                st.rerun()
-                    # Métricas debajo, ancho completo
+                    # Tarjeta completa en UN bloque HTML (flecha › a la altura del nombre)
                     st.markdown(f"""
                     <div style="background:#161616;border:1px solid #262626;border-left:3px solid #d4a853;
-                                border-radius:12px;padding:9px 13px;margin:2px 0 12px 0">
+                                border-radius:12px 12px 0 0;border-bottom:none;padding:12px 15px 14px 15px">
+                      <div style="display:flex;align-items:center;gap:11px;margin-bottom:11px">
+                        <div style="background:#d4a853;color:#141414;min-width:24px;height:24px;border-radius:50%;
+                                    display:flex;align-items:center;justify-content:center;font-weight:700;font-size:0.78rem">{_rank}</div>
+                        <div style="flex:1;min-width:0">
+                          <div style="color:#f0ede8;font-size:1.02rem;font-weight:600;line-height:1.15">{_gz}</div>
+                          <div style="color:#6a6a6a;font-size:0.7rem">{_dgz} día(s) trabajados</div>
+                        </div>
+                        <div style="color:#d4a853;font-size:1.4rem;font-weight:700;line-height:1">&rsaquo;</div>
+                      </div>
                       <div style="display:flex;gap:8px;justify-content:space-between">
                         <div style="flex:1;background:#1c1c1c;border-radius:9px;padding:7px 9px">
                           <div style="color:#7a7a7a;font-size:0.6rem;text-transform:uppercase;letter-spacing:0.04em">Venta</div>
@@ -26447,6 +26434,11 @@ elif modulo.startswith("🔍 Detalle Garzones"):
                         </div>
                       </div>
                     </div>""", unsafe_allow_html=True)
+                    # Botón full-width bajo la tarjeta (se ve como el pie de la tarjeta)
+                    if st.button("Ver detalle →", key=f"dggz-{_rank}", use_container_width=True):
+                        st.session_state["dg_nav"] = {"gz": _gz, "cat": None, "sku": None}
+                        st.rerun()
+                    st.markdown("<div style='margin-bottom:12px'></div>", unsafe_allow_html=True)
             # ═══ NIVEL 1: CATEGORÍAS del garzón (tarjeta, comparación vs promedio) ═══
             elif not _nav["cat"]:
                 _dfg = _df[_df["garzon"] == _nav["gz"]]
