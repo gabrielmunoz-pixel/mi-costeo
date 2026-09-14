@@ -26346,9 +26346,9 @@ elif modulo.startswith("🔍 Detalle Garzones"):
                 _crumbs.append((f"👤 {_nav['gz'].split()[0]}", "gz"))
             if _nav["cat"]:
                 _ic = _CAT_STYLE.get(_nav['cat'], ('', '▸'))[1]
-                _crumbs.append((f"{_ic} {_nav['cat']}", "cat"))
+                _crumbs.append((f"{_ic} {_nav['cat'].capitalize()}", "cat"))
             if _nav["sku"]:
-                _crumbs.append(("• producto", "sku"))
+                _crumbs.append(("🔍 Producto", "sku"))
             # Renderizar chips en fila (columnas ajustadas al número de niveles)
             _ncr = len(_crumbs)
             _bc_cols = st.columns(_ncr + (1 if _ncr < 4 else 0))
