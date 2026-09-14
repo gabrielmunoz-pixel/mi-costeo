@@ -26384,12 +26384,13 @@ elif modulo.startswith("🔍 Detalle Garzones"):
                             f"(Adic. prom: <b style='color:#c8c4be'>{_fpct(_prom_pa)}</b>) · toca una tarjeta para ver el detalle</div>",
                             unsafe_allow_html=True)
 
-                # CSS: botón compacto tipo chip SOLO dentro de este módulo (scope por clase)
+                # CSS: botón compacto tipo chip, alineado a la derecha y a la altura del nombre
                 st.markdown("""<style>
+                .dg-wrap div[data-testid="stButton"]{display:flex;justify-content:flex-end}
                 .dg-wrap div[data-testid="stButton"] button{
                     border-radius:9px;border:1px solid #3a3320;background:#221d10;
-                    color:#e8c76a;font-size:0.78rem;padding:3px 12px;min-height:0;height:auto;
-                    float:right;width:auto}
+                    color:#e8c76a;font-size:0.82rem;padding:5px 16px;min-height:0;height:auto;
+                    width:auto;margin-top:8px}
                 .dg-wrap div[data-testid="stButton"] button:hover{
                     background:#2e2714;border-color:#d4a853;color:#f0d98a}
                 </style>""", unsafe_allow_html=True)
@@ -26400,8 +26401,8 @@ elif modulo.startswith("🔍 Detalle Garzones"):
                     _sem_vt  = _sem(_vt, _prom_vt)
                     _sem_vdp = _sem(_vdp, _prom_vdp)
                     _sem_pa  = _sem(_pa, _prom_pa, es_pct=True)
-                    # Header: número + nombre (izq) | flecha visual (der) ── en columnas reales
-                    _hc1, _hc2 = st.columns([5, 1])
+                    # Header: número + nombre (izq) | botón Ver → (der, misma altura)
+                    _hc1, _hc2 = st.columns([3, 1])
                     with _hc1:
                         st.markdown(f"""
                         <div style="display:flex;align-items:center;gap:11px;padding-top:6px">
