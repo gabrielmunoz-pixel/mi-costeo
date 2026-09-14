@@ -26384,15 +26384,17 @@ elif modulo.startswith("🔍 Detalle Garzones"):
                             f"(Adic. prom: <b style='color:#c8c4be'>{_fpct(_prom_pa)}</b>) · toca una tarjeta para ver el detalle</div>",
                             unsafe_allow_html=True)
 
-                # CSS: botón compacto tipo chip, alineado a la derecha y a la altura del nombre
+                # CSS: sobreescribe el global (width:100% !important) SOLO para los
+                # botones de garzón, usando la clase .st-key-<key> que Streamlit añade.
                 st.markdown("""<style>
-                .dg-wrap div[data-testid="stButton"]{display:flex;justify-content:flex-end}
-                .dg-wrap div[data-testid="stButton"] button{
-                    border-radius:9px;border:1px solid #3a3320;background:#221d10;
-                    color:#e8c76a;font-size:0.82rem;padding:5px 16px;min-height:0;height:auto;
-                    width:auto;margin-top:8px}
-                .dg-wrap div[data-testid="stButton"] button:hover{
-                    background:#2e2714;border-color:#d4a853;color:#f0d98a}
+                div[class*="st-key-dggz-"] > div[data-testid="stButton"]{display:flex;justify-content:flex-end}
+                div[class*="st-key-dggz-"] button{
+                    width:auto !important;min-height:0 !important;height:auto !important;
+                    border-radius:9px !important;border:1px solid #3a3320 !important;
+                    background:#221d10 !important;color:#e8c76a !important;
+                    font-size:0.82rem !important;padding:6px 18px !important;margin-top:10px !important}
+                div[class*="st-key-dggz-"] button:hover{
+                    background:#2e2714 !important;border-color:#d4a853 !important;color:#f0d98a !important}
                 </style>""", unsafe_allow_html=True)
 
                 for _rank, _g in enumerate(_gz_stats, 1):
@@ -26414,11 +26416,9 @@ elif modulo.startswith("🔍 Detalle Garzones"):
                           </div>
                         </div>""", unsafe_allow_html=True)
                     with _hc2:
-                        st.markdown("<div class='dg-wrap'>", unsafe_allow_html=True)
-                        if st.button("Ver →", key=f"dg_gz_{_gz}", use_container_width=False):
+                        if st.button("Ver →", key=f"dggz-{_rank}", use_container_width=False):
                             st.session_state["dg_nav"] = {"gz": _gz, "cat": None, "sku": None}
                             st.rerun()
-                        st.markdown("</div>", unsafe_allow_html=True)
                     # Métricas debajo, ancho completo
                     st.markdown(f"""
                     <div style="background:#161616;border:1px solid #262626;border-left:3px solid #d4a853;
