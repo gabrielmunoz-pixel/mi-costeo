@@ -26384,12 +26384,13 @@ elif modulo.startswith("🔍 Detalle Garzones"):
                             f"(Adic. prom: <b style='color:#c8c4be'>{_fpct(_prom_pa)}</b>) · toca una tarjeta para ver el detalle</div>",
                             unsafe_allow_html=True)
 
-                # CSS: botones compactos tipo "chip" para el Ver → de cada tarjeta
+                # CSS: botón compacto tipo chip SOLO dentro de este módulo (scope por clase)
                 st.markdown("""<style>
-                div[data-testid="stButton"] button[kind="secondary"]{
+                .dg-wrap div[data-testid="stButton"] button{
                     border-radius:9px;border:1px solid #3a3320;background:#221d10;
-                    color:#e8c76a;font-size:0.8rem;padding:4px 10px;min-height:0;height:auto}
-                div[data-testid="stButton"] button[kind="secondary"]:hover{
+                    color:#e8c76a;font-size:0.78rem;padding:3px 12px;min-height:0;height:auto;
+                    float:right;width:auto}
+                .dg-wrap div[data-testid="stButton"] button:hover{
                     background:#2e2714;border-color:#d4a853;color:#f0d98a}
                 </style>""", unsafe_allow_html=True)
 
@@ -26399,32 +26400,28 @@ elif modulo.startswith("🔍 Detalle Garzones"):
                     _sem_vt  = _sem(_vt, _prom_vt)
                     _sem_vdp = _sem(_vdp, _prom_vdp)
                     _sem_pa  = _sem(_pa, _prom_pa, es_pct=True)
-                    # Contenedor de tarjeta abierto: header con nombre + botón a la misma altura
-                    st.markdown(f"""
-                    <div style="background:#161616;border:1px solid #262626;border-left:3px solid #d4a853;
-                                border-radius:14px 14px 0 0;border-bottom:none;padding:13px 15px 4px 15px">
-                      <div style="display:flex;align-items:center;gap:11px">
-                        <div style="background:#d4a853;color:#141414;min-width:24px;height:24px;border-radius:50%;
-                                    display:flex;align-items:center;justify-content:center;font-weight:700;font-size:0.78rem">{_rank}</div>
-                        <div style="flex:1">
-                          <div style="color:#f0ede8;font-size:1.02rem;font-weight:600;line-height:1.15">{_gz}</div>
-                          <div style="color:#6a6a6a;font-size:0.7rem">{_dgz} día(s) trabajados</div>
-                        </div>
-                      </div>
-                    </div>""", unsafe_allow_html=True)
-                    # Botón posicionado a la derecha, superpuesto a la altura del nombre
-                    _hc1, _hc2 = st.columns([4, 1])
+                    # Header: número + nombre (izq) | flecha visual (der) ── en columnas reales
+                    _hc1, _hc2 = st.columns([5, 1])
+                    with _hc1:
+                        st.markdown(f"""
+                        <div style="display:flex;align-items:center;gap:11px;padding-top:6px">
+                          <div style="background:#d4a853;color:#141414;min-width:24px;height:24px;border-radius:50%;
+                                      display:flex;align-items:center;justify-content:center;font-weight:700;font-size:0.78rem">{_rank}</div>
+                          <div>
+                            <div style="color:#f0ede8;font-size:1.02rem;font-weight:600;line-height:1.15">{_gz}</div>
+                            <div style="color:#6a6a6a;font-size:0.7rem">{_dgz} día(s) trabajados</div>
+                          </div>
+                        </div>""", unsafe_allow_html=True)
                     with _hc2:
-                        st.markdown("<div style='margin-top:-52px;position:relative;z-index:10'></div>",
-                                    unsafe_allow_html=True)
-                        if st.button("Ver →", key=f"dg_gz_{_gz}", use_container_width=True):
+                        st.markdown("<div class='dg-wrap'>", unsafe_allow_html=True)
+                        if st.button("Ver →", key=f"dg_gz_{_gz}", use_container_width=False):
                             st.session_state["dg_nav"] = {"gz": _gz, "cat": None, "sku": None}
                             st.rerun()
-                    # Métricas (cierre de la tarjeta)
+                        st.markdown("</div>", unsafe_allow_html=True)
+                    # Métricas debajo, ancho completo
                     st.markdown(f"""
                     <div style="background:#161616;border:1px solid #262626;border-left:3px solid #d4a853;
-                                border-radius:0 0 14px 14px;border-top:none;padding:2px 15px 10px 15px;
-                                margin-top:-14px;margin-bottom:10px">
+                                border-radius:12px;padding:9px 13px;margin:2px 0 12px 0">
                       <div style="display:flex;gap:8px;justify-content:space-between">
                         <div style="flex:1;background:#1c1c1c;border-radius:9px;padding:7px 9px">
                           <div style="color:#7a7a7a;font-size:0.6rem;text-transform:uppercase;letter-spacing:0.04em">Venta</div>
@@ -26443,7 +26440,6 @@ elif modulo.startswith("🔍 Detalle Garzones"):
                         </div>
                       </div>
                     </div>""", unsafe_allow_html=True)
-
             # ═══ NIVEL 1: CATEGORÍAS del garzón (tarjeta, comparación vs promedio) ═══
             elif not _nav["cat"]:
                 _dfg = _df[_df["garzon"] == _nav["gz"]]
