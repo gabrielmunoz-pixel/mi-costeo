@@ -3421,6 +3421,44 @@ def save_compras(df: pd.DataFrame):
             df[cols_ok].to_sql('compras', engine, if_exists='append',
                                index=False, method='multi', chunksize=500)
 
+        # ── Aplicar criterios de categorización a lo recién cargado ──
+        # Normalización corregida: translate(lower(...)) para que las tildes (incl.
+        # mayúsculas Ó) se limpien bien. Cascada: nombre exacto → proveedor;
+        # control: nombre exacto → keyword más larga (alcance).
+        with st.spinner("Categorizando productos…"):
+            _NORM = "regexp_replace(btrim(translate(lower({c}), 'áéíóúñü','aeiounu')), '\\s+',' ','g')"
+            with engine.begin() as _cx:
+                _cx.execute(text(f"""
+                    WITH base AS (
+                      SELECT id,
+                        {_NORM.format(c='nombre_producto')}  AS nom_norm,
+                        {_NORM.format(c='nombre_proveedor')} AS prov_norm
+                      FROM compras
+                      WHERE fecha_dte::date BETWEEN :fi AND :ff
+                    ),
+                    res AS (
+                      SELECT b.id,
+                        COALESCE(n.categoria, p.categoria) AS cat_final,
+                        COALESCE(n.categoria_control,
+                          (SELECT k.categoria_control FROM criterio_control_keywords k
+                           WHERE b.nom_norm LIKE '%'||k.keyword_norm||'%'
+                           ORDER BY k.largo DESC LIMIT 1)) AS ctrl_final,
+                        CASE WHEN n.categoria_control IS NOT NULL THEN 'exacto'
+                             WHEN EXISTS (SELECT 1 FROM criterio_control_keywords k
+                                          WHERE b.nom_norm LIKE '%'||k.keyword_norm||'%')
+                                  THEN 'alcance' ELSE NULL END AS ctrl_origen
+                      FROM base b
+                      LEFT JOIN criterio_categoria_nombre    n ON n.nombre_norm    = b.nom_norm
+                      LEFT JOIN criterio_categoria_proveedor p ON p.proveedor_norm = b.prov_norm
+                    )
+                    UPDATE compras c
+                    SET categoria_producto       = res.cat_final,
+                        categoria_control        = res.ctrl_final,
+                        categoria_control_origen = res.ctrl_origen
+                    FROM res
+                    WHERE c.id = res.id
+                """), {'fi': fecha_min, 'ff': fecha_max})
+
         st.success(f"✅ {total:,} registros guardados ({fecha_min} → {fecha_max}).")
     except Exception as e:
         st.error(f"Error al guardar compras: {e}")
