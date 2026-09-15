@@ -12982,35 +12982,46 @@ if modulo.startswith("📦"):
         _CATS_GEN = ["ALIMENTOS","BAR","VERDURAS","DESECHABLES","ADMINISTRACION",
                      "ART. LIMPIEZA","EQUIPAMIENTO","LOZA Y CRISTALERIA"]
 
-        # Traer productos pendientes (agrupados por nombre+proveedor)
-        _pend = run_query("""
-            SELECT nombre_producto, nombre_proveedor,
-                   MAX(sku) AS sku, MAX(subcat) AS subcat,
-                   MAX(conversion) AS conversion, MAX(formato) AS formato,
-                   COUNT(*) AS veces, SUM(costo_realfinal) AS monto
-            FROM compras
-            WHERE categoria_producto IS NULL
-            GROUP BY nombre_producto, nombre_proveedor
-            ORDER BY SUM(costo_realfinal) DESC NULLS LAST
-        """)
+        # Cargar pendientes UNA sola vez a memoria de sesión (botón / primera vez).
+        _cc1, _cc2 = st.columns([1, 3])
+        with _cc1:
+            _recargar = st.button("🔄 Cargar pendientes", key="cat_pend_load")
+        if _recargar or "cat_pend_df" not in st.session_state:
+            _pend = run_query("""
+                SELECT nombre_producto, nombre_proveedor,
+                       MAX(sku) AS sku, MAX(subcat) AS subcat,
+                       MAX(conversion) AS conversion, MAX(formato) AS formato,
+                       COUNT(*) AS veces, SUM(costo_realfinal) AS monto
+                FROM compras
+                WHERE categoria_producto IS NULL
+                GROUP BY nombre_producto, nombre_proveedor
+                ORDER BY SUM(costo_realfinal) DESC NULLS LAST
+            """)
+            if _pend is not None and not _pend.empty:
+                _pend = _pend.copy()
+                _pend["categoria_general"] = ""
+                _pend["categoria_control"] = ""
+                _pend = _pend[["nombre_producto","nombre_proveedor","categoria_general",
+                               "categoria_control","sku","conversion","formato","subcat",
+                               "veces","monto"]]
+            st.session_state["cat_pend_df"] = _pend
+            # opciones de control cacheadas junto con la data
+            _cats_ctrl_df = run_query("SELECT DISTINCT categoria_control FROM criterio_categoria_nombre WHERE categoria_control IS NOT NULL ORDER BY categoria_control")
+            st.session_state["cat_pend_ctrl_opts"] = [""] + (
+                _cats_ctrl_df["categoria_control"].tolist()
+                if _cats_ctrl_df is not None and not _cats_ctrl_df.empty else [])
+
+        _pend = st.session_state.get("cat_pend_df")
+        _CATS_CTRL = st.session_state.get("cat_pend_ctrl_opts", [""])
 
         if _pend is None or _pend.empty:
             st.success("✅ No hay productos pendientes de categorizar. Todo está asignado.")
         else:
-            _cats_ctrl_df = run_query("SELECT DISTINCT categoria_control FROM criterio_categoria_nombre WHERE categoria_control IS NOT NULL ORDER BY categoria_control")
-            _CATS_CTRL = [""] + (_cats_ctrl_df["categoria_control"].tolist() if _cats_ctrl_df is not None and not _cats_ctrl_df.empty else [])
-
-            st.info(f"**{len(_pend)}** producto(s) pendiente(s). Completa los campos y guarda cada uno.")
-
-            # Editor por fila: usamos data_editor para edición masiva
-            _ed = _pend.copy()
-            _ed["categoria_general"] = ""
-            _ed["categoria_control"] = ""
-            _ed = _ed[["nombre_producto","nombre_proveedor","categoria_general","categoria_control",
-                       "sku","conversion","formato","subcat","veces","monto"]]
+            st.info(f"**{len(_pend)}** producto(s) pendiente(s). Edita en la tabla y guarda todo junto. "
+                    "Solo se guardan las filas que tengan **Categoría General** asignada.")
 
             _edited = st.data_editor(
-                _ed, use_container_width=True, hide_index=True, key="cat_pend_editor",
+                _pend, use_container_width=True, hide_index=True, key="cat_pend_editor",
                 column_config={
                     "nombre_producto": st.column_config.TextColumn("Producto", disabled=True),
                     "nombre_proveedor": st.column_config.TextColumn("Proveedor", disabled=True),
@@ -13025,20 +13036,32 @@ if modulo.startswith("📦"):
                 },
             )
 
-            if st.button("💾 Guardar categorizaciones", type="primary", key="cat_pend_save"):
-                _n_ok = 0; _errs = []
+            if st.button("💾 Guardar todo", type="primary", key="cat_pend_save"):
+                # Preparar el LOTE (solo filas con categoría general asignada)
+                _lote_compras = []; _lote_maestro = []
                 for _, _row in _edited.iterrows():
                     _catg = (_row.get("categoria_general") or "").strip()
                     if not _catg:
-                        continue  # sin categoría general asignada → se omite
+                        continue
                     _nom = _row["nombre_producto"]; _prov = _row["nombre_proveedor"]
                     _ctrl = (_row.get("categoria_control") or "").strip() or None
-                    _sku = _row.get("sku"); _subcat = _row.get("subcat")
                     _conv = _row.get("conversion"); _fmt = _row.get("formato")
-                    _nom_norm = _norm_cat(_nom)
+                    _conv = None if pd.isna(_conv) else float(_conv)
+                    _fmt  = None if pd.isna(_fmt)  else float(_fmt)
+                    _lote_compras.append({
+                        "cat": _catg, "ctrl": _ctrl,
+                        "sku": (_row.get("sku") or None), "subcat": (_row.get("subcat") or None),
+                        "conv": _conv, "fmt": _fmt, "nom": _nom, "prov": _prov})
+                    _lote_maestro.append({
+                        "nn": _norm_cat(_nom), "orig": str(_nom).strip(),
+                        "cat": _catg, "ctrl": _ctrl})
+
+                if not _lote_compras:
+                    st.warning("No asignaste categoría general a ninguna fila. Nada que guardar.")
+                else:
                     try:
+                        # UN solo batch: dos executemany dentro de una transacción.
                         with get_engine().begin() as _cx:
-                            # 1) actualizar TODAS las filas de compras de ese producto+proveedor
                             _cx.execute(text("""
                                 UPDATE compras
                                 SET categoria_producto = :cat,
@@ -13050,26 +13073,20 @@ if modulo.startswith("📦"):
                                     formato = COALESCE(:fmt, formato)
                                 WHERE nombre_producto = :nom AND nombre_proveedor = :prov
                                   AND categoria_producto IS NULL
-                            """), {"cat": _catg, "ctrl": _ctrl, "sku": _sku, "subcat": _subcat,
-                                   "conv": _conv, "fmt": _fmt, "nom": _nom, "prov": _prov})
-                            # 2) alimentar el maestro de nombres (para match exacto futuro)
+                            """), _lote_compras)
                             _cx.execute(text("""
                                 INSERT INTO criterio_categoria_nombre (nombre_norm, nombre_original, categoria, categoria_control)
                                 VALUES (:nn, :orig, :cat, :ctrl)
                                 ON CONFLICT (nombre_norm) DO UPDATE
                                 SET categoria = EXCLUDED.categoria,
                                     categoria_control = EXCLUDED.categoria_control
-                            """), {"nn": _nom_norm, "orig": str(_nom).strip(), "cat": _catg, "ctrl": _ctrl})
-                        _n_ok += 1
+                            """), _lote_maestro)
+                        st.success(f"✅ {len(_lote_compras)} producto(s) guardado(s) en un solo lote.")
+                        st.session_state.pop("cat_pend_df", None)   # forzar recarga limpia
+                        st.cache_data.clear()
+                        st.rerun()
                     except Exception as _e_cat:
-                        _errs.append(f"{_nom}: {_e_cat}")
-                if _n_ok:
-                    st.success(f"✅ {_n_ok} producto(s) categorizado(s) y agregado(s) al maestro.")
-                    st.cache_data.clear()
-                if _errs:
-                    st.error("Errores:\n" + "\n".join(_errs[:10]))
-                if _n_ok and not _errs:
-                    st.rerun()
+                        st.error(f"Error al guardar el lote: {_e_cat}")
 
 elif modulo.startswith("🧮"):
     st.markdown(f"""
