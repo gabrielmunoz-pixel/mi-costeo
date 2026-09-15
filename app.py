@@ -12987,11 +12987,11 @@ if modulo.startswith("📦"):
             SELECT nombre_producto, nombre_proveedor,
                    MAX(sku) AS sku, MAX(subcat) AS subcat,
                    MAX(conversion) AS conversion, MAX(formato) AS formato,
-                   COUNT(*) AS veces, SUM(total_item) AS monto
+                   COUNT(*) AS veces, SUM(costo_realfinal) AS monto
             FROM compras
             WHERE categoria_producto IS NULL
             GROUP BY nombre_producto, nombre_proveedor
-            ORDER BY SUM(total_item) DESC NULLS LAST
+            ORDER BY SUM(costo_realfinal) DESC NULLS LAST
         """)
 
         if _pend is None or _pend.empty:
