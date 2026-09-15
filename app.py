@@ -1063,6 +1063,34 @@ def _init_db():
             registrado_por   text
         )""",
         "CREATE INDEX IF NOT EXISTS idx_salidas_insumos_local ON salidas_insumos (local, sku)",
+        # ══════════ MAESTROS DE CRITERIOS DE CATEGORIZACIÓN ══════════
+        # Criterio 1: match por NOMBRE de producto exacto (normalizado) → categoría
+        # general + categoría de control. nombre_norm es la clave de match.
+        """CREATE TABLE IF NOT EXISTS criterio_categoria_nombre (
+            nombre_norm      text       PRIMARY KEY,
+            nombre_original  text,
+            categoria        text,
+            categoria_control text,
+            fecha_registro   timestamp  NOT NULL DEFAULT now()
+        )""",
+        # Criterio 2: match por PROVEEDOR (normalizado) → categoría general (fallback).
+        """CREATE TABLE IF NOT EXISTS criterio_categoria_proveedor (
+            proveedor_norm   text       PRIMARY KEY,
+            proveedor_original text,
+            categoria        text,
+            fecha_registro   timestamp  NOT NULL DEFAULT now()
+        )""",
+        # Criterio 3: conversión para informe de costos (por nombre normalizado).
+        """CREATE TABLE IF NOT EXISTS criterio_conversion (
+            nombre_norm      text       PRIMARY KEY,
+            nombre_original  text,
+            conversion       double precision,
+            fecha_registro   timestamp  NOT NULL DEFAULT now()
+        )""",
+        # Columnas nuevas en compras: categoría de control + origen de su asignación
+        # (exacto / alcance / manual). Se añaden solo si no existen.
+        "ALTER TABLE compras ADD COLUMN IF NOT EXISTS categoria_control text",
+        "ALTER TABLE compras ADD COLUMN IF NOT EXISTS categoria_control_origen text",
     ]
     try:
         with engine.begin() as conn:
