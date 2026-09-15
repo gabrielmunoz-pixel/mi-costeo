@@ -8072,7 +8072,7 @@ if modulo.startswith("📦"):
     </div>
     """, unsafe_allow_html=True)
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab12, tab13, tab14 = st.tabs(["📖 Recetario", "🛒 Compras", "📈 Ventas", "🔀 Equivalencias SKU", "🔍 Auditoría Compras", "📦 Inventario / Uso", "🗂️ Clasificación", "🏷️ Auditoría Categorías", "🔗 Conciliador", "🏢 Proveedores", "🛍️ Estimador de Compras", "👥 Asistencia RRHH", "✅ Whitelist Garzones"])
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab12, tab13, tab14, tab15 = st.tabs(["📖 Recetario", "🛒 Compras", "📈 Ventas", "🔀 Equivalencias SKU", "🔍 Auditoría Compras", "📦 Inventario / Uso", "🗂️ Clasificación", "🏷️ Auditoría Categorías", "🔗 Conciliador", "🏢 Proveedores", "🛍️ Estimador de Compras", "👥 Asistencia RRHH", "✅ Whitelist Garzones", "🏷️ Categorización Pendiente"])
 
     with tab1:
         _rt1, _rt2, _rt3 = st.tabs(["📥 Carga Masiva", "✏️ Editor de Recetas", "📖 Recetario Oficial"])
@@ -12959,6 +12959,117 @@ if modulo.startswith("📦"):
                             st.cache_data.clear()
                             st.rerun()
 
+
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  TAB: 🏷️ CATEGORIZACIÓN PENDIENTE — asignar productos sin categoría
+    #  Muestra productos de `compras` con categoria_producto NULL (no matchearon).
+    #  Al asignar: actualiza compras Y alimenta los maestros (para futuros matches).
+    # ══════════════════════════════════════════════════════════════════════
+    with tab15:
+        st.markdown("### 🏷️ Categorización Pendiente")
+        st.caption("Productos de compras sin categoría general asignada (no matchearon "
+                   "por nombre ni por proveedor). Asígnalos aquí; se actualizan en compras "
+                   "y se agregan a los maestros para que matcheen a futuro.")
+
+        import unicodedata as _ud_cat, re as _re_cat
+        def _norm_cat(s):
+            if s is None: return ""
+            s = str(s).strip().lower()
+            s = "".join(c for c in _ud_cat.normalize("NFD", s) if _ud_cat.category(c) != "Mn")
+            return _re_cat.sub(r"\s+", " ", s).strip()
+
+        _CATS_GEN = ["ALIMENTOS","BAR","VERDURAS","DESECHABLES","ADMINISTRACION",
+                     "ART. LIMPIEZA","EQUIPAMIENTO","LOZA Y CRISTALERIA"]
+
+        # Traer productos pendientes (agrupados por nombre+proveedor)
+        _pend = run_query("""
+            SELECT nombre_producto, nombre_proveedor,
+                   MAX(sku) AS sku, MAX(subcat) AS subcat,
+                   MAX(conversion) AS conversion, MAX(formato) AS formato,
+                   COUNT(*) AS veces, SUM(total_item) AS monto
+            FROM compras
+            WHERE categoria_producto IS NULL
+            GROUP BY nombre_producto, nombre_proveedor
+            ORDER BY SUM(total_item) DESC NULLS LAST
+        """)
+
+        if _pend is None or _pend.empty:
+            st.success("✅ No hay productos pendientes de categorizar. Todo está asignado.")
+        else:
+            _cats_ctrl_df = run_query("SELECT DISTINCT categoria_control FROM criterio_categoria_nombre WHERE categoria_control IS NOT NULL ORDER BY categoria_control")
+            _CATS_CTRL = [""] + (_cats_ctrl_df["categoria_control"].tolist() if _cats_ctrl_df is not None and not _cats_ctrl_df.empty else [])
+
+            st.info(f"**{len(_pend)}** producto(s) pendiente(s). Completa los campos y guarda cada uno.")
+
+            # Editor por fila: usamos data_editor para edición masiva
+            _ed = _pend.copy()
+            _ed["categoria_general"] = ""
+            _ed["categoria_control"] = ""
+            _ed = _ed[["nombre_producto","nombre_proveedor","categoria_general","categoria_control",
+                       "sku","conversion","formato","subcat","veces","monto"]]
+
+            _edited = st.data_editor(
+                _ed, use_container_width=True, hide_index=True, key="cat_pend_editor",
+                column_config={
+                    "nombre_producto": st.column_config.TextColumn("Producto", disabled=True),
+                    "nombre_proveedor": st.column_config.TextColumn("Proveedor", disabled=True),
+                    "categoria_general": st.column_config.SelectboxColumn("Categoría General", options=_CATS_GEN, required=False),
+                    "categoria_control": st.column_config.SelectboxColumn("Categoría Control", options=_CATS_CTRL, required=False),
+                    "sku": st.column_config.TextColumn("SKU"),
+                    "conversion": st.column_config.NumberColumn("Conversión"),
+                    "formato": st.column_config.NumberColumn("Formato"),
+                    "subcat": st.column_config.TextColumn("Subcat"),
+                    "veces": st.column_config.NumberColumn("Veces", disabled=True),
+                    "monto": st.column_config.NumberColumn("Monto $", disabled=True, format="$%d"),
+                },
+            )
+
+            if st.button("💾 Guardar categorizaciones", type="primary", key="cat_pend_save"):
+                _n_ok = 0; _errs = []
+                for _, _row in _edited.iterrows():
+                    _catg = (_row.get("categoria_general") or "").strip()
+                    if not _catg:
+                        continue  # sin categoría general asignada → se omite
+                    _nom = _row["nombre_producto"]; _prov = _row["nombre_proveedor"]
+                    _ctrl = (_row.get("categoria_control") or "").strip() or None
+                    _sku = _row.get("sku"); _subcat = _row.get("subcat")
+                    _conv = _row.get("conversion"); _fmt = _row.get("formato")
+                    _nom_norm = _norm_cat(_nom)
+                    try:
+                        with get_engine().begin() as _cx:
+                            # 1) actualizar TODAS las filas de compras de ese producto+proveedor
+                            _cx.execute(text("""
+                                UPDATE compras
+                                SET categoria_producto = :cat,
+                                    categoria_control = :ctrl,
+                                    categoria_control_origen = CASE WHEN :ctrl IS NULL THEN NULL ELSE 'manual' END,
+                                    sku = COALESCE(:sku, sku),
+                                    subcat = COALESCE(:subcat, subcat),
+                                    conversion = COALESCE(:conv, conversion),
+                                    formato = COALESCE(:fmt, formato)
+                                WHERE nombre_producto = :nom AND nombre_proveedor = :prov
+                                  AND categoria_producto IS NULL
+                            """), {"cat": _catg, "ctrl": _ctrl, "sku": _sku, "subcat": _subcat,
+                                   "conv": _conv, "fmt": _fmt, "nom": _nom, "prov": _prov})
+                            # 2) alimentar el maestro de nombres (para match exacto futuro)
+                            _cx.execute(text("""
+                                INSERT INTO criterio_categoria_nombre (nombre_norm, nombre_original, categoria, categoria_control)
+                                VALUES (:nn, :orig, :cat, :ctrl)
+                                ON CONFLICT (nombre_norm) DO UPDATE
+                                SET categoria = EXCLUDED.categoria,
+                                    categoria_control = EXCLUDED.categoria_control
+                            """), {"nn": _nom_norm, "orig": str(_nom).strip(), "cat": _catg, "ctrl": _ctrl})
+                        _n_ok += 1
+                    except Exception as _e_cat:
+                        _errs.append(f"{_nom}: {_e_cat}")
+                if _n_ok:
+                    st.success(f"✅ {_n_ok} producto(s) categorizado(s) y agregado(s) al maestro.")
+                    st.cache_data.clear()
+                if _errs:
+                    st.error("Errores:\n" + "\n".join(_errs[:10]))
+                if _n_ok and not _errs:
+                    st.rerun()
 
 elif modulo.startswith("🧮"):
     st.markdown(f"""
