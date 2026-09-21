@@ -4907,10 +4907,13 @@ def generar_pdf_colaciones_local(comp, modo, fi, ff):
     return buf.getvalue()
 
 
-def generar_pdf_colaciones_individual(loc, fi, ff, df_dia, df_pers, modo):
+def generar_pdf_colaciones_individual(loc, fi, ff, df_dia, df_pers, modo,
+                                      pesos=None, nota_prorateo=""):
     """PDF ejecutivo de UN local: resumen + desglose diario + lista de personal.
-    df_dia : DataFrame [fecha, colaciones, turnos, ratio]
+    df_dia : DataFrame [fecha, colaciones, turnos, ratio]  (ya ponderado si aplica)
     df_pers: DataFrame [nombre, cargo, turnos, colacion_min_prom]  (personal del local)
+    pesos  : dict {'YYYY-MM-DD': 1.0|0.5|0.0} para marcar medios días ("½") en el desglose.
+    nota_prorateo: texto opcional que documenta el ajuste de prorateo (vacío = sin ajuste).
     """
     R = _cr_pdf_base()
     mm = R["mm"]; pal = R["pal"]; PS = R["ParagraphStyle"]; rc = R["rc"]
@@ -4994,7 +4997,11 @@ def generar_pdf_colaciones_individual(loc, fi, ff, df_dia, df_pers, modo):
     story += [Paragraph(
         "Ratio = colaciones servidas ÷ turnos trabajados. "
         "Referencia: &lt; 2,5 Normal · 2,5–3,0 Atención · &gt; 3,0 Alto.",
-        s(7.5, pal["CM"])), Spacer(1, 6*mm)]
+        s(7.5, pal["CM"]))]
+    if nota_prorateo:
+        story += [Spacer(1, 2*mm),
+                  Paragraph(str(nota_prorateo), s(7.5, pal["CG"], bold=True))]
+    story += [Spacer(1, 6*mm)]
 
     # ════════ 2) DESGLOSE DIARIO ════════
     story += [Paragraph("📅 DESGLOSE DIARIO", s(11, pal["CG"], bold=True)),
@@ -5013,9 +5020,12 @@ def generar_pdf_colaciones_individual(loc, fi, ff, df_dia, df_pers, modo):
             rr = r.get("ratio")
             est, ecol = _sem(rr)
             rtxt = (f"{rr:.2f}".replace(".", ",")) if not _pd.isna(rr) else "—"
+            _dow_txt = _DOW[f.weekday()]
+            if pesos and pesos.get(f.strftime("%Y-%m-%d")) == 0.5:
+                _dow_txt += " ½"
             rows.append([
                 Paragraph(f.strftime("%d-%m-%Y"), s(8, pal["CT"])),
-                Paragraph(_DOW[f.weekday()], s(8, pal["CT"])),
+                Paragraph(_dow_txt, s(8, pal["CT"])),
                 Paragraph(f"{int(r['colaciones']):,}", s(8, pal["CT"], align=TA_RIGHT)),
                 Paragraph(f"{int(r['turnos']):,}", s(8, pal["CT"], align=TA_RIGHT)),
                 Paragraph(rtxt, s(8, ecol, bold=True, align=TA_RIGHT)),
@@ -5188,7 +5198,8 @@ def _cr_conclusion_local(sub, periodos, modo, cp_red, caso):
     return " ".join(partes)
 
 
-def generar_pdf_colaciones_empresa(comp, modo, fi, ff, df_pers_dia=None, dias_sin_col=None):
+def generar_pdf_colaciones_empresa(comp, modo, fi, ff, df_pers_dia=None, dias_sin_col=None,
+                                   nota_prorateo=""):
     R = _cr_pdf_base()
     mm = R["mm"]; pal = R["pal"]; PS = R["ParagraphStyle"]
     TA_LEFT, TA_CENTER, TA_JUSTIFY = R["TA_LEFT"], R["TA_CENTER"], R["TA_JUSTIFY"]
@@ -5219,6 +5230,9 @@ def generar_pdf_colaciones_empresa(comp, modo, fi, ff, df_pers_dia=None, dias_si
         Spacer(1, 2*mm),
         HRFlowable(width="100%", color=pal["CG"], thickness=1.5),
         Spacer(1, 4*mm)]
+    if nota_prorateo:
+        story += [Paragraph(str(nota_prorateo), s(8, pal["CG"], bold=True, align=TA_CENTER)),
+                  Spacer(1, 3*mm)]
 
     periodos = sorted(comp["periodo"].unique())
     ult = periodos[-1]
@@ -15928,8 +15942,10 @@ elif modulo.startswith("📊"):
 
         # ── Render (persistente) ──
         if "cr_tur" in st.session_state and not st.session_state["cr_tur"].empty:
-            _cr_col = st.session_state.get("cr_col", pd.DataFrame())
-            _cr_tur = st.session_state["cr_tur"]
+            # .copy() obligatorio: session_state guarda la referencia; sin copiar,
+            # el prorateo se aplicaría de forma acumulativa en cada rerun.
+            _cr_col = st.session_state.get("cr_col", pd.DataFrame()).copy()
+            _cr_tur = st.session_state["cr_tur"].copy()
             _cr_meta = st.session_state.get("cr_meta", {})
 
             for _c in ("colaciones",):
@@ -15938,17 +15954,135 @@ elif modulo.startswith("📊"):
             for _c in ("turnos", "personas"):
                 _cr_tur[_c] = pd.to_numeric(_cr_tur[_c], errors="coerce").fillna(0)
 
+            # ════════ CALENDARIO DE PRORATEO (días completos / medios / excluidos) ═══
+            # Ajusta el rango a los días realmente operativos. Peso por día:
+            #   • Completo  (1,0) → entra normal.
+            #   • Medio día (0,5) → turnos y colaciones se ponderan al 50%.
+            #   • Excluido  (0,0) → se descarta por completo (numerador y denominador;
+            #     y sus RUT salen del conteo de personas del período).
+            # El set es GLOBAL (mismo para todos los locales) e impacta pantalla + 3 PDF.
+            # Invariante: sin ajustes (todo Completo) el módulo se comporta igual que antes.
+            _CR_PESO_LBL = {"Completo": 1.0, "Medio día": 0.5, "Excluido": 0.0}
+
+            # Fechas presentes en el rango (unión de asistencia y ventas)
+            _cr_series_fechas = []
+            if "fecha" in _cr_tur.columns:
+                _cr_series_fechas.append(_cr_tur["fecha"])
+            if (not _cr_col.empty) and "fecha" in _cr_col.columns:
+                _cr_series_fechas.append(_cr_col["fecha"])
+            if _cr_series_fechas:
+                _cr_fechas = (pd.to_datetime(pd.concat(_cr_series_fechas, ignore_index=True),
+                                             errors="coerce")
+                              .dropna().dt.normalize().drop_duplicates().sort_values())
+                _cr_iso = [d.strftime("%Y-%m-%d") for d in _cr_fechas]
+            else:
+                _cr_iso = []
+
+            # Estado persistente; se resetea si cambia el rango cargado
+            _cr_pesos_key = f"{_cr_meta.get('fi','')}|{_cr_meta.get('ff','')}"
+            if st.session_state.get("cr_pesos_key") != _cr_pesos_key:
+                st.session_state["cr_pesos_key"] = _cr_pesos_key
+                st.session_state["cr_pesos"] = {}
+            _cr_pesos = dict(st.session_state.get("cr_pesos", {}))
+
+            _DOW_CR = {0:"Lunes",1:"Martes",2:"Miércoles",3:"Jueves",
+                       4:"Viernes",5:"Sábado",6:"Domingo"}
+            with st.expander("🗓️ Calendario de días (ajuste de prorateo)", expanded=False):
+                st.caption(
+                    "Marca cada día como **Completo**, **Medio día** (turnos y colaciones "
+                    "al 50%) o **Excluido** (se descarta). Aplica a todos los locales, en "
+                    "pantalla y en los 3 PDF."
+                )
+                if not _cr_iso:
+                    st.info("No hay días con datos en el rango cargado.")
+                else:
+                    _cr_cal_df = pd.DataFrame({
+                        "Fecha": _cr_iso,
+                        "Día":   [_DOW_CR[pd.Timestamp(d).weekday()] for d in _cr_iso],
+                        "Jornada": [_cr_pesos.get(d, "Completo") for d in _cr_iso],
+                    })
+                    _cr_cal_ed = st.data_editor(
+                        _cr_cal_df,
+                        key=f"cr_cal_{_cr_pesos_key}",
+                        hide_index=True, use_container_width=True,
+                        column_config={
+                            "Fecha":   st.column_config.TextColumn("Fecha", disabled=True),
+                            "Día":     st.column_config.TextColumn("Día", disabled=True),
+                            "Jornada": st.column_config.SelectboxColumn(
+                                "Jornada", options=list(_CR_PESO_LBL.keys()),
+                                required=True, width="medium"),
+                        },
+                    )
+                    _cr_pesos = {
+                        str(r["Fecha"]): (r["Jornada"] if r["Jornada"] in _CR_PESO_LBL
+                                          else "Completo")
+                        for _, r in _cr_cal_ed.iterrows()
+                    }
+                    st.session_state["cr_pesos"] = _cr_pesos
+                    _n_med = sum(1 for v in _cr_pesos.values() if v == "Medio día")
+                    _n_exc = sum(1 for v in _cr_pesos.values() if v == "Excluido")
+                    if _n_med or _n_exc:
+                        st.success(f"Prorateo activo: {_n_exc} día(s) excluido(s) · "
+                                   f"{_n_med} medio(s) día(s).")
+                    else:
+                        st.caption("Sin ajustes: todos los días entran completos "
+                                   "(comportamiento estándar).")
+
+            # ── Derivados del calendario ──
+            _cr_wmap = {d: _CR_PESO_LBL.get(_cr_pesos.get(d, "Completo"), 1.0) for d in _cr_iso}
+            _cr_excl = [d for d, w in _cr_wmap.items() if w == 0.0]
+            _cr_med  = {d for d, w in _cr_wmap.items() if w == 0.5}
+            # Firma del calendario vigente (rango + pesos), para invalidar el ZIP
+            # guardado si el prorateo cambia después de generarlo.
+            _cr_cal_sig = (f"{_cr_pesos_key}|"
+                           + ";".join(f"{_d}:{_cr_wmap[_d]}" for _d in sorted(_cr_wmap)))
+            # Filtro SQL SOLO para excluidos (los medios no alteran el headcount de personas)
+            _cr_excl_sql = " AND fecha <> ALL(:cr_excl)" if _cr_excl else ""
+            _cr_excl_par = {"cr_excl": _cr_excl} if _cr_excl else {}
+
+            def _cr_fmt_iso(_s):
+                try:    return pd.Timestamp(_s).strftime("%d-%m")
+                except Exception: return str(_s)
+
+            # Nota para los PDF (vacía si no hay ajustes → salida idéntica a la actual)
+            _cr_nota_prorateo = ""
+            if _cr_excl or _cr_med:
+                _p1 = ("Excluidos: " + ", ".join(_cr_fmt_iso(d) for d in sorted(_cr_excl))
+                       ) if _cr_excl else ""
+                _p2 = ("Medios días (50%): " + ", ".join(_cr_fmt_iso(d) for d in sorted(_cr_med))
+                       ) if _cr_med else ""
+                _cr_nota_prorateo = ("Prorateo aplicado — "
+                                     + " · ".join(p for p in (_p1, _p2) if p) + ".")
+
+            def _cr_aplicar_peso(_df, _cols):
+                """Copia ponderada: descarta días excluidos y escala _cols por el peso del día."""
+                if _df is None or _df.empty or "fecha" not in _df.columns:
+                    return _df.copy() if _df is not None else _df
+                _o = _df.copy()
+                _w = (pd.to_datetime(_o["fecha"], errors="coerce")
+                      .dt.strftime("%Y-%m-%d").map(_cr_wmap).fillna(1.0))
+                _o = _o[_w > 0].copy()
+                _w = _w[_w > 0]
+                for _cc in _cols:
+                    if _cc in _o.columns:
+                        _o[_cc] = pd.to_numeric(_o[_cc], errors="coerce").fillna(0) * _w.values
+                return _o
+
+            # Fuentes por día ya ponderadas: TODO lo de abajo (pantalla y PDF) deriva de aquí
+            _cr_col = _cr_aplicar_peso(_cr_col, ["colaciones"])
+            _cr_tur = _cr_aplicar_peso(_cr_tur, ["turnos"])
+
             # ════════ 1) RESUMEN POR LOCAL ════════
             _cr_tur_loc = _cr_tur.groupby("local").agg(
                 turnos=("turnos", "sum"),
             ).reset_index()
             # personas distintas reales del período:
-            _cr_pers = run_query("""
+            _cr_pers = run_query(f"""
                 SELECT local, COUNT(DISTINCT rut) AS personas_periodo
                 FROM asistencia_rrhh
-                WHERE fecha BETWEEN :fi AND :ff AND trabajo = TRUE
+                WHERE fecha BETWEEN :fi AND :ff AND trabajo = TRUE{_cr_excl_sql}
                 GROUP BY local
-            """, {"fi": _cr_meta["fi"], "ff": _cr_meta["ff"]})
+            """, {"fi": _cr_meta["fi"], "ff": _cr_meta["ff"], **_cr_excl_par})
             _cr_tur_loc = _cr_tur_loc.merge(_cr_pers, on="local", how="left")
 
             if not _cr_col.empty:
@@ -16068,13 +16202,25 @@ elif modulo.startswith("📊"):
 
             if not _cr_dia.empty:
                 _cr_dia["alerta"] = _cr_dia["ratio"].apply(_cr_sem)
+                # Marca de jornada: "½" en medios días (los excluidos ya no aparecen).
+                _cr_dia_iso = pd.to_datetime(_cr_dia["fecha"], errors="coerce").dt.strftime("%Y-%m-%d")
+                _cr_dia = _cr_dia.assign(
+                    Jornada=[("½" if _d in _cr_med else "") for _d in _cr_dia_iso]
+                )
                 _cr_dia_show = _cr_dia.rename(columns={
                     "fecha": "Fecha", "colaciones": "Colaciones",
                     "turnos": "Turnos", "ratio": "Colac./turno", "alerta": "Alerta",
-                })[["Fecha", "Colaciones", "Turnos", "Colac./turno", "Alerta"]]
-                _cr_dia_show["Colaciones"] = _cr_dia_show["Colaciones"].astype(int)
-                _cr_dia_show["Turnos"] = _cr_dia_show["Turnos"].astype(int)
+                })[["Fecha", "Jornada", "Colaciones", "Turnos", "Colac./turno", "Alerta"]]
+                # round (no truncar): con medios días los totales pueden ser fraccionarios.
+                _cr_dia_show["Colaciones"] = _cr_dia_show["Colaciones"].round(0).astype(int)
+                _cr_dia_show["Turnos"] = _cr_dia_show["Turnos"].round(0).astype(int)
                 st.dataframe(_cr_dia_show, use_container_width=True, hide_index=True)
+                if _cr_excl or _cr_med:
+                    st.caption(
+                        f"Prorateo: {len(_cr_excl)} día(s) excluido(s) (no listados) · "
+                        f"{len(_cr_med)} medio(s) día(s) al 50% (marcados ½). "
+                        "Colaciones y turnos mostrados ya vienen ponderados."
+                    )
 
                 # ── Gráfico de tendencia: solo aplica con ≥ 3 días con dato ──
                 _cr_trend = _cr_dia.dropna(subset=["ratio"]).set_index("fecha")["ratio"]
@@ -16111,11 +16257,11 @@ elif modulo.startswith("📊"):
             )
 
             # Personas distintas por (local, fecha) para el ratio col/persona
-            _cr_pdia = run_query("""
+            _cr_pdia = run_query(f"""
                 SELECT local, fecha, rut
                 FROM asistencia_rrhh
-                WHERE fecha BETWEEN :fi AND :ff AND trabajo = TRUE
-            """, {"fi": _cr_meta["fi"], "ff": _cr_meta["ff"]})
+                WHERE fecha BETWEEN :fi AND :ff AND trabajo = TRUE{_cr_excl_sql}
+            """, {"fi": _cr_meta["fi"], "ff": _cr_meta["ff"], **_cr_excl_par})
             if _cr_pdia is None:
                 _cr_pdia = pd.DataFrame(columns=["local", "fecha", "rut"])
 
@@ -16159,16 +16305,16 @@ elif modulo.startswith("📊"):
                 else:
                     # Personal del local en el período (turnos y colación promedio).
                     # Personal que marca turno (todos menos admin/subadmin Art. 22).
-                    _cr_pers = run_query("""
+                    _cr_pers = run_query(f"""
                         SELECT TRIM(COALESCE(nombre,'') || ' ' || COALESCE(apellidos,'')) AS nombre,
                                MAX(cargo) AS cargo,
                                COUNT(*) FILTER (WHERE trabajo) AS turnos,
                                AVG(NULLIF(colacion_min,0)) FILTER (WHERE trabajo) AS colacion_min_prom
                         FROM asistencia_rrhh
-                        WHERE fecha BETWEEN :fi AND :ff AND local = :loc
+                        WHERE fecha BETWEEN :fi AND :ff AND local = :loc{_cr_excl_sql}
                         GROUP BY TRIM(COALESCE(nombre,'') || ' ' || COALESCE(apellidos,''))
                         HAVING COUNT(*) FILTER (WHERE trabajo) > 0
-                    """, {"fi": _cr_meta["fi"], "ff": _cr_meta["ff"], "loc": _cr_loc_sel})
+                    """, {"fi": _cr_meta["fi"], "ff": _cr_meta["ff"], "loc": _cr_loc_sel, **_cr_excl_par})
                     if _cr_pers is None:
                         _cr_pers = pd.DataFrame(columns=["nombre","cargo","turnos","colacion_min_prom"])
 
@@ -16176,14 +16322,14 @@ elif modulo.startswith("📊"):
                     # lista solo de forma informativa (nombre y cargo). NO se les
                     # cuenta turnos ni colación aquí: su aporte a la métrica ya está
                     # aplicado aparte (+1 persona y +1 turno por día activo).
-                    _cr_adm = run_query("""
+                    _cr_adm = run_query(f"""
                         SELECT DISTINCT
                                TRIM(COALESCE(nombre,'') || ' ' || COALESCE(apellidos,'')) AS nombre,
                                cargo
                         FROM asistencia_rrhh
-                        WHERE fecha BETWEEN :fi AND :ff AND local = :loc
+                        WHERE fecha BETWEEN :fi AND :ff AND local = :loc{_cr_excl_sql}
                           AND cargo IN ('Administrador','Sub Administrador')
-                    """, {"fi": _cr_meta["fi"], "ff": _cr_meta["ff"], "loc": _cr_loc_sel})
+                    """, {"fi": _cr_meta["fi"], "ff": _cr_meta["ff"], "loc": _cr_loc_sel, **_cr_excl_par})
                     if _cr_adm is not None and not _cr_adm.empty:
                         _cr_adm = _cr_adm.copy()
                         _cr_adm["turnos"] = None
@@ -16193,7 +16339,8 @@ elif modulo.startswith("📊"):
                         _pdf_loc = generar_pdf_colaciones_individual(
                             _cr_loc_sel, _cr_meta["fi"], _cr_meta["ff"],
                             _cr_dia[["fecha","colaciones","turnos","ratio"]].copy(),
-                            _cr_pers, _cr_modo)
+                            _cr_pers, _cr_modo,
+                            pesos=_cr_wmap, nota_prorateo=_cr_nota_prorateo)
                         st.download_button(
                             f"📄 PDF · {_cr_loc_sel}",
                             _pdf_loc,
@@ -16206,7 +16353,7 @@ elif modulo.startswith("📊"):
                 try:
                     _pdf_emp = generar_pdf_colaciones_empresa(
                         _cr_comp, _cr_modo, _cr_meta["fi"], _cr_meta["ff"], _cr_pdia,
-                        dias_sin_col=_cr_sincol)
+                        dias_sin_col=_cr_sincol, nota_prorateo=_cr_nota_prorateo)
                     st.download_button(
                         "🏢 PDF resumen empresa",
                         _pdf_emp,
@@ -16248,27 +16395,27 @@ elif modulo.startswith("📊"):
                                     _dia_z = _dia_z.sort_values("fecha")
 
                                     # Personal del local (mismo criterio que el PDF individual)
-                                    _pers_z = run_query("""
+                                    _pers_z = run_query(f"""
                                         SELECT TRIM(COALESCE(nombre,'') || ' ' || COALESCE(apellidos,'')) AS nombre,
                                                MAX(cargo) AS cargo,
                                                COUNT(*) FILTER (WHERE trabajo) AS turnos,
                                                AVG(NULLIF(colacion_min,0)) FILTER (WHERE trabajo) AS colacion_min_prom
                                         FROM asistencia_rrhh
-                                        WHERE fecha BETWEEN :fi AND :ff AND local = :loc
+                                        WHERE fecha BETWEEN :fi AND :ff AND local = :loc{_cr_excl_sql}
                                         GROUP BY TRIM(COALESCE(nombre,'') || ' ' || COALESCE(apellidos,''))
                                         HAVING COUNT(*) FILTER (WHERE trabajo) > 0
-                                    """, {"fi": _cr_meta["fi"], "ff": _cr_meta["ff"], "loc": _loc_z})
+                                    """, {"fi": _cr_meta["fi"], "ff": _cr_meta["ff"], "loc": _loc_z, **_cr_excl_par})
                                     if _pers_z is None:
                                         _pers_z = pd.DataFrame(columns=["nombre","cargo","turnos","colacion_min_prom"])
 
-                                    _adm_z = run_query("""
+                                    _adm_z = run_query(f"""
                                         SELECT DISTINCT
                                                TRIM(COALESCE(nombre,'') || ' ' || COALESCE(apellidos,'')) AS nombre,
                                                cargo
                                         FROM asistencia_rrhh
-                                        WHERE fecha BETWEEN :fi AND :ff AND local = :loc
+                                        WHERE fecha BETWEEN :fi AND :ff AND local = :loc{_cr_excl_sql}
                                           AND cargo IN ('Administrador','Sub Administrador')
-                                    """, {"fi": _cr_meta["fi"], "ff": _cr_meta["ff"], "loc": _loc_z})
+                                    """, {"fi": _cr_meta["fi"], "ff": _cr_meta["ff"], "loc": _loc_z, **_cr_excl_par})
                                     if _adm_z is not None and not _adm_z.empty:
                                         _adm_z = _adm_z.copy()
                                         _adm_z["turnos"] = None
@@ -16278,7 +16425,8 @@ elif modulo.startswith("📊"):
                                     _pdf_z = generar_pdf_colaciones_individual(
                                         _loc_z, _cr_meta["fi"], _cr_meta["ff"],
                                         _dia_z[["fecha","colaciones","turnos","ratio"]].copy(),
-                                        _pers_z, _cr_modo)
+                                        _pers_z, _cr_modo,
+                                        pesos=_cr_wmap, nota_prorateo=_cr_nota_prorateo)
                                     _safe = "".join(c if (c.isalnum() or c in " -_") else "_"
                                                     for c in str(_loc_z)).strip().replace(" ", "_")
                                     _zf.writestr(
@@ -16292,10 +16440,17 @@ elif modulo.startswith("📊"):
                         f"colaciones_{_zip_ok}locales_{_cr_meta['fi']}_{_cr_meta['ff']}.zip")
                     st.session_state["_cr_zip_errs"]  = _zip_errs
                     st.session_state["_cr_zip_ok"]    = _zip_ok
+                    st.session_state["_cr_zip_sig"]   = _cr_cal_sig
 
+                # Si el calendario cambió tras generar el ZIP (firma distinta), el
+                # ZIP guardado quedó desactualizado y se pide regenerarlo.
                 _zip_sfx = f"{_cr_meta['fi']}_{_cr_meta['ff']}.zip"
-                if (st.session_state.get("_cr_zip_bytes")
-                        and str(st.session_state.get("_cr_zip_name", "")).endswith(_zip_sfx)):
+                _zip_vigente = (
+                    st.session_state.get("_cr_zip_bytes")
+                    and str(st.session_state.get("_cr_zip_name", "")).endswith(_zip_sfx)
+                    and st.session_state.get("_cr_zip_sig") == _cr_cal_sig
+                )
+                if _zip_vigente:
                     st.download_button(
                         f"⬇️ Descargar ZIP ({st.session_state.get('_cr_zip_ok',0)} locales)",
                         st.session_state["_cr_zip_bytes"],
@@ -16305,6 +16460,10 @@ elif modulo.startswith("📊"):
                     if st.session_state.get("_cr_zip_errs"):
                         st.caption("⚠️ Locales omitidos: " +
                                    "; ".join(st.session_state["_cr_zip_errs"]))
+                elif (st.session_state.get("_cr_zip_bytes")
+                      and str(st.session_state.get("_cr_zip_name", "")).endswith(_zip_sfx)):
+                    st.caption("♻️ El calendario cambió: vuelve a generar el ZIP para "
+                               "reflejar el prorateo.")
                 else:
                     st.caption("Genera un PDF por cada local del rango, empaquetados en un ZIP.")
 
