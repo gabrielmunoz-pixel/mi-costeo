@@ -26737,33 +26737,33 @@ elif modulo.startswith("🔍 Detalle Garzones"):
                     # borde inferior redondeado solo si NO hay botón debajo (categoría vacía)
                     _br = "12px" if _empty else "12px 12px 0 0"
                     _bb = "1px solid #262626" if _empty else "none"
-                    st.markdown(f"""
-                    <div style="background:#161616;border:1px solid #262626;border-left:4px solid {_col};
-                                border-radius:{_br};border-bottom:{_bb};padding:12px 15px 14px 15px;
-                                margin-bottom:{'12px' if _empty else '0'};opacity:{'0.4' if _empty else '1'}">
-                      <div style="display:flex;align-items:center;gap:10px;margin-bottom:11px">
-                        <span style="font-size:1.25rem">{_ico}</span>
-                        <span style="flex:1;color:{_col};font-size:0.98rem;font-weight:700;letter-spacing:0.02em">{_cat}</span>
-                        {'' if _empty else f'<span style="color:{_col};font-size:1.4rem;font-weight:700;line-height:1">&rsaquo;</span>'}
-                      </div>
-                      <div style="display:flex;gap:8px;justify-content:space-between">
-                        <div style="flex:1;background:#1c1c1c;border-radius:9px;padding:7px 9px">
-                          <div style="color:#7a7a7a;font-size:0.6rem;text-transform:uppercase">Venta</div>
-                          <div style="color:#f0ede8;font-size:0.9rem;font-weight:700">{_fmoney(_vc)}</div>
-                          {_sem_vc}
-                        </div>
-                        <div style="flex:1;background:#1c1c1c;border-radius:9px;padding:7px 9px">
-                          <div style="color:#7a7a7a;font-size:0.6rem;text-transform:uppercase">Unidades</div>
-                          <div style="color:#f0ede8;font-size:0.9rem;font-weight:700">{_fq(_qc)}</div>
-                          {_sem_qc}
-                        </div>
-                        <div style="flex:1;background:#1c1c1c;border-radius:9px;padding:7px 9px">
-                          <div style="color:#7a7a7a;font-size:0.6rem;text-transform:uppercase">% venta</div>
-                          <div style="color:{_col};font-size:0.9rem;font-weight:700">{_fpct(_pc)}</div>
-                          {_sem_pc}
-                        </div>
-                      </div>
-                    </div>""", unsafe_allow_html=True)
+                    _flecha = '' if _empty else f'<span style="color:{_col};font-size:1.4rem;font-weight:700;line-height:1">&rsaquo;</span>'
+                    _mb = '12px' if _empty else '0'
+                    _op = '0.4' if _empty else '1'
+                    _html_cat = (
+f'<div style="background:#161616;border:1px solid #262626;border-left:4px solid {_col};border-radius:{_br};border-bottom:{_bb};padding:12px 15px 14px 15px;margin-bottom:{_mb};opacity:{_op}">'
+f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:11px">'
+f'<span style="font-size:1.25rem">{_ico}</span>'
+f'<span style="flex:1;color:{_col};font-size:0.98rem;font-weight:700;letter-spacing:0.02em">{_cat}</span>'
+f'{_flecha}'
+f'</div>'
+f'<div style="display:flex;gap:8px;justify-content:space-between">'
+f'<div style="flex:1;background:#1c1c1c;border-radius:9px;padding:7px 9px">'
+f'<div style="color:#7a7a7a;font-size:0.6rem;text-transform:uppercase">Venta</div>'
+f'<div style="color:#f0ede8;font-size:0.9rem;font-weight:700">{_fmoney(_vc)}</div>{_sem_vc}'
+f'</div>'
+f'<div style="flex:1;background:#1c1c1c;border-radius:9px;padding:7px 9px">'
+f'<div style="color:#7a7a7a;font-size:0.6rem;text-transform:uppercase">Unidades</div>'
+f'<div style="color:#f0ede8;font-size:0.9rem;font-weight:700">{_fq(_qc)}</div>{_sem_qc}'
+f'</div>'
+f'<div style="flex:1;background:#1c1c1c;border-radius:9px;padding:7px 9px">'
+f'<div style="color:#7a7a7a;font-size:0.6rem;text-transform:uppercase">% venta</div>'
+f'<div style="color:{_col};font-size:0.9rem;font-weight:700">{_fpct(_pc)}</div>{_sem_pc}'
+f'</div>'
+f'</div>'
+f'</div>'
+                    )
+                    st.markdown(_html_cat, unsafe_allow_html=True)
                     if not _empty:
                         if st.button("Ver →", key=f"dgcat-{_cat}", use_container_width=True):
                             st.session_state["dg_nav"]["cat"] = _cat
