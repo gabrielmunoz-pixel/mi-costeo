@@ -13748,6 +13748,16 @@ elif modulo.startswith("📊"):
                         import base64 as _b64_vd
                         _wb_out = _oxl.load_workbook(_io_exp.BytesIO(_b64_vd.b64decode(_VENTAS_DIARIAS_TEMPLATE_B64)))
                         _ws_out = _wb_out['INF DIARIO 15']
+                        # Copia solo-lectura con los valores cacheados por Excel: el histórico
+                        # (filas 40/41/45, meses cerrados) viene como FÓRMULAS, y openpyxl no
+                        # las evalúa. Para los gráficos leemos esos valores desde aquí.
+                        try:
+                            _wb_vals = _oxl.load_workbook(
+                                _io_exp.BytesIO(_b64_vd.b64decode(_VENTAS_DIARIAS_TEMPLATE_B64)),
+                                data_only=True)
+                            _ws_vals = _wb_vals['INF DIARIO 15']
+                        except Exception:
+                            _ws_vals = None
 
                         _exp_año = _exp_fecha.year
                         _exp_mes = _exp_fecha.month
@@ -14028,6 +14038,13 @@ elif modulo.startswith("📊"):
                                     g_val = ws.cell(row, 7).value
                                     try:
                                         return float(g_val) / int(_exp_dias_cal) * _exp_dias_mes if int(_exp_dias_cal) > 0 else 0.0
+                                    except (TypeError, ValueError):
+                                        return 0.0
+                                # Fórmula del histórico (meses cerrados): usar el valor
+                                # cacheado por Excel (openpyxl no evalúa fórmulas).
+                                if _ws_vals is not None:
+                                    try:
+                                        return float(_ws_vals.cell(row, col).value)
                                     except (TypeError, ValueError):
                                         return 0.0
                                 return 0.0
