@@ -1569,6 +1569,7 @@ _PP_CRITERIOS = {
 }
 
 
+@st.cache_data(ttl=300, show_spinner=False)
 def _pp_perfil_dow(ini, fin, local, criterio="max", excluir_cp=False, solo_skus=None):
     """Igual que _cp_maximos_por_dia pero con criterio de agregación seleccionable
     sobre las ocurrencias de cada día de semana dentro del RANGO DE MUESTRA [ini, fin].
@@ -1703,6 +1704,7 @@ def _pp_ranking_similitud(mens, dow, cat, mes_obj, cats_orden):
     return _pd.DataFrame(rows).sort_values("score", ascending=False).reset_index(drop=True)
 
 
+@st.cache_data(ttl=300, show_spinner=False)
 def _pp_comparar_meses(locales, mes_obj, meses_atras=24):
     """Consulta ventas y rankea meses históricos por parecido a 'mes_obj' (YYYY-MM)
     para la lista de 'locales'. Devuelve (df_ranking, meta) o (None, None)."""
@@ -26183,20 +26185,36 @@ elif modulo.startswith("🏭 Proyecto Producción"):
             _cmp_sem = st.date_input("Semana objetivo (elige cualquier día de esa semana)",
                                      value=_pp_dt.date.today(), key="pp_cmp_sem")
         with _cmp_c2:
-            _cmp_atras = st.slider("Meses a comparar", 6, 36, 24, key="pp_cmp_atras")
+            _cmp_atras = st.slider("Meses a comparar", 6, 36, 12, key="pp_cmp_atras")
         _cmp_mes_obj = _cmp_sem.strftime("%Y-%m")
         st.caption(f"Mes objetivo: **{_cmp_mes_obj}** (mes de la semana elegida).")
+        # La comparación es costosa (3 consultas de varios meses): se ejecuta solo al
+        # pulsar el botón y el resultado se guarda, para no re-consultar en cada rerun
+        # ni al trabajar en la otra pestaña.
+        _cmp_sig = f"{_cmp_mes_obj}|{_cmp_atras}|{','.join(sorted(_cmp_locs))}"
+        if st.button("🔎 Buscar mes similar", key="pp_cmp_go",
+                     disabled=not _cmp_locs, use_container_width=True):
+            with st.spinner("Comparando meses…"):
+                st.session_state["pp_cmp_res"] = _pp_comparar_meses(
+                    tuple(_cmp_locs), _cmp_mes_obj, _cmp_atras)
+                st.session_state["pp_cmp_sig"] = _cmp_sig
         if not _cmp_locs:
             st.info("Elige al menos un local.")
+        elif st.session_state.get("pp_cmp_res") is None:
+            st.info("Ajusta los filtros y pulsa **🔎 Buscar mes similar**.")
         else:
-            _cmp_df, _cmp_meta = _pp_comparar_meses(_cmp_locs, _cmp_mes_obj, _cmp_atras)
-            if _cmp_df is None or _cmp_df.empty:
-                st.warning(f"No hay datos suficientes para comparar el mes {_cmp_mes_obj}. "
+            if st.session_state.get("pp_cmp_sig") != _cmp_sig:
+                st.caption("⚠️ Cambiaste los filtros: vuelve a pulsar **🔎 Buscar mes similar** "
+                           "para actualizar el resultado.")
+            _cmp_df, _cmp_meta = st.session_state["pp_cmp_res"]
+            if _cmp_df is None or (hasattr(_cmp_df, "empty") and _cmp_df.empty):
+                _cmp_mo = str(st.session_state.get("pp_cmp_sig", "|")).split("|")[0]
+                st.warning(f"No hay datos suficientes para comparar el mes {_cmp_mo}. "
                            "Revisa que ese mes tenga ventas para los locales elegidos y "
                            "amplía los meses a comparar.")
             else:
                 _cmp_best = _cmp_df.iloc[0]
-                st.success(f"📌 Mes más parecido a {_cmp_mes_obj}: **{_cmp_best['mes']}** — "
+                st.success(f"📌 Mes más parecido: **{_cmp_best['mes']}** — "
                            f"similitud **{_cmp_best['score']:.0f}%** "
                            f"({int(_cmp_best['dias'])} días con venta).")
                 _cmp_show = _cmp_df.rename(columns={
@@ -26284,7 +26302,7 @@ elif modulo.startswith("🏭 Proyecto Producción"):
         for _loc in _pp_locales_iter:
             # Perfil por día de semana desde el RANGO DE MUESTRA, con el criterio elegido
             _perfil = _pp_perfil_dow(_pp_m_ini, _pp_m_fin, _loc, criterio=_pp_crit,
-                                     excluir_cp=not _pp_incl, solo_skus=set(_SKR_SKU_CAT))
+                                     excluir_cp=not _pp_incl, solo_skus=tuple(sorted(_SKR_SKU_CAT)))
             if not _perfil:
                 _pp_sincfg.append(_loc)
                 continue
