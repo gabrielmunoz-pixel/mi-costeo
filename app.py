@@ -1618,6 +1618,146 @@ def _pp_perfil_dow(ini, fin, local, criterio="max", excluir_cp=False, solo_skus=
     return out
 
 
+# ── Proyecto Producción · Comparador: mes histórico más parecido al objetivo ──
+def _pp_sim_escalar(a, b):
+    """Similitud 0-100 entre dos escalares (cercanía relativa)."""
+    a = float(a or 0); b = float(b or 0)
+    m = max(a, b)
+    if m <= 0:
+        return 100.0
+    return 100.0 * (1 - abs(a - b) / m)
+
+
+def _pp_sim_frac(a, b):
+    """Similitud 0-100 entre dos fracciones (ambas en [0,1])."""
+    return 100.0 * (1 - min(abs(float(a or 0) - float(b or 0)), 1.0))
+
+
+def _pp_sim_dist(va, vb):
+    """Similitud 0-100 entre dos vectores comparando su FORMA (normaliza a
+    proporción y usa distancia de variación total). None si algún vector es vacío."""
+    sa = float(sum(va)); sb = float(sum(vb))
+    if sa <= 0 or sb <= 0:
+        return None
+    tvd = 0.5 * sum(abs(a / sa - b / sb) for a, b in zip(va, vb))
+    return 100.0 * (1 - tvd)
+
+
+def _pp_ranking_similitud(mens, dow, cat, mes_obj, cats_orden):
+    """Rankea los meses de 'mens' por similitud compuesta al 'mes_obj'.
+    mens: DF [mes, venta, venta_deliv, dias]; dow: DF [mes, dow, venta];
+    cat: DF [mes, categoria, u] (o None). Escalares se comparan POR DÍA OPERATIVO
+    para que un mes objetivo parcial (en curso) compare de forma justa."""
+    import pandas as _pd
+    if mens is None or mens.empty or mes_obj not in set(mens["mes"]):
+        return None
+    mens = mens.copy()
+    for _c in ("venta", "venta_deliv", "dias"):
+        mens[_c] = _pd.to_numeric(mens[_c], errors="coerce").fillna(0)
+    mens["venta_dia"] = mens.apply(lambda r: (r["venta"] / r["dias"]) if r["dias"] else 0.0, axis=1)
+    mens["deliv_frac"] = mens.apply(lambda r: (r["venta_deliv"] / r["venta"]) if r["venta"] else 0.0, axis=1)
+    _dias = dict(zip(mens["mes"], mens["dias"]))
+    # Unidades de proteínas por mes (total) y perfiles de forma
+    _up, _dowp, _mixp = {}, {}, {}
+    if cat is not None and not cat.empty:
+        cat = cat.copy()
+        cat["u"] = _pd.to_numeric(cat["u"], errors="coerce").fillna(0)
+        _up = cat.groupby("mes")["u"].sum().to_dict()
+        for _m, _g in cat.groupby("mes"):
+            _v = {c: float(x) for c, x in zip(_g["categoria"], _g["u"])}
+            _mixp[_m] = [_v.get(c, 0.0) for c in cats_orden]
+    if dow is not None and not dow.empty:
+        dow = dow.copy()
+        dow["venta"] = _pd.to_numeric(dow["venta"], errors="coerce").fillna(0)
+        for _m, _g in dow.groupby("mes"):
+            _v = {int(d): float(x) for d, x in zip(_g["dow"], _g["venta"])}
+            _dowp[_m] = [_v.get(d, 0.0) for d in range(7)]
+    _f = mens.set_index("mes")
+    o = mes_obj
+    o_vd = _f.at[o, "venta_dia"]
+    o_ud = (_up.get(o, 0.0) / _dias.get(o, 1)) if _dias.get(o) else 0.0
+    o_dl = _f.at[o, "deliv_frac"]
+    rows = []
+    for m in _f.index:
+        if m == o:
+            continue
+        c_vd = _f.at[m, "venta_dia"]
+        c_ud = (_up.get(m, 0.0) / _dias.get(m, 1)) if _dias.get(m) else 0.0
+        c_dl = _f.at[m, "deliv_frac"]
+        s_venta = _pp_sim_escalar(o_vd, c_vd)
+        s_unit = _pp_sim_escalar(o_ud, c_ud)
+        s_deliv = _pp_sim_frac(o_dl, c_dl)
+        s_dow = _pp_sim_dist(_dowp.get(o), _dowp.get(m)) if (o in _dowp and m in _dowp) else None
+        s_mix = _pp_sim_dist(_mixp.get(o), _mixp.get(m)) if (o in _mixp and m in _mixp) else None
+        _comps = [x for x in [s_venta, s_unit, s_deliv, s_dow, s_mix] if x is not None]
+        _score = sum(_comps) / len(_comps) if _comps else 0.0
+        rows.append({
+            "mes": m, "score": round(_score, 1),
+            "venta_dia": round(s_venta), "unid_dia": round(s_unit),
+            "dow": (round(s_dow) if s_dow is not None else None),
+            "mix": (round(s_mix) if s_mix is not None else None),
+            "delivery": round(s_deliv), "dias": int(_f.at[m, "dias"]),
+        })
+    if not rows:
+        return None
+    return _pd.DataFrame(rows).sort_values("score", ascending=False).reset_index(drop=True)
+
+
+def _pp_comparar_meses(locales, mes_obj, meses_atras=24):
+    """Consulta ventas y rankea meses históricos por parecido a 'mes_obj' (YYYY-MM)
+    para la lista de 'locales'. Devuelve (df_ranking, meta) o (None, None)."""
+    import datetime as _dt
+    if not locales:
+        return None, None
+    try:
+        _oy, _om = map(int, mes_obj.split("-"))
+    except Exception:
+        return None, None
+    _y, _m = _oy, _om - int(meses_atras)
+    while _m <= 0:
+        _m += 12; _y -= 1
+    _desde = _dt.date(_y, _m, 1)
+    _locs_up = [str(l).strip().upper() for l in locales]
+    _params = {"d": str(_desde), "locs": _locs_up}
+    _loc_sql = "AND UPPER(TRIM(local)) = ANY(:locs)"
+    _mens = run_query(f"""
+        SELECT to_char(fecha_venta,'YYYY-MM') AS mes,
+               SUM(monto_venta_real) AS venta,
+               SUM(monto_venta_real) FILTER (WHERE origen IS NOT NULL AND origen <> '') AS venta_deliv,
+               COUNT(DISTINCT fecha_venta) AS dias
+        FROM ventas
+        WHERE fecha_venta >= :d {_loc_sql}
+        GROUP BY 1
+    """, _params)
+    if _mens is None or _mens.empty or mes_obj not in set(_mens["mes"]):
+        return None, None
+    _dow = run_query(f"""
+        SELECT to_char(fecha_venta,'YYYY-MM') AS mes,
+               EXTRACT(DOW FROM fecha_venta)::int AS dow,
+               SUM(monto_venta_real) AS venta
+        FROM ventas
+        WHERE fecha_venta >= :d {_loc_sql}
+        GROUP BY 1,2
+    """, _params)
+    _skus = list(_SKR_SKU_CAT.keys())
+    _catq = run_query(f"""
+        SELECT to_char(fecha_venta,'YYYY-MM') AS mes,
+               sku_producto, SUM(cantidad_vendida) AS u
+        FROM ventas
+        WHERE fecha_venta >= :d {_loc_sql} AND sku_producto = ANY(:skus)
+        GROUP BY 1,2
+    """, {**_params, "skus": _skus})
+    _cat = None
+    if _catq is not None and not _catq.empty:
+        _catq = _catq.copy()
+        _catq["categoria"] = _catq["sku_producto"].map(_SKR_SKU_CAT)
+        _catq = _catq[_catq["categoria"].notna()]
+        if not _catq.empty:
+            _cat = _catq.groupby(["mes", "categoria"], as_index=False)["u"].sum()
+    _rk = _pp_ranking_similitud(_mens, _dow, _cat, mes_obj, list(_SKR_CATS))
+    return _rk, {"mes_obj": mes_obj, "desde": str(_desde)}
+
+
 def init_exclusiones():
     """Crea las tablas compras_excluidas y sku_colacion si no existen."""
     engine = get_engine()
@@ -26026,194 +26166,246 @@ elif modulo.startswith("🏭 Proyecto Producción"):
         </div>
     </div>
     """, unsafe_allow_html=True)
-    st.markdown("<div class='info-box'>Estima la <b>producción propia de cada local</b> de las 4 "
-                "materias primas de control (<b>POSTA, FILETE, LOMO LISO, LOMO VETADO</b>), orientado "
-                "al proyecto de centralización en planta. El perfil de demanda por día de semana se "
-                "calcula con el <b>criterio elegido</b> sobre el <b>rango de muestra</b> (histórico) y "
-                "se proyecta sobre el <b>rango a proyectar</b>. Los kilos son <b>brutos</b> (con "
-                "rendimiento de receta aplicado).</div>",
-                unsafe_allow_html=True)
 
-    _PP_LOCALES = ["Vitacura", "Las Condes", "Macul", "Los Trapenses", "Quilin"]
-    _PP_DOW = {0: "Lun", 1: "Mar", 2: "Mié", 3: "Jue", 4: "Vie", 5: "Sáb", 6: "Dom"}
+    _pp_tab_proj, _pp_tab_cmp = st.tabs(["📊 Proyección", "🔎 Mes similar"])
 
-    # Recetario oficial requerido para la explosión a materia prima
-    _pp_chk = run_query("SELECT COUNT(*) AS n FROM recetas_oficial")
-    if _pp_chk is None or _pp_chk.empty or int(_pp_chk["n"].iloc[0]) == 0:
-        st.warning("⚠️ No hay **recetario oficial** cargado. Cárgalo en "
-                   "**Gestión de Datos → Recetario → Recetario Oficial**.")
-        st.stop()
+    with _pp_tab_cmp:
+        st.markdown("<div class='info-box'>Encuentra el <b>mes histórico más parecido</b> al "
+                    "mes de la <b>semana objetivo</b>, para proponerlo como base de muestra. "
+                    "Compara con todos los criterios disponibles: venta $/día operativo, "
+                    "unidades de proteínas/día, perfil por día de semana, mix de proteínas y "
+                    "% delivery.</div>", unsafe_allow_html=True)
+        _PP_LOCALES_CMP = ["Vitacura", "Las Condes", "Macul", "Los Trapenses", "Quilin"]
+        _cmp_locs = st.multiselect("Locales", _PP_LOCALES_CMP, default=_PP_LOCALES_CMP,
+                                   key="pp_cmp_locs", help="Uno, varios o todos.")
+        _cmp_c1, _cmp_c2 = st.columns([2, 1])
+        with _cmp_c1:
+            _cmp_sem = st.date_input("Semana objetivo (elige cualquier día de esa semana)",
+                                     value=_pp_dt.date.today(), key="pp_cmp_sem")
+        with _cmp_c2:
+            _cmp_atras = st.slider("Meses a comparar", 6, 36, 24, key="pp_cmp_atras")
+        _cmp_mes_obj = _cmp_sem.strftime("%Y-%m")
+        st.caption(f"Mes objetivo: **{_cmp_mes_obj}** (mes de la semana elegida).")
+        if not _cmp_locs:
+            st.info("Elige al menos un local.")
+        else:
+            _cmp_df, _cmp_meta = _pp_comparar_meses(_cmp_locs, _cmp_mes_obj, _cmp_atras)
+            if _cmp_df is None or _cmp_df.empty:
+                st.warning(f"No hay datos suficientes para comparar el mes {_cmp_mes_obj}. "
+                           "Revisa que ese mes tenga ventas para los locales elegidos y "
+                           "amplía los meses a comparar.")
+            else:
+                _cmp_best = _cmp_df.iloc[0]
+                st.success(f"📌 Mes más parecido a {_cmp_mes_obj}: **{_cmp_best['mes']}** — "
+                           f"similitud **{_cmp_best['score']:.0f}%** "
+                           f"({int(_cmp_best['dias'])} días con venta).")
+                _cmp_show = _cmp_df.rename(columns={
+                    "mes": "Mes", "score": "Similitud %", "venta_dia": "Venta/día %",
+                    "unid_dia": "Unid. prot/día %", "dow": "Perfil semana %",
+                    "mix": "Mix proteínas %", "delivery": "Delivery %", "dias": "Días c/venta"})
+                st.dataframe(_cmp_show, use_container_width=True, hide_index=True)
+                st.caption("Cada columna es el % de parecido en ese criterio (100% = idéntico); "
+                           "la Similitud % es su promedio. Montos y unidades se comparan por día "
+                           "operativo, para que un mes objetivo parcial compare de forma justa.")
+                if st.button(f"Usar {_cmp_best['mes']} como rango de muestra", key="pp_cmp_use"):
+                    import calendar as _cmp_cal
+                    _by, _bm = map(int, _cmp_best["mes"].split("-"))
+                    _bdim = _cmp_cal.monthrange(_by, _bm)[1]
+                    st.session_state["pp_m_ini"] = _pp_dt.date(_by, _bm, 1)
+                    st.session_state["pp_m_fin"] = _pp_dt.date(_by, _bm, _bdim)
+                    st.success(f"Rango de muestra fijado a {_cmp_best['mes']}. "
+                               "Abre la pestaña 📊 Proyección.")
+                    st.rerun()
 
-    # ── Controles: rango de muestra (base) + rango a proyectar ──
-    _pp_hoy = _pp_dt.date.today()
-    st.markdown("**1) Rango de muestra** — historia base para el perfil por día de semana")
-    _ppm1, _ppm2 = st.columns(2)
-    with _ppm1:
-        _pp_m_ini = st.date_input("Muestra · desde", value=_pp_hoy.replace(day=1), key="pp_m_ini")
-    with _ppm2:
-        _pp_m_fin = st.date_input("Muestra · hasta", value=_pp_hoy, key="pp_m_fin")
+    with _pp_tab_proj:
+        st.markdown("<div class='info-box'>Estima la <b>producción propia de cada local</b> de las 4 "
+                    "materias primas de control (<b>POSTA, FILETE, LOMO LISO, LOMO VETADO</b>), orientado "
+                    "al proyecto de centralización en planta. El perfil de demanda por día de semana se "
+                    "calcula con el <b>criterio elegido</b> sobre el <b>rango de muestra</b> (histórico) y "
+                    "se proyecta sobre el <b>rango a proyectar</b>. Los kilos son <b>brutos</b> (con "
+                    "rendimiento de receta aplicado).</div>",
+                    unsafe_allow_html=True)
 
-    st.markdown("**2) Rango a proyectar** — período que se quiere estimar")
-    _ppp1, _ppp2, _ppp3 = st.columns([2, 2, 2])
-    with _ppp1:
-        _pp_ini = st.date_input("Proyección · desde", value=_pp_hoy, key="pp_p_ini")
-    with _ppp2:
-        _pp_fin = st.date_input("Proyección · hasta",
-                                value=_pp_hoy + _pp_dt.timedelta(days=6), key="pp_p_fin")
-    with _ppp3:
-        _pp_crit_lbl = st.selectbox("Criterio de estimación",
-                                    list(_PP_CRITERIOS.keys()), index=0, key="pp_crit")
-    _pp_incl = st.toggle("Incluir colaciones (SKU 'CP')", value=True, key="pp_incl",
-                         help="Al desactivar, se excluyen los productos cuyo SKU empieza con 'CP'.")
-    _pp_loc_sel = st.selectbox("Local a proyectar", ["Todos"] + _PP_LOCALES, index=0,
-                               key="pp_loc",
-                               help="Elige un local para proyectarlo solo, o 'Todos' para la planta completa.")
-    _pp_crit = _PP_CRITERIOS[_pp_crit_lbl]
-    # Locales a estimar: uno solo si se filtró, o los 5 si es "Todos"
-    _pp_locales_iter = _PP_LOCALES if _pp_loc_sel == "Todos" else [_pp_loc_sel]
+        _PP_LOCALES = ["Vitacura", "Las Condes", "Macul", "Los Trapenses", "Quilin"]
+        _PP_DOW = {0: "Lun", 1: "Mar", 2: "Mié", 3: "Jue", 4: "Vie", 5: "Sáb", 6: "Dom"}
 
-    if _pp_m_fin < _pp_m_ini:
-        st.error("Rango de muestra inválido: 'hasta' es anterior a 'desde'.")
-        st.stop()
-    if _pp_fin < _pp_ini:
-        st.error("Rango a proyectar inválido: 'hasta' es anterior a 'desde'.")
-        st.stop()
+        # Recetario oficial requerido para la explosión a materia prima
+        _pp_chk = run_query("SELECT COUNT(*) AS n FROM recetas_oficial")
+        if _pp_chk is None or _pp_chk.empty or int(_pp_chk["n"].iloc[0]) == 0:
+            st.warning("⚠️ No hay **recetario oficial** cargado. Cárgalo en "
+                       "**Gestión de Datos → Recetario → Recetario Oficial**.")
+            st.stop()
 
-    # Ocurrencias de cada día de semana dentro del rango a PROYECTAR
-    _pp_dow_count = {}
-    _pp_d = _pp_ini
-    while _pp_d <= _pp_fin:
-        _dd = _PP_DOW[_pp_d.weekday()]
-        _pp_dow_count[_dd] = _pp_dow_count.get(_dd, 0) + 1
-        _pp_d += _pp_dt.timedelta(days=1)
-    _pp_dias = (_pp_fin - _pp_ini).days + 1
+        # ── Controles: rango de muestra (base) + rango a proyectar ──
+        _pp_hoy = _pp_dt.date.today()
+        st.markdown("**1) Rango de muestra** — historia base para el perfil por día de semana")
+        _ppm1, _ppm2 = st.columns(2)
+        with _ppm1:
+            _pp_m_ini = st.date_input("Muestra · desde", value=_pp_hoy.replace(day=1), key="pp_m_ini")
+        with _ppm2:
+            _pp_m_fin = st.date_input("Muestra · hasta", value=_pp_hoy, key="pp_m_fin")
 
-    _pp_matriz, _pp_det_cat, _pp_det_dia, _pp_sincfg = [], {}, {}, []
-    for _loc in _pp_locales_iter:
-        # Perfil por día de semana desde el RANGO DE MUESTRA, con el criterio elegido
-        _perfil = _pp_perfil_dow(_pp_m_ini, _pp_m_fin, _loc, criterio=_pp_crit,
-                                 excluir_cp=not _pp_incl, solo_skus=set(_SKR_SKU_CAT))
-        if not _perfil:
-            _pp_sincfg.append(_loc)
-            continue
-        # Unidades por categoría en todo el período = perfil(dow) × nº de ese dow en el rango
-        _unid_cat = _pp_dd(float)
-        for _dow, _cnt in _pp_dow_count.items():
-            for _cat in _SKR_CATS:
-                _u = (_perfil.get(_cat, {}) or {}).get(_dow, 0) or 0
-                if _u:
-                    _unid_cat[_cat] += _u * _cnt
-        _kg_mp = _skr_kilos_por_mp(dict(_unid_cat))
-        _det = {}
-        for _cat, _u in _unid_cat.items():
-            if _u > 0:
-                _det[_cat] = _skr_kilos_por_mp({_cat: _u})
-        _pp_det_cat[_loc] = (dict(_unid_cat), _det)
-        # Detalle diario (kg teóricos por día)
-        _drows = []
+        st.markdown("**2) Rango a proyectar** — período que se quiere estimar")
+        _ppp1, _ppp2, _ppp3 = st.columns([2, 2, 2])
+        with _ppp1:
+            _pp_ini = st.date_input("Proyección · desde", value=_pp_hoy, key="pp_p_ini")
+        with _ppp2:
+            _pp_fin = st.date_input("Proyección · hasta",
+                                    value=_pp_hoy + _pp_dt.timedelta(days=6), key="pp_p_fin")
+        with _ppp3:
+            _pp_crit_lbl = st.selectbox("Criterio de estimación",
+                                        list(_PP_CRITERIOS.keys()), index=0, key="pp_crit")
+        _pp_incl = st.toggle("Incluir colaciones (SKU 'CP')", value=True, key="pp_incl",
+                             help="Al desactivar, se excluyen los productos cuyo SKU empieza con 'CP'.")
+        _pp_loc_sel = st.selectbox("Local a proyectar", ["Todos"] + _PP_LOCALES, index=0,
+                                   key="pp_loc",
+                                   help="Elige un local para proyectarlo solo, o 'Todos' para la planta completa.")
+        _pp_crit = _PP_CRITERIOS[_pp_crit_lbl]
+        # Locales a estimar: uno solo si se filtró, o los 5 si es "Todos"
+        _pp_locales_iter = _PP_LOCALES if _pp_loc_sel == "Todos" else [_pp_loc_sel]
+
+        if _pp_m_fin < _pp_m_ini:
+            st.error("Rango de muestra inválido: 'hasta' es anterior a 'desde'.")
+            st.stop()
+        if _pp_fin < _pp_ini:
+            st.error("Rango a proyectar inválido: 'hasta' es anterior a 'desde'.")
+            st.stop()
+
+        # Ocurrencias de cada día de semana dentro del rango a PROYECTAR
+        _pp_dow_count = {}
         _pp_d = _pp_ini
         while _pp_d <= _pp_fin:
-            _kgd = _skr_kilos_teoricos_dia(_perfil, _PP_DOW[_pp_d.weekday()])
-            _fr = {"Fecha": _pp_d.strftime('%d-%m') + " " + _PP_DOW[_pp_d.weekday()]}
-            for _mp in _SKR_MP_ORDEN:
-                _fr[_mp] = round(_kgd.get(_mp, 0.0), 2)
-            _fr["Total"] = round(sum(_kgd.values()), 2)
-            _drows.append(_fr)
+            _dd = _PP_DOW[_pp_d.weekday()]
+            _pp_dow_count[_dd] = _pp_dow_count.get(_dd, 0) + 1
             _pp_d += _pp_dt.timedelta(days=1)
-        _pp_det_dia[_loc] = _pp_pd.DataFrame(_drows)
-        _fila = {"Local": _loc}
+        _pp_dias = (_pp_fin - _pp_ini).days + 1
+
+        _pp_matriz, _pp_det_cat, _pp_det_dia, _pp_sincfg = [], {}, {}, []
+        for _loc in _pp_locales_iter:
+            # Perfil por día de semana desde el RANGO DE MUESTRA, con el criterio elegido
+            _perfil = _pp_perfil_dow(_pp_m_ini, _pp_m_fin, _loc, criterio=_pp_crit,
+                                     excluir_cp=not _pp_incl, solo_skus=set(_SKR_SKU_CAT))
+            if not _perfil:
+                _pp_sincfg.append(_loc)
+                continue
+            # Unidades por categoría en todo el período = perfil(dow) × nº de ese dow en el rango
+            _unid_cat = _pp_dd(float)
+            for _dow, _cnt in _pp_dow_count.items():
+                for _cat in _SKR_CATS:
+                    _u = (_perfil.get(_cat, {}) or {}).get(_dow, 0) or 0
+                    if _u:
+                        _unid_cat[_cat] += _u * _cnt
+            _kg_mp = _skr_kilos_por_mp(dict(_unid_cat))
+            _det = {}
+            for _cat, _u in _unid_cat.items():
+                if _u > 0:
+                    _det[_cat] = _skr_kilos_por_mp({_cat: _u})
+            _pp_det_cat[_loc] = (dict(_unid_cat), _det)
+            # Detalle diario (kg teóricos por día)
+            _drows = []
+            _pp_d = _pp_ini
+            while _pp_d <= _pp_fin:
+                _kgd = _skr_kilos_teoricos_dia(_perfil, _PP_DOW[_pp_d.weekday()])
+                _fr = {"Fecha": _pp_d.strftime('%d-%m') + " " + _PP_DOW[_pp_d.weekday()]}
+                for _mp in _SKR_MP_ORDEN:
+                    _fr[_mp] = round(_kgd.get(_mp, 0.0), 2)
+                _fr["Total"] = round(sum(_kgd.values()), 2)
+                _drows.append(_fr)
+                _pp_d += _pp_dt.timedelta(days=1)
+            _pp_det_dia[_loc] = _pp_pd.DataFrame(_drows)
+            _fila = {"Local": _loc}
+            for _mp in _SKR_MP_ORDEN:
+                _fila[_mp] = round(_kg_mp.get(_mp, 0.0), 2)
+            _fila["Total"] = round(sum(_kg_mp.values()), 2)
+            _pp_matriz.append(_fila)
+
+        if _pp_sincfg:
+            st.warning("Locales sin ventas en el **rango de muestra** (no se estiman): "
+                       + ", ".join(_pp_sincfg) + ". Amplía el rango de muestra o revisa que tengan datos.")
+
+        if not _pp_matriz:
+            st.info("No hay locales con datos para estimar en este período.")
+            st.stop()
+
+        _pp_df = _pp_pd.DataFrame(_pp_matriz)
+        _pp_tot_mp = {_mp: round(_pp_df[_mp].sum(), 2) for _mp in _SKR_MP_ORDEN}
+        _pp_tot = round(sum(_pp_tot_mp.values()), 2)
+
+        # ── KPIs de planta ──
+        _pp_lbl_tot = "Total Planta" if _pp_loc_sel == "Todos" else f"Total {_pp_loc_sel}"
+        _pp_cards = []
+        for _lbl, _val, _col in ([(_pp_lbl_tot, _pp_tot, "#4caf7d")]
+                                 + [(_mp, _pp_tot_mp[_mp], "#d4a853") for _mp in _SKR_MP_ORDEN]):
+            _pp_cards.append(
+                "<div style=\"flex:1 1 130px;min-width:130px;background:#0e1116;"
+                "border:1px solid #1f242c;border-left:4px solid " + _col + ";"
+                "border-radius:12px;padding:12px 14px\">"
+                "<div style=\"font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;"
+                "color:#ffffff\">" + _lbl + "</div>"
+                "<div style=\"font-family:'DM Serif Display',serif;font-size:1.5rem;color:" + _col + ";"
+                "line-height:1.15\">" + f"{_val:,.1f} "
+                "<span style=\"font-size:0.8rem;color:#ffffff\">kg</span></div></div>")
+        st.markdown(f"**Muestra:** {_pp_m_ini.strftime('%d-%m-%Y')} al {_pp_m_fin.strftime('%d-%m-%Y')} · "
+                    f"**Proyección:** {_pp_ini.strftime('%d-%m-%Y')} al {_pp_fin.strftime('%d-%m-%Y')} "
+                    f"({_pp_dias} días) · **Criterio:** {_pp_crit_lbl}")
+        st.markdown("<div style=\"display:flex;gap:10px;flex-wrap:wrap;margin:6px 0 16px 0\">"
+                    + "".join(_pp_cards) + "</div>", unsafe_allow_html=True)
+
+        # ── Matriz principal: locales × MP + Total Planta ──
+        _pp_tot_row = {"Local": "TOTAL PLANTA"}
         for _mp in _SKR_MP_ORDEN:
-            _fila[_mp] = round(_kg_mp.get(_mp, 0.0), 2)
-        _fila["Total"] = round(sum(_kg_mp.values()), 2)
-        _pp_matriz.append(_fila)
+            _pp_tot_row[_mp] = _pp_tot_mp[_mp]
+        _pp_tot_row["Total"] = _pp_tot
+        _pp_df_show = _pp_pd.concat([_pp_df, _pp_pd.DataFrame([_pp_tot_row])], ignore_index=True)
+        st.markdown("#### Producción estimada por local (kg brutos)")
+        st.dataframe(_pp_df_show, use_container_width=True, hide_index=True)
 
-    if _pp_sincfg:
-        st.warning("Locales sin ventas en el **rango de muestra** (no se estiman): "
-                   + ", ".join(_pp_sincfg) + ". Amplía el rango de muestra o revisa que tengan datos.")
-
-    if not _pp_matriz:
-        st.info("No hay locales con datos para estimar en este período.")
-        st.stop()
-
-    _pp_df = _pp_pd.DataFrame(_pp_matriz)
-    _pp_tot_mp = {_mp: round(_pp_df[_mp].sum(), 2) for _mp in _SKR_MP_ORDEN}
-    _pp_tot = round(sum(_pp_tot_mp.values()), 2)
-
-    # ── KPIs de planta ──
-    _pp_lbl_tot = "Total Planta" if _pp_loc_sel == "Todos" else f"Total {_pp_loc_sel}"
-    _pp_cards = []
-    for _lbl, _val, _col in ([(_pp_lbl_tot, _pp_tot, "#4caf7d")]
-                             + [(_mp, _pp_tot_mp[_mp], "#d4a853") for _mp in _SKR_MP_ORDEN]):
-        _pp_cards.append(
-            "<div style=\"flex:1 1 130px;min-width:130px;background:#0e1116;"
-            "border:1px solid #1f242c;border-left:4px solid " + _col + ";"
-            "border-radius:12px;padding:12px 14px\">"
-            "<div style=\"font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;"
-            "color:#ffffff\">" + _lbl + "</div>"
-            "<div style=\"font-family:'DM Serif Display',serif;font-size:1.5rem;color:" + _col + ";"
-            "line-height:1.15\">" + f"{_val:,.1f} "
-            "<span style=\"font-size:0.8rem;color:#ffffff\">kg</span></div></div>")
-    st.markdown(f"**Muestra:** {_pp_m_ini.strftime('%d-%m-%Y')} al {_pp_m_fin.strftime('%d-%m-%Y')} · "
-                f"**Proyección:** {_pp_ini.strftime('%d-%m-%Y')} al {_pp_fin.strftime('%d-%m-%Y')} "
-                f"({_pp_dias} días) · **Criterio:** {_pp_crit_lbl}")
-    st.markdown("<div style=\"display:flex;gap:10px;flex-wrap:wrap;margin:6px 0 16px 0\">"
-                + "".join(_pp_cards) + "</div>", unsafe_allow_html=True)
-
-    # ── Matriz principal: locales × MP + Total Planta ──
-    _pp_tot_row = {"Local": "TOTAL PLANTA"}
-    for _mp in _SKR_MP_ORDEN:
-        _pp_tot_row[_mp] = _pp_tot_mp[_mp]
-    _pp_tot_row["Total"] = _pp_tot
-    _pp_df_show = _pp_pd.concat([_pp_df, _pp_pd.DataFrame([_pp_tot_row])], ignore_index=True)
-    st.markdown("#### Producción estimada por local (kg brutos)")
-    st.dataframe(_pp_df_show, use_container_width=True, hide_index=True)
-
-    # ── Detalle por local: por categoría de proteína + por día ──
-    st.markdown("#### Detalle por local")
-    for _loc in [_f["Local"] for _f in _pp_matriz]:
-        with st.expander(f"🍽️ {_loc}"):
-            _uc, _dc = _pp_det_cat[_loc]
-            _crows = []
-            for _cat in sorted(_dc):
-                _rw = {"Categoría": _cat, "Unidades": round(_uc.get(_cat, 0), 1)}
-                for _mp in _SKR_MP_ORDEN:
-                    _rw[_mp] = round(_dc[_cat].get(_mp, 0.0), 2)
-                _rw["Total kg"] = round(sum(_dc[_cat].values()), 2)
-                _crows.append(_rw)
-            st.markdown("**Por categoría de proteína**")
-            if _crows:
-                st.dataframe(_pp_pd.DataFrame(_crows), use_container_width=True, hide_index=True)
-            else:
-                st.caption("Sin categorías con producción estimada en el período.")
-            st.markdown("**Por día**")
-            st.dataframe(_pp_det_dia[_loc], use_container_width=True, hide_index=True)
-
-    # ── Export Excel (Resumen + Por categoría + Por día) ──
-    _pp_buf = _pp_io.BytesIO()
-    with _pp_pd.ExcelWriter(_pp_buf, engine="openpyxl") as _pp_w:
-        _pp_df_show.to_excel(_pp_w, sheet_name="Resumen", index=False)
-        _cat_all = []
+        # ── Detalle por local: por categoría de proteína + por día ──
+        st.markdown("#### Detalle por local")
         for _loc in [_f["Local"] for _f in _pp_matriz]:
-            _uc, _dc = _pp_det_cat[_loc]
-            for _cat in sorted(_dc):
-                _rw = {"Local": _loc, "Categoría": _cat, "Unidades": round(_uc.get(_cat, 0), 1)}
-                for _mp in _SKR_MP_ORDEN:
-                    _rw[_mp] = round(_dc[_cat].get(_mp, 0.0), 2)
-                _cat_all.append(_rw)
-        if _cat_all:
-            _pp_pd.DataFrame(_cat_all).to_excel(_pp_w, sheet_name="Por categoría", index=False)
-        _dia_all = []
-        for _loc in [_f["Local"] for _f in _pp_matriz]:
-            _tmp = _pp_det_dia[_loc].copy()
-            _tmp.insert(0, "Local", _loc)
-            _dia_all.append(_tmp)
-        if _dia_all:
-            _pp_pd.concat(_dia_all, ignore_index=True).to_excel(_pp_w, sheet_name="Por día", index=False)
-    _pp_buf.seek(0)
-    st.download_button("📥 Exportar Excel", _pp_buf.getvalue(),
-                       file_name=f"proyecto_produccion_{_pp_ini.isoformat()}_{_pp_fin.isoformat()}.xlsx",
-                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                       use_container_width=True, key="pp_dl_xlsx")
+            with st.expander(f"🍽️ {_loc}"):
+                _uc, _dc = _pp_det_cat[_loc]
+                _crows = []
+                for _cat in sorted(_dc):
+                    _rw = {"Categoría": _cat, "Unidades": round(_uc.get(_cat, 0), 1)}
+                    for _mp in _SKR_MP_ORDEN:
+                        _rw[_mp] = round(_dc[_cat].get(_mp, 0.0), 2)
+                    _rw["Total kg"] = round(sum(_dc[_cat].values()), 2)
+                    _crows.append(_rw)
+                st.markdown("**Por categoría de proteína**")
+                if _crows:
+                    st.dataframe(_pp_pd.DataFrame(_crows), use_container_width=True, hide_index=True)
+                else:
+                    st.caption("Sin categorías con producción estimada en el período.")
+                st.markdown("**Por día**")
+                st.dataframe(_pp_det_dia[_loc], use_container_width=True, hide_index=True)
+
+        # ── Export Excel (Resumen + Por categoría + Por día) ──
+        _pp_buf = _pp_io.BytesIO()
+        with _pp_pd.ExcelWriter(_pp_buf, engine="openpyxl") as _pp_w:
+            _pp_df_show.to_excel(_pp_w, sheet_name="Resumen", index=False)
+            _cat_all = []
+            for _loc in [_f["Local"] for _f in _pp_matriz]:
+                _uc, _dc = _pp_det_cat[_loc]
+                for _cat in sorted(_dc):
+                    _rw = {"Local": _loc, "Categoría": _cat, "Unidades": round(_uc.get(_cat, 0), 1)}
+                    for _mp in _SKR_MP_ORDEN:
+                        _rw[_mp] = round(_dc[_cat].get(_mp, 0.0), 2)
+                    _cat_all.append(_rw)
+            if _cat_all:
+                _pp_pd.DataFrame(_cat_all).to_excel(_pp_w, sheet_name="Por categoría", index=False)
+            _dia_all = []
+            for _loc in [_f["Local"] for _f in _pp_matriz]:
+                _tmp = _pp_det_dia[_loc].copy()
+                _tmp.insert(0, "Local", _loc)
+                _dia_all.append(_tmp)
+            if _dia_all:
+                _pp_pd.concat(_dia_all, ignore_index=True).to_excel(_pp_w, sheet_name="Por día", index=False)
+        _pp_buf.seek(0)
+        st.download_button("📥 Exportar Excel", _pp_buf.getvalue(),
+                           file_name=f"proyecto_produccion_{_pp_ini.isoformat()}_{_pp_fin.isoformat()}.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           use_container_width=True, key="pp_dl_xlsx")
 
 
 elif modulo.startswith("📈 Resumen Ventas"):
