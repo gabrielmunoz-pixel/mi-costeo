@@ -26065,7 +26065,12 @@ elif modulo.startswith("🏭 Proyecto Producción"):
                                     list(_PP_CRITERIOS.keys()), index=0, key="pp_crit")
     _pp_incl = st.toggle("Incluir colaciones (SKU 'CP')", value=True, key="pp_incl",
                          help="Al desactivar, se excluyen los productos cuyo SKU empieza con 'CP'.")
+    _pp_loc_sel = st.selectbox("Local a proyectar", ["Todos"] + _PP_LOCALES, index=0,
+                               key="pp_loc",
+                               help="Elige un local para proyectarlo solo, o 'Todos' para la planta completa.")
     _pp_crit = _PP_CRITERIOS[_pp_crit_lbl]
+    # Locales a estimar: uno solo si se filtró, o los 5 si es "Todos"
+    _pp_locales_iter = _PP_LOCALES if _pp_loc_sel == "Todos" else [_pp_loc_sel]
 
     if _pp_m_fin < _pp_m_ini:
         st.error("Rango de muestra inválido: 'hasta' es anterior a 'desde'.")
@@ -26084,7 +26089,7 @@ elif modulo.startswith("🏭 Proyecto Producción"):
     _pp_dias = (_pp_fin - _pp_ini).days + 1
 
     _pp_matriz, _pp_det_cat, _pp_det_dia, _pp_sincfg = [], {}, {}, []
-    for _loc in _PP_LOCALES:
+    for _loc in _pp_locales_iter:
         # Perfil por día de semana desde el RANGO DE MUESTRA, con el criterio elegido
         _perfil = _pp_perfil_dow(_pp_m_ini, _pp_m_fin, _loc, criterio=_pp_crit,
                                  excluir_cp=not _pp_incl, solo_skus=set(_SKR_SKU_CAT))
@@ -26135,8 +26140,9 @@ elif modulo.startswith("🏭 Proyecto Producción"):
     _pp_tot = round(sum(_pp_tot_mp.values()), 2)
 
     # ── KPIs de planta ──
+    _pp_lbl_tot = "Total Planta" if _pp_loc_sel == "Todos" else f"Total {_pp_loc_sel}"
     _pp_cards = []
-    for _lbl, _val, _col in ([("Total Planta", _pp_tot, "#4caf7d")]
+    for _lbl, _val, _col in ([(_pp_lbl_tot, _pp_tot, "#4caf7d")]
                              + [(_mp, _pp_tot_mp[_mp], "#d4a853") for _mp in _SKR_MP_ORDEN]):
         _pp_cards.append(
             "<div style=\"flex:1 1 130px;min-width:130px;background:#0e1116;"
