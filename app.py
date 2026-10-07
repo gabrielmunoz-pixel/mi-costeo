@@ -26805,6 +26805,17 @@ elif modulo.startswith("🔍 Detalle Garzones"):
     _DG_LOCALES = ['Vitacura','Las Condes','Chicureo','La Dehesa','Macul','La Reina',
                    'Quilin','Nueva Providencia','Providencia','Los Trapenses','La Casona']
 
+    # Semana ANTERIOR (lunes a domingo) impuesta POR CÓDIGO, sin depender del cache
+    # de cada usuario: se (re)inicializa en session_state cuando cambia la semana o
+    # en la primera carga. Dentro de la misma semana respeta los cambios manuales.
+    _dg_hoy = _dg_date.today()
+    _dg_lun_ant = _dg_hoy - _dg_td(days=_dg_hoy.weekday() + 7)
+    _dg_dom_ant = _dg_lun_ant + _dg_td(days=6)
+    if st.session_state.get("dg_week_ref") != str(_dg_lun_ant):
+        st.session_state["dg_week_ref"] = str(_dg_lun_ant)
+        st.session_state["dg_fi"] = _dg_lun_ant
+        st.session_state["dg_ff"] = _dg_dom_ant
+
     _dgc1, _dgc2, _dgc3 = st.columns([2, 1.2, 1.2])
     with _dgc1:
         if _dg_user_local and not _dg_is_admin:
@@ -26814,9 +26825,9 @@ elif modulo.startswith("🔍 Detalle Garzones"):
         else:
             _dg_local = st.selectbox("📍 Local", _DG_LOCALES, key="dg_local")
     with _dgc2:
-        _dg_fi = st.date_input("Desde", value=_dg_date(2026, 8, 24), key="dg_fi")
+        _dg_fi = st.date_input("Desde", key="dg_fi")
     with _dgc3:
-        _dg_ff = st.date_input("Hasta", value=_dg_date(2026, 8, 30), key="dg_ff")
+        _dg_ff = st.date_input("Hasta", key="dg_ff")
 
     if _dg_ff < _dg_fi:
         st.error("La fecha 'Hasta' no puede ser anterior a 'Desde'.")
