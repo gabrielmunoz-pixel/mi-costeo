@@ -6603,11 +6603,11 @@ def _sg_resumen_colores_pdf(df_acum, local, dias_periodo, logo_path=None,
                     "punt": pv + pa, "p_total": f["p_total"]})
     _c3.sort(key=lambda c: (c["punt"], -c["p_total"]))  # menor puntaje; desempate: mayor % adic
     h3 = [P(x, st_h) for x in ["Ranking Total", "NOMBRE GARZON",
-                               "Ranking Venta", "Ranking % Adic."]]
+                               "Ranking Venta", "Ranking % Adic.", "Puntaje"]]
     d3 = [h3]
     for k, c in enumerate(_c3):
-        d3.append([P(k + 1), P(c["nombre"]), P(c["pv"]), P(c["pa"])])
-    w3_p = [5.0, 14.0, 6.0, 6.0]
+        d3.append([P(k + 1), P(c["nombre"]), P(c["pv"]), P(c["pa"]), P(c["punt"])])
+    w3_p = [5.0, 13.0, 6.0, 6.0, 5.0]
     w3 = [util * p / sum(w3_p) for p in w3_p]
     t3 = _Table(d3, colWidths=w3, repeatRows=1)
     t3.setStyle(_estilo(len(_c3), _pos_colors, False))  # colorea por ranking combinado
