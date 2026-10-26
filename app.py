@@ -16683,12 +16683,18 @@ elif modulo.startswith("📊"):
                     and st.session_state.get("_cr_zip_sig") == _cr_cal_sig
                 )
                 if _zip_vigente:
-                    st.download_button(
-                        f"⬇️ Descargar ZIP ({st.session_state.get('_cr_zip_ok',0)} locales)",
-                        st.session_state["_cr_zip_bytes"],
-                        file_name=st.session_state.get("_cr_zip_name", "colaciones_locales.zip"),
-                        mime="application/zip", use_container_width=True, key="cr_pdf_zip_dl",
-                    )
+                    # Link con los bytes embebidos (data URI) en vez de st.download_button:
+                    # la URL /media del servidor caducaba (rerun/reinicio) y Chrome daba
+                    # "Unknown server error". Así la descarga no depende del servidor.
+                    import base64 as _b64_zip
+                    _zip_b64 = _b64_zip.b64encode(st.session_state["_cr_zip_bytes"]).decode()
+                    st.markdown(
+                        f'<a href="data:application/zip;base64,{_zip_b64}" '
+                        f'download="{st.session_state.get("_cr_zip_name", "colaciones_locales.zip")}" '
+                        'style="display:block;text-align:center;padding:10px;border-radius:10px;'
+                        'border:1px solid #444;color:#f0ede8;text-decoration:none;">'
+                        f"⬇️ Descargar ZIP ({st.session_state.get('_cr_zip_ok',0)} locales)</a>",
+                        unsafe_allow_html=True)
                     if st.session_state.get("_cr_zip_errs"):
                         st.caption("⚠️ Locales omitidos: " +
                                    "; ".join(st.session_state["_cr_zip_errs"]))
