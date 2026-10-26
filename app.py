@@ -3849,6 +3849,19 @@ def save_ventas_chunk(df_raw, engine, skip_delete=False):
 # ============================================================
 # HELPERS UI
 # ============================================================
+def _link_descarga(label, data, file_name, mime):
+    """Botón de descarga con los bytes embebidos (data URI). A diferencia de
+    st.download_button no depende de la URL /media del servidor, que caduca en
+    el rerun/reinicio y hace que Chrome muestre "Unknown server error"."""
+    import base64 as _b64_dl
+    _b64 = _b64_dl.b64encode(data).decode()
+    st.markdown(
+        f'<a href="data:{mime};base64,{_b64}" download="{file_name}" '
+        'style="display:block;text-align:center;padding:10px;border-radius:10px;'
+        f'border:1px solid #444;color:#f0ede8;text-decoration:none;">{label}</a>',
+        unsafe_allow_html=True)
+
+
 def semaforo_margen(val):
     if val >= 65:
         return 'background-color: #1a3a2a; color: #4caf7d'
@@ -16683,18 +16696,11 @@ elif modulo.startswith("📊"):
                     and st.session_state.get("_cr_zip_sig") == _cr_cal_sig
                 )
                 if _zip_vigente:
-                    # Link con los bytes embebidos (data URI) en vez de st.download_button:
-                    # la URL /media del servidor caducaba (rerun/reinicio) y Chrome daba
-                    # "Unknown server error". Así la descarga no depende del servidor.
-                    import base64 as _b64_zip
-                    _zip_b64 = _b64_zip.b64encode(st.session_state["_cr_zip_bytes"]).decode()
-                    st.markdown(
-                        f'<a href="data:application/zip;base64,{_zip_b64}" '
-                        f'download="{st.session_state.get("_cr_zip_name", "colaciones_locales.zip")}" '
-                        'style="display:block;text-align:center;padding:10px;border-radius:10px;'
-                        'border:1px solid #444;color:#f0ede8;text-decoration:none;">'
-                        f"⬇️ Descargar ZIP ({st.session_state.get('_cr_zip_ok',0)} locales)</a>",
-                        unsafe_allow_html=True)
+                    _link_descarga(
+                        f"⬇️ Descargar ZIP ({st.session_state.get('_cr_zip_ok',0)} locales)",
+                        st.session_state["_cr_zip_bytes"],
+                        st.session_state.get("_cr_zip_name", "colaciones_locales.zip"),
+                        "application/zip")
                     if st.session_state.get("_cr_zip_errs"):
                         st.caption("⚠️ Locales omitidos: " +
                                    "; ".join(st.session_state["_cr_zip_errs"]))
@@ -22295,10 +22301,9 @@ buildTree(data, 1, null);
             _buf_zip.seek(0)
             if _ok:
                 st.success(f"Listo: {_ok}/{len(_SG_LOCALES_ZIP)} resúmenes generados.")
-                st.download_button(f"⬇️ Descargar ZIP ({_ok} resúmenes)",
-                    _buf_zip.getvalue(),
-                    file_name=f"resumenes_colores_{_sg_ini}.zip",
-                    mime="application/zip", use_container_width=True, key="sg_zip_dl")
+                _link_descarga(f"⬇️ Descargar ZIP ({_ok} resúmenes)",
+                    _buf_zip.getvalue(), f"resumenes_colores_{_sg_ini}.zip",
+                    "application/zip")
             else:
                 st.error("No se generó ningún resumen.")
             if _errs:
@@ -22376,10 +22381,9 @@ buildTree(data, 1, null);
                     _pdf_cons = _sg_consolidado_locales_pdf(
                         _pct_act, _pct_ant, _rango_act, _rango_ant, logo_path=LOGO_PATH)
                     st.success(f"Consolidado listo · {len(_pct_act)} locales.")
-                    st.download_button("⬇️ Descargar consolidado (PDF)",
-                        _pdf_cons,
-                        file_name=f"consolidado_locales_{_sg_ini}.pdf",
-                        mime="application/pdf", use_container_width=True, key="sg_consol_dl")
+                    _link_descarga("⬇️ Descargar consolidado (PDF)",
+                        _pdf_cons, f"consolidado_locales_{_sg_ini}.pdf",
+                        "application/pdf")
 
 elif informe_sel == "Auditor":
     from datetime import date as _date2
