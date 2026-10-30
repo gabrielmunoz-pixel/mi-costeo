@@ -25127,7 +25127,6 @@ elif modulo.startswith("👷 Costo de Personal"):
     _GV_PROMEDIO_NIVELES = {"Ayudante de Cocina": ["Ayudante de Cocina 1", "Ayudante de Cocina 2",
                                                    "Ayudante de Cocina 3"],
                             "Copero": ["Copero 1", "Copero 2"]}
-    _GV_SEMANAS = [(1, 7), (8, 14), (15, 21), (22, 31)]  # P7: tramos por día del mes
     _GV_DOM_LIBRES = 2  # Regla C provisoria: domingos incluidos por persona al mes (sin recargo)
     # P8: feriados = _CP_FERIADOS (oficiales de Chile)
     _GV_APORTE = 0.0683
@@ -25190,8 +25189,15 @@ elif modulo.startswith("👷 Costo de Personal"):
             b += 24 * 60  # turno que cruza medianoche
         return (b - a) / 60
 
-    def _gv_semana(dia):
-        return next((i + 1 for i, (a, b) in enumerate(_GV_SEMANAS) if a <= dia <= b), None)
+    def _gv_factor_optimo(ini, fin):
+        """Fracción del óptimo MENSUAL que corresponde al rango (prorrateo por días de cada mes)."""
+        f, d = 0.0, ini
+        while d <= fin:
+            dm = _cp_cal.monthrange(d.year, d.month)[1]
+            fin_mes = min(fin, d.replace(day=dm))
+            f += ((fin_mes - d).days + 1) / dm
+            d = fin_mes + _cp_dt.timedelta(days=1)
+        return f
 
     def _gv_dia(row):
         """Cantidades y costos variables de un registro persona-día."""
@@ -25229,7 +25235,8 @@ elif modulo.startswith("👷 Costo de Personal"):
         desde el siguiente domingo trabajado (planificado o no) se paga recargo.
         Un feriado en domingo cuenta como feriado, no como domingo."""
         es_dom = df["fecha"].map(lambda f: f.weekday() == 6 and f not in _CP_FERIADOS)
-        n = df[es_dom].groupby("rut")["fecha"].rank(method="first")
+        mes = df["fecha"].map(lambda f: (f.year, f.month))
+        n = df[es_dom].groupby([df["rut"], mes])["fecha"].rank(method="first")
         df["dom_n"] = (n > _GV_DOM_LIBRES).astype(int).reindex(df.index, fill_value=0)
         df["Rem.Domingos"] = (df["dom_n"] * df["cargo_tar"].map(lambda c: _GV_TARIFAS[c][0])
                               * (1 + _GV_APORTE))
@@ -25238,6 +25245,8 @@ elif modulo.startswith("👷 Costo de Personal"):
     # Self-check del parser de turnos (falla en voz alta si cambia el formato)
     assert _gv_horas_turno("10:00 - 18:00(30 mins)") == 8.0
     assert _gv_horas_turno("18:00 - 02:00( Sin Colación )") == 8.0
+    assert _gv_factor_optimo(_cp_dt.date(2026, 10, 1), _cp_dt.date(2026, 10, 31)) == 1.0
+    assert abs(_gv_factor_optimo(_cp_dt.date(2026, 10, 25), _cp_dt.date(2026, 11, 7)) - (7/31 + 7/30)) < 1e-9
 
     _gv_money = lambda x: ("-" if x < 0 else "") + f"${abs(x):,.0f}".replace(",", ".")
 
@@ -25301,26 +25310,32 @@ elif modulo.startswith("👷 Costo de Personal"):
     </div>
     """, unsafe_allow_html=True)
 
-    _gv_c1, _gv_c2 = st.columns(2)
+    _gv_hoy = _cp_dt.date.today()
+    _gv_c1, _gv_c2, _gv_c3 = st.columns(3)
     with _gv_c1:
-        _gv_ref = st.date_input("Mes", value=_cp_dt.date.today().replace(day=1),
-                                key="gv_mes", format="DD/MM/YYYY",
-                                help="Elige cualquier día del mes que quieres revisar.")
-    _gv_ini = _gv_ref.replace(day=1)
-    _gv_fin = _gv_ini.replace(day=_cp_cal.monthrange(_gv_ini.year, _gv_ini.month)[1])
+        _gv_ini = st.date_input("Desde", value=_gv_hoy.replace(day=1), key="gv_desde", format="DD/MM/YYYY")
     with _gv_c2:
+        _gv_fin = st.date_input("Hasta", value=_gv_hoy, key="gv_hasta", format="DD/MM/YYYY",
+                                help="Para ver una semana elige 7 días; para el mes, del 1 al último día.")
+    with _gv_c3:
         if _user_local_cp:
             _gv_loc = _user_local_cp
             st.markdown(f"**Local:** `{_gv_loc}`")
         else:
             _gv_loc = st.selectbox("Local", ["Todos"] + list(_GV_OPTIMO), key="gv_local")
+    if _gv_ini > _gv_fin:
+        st.error("La fecha 'Desde' no puede ser posterior a 'Hasta'.")
+        st.stop()
+    _gv_factor = _gv_factor_optimo(_gv_ini, _gv_fin)
+    _gv_dias = (_gv_fin - _gv_ini).days + 1
 
+    # Se trae desde el día 1 del mes de 'Desde' para contar bien los domingos del mes (regla C)
     _gv_as = run_query("""
         SELECT rut, TRIM(COALESCE(nombre,'') || ' ' || COALESCE(apellidos,'')) AS nombre,
                local, fecha, tipo_jornada, turno_raw, colacion_min, horas_totales, cargo
         FROM asistencia_rrhh
         WHERE fecha BETWEEN :i AND :f AND trabajo = true
-    """, {"i": str(_gv_ini), "f": str(_gv_fin)})
+    """, {"i": str(_gv_ini.replace(day=1)), "f": str(_gv_fin)})
     if _gv_as is None or _gv_as.empty:
         st.info(f"No hay asistencia cargada entre el {_gv_ini:%d/%m/%Y} y el {_gv_fin:%d/%m/%Y}.")
         st.stop()
@@ -25334,11 +25349,12 @@ elif modulo.startswith("👷 Costo de Personal"):
         st.info("Ningún cargo de la asistencia coincide con las tarifas del Excel.")
         st.stop()
     _gv_as = _gv_domingos(pd.concat([_gv_as, _gv_as.apply(_gv_dia, axis=1)], axis=1))
-    _gv_as["semana"] = _gv_as["fecha"].map(lambda d: _gv_semana(d.day))
+    _gv_as = _gv_as[_gv_as["fecha"] >= _gv_ini]
+    _gv_excl = _gv_excl[_gv_excl["fecha"] >= _gv_ini]
 
     _gv_sel = _gv_as if _gv_loc == "Todos" else _gv_as[_gv_as["local"] == _gv_loc]
-    _gv_opt_mes = [sum(v[i] for v in _GV_OPTIMO.values()) if _gv_loc == "Todos"
-                   else _GV_OPTIMO.get(_gv_loc, (0,) * 5)[i] for i in range(5)]
+    _gv_opt_mes = [(sum(v[i] for v in _GV_OPTIMO.values()) if _gv_loc == "Todos"
+                    else _GV_OPTIMO.get(_gv_loc, (0,) * 5)[i]) * _gv_factor for i in range(5)]
     _GV_4 = _GV_CONCEPTOS[:4]  # conceptos con real (otros bonos aún sin fuente)
 
     # ── Resumen ──
@@ -25352,7 +25368,7 @@ elif modulo.startswith("👷 Costo de Personal"):
     st.markdown(
         "<div class='gv-kpis'>"
         f"<div class='gv-kpi'><div class='l'>Planificado</div><div class='v'>{_gv_money(_gv_opt_tot)}</div>"
-        "<div class='s'>Óptimo del mes</div></div>"
+        f"<div class='s'>Óptimo de {_gv_dias} día(s) · {_gv_factor*100:.0f}% del mes</div></div>"
         f"<div class='gv-kpi'><div class='l'>Real</div><div class='v'>{_gv_money(_gv_real_tot)}</div>"
         f"<div class='s'>Según asistencia</div></div>"
         f"<div class='gv-kpi'><div class='l'>Diferencia</div><div class='v' style='color:{_gv_fg}'>"
@@ -25361,8 +25377,10 @@ elif modulo.startswith("👷 Costo de Personal"):
         f"<div class='gv-kpi'><div class='l'>Estado</div><div class='v' style='font-size:1rem;color:{_gv_fg}'>"
         f"● {_gv_estado}</div><div class='s'>Sin contar otros bonos</div></div>"
         "</div>", unsafe_allow_html=True)
-    if _gv_fin >= _cp_dt.date.today():
-        st.caption("🕒 Mes en curso: el real llega hasta el último día cargado y el óptimo es del mes completo.")
+    _gv_ult = max(_gv_as["fecha"]) if not _gv_as.empty else None
+    if _gv_ult and _gv_ult < _gv_fin:
+        st.caption(f"🕒 La asistencia cargada llega hasta el {_gv_ult:%d/%m/%Y}; el óptimo cubre "
+                   f"hasta el {_gv_fin:%d/%m/%Y}. Para comparar parejo, ajusta 'Hasta'.")
 
     # ── Por concepto ──
     st.markdown("<div class='section-label'>Por concepto</div>", unsafe_allow_html=True)
@@ -25386,7 +25404,8 @@ elif modulo.startswith("👷 Costo de Personal"):
         st.markdown("<div class='section-label' style='margin-top:1rem'>Por local</div>",
                     unsafe_allow_html=True)
         _gv_real_loc = _gv_as.groupby("local")[_GV_4].sum().sum(axis=1)
-        _gv_rk = sorted(((l, float(_gv_real_loc.get(l, 0)), sum(v[:4])) for l, v in _GV_OPTIMO.items()),
+        _gv_rk = sorted(((l, float(_gv_real_loc.get(l, 0)), sum(v[:4]) * _gv_factor)
+                         for l, v in _GV_OPTIMO.items()),
                         key=lambda t: t[1] / t[2] if t[2] else 0, reverse=True)
         _gv_cols = st.columns(2)
         for _i, (_l, _r, _o) in enumerate(_gv_rk):
@@ -25396,17 +25415,6 @@ elif modulo.startswith("👷 Costo de Personal"):
                 unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
-
-    with st.expander("📅 Ver por semana"):
-        _gv_sem_rows = []
-        for _i, (_a, _b) in enumerate(_GV_SEMANAS):
-            _s = _gv_sel[_gv_sel["semana"] == _i + 1]
-            _r = float(_s[_GV_4].sum().sum()); _o = _gv_opt_tot / 4
-            _gv_sem_rows.append({"Semana": f"Semana {_i+1} (del {_a} al {min(_b, _gv_fin.day)})",
-                                 "Real": _gv_money(_r), "Óptimo (mes ÷ 4)": _gv_money(_o),
-                                 "Diferencia": _gv_money(_r - _o),
-                                 "Var %": f"{(_r / _o - 1) * 100:+.1f}%" if _o else "—"})
-        st.dataframe(pd.DataFrame(_gv_sem_rows), use_container_width=True, hide_index=True)
 
     with st.expander("👥 Detalle por persona"):
         _gv_det = (_gv_sel.groupby(["local", "nombre", "cargo"], as_index=False)
