@@ -25329,28 +25329,32 @@ elif modulo.startswith("👷 Costo de Personal"):
     _gv_factor = _gv_factor_optimo(_gv_ini, _gv_fin)
     _gv_dias = (_gv_fin - _gv_ini).days + 1
 
-    # Se trae desde el día 1 del mes de 'Desde' para contar bien los domingos del mes (regla C)
-    _gv_as = run_query("""
-        SELECT rut, TRIM(COALESCE(nombre,'') || ' ' || COALESCE(apellidos,'')) AS nombre,
-               local, fecha, tipo_jornada, turno_raw, colacion_min, horas_totales, cargo
-        FROM asistencia_rrhh
-        WHERE fecha BETWEEN :i AND :f AND trabajo = true
-    """, {"i": str(_gv_ini.replace(day=1)), "f": str(_gv_fin)})
-    if _gv_as is None or _gv_as.empty:
-        st.info(f"No hay asistencia cargada entre el {_gv_ini:%d/%m/%Y} y el {_gv_fin:%d/%m/%Y}.")
-        st.stop()
+    def _gv_cargar(ini, fin):
+        """Asistencia valorizada entre ini y fin → (con tarifa, excluidos); None si no hay datos.
+        Se trae desde el día 1 del mes de 'ini' para contar bien los domingos del mes (regla C)."""
+        df = run_query("""
+            SELECT rut, TRIM(COALESCE(nombre,'') || ' ' || COALESCE(apellidos,'')) AS nombre,
+                   local, fecha, tipo_jornada, turno_raw, colacion_min, horas_totales, cargo
+            FROM asistencia_rrhh
+            WHERE fecha BETWEEN :i AND :f AND trabajo = true
+        """, {"i": str(ini.replace(day=1)), "f": str(fin)})
+        if df is None or df.empty:
+            return None
+        df["fecha"] = pd.to_datetime(df["fecha"]).dt.date
+        df["cargo"] = df["cargo"].fillna("").str.strip()
+        df["cargo_tar"] = df["cargo"].map(lambda c: _GV_ALIAS.get(c, c))
+        excl = df[~df["cargo_tar"].isin(_GV_TARIFAS)]
+        df = df[df["cargo_tar"].isin(_GV_TARIFAS)].copy()
+        if df.empty:
+            return None
+        df = _gv_domingos(pd.concat([df, df.apply(_gv_dia, axis=1)], axis=1))
+        return df[df["fecha"] >= ini], excl[excl["fecha"] >= ini]
 
-    _gv_as["fecha"] = pd.to_datetime(_gv_as["fecha"]).dt.date
-    _gv_as["cargo"] = _gv_as["cargo"].fillna("").str.strip()
-    _gv_as["cargo_tar"] = _gv_as["cargo"].map(lambda c: _GV_ALIAS.get(c, c))
-    _gv_excl = _gv_as[~_gv_as["cargo_tar"].isin(_GV_TARIFAS)]
-    _gv_as = _gv_as[_gv_as["cargo_tar"].isin(_GV_TARIFAS)].copy()
-    if _gv_as.empty:
-        st.info("Ningún cargo de la asistencia coincide con las tarifas del Excel.")
+    _gv_res = _gv_cargar(_gv_ini, _gv_fin)
+    if _gv_res is None:
+        st.info(f"No hay asistencia con cargos tarifados entre el {_gv_ini:%d/%m/%Y} y el {_gv_fin:%d/%m/%Y}.")
         st.stop()
-    _gv_as = _gv_domingos(pd.concat([_gv_as, _gv_as.apply(_gv_dia, axis=1)], axis=1))
-    _gv_as = _gv_as[_gv_as["fecha"] >= _gv_ini]
-    _gv_excl = _gv_excl[_gv_excl["fecha"] >= _gv_ini]
+    _gv_as, _gv_excl = _gv_res
 
     _gv_sel = _gv_as if _gv_loc == "Todos" else _gv_as[_gv_as["local"] == _gv_loc]
     _gv_opt_mes = [(sum(v[i] for v in _GV_OPTIMO.values()) if _gv_loc == "Todos"
@@ -25413,6 +25417,31 @@ elif modulo.startswith("👷 Costo de Personal"):
             _gv_cols[_i % 2].markdown(
                 _gv_card(_l, _r, _o, f"{_he:,.0f} horas extras".replace(",", ".")),
                 unsafe_allow_html=True)
+
+    # ── Últimas 4 semanas cerradas (lun–dom), independiente de Desde/Hasta ──
+    _gv_wfin = _gv_hoy - _cp_dt.timedelta(days=_gv_hoy.weekday() + 1)  # último domingo cerrado
+    _gv_wini = _gv_wfin - _cp_dt.timedelta(days=27)
+    st.markdown("<div class='section-label' style='margin-top:1rem'>Últimas 4 semanas (lunes a domingo)</div>",
+                unsafe_allow_html=True)
+    _gv_wres = _gv_cargar(_gv_wini, _gv_wfin)
+    if _gv_wres is None:
+        st.caption("Sin asistencia cargada para las últimas 4 semanas.")
+    else:
+        _gv_w = _gv_wres[0] if _gv_loc == "Todos" else _gv_wres[0][_gv_wres[0]["local"] == _gv_loc]
+        _gv_opt_base = ([sum(v[i] for v in _GV_OPTIMO.values()) for i in range(4)] if _gv_loc == "Todos"
+                        else list(_GV_OPTIMO.get(_gv_loc, (0,) * 5)[:4]))
+        _gv_cols = st.columns(2)
+        for _k in range(4):
+            _a = _gv_wini + _cp_dt.timedelta(days=7 * _k)
+            _b = _a + _cp_dt.timedelta(days=6)
+            _s = _gv_w[(_gv_w["fecha"] >= _a) & (_gv_w["fecha"] <= _b)]
+            _o = sum(_gv_opt_base) * _gv_factor_optimo(_a, _b)
+            _det = (f"{_a:%d/%m} – {_b:%d/%m} · HE {_gv_money(float(_s['Rem.H.Extras'].sum()))} · "
+                    f"Dom {_gv_money(float(_s['Rem.Domingos'].sum()))}")
+            _gv_cols[_k % 2].markdown(_gv_card(f"Semana {_k + 1}", float(_s[_GV_4].sum().sum()), _o, _det),
+                                      unsafe_allow_html=True)
+        st.caption("Domingos según regla C: los 2 primeros del mes van incluidos, por eso las "
+                   "semanas de fin de mes suelen salir más altas.")
 
     st.markdown("<br>", unsafe_allow_html=True)
 
