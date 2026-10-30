@@ -25311,7 +25311,7 @@ elif modulo.startswith("👷 Costo de Personal"):
     """, unsafe_allow_html=True)
 
     _gv_hoy = _cp_dt.date.today()
-    _gv_c1, _gv_c2, _gv_c3 = st.columns(3)
+    _gv_c1, _gv_c2, _gv_c3, _gv_c4 = st.columns([1, 1, 1, 0.8])
     with _gv_c1:
         _gv_ini = st.date_input("Desde", value=_gv_hoy.replace(day=1), key="gv_desde", format="DD/MM/YYYY")
     with _gv_c2:
@@ -25323,9 +25323,21 @@ elif modulo.startswith("👷 Costo de Personal"):
             st.markdown(f"**Local:** `{_gv_loc}`")
         else:
             _gv_loc = st.selectbox("Local", ["Todos"] + list(_GV_OPTIMO), key="gv_local")
+    with _gv_c4:
+        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+        _gv_btn = st.button("📊 Generar informe", key="gv_generar", type="primary", use_container_width=True)
     if _gv_ini > _gv_fin:
         st.error("La fecha 'Desde' no puede ser posterior a 'Hasta'.")
         st.stop()
+    # El informe se calcula con los filtros del último clic; cambiar filtros no recalcula solo
+    if _gv_btn:
+        st.session_state["gv_params"] = (_gv_ini, _gv_fin, _gv_loc)
+    if "gv_params" not in st.session_state:
+        st.info("Elige el rango de fechas y el local, y presiona **📊 Generar informe**.")
+        st.stop()
+    if st.session_state["gv_params"] != (_gv_ini, _gv_fin, _gv_loc):
+        st.caption("⚠️ Cambiaste los filtros: presiona **Generar informe** para actualizar.")
+    _gv_ini, _gv_fin, _gv_loc = st.session_state["gv_params"]
     _gv_factor = _gv_factor_optimo(_gv_ini, _gv_fin)
     _gv_dias = (_gv_fin - _gv_ini).days + 1
 
@@ -25403,21 +25415,6 @@ elif modulo.startswith("👷 Costo de Personal"):
     _gv_cols[0].markdown(_gv_card("Otros bonos", None, _gv_opt_mes[4], "Aún sin fuente de datos reales"),
                          unsafe_allow_html=True)
 
-    # ── Por local (solo vista cadena) ──
-    if _gv_loc == "Todos":
-        st.markdown("<div class='section-label' style='margin-top:1rem'>Por local</div>",
-                    unsafe_allow_html=True)
-        _gv_real_loc = _gv_as.groupby("local")[_GV_4].sum().sum(axis=1)
-        _gv_rk = sorted(((l, float(_gv_real_loc.get(l, 0)), sum(v[:4]) * _gv_factor)
-                         for l, v in _GV_OPTIMO.items()),
-                        key=lambda t: t[1] / t[2] if t[2] else 0, reverse=True)
-        _gv_cols = st.columns(2)
-        for _i, (_l, _r, _o) in enumerate(_gv_rk):
-            _he = _gv_as.loc[_gv_as["local"] == _l, "he_h"].sum()
-            _gv_cols[_i % 2].markdown(
-                _gv_card(_l, _r, _o, f"{_he:,.0f} horas extras".replace(",", ".")),
-                unsafe_allow_html=True)
-
     # ── Últimas 4 semanas cerradas (lun–dom), independiente de Desde/Hasta ──
     _gv_wfin = _gv_hoy - _cp_dt.timedelta(days=_gv_hoy.weekday() + 1)  # último domingo cerrado
     _gv_wini = _gv_wfin - _cp_dt.timedelta(days=27)
@@ -25442,6 +25439,22 @@ elif modulo.startswith("👷 Costo de Personal"):
                                       unsafe_allow_html=True)
         st.caption("Domingos según regla C: los 2 primeros del mes van incluidos, por eso las "
                    "semanas de fin de mes suelen salir más altas.")
+
+
+    # ── Por local (solo vista cadena) ──
+    if _gv_loc == "Todos":
+        st.markdown("<div class='section-label' style='margin-top:1rem'>Por local</div>",
+                    unsafe_allow_html=True)
+        _gv_real_loc = _gv_as.groupby("local")[_GV_4].sum().sum(axis=1)
+        _gv_rk = sorted(((l, float(_gv_real_loc.get(l, 0)), sum(v[:4]) * _gv_factor)
+                         for l, v in _GV_OPTIMO.items()),
+                        key=lambda t: t[1] / t[2] if t[2] else 0, reverse=True)
+        _gv_cols = st.columns(2)
+        for _i, (_l, _r, _o) in enumerate(_gv_rk):
+            _he = _gv_as.loc[_gv_as["local"] == _l, "he_h"].sum()
+            _gv_cols[_i % 2].markdown(
+                _gv_card(_l, _r, _o, f"{_he:,.0f} horas extras".replace(",", ".")),
+                unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
