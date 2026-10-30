@@ -25197,13 +25197,18 @@ elif modulo.startswith("👷 Costo de Personal"):
             tar = _GV_TARIFAS[row["cargo_tar"]]
             fch, tipo = row["fecha"], row["tipo_jornada"]
             es_fer, es_dom = fch in _CP_FERIADOS, fch.weekday() == 6
-            es_te = _GV_TE_ES_DESCANSO and tipo == "Descanso"
+            # Descanso trabajado: turno extra solo si el cargo tiene tarifa TE (jefaturas);
+            # el resto no tiene turnos extra y se le pagan esas horas como horas extra.
+            es_descanso = _GV_TE_ES_DESCANSO and tipo == "Descanso"
+            es_te = es_descanso and tar[3] > 0
             te = 1 if es_te and (not (es_fer or es_dom) or _GV_TE_DOMFER in ("te", "ambos")) else 0
             recargo = (not es_te) or _GV_TE_DOMFER in ("recargo", "ambos")
             fer = 1 if es_fer and recargo else 0
             dom = 1 if es_dom and not es_fer and recargo else 0  # feriado en domingo = feriado
             he = 0.0
-            if tipo == "Turno":
+            if es_descanso and not es_te:
+                he = float(row["horas_totales"] or 0)
+            elif tipo == "Turno":
                 plan = _gv_horas_turno(row["turno_raw"])
                 if plan is not None:
                     hrs = float(row["horas_totales"] or 0)
@@ -25229,7 +25234,8 @@ elif modulo.startswith("👷 Costo de Personal"):
             st.markdown(
                 f"1. Hora extra desde un exceso de **{_GV_HE_TOLERANCIA_H:g} h** sobre la duración del turno.\n"
                 f"2. Horas totales {'**incluyen**' if _GV_HORAS_INCL_COL else '**no incluyen**'} la colación.\n"
-                f"3. Turno extra = día **Descanso trabajado**.\n"
+                f"3. Descanso trabajado = **turno extra** en jefaturas (Jefe de Local / Sub Adm.); "
+                "en el resto de los cargos **todas sus horas son horas extra**.\n"
                 f"4. Descanso trabajado en domingo/feriado se paga como: **{_GV_TE_DOMFER}**.\n"
                 "5. Otros bonos: **real sin fuente** (solo óptimo).\n"
                 "6. Ayudante de Cocina y Copero sin nivel → tarifa **nivel 1**.\n"
