@@ -25128,6 +25128,7 @@ elif modulo.startswith("👷 Costo de Personal"):
                                                    "Ayudante de Cocina 3"],
                             "Copero": ["Copero 1", "Copero 2"]}
     _GV_SEMANAS = [(1, 7), (8, 14), (15, 21), (22, 31)]  # P7: tramos por día del mes
+    _GV_DOM_LIBRES = 2  # Regla C provisoria: domingos incluidos por persona al mes (sin recargo)
     # P8: feriados = _CP_FERIADOS (oficiales de Chile)
     _GV_APORTE = 0.0683
     # shortcut: tarifas y óptimo copiados del Excel "SINTITULO(rrhh).xlsx" (oct-2026);
@@ -25205,7 +25206,7 @@ elif modulo.startswith("👷 Costo de Personal"):
         te = 1 if es_te and (not (es_fer or es_dom) or _GV_TE_DOMFER in ("te", "ambos")) else 0
         recargo = (not es_te) or _GV_TE_DOMFER in ("recargo", "ambos")
         fer = 1 if es_fer and recargo else 0
-        dom = 1 if es_dom and not es_fer and recargo else 0  # feriado en domingo = feriado
+        dom = 0  # domingos: se calculan por persona-mes en _gv_domingos
         he = 0.0
         if es_descanso and not es_te:
             he = float(row["horas_totales"] or 0)
@@ -25222,6 +25223,17 @@ elif modulo.startswith("👷 Costo de Personal"):
             "Rem.H.Extras": he * tar[2] * k, "Rem.T.Extras": te * tar[3] * k,
             "Rem.Feriados": fer * tar[1] * k, "Rem.Domingos": dom * tar[0] * k,
         })
+
+    def _gv_domingos(df):
+        """Regla C (provisoria): cada persona tiene _GV_DOM_LIBRES domingos incluidos al mes;
+        desde el siguiente domingo trabajado (planificado o no) se paga recargo.
+        Un feriado en domingo cuenta como feriado, no como domingo."""
+        es_dom = df["fecha"].map(lambda f: f.weekday() == 6 and f not in _CP_FERIADOS)
+        n = df[es_dom].groupby("rut")["fecha"].rank(method="first")
+        df["dom_n"] = (n > _GV_DOM_LIBRES).astype(int).reindex(df.index, fill_value=0)
+        df["Rem.Domingos"] = (df["dom_n"] * df["cargo_tar"].map(lambda c: _GV_TARIFAS[c][0])
+                              * (1 + _GV_APORTE))
+        return df
 
     # Self-check del parser de turnos (falla en voz alta si cambia el formato)
     assert _gv_horas_turno("10:00 - 18:00(30 mins)") == 8.0
@@ -25321,7 +25333,7 @@ elif modulo.startswith("👷 Costo de Personal"):
     if _gv_as.empty:
         st.info("Ningún cargo de la asistencia coincide con las tarifas del Excel.")
         st.stop()
-    _gv_as = pd.concat([_gv_as, _gv_as.apply(_gv_dia, axis=1)], axis=1)
+    _gv_as = _gv_domingos(pd.concat([_gv_as, _gv_as.apply(_gv_dia, axis=1)], axis=1))
     _gv_as["semana"] = _gv_as["fecha"].map(lambda d: _gv_semana(d.day))
 
     _gv_sel = _gv_as if _gv_loc == "Todos" else _gv_as[_gv_as["local"] == _gv_loc]
@@ -25358,7 +25370,8 @@ elif modulo.startswith("👷 Costo de Personal"):
         "Rem.H.Extras":  ("Horas extras", f"{_gv_sel['he_h'].sum():,.0f} horas".replace(",", ".")),
         "Rem.T.Extras":  ("Turnos extras", f"{int(_gv_sel['te_n'].sum())} turno(s) · solo Jefe de Local / Sub Adm."),
         "Rem.Feriados":  ("Feriados", f"{int(_gv_sel['fer_n'].sum())} días trabajados en feriado"),
-        "Rem.Domingos":  ("Domingos", f"{int(_gv_sel['dom_n'].sum())} domingos trabajados"),
+        "Rem.Domingos":  ("Domingos", f"{int(_gv_sel['dom_n'].sum())} domingos pagados "
+                                      f"(desde el {_GV_DOM_LIBRES + 1}° trabajado por persona)"),
     }
     _gv_cols = st.columns(2)
     for _i, _c in enumerate(_GV_4):
@@ -25416,7 +25429,9 @@ elif modulo.startswith("👷 Costo de Personal"):
             f"desde {_GV_HE_TOLERANCIA_H*60:.0f} min de exceso.\n"
             "- **Día de descanso trabajado:** Jefe de Local y Sub Administrador cobran turno extra "
             "($100.000); el resto cobra todas esas horas como horas extras (+ recargo si es domingo o feriado).\n"
-            "- **Domingos y feriados:** recargo por cada día trabajado (feriados oficiales de Chile).\n"
+            f"- **Domingos (provisorio):** cada persona tiene {_GV_DOM_LIBRES} domingos incluidos al mes; "
+            f"desde su {_GV_DOM_LIBRES + 1}° domingo trabajado (planificado o no) se paga el recargo.\n"
+            "- **Feriados:** recargo por cada feriado trabajado (feriados oficiales de Chile).\n"
             "\n**Provisorio (por definir con RRHH):**\n"
             "- Otros bonos aún sin datos reales: se muestra solo el óptimo.\n"
             "- Ayudante de Cocina y Copero no traen nivel: se usa el promedio de las tarifas de sus niveles.")
