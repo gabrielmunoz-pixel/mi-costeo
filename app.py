@@ -25121,15 +25121,17 @@ elif modulo.startswith("👷 Costo de Personal"):
         # tarifa por cargo del mismo Excel (+ aporte patronal).
         import re as _re_gv
         # ── Reglas PENDIENTES (jefatura/RRHH). Valor provisorio; cambiar aquí. ──
-        _GV_HE_TOLERANCIA_H = 0.0      # P1: exceso mínimo (horas) para contar hora extra
-        _GV_HORAS_INCL_COL  = True     # P2: True = horas_totales ya incluye la colación
+        _GV_HE_TOLERANCIA_H = 10 / 60  # P1: hora extra desde 10 min de exceso (por validar con Bernardita)
+        _GV_HORAS_INCL_COL  = False    # P2: horas_totales ya descuenta la colación (por validar)
         _GV_TE_ES_DESCANSO  = True     # P3: turno extra = día 'Descanso' trabajado
-        _GV_TE_DOMFER       = "ambos"  # P4: descanso trabajado en dom/feriado: 'te' | 'recargo' | 'ambos'
+        _GV_TE_DOMFER       = "ambos"  # P4 (solo jefaturas con tarifa TE): 'te' | 'recargo' | 'ambos'
+        # Resto de cargos (sin tarifa TE): descanso trabajado = todas sus horas como horas extra.
         _GV_OTROS_BONOS     = None     # P5: fuente del real de otros bonos (sin definir)
-        _GV_ALIAS = {                  # P6: nivel por defecto mientras no haya lista por persona
-            "Ayudante de Cocina": "Ayudante de Cocina 1", "Copero": "Copero 1",
-            "Bodeguero (a)": "Bodeguero",
-        }
+        _GV_ALIAS = {"Bodeguero (a)": "Bodeguero"}
+        # P6 (a definir): asistencia no trae nivel → promedio de tarifas de los niveles
+        _GV_PROMEDIO_NIVELES = {"Ayudante de Cocina": ["Ayudante de Cocina 1", "Ayudante de Cocina 2",
+                                                       "Ayudante de Cocina 3"],
+                                "Copero": ["Copero 1", "Copero 2"]}
         _GV_SEMANAS = [(1, 7), (8, 14), (15, 21), (22, 31)]  # P7: tramos por día del mes
         # P8: feriados = _CP_FERIADOS (oficiales de Chile)
         _GV_APORTE = 0.0683
@@ -25164,6 +25166,9 @@ elif modulo.startswith("👷 Costo de Personal"):
             "Nochero": (13839, 9226, 4612.9, 0),
             "Chofer": (13839, 9226, 4612.9, 0),
         }
+        for _gv_c, _gv_niv in _GV_PROMEDIO_NIVELES.items():
+            _GV_TARIFAS[_gv_c] = tuple(sum(_GV_TARIFAS[n][i] for n in _gv_niv) / len(_gv_niv)
+                                       for i in range(4))
         _GV_CONCEPTOS = ["Rem.H.Extras", "Rem.T.Extras", "Rem.Feriados", "Rem.Domingos", "Rem.Otro Bonos"]
         _GV_OPTIMO = {  # óptimo MES por local, en el orden de _GV_CONCEPTOS
             "Vitacura": (3247101, 213660, 679564, 3862169, 1845506),
@@ -25197,9 +25202,10 @@ elif modulo.startswith("👷 Costo de Personal"):
             tar = _GV_TARIFAS[row["cargo_tar"]]
             fch, tipo = row["fecha"], row["tipo_jornada"]
             es_fer, es_dom = fch in _CP_FERIADOS, fch.weekday() == 6
-            # Descanso trabajado: turno extra solo si el cargo tiene tarifa TE (jefaturas);
-            # el resto no tiene turnos extra y se le pagan esas horas como horas extra.
+            k = 1 + _GV_APORTE
             es_descanso = _GV_TE_ES_DESCANSO and tipo == "Descanso"
+            # Turno extra solo en cargos con tarifa TE (Jefe de Local / Sub Administrador);
+            # el resto no tiene turnos extra: su descanso trabajado son horas extra.
             es_te = es_descanso and tar[3] > 0
             te = 1 if es_te and (not (es_fer or es_dom) or _GV_TE_DOMFER in ("te", "ambos")) else 0
             recargo = (not es_te) or _GV_TE_DOMFER in ("recargo", "ambos")
@@ -25215,8 +25221,7 @@ elif modulo.startswith("👷 Costo de Personal"):
                     if not _GV_HORAS_INCL_COL:
                         hrs += float(row["colacion_min"] or 0) / 60
                     exc = hrs - plan
-                    he = exc if exc > _GV_HE_TOLERANCIA_H and exc > 0 else 0.0
-            k = 1 + _GV_APORTE
+                    he = exc if exc >= _GV_HE_TOLERANCIA_H and exc > 0 else 0.0
             return pd.Series({
                 "he_h": he, "te_n": te, "fer_n": fer, "dom_n": dom,
                 "Rem.H.Extras": he * tar[2] * k, "Rem.T.Extras": te * tar[3] * k,
@@ -25232,15 +25237,14 @@ elif modulo.startswith("👷 Costo de Personal"):
                    f"del mismo Excel + aporte patronal {_GV_APORTE*100:.2f}%. Óptimo semanal = mes / 4.")
         with st.expander("⚠️ Reglas provisorias (pendientes de definir con jefatura / RRHH)"):
             st.markdown(
-                f"1. Hora extra desde un exceso de **{_GV_HE_TOLERANCIA_H:g} h** sobre la duración del turno.\n"
-                f"2. Horas totales {'**incluyen**' if _GV_HORAS_INCL_COL else '**no incluyen**'} la colación.\n"
-                f"3. Descanso trabajado = **turno extra** en jefaturas (Jefe de Local / Sub Adm.); "
-                "en el resto de los cargos **todas sus horas son horas extra**.\n"
-                f"4. Descanso trabajado en domingo/feriado se paga como: **{_GV_TE_DOMFER}**.\n"
-                "5. Otros bonos: **real sin fuente** (solo óptimo).\n"
-                "6. Ayudante de Cocina y Copero sin nivel → tarifa **nivel 1**.\n"
-                "7. Semanas: **1–7, 8–14, 15–21, 22–fin de mes**.\n"
-                "8. Feriados: **oficiales de Chile**.")
+                f"1. Hora extra desde un exceso de **{_GV_HE_TOLERANCIA_H*60:.0f} min** sobre la duración del turno.\n"
+                f"2. Horas totales {'**incluyen**' if _GV_HORAS_INCL_COL else '**ya descuentan**'} la colación "
+                "(se suma la colación antes de comparar con el turno).\n"
+                "3. Descanso trabajado: Jefe de Local / Sub Adm. = **turno extra $100.000**; "
+                "resto de cargos = **todas sus horas como horas extra** (+ recargo si es domingo/feriado).\n"
+                "4. Otros bonos: **real sin fuente** (solo óptimo).\n"
+                "5. Ayudante de Cocina y Copero sin nivel → **promedio de tarifas de sus niveles** (a definir).\n"
+                "6. Feriados: **oficiales de Chile**.")
 
         _gv_c1, _gv_c2 = st.columns(2)
         with _gv_c1:
