@@ -25113,6 +25113,226 @@ elif modulo.startswith("👷 Costo de Personal"):
         _cp_dt.date(2026, 12, 8), _cp_dt.date(2026, 12, 25),
     }
 
+    _cp_vista = st.radio("Vista", ["Costo MO", "Gastos variables · Óptimo vs Real"],
+                         horizontal=True, key="cp_vista")
+    if _cp_vista.startswith("Gastos"):
+        # ══ GASTOS VARIABLES REMUNERACIONALES ══════════════════════════════
+        # Óptimo = Excel de jefatura (Dotación Óptima). Real = asistencia_rrhh ×
+        # tarifa por cargo del mismo Excel (+ aporte patronal).
+        import re as _re_gv
+        # ── Reglas PENDIENTES (jefatura/RRHH). Valor provisorio; cambiar aquí. ──
+        _GV_HE_TOLERANCIA_H = 0.0      # P1: exceso mínimo (horas) para contar hora extra
+        _GV_HORAS_INCL_COL  = True     # P2: True = horas_totales ya incluye la colación
+        _GV_TE_ES_DESCANSO  = True     # P3: turno extra = día 'Descanso' trabajado
+        _GV_TE_DOMFER       = "ambos"  # P4: descanso trabajado en dom/feriado: 'te' | 'recargo' | 'ambos'
+        _GV_OTROS_BONOS     = None     # P5: fuente del real de otros bonos (sin definir)
+        _GV_ALIAS = {                  # P6: nivel por defecto mientras no haya lista por persona
+            "Ayudante de Cocina": "Ayudante de Cocina 1", "Copero": "Copero 1",
+            "Bodeguero (a)": "Bodeguero",
+        }
+        _GV_SEMANAS = [(1, 7), (8, 14), (15, 21), (22, 31)]  # P7: tramos por día del mes
+        # P8: feriados = _CP_FERIADOS (oficiales de Chile)
+        _GV_APORTE = 0.0683
+        # shortcut: tarifas y óptimo copiados del Excel "SINTITULO(rrhh).xlsx" (oct-2026);
+        # si jefatura cambia el Excel hay que actualizarlos aquí o pasar a carga por archivo.
+        _GV_TARIFAS = {  # cargo: (domingo, feriado, hora_extra_50, turno_extra)
+            "Jefe de Local": (30345, 20230, 10115.0, 100000),
+            "Sub Administrador": (26515, 17677, 8838.3, 100000),
+            "Encargado de delivery": (41516, 9226, 4612.9, 0),
+            "Jefe de Cocina": (52390, 11642, 5821.1, 0),
+            "Sub Jefe de Cocina": (47912, 10647, 5323.6, 0),
+            "Ayudante de Cocina 1": (45222, 10049, 5024.7, 0),
+            "Ayudante de Cocina 2": (42000, 9333, 4666.7, 0),
+            "Ayudante de Cocina 3": (51516, 9226, 4612.9, 0),
+            "Copero 1": (45222, 10049, 5024.7, 0),
+            "Copero 2": (42000, 9333, 4666.7, 0),
+            "Jefe de Producción": (45222, 10049, 5024.7, 0),
+            "Subjefe de Producción": (45222, 10049, 5024.7, 0),
+            "Producción": (41516, 9226, 4612.9, 0),
+            "Cajero (a)": (13839, 9226, 4612.9, 0),
+            "Jefe de Salón": (16375, 10917, 5458.3, 0),
+            "Sub Jefe de Salón": (16375, 10917, 5458.3, 0),
+            "Garzón": (13839, 9226, 4612.9, 0),
+            "Runner": (13839, 9226, 4612.9, 0),
+            "Anfitrión (a)": (13839, 9226, 4612.9, 0),
+            "Anfitriona de reservas": (13839, 9226, 4612.9, 0),
+            "Jefe de Barra": (15000, 10000, 5000.0, 0),
+            "Sub Jefe de Barra": (13839, 9226, 4612.9, 0),
+            "Bartender": (13839, 9226, 4612.9, 0),
+            "Bodeguero": (14250, 9500, 4750.0, 0),
+            "Estacionador": (13839, 9226, 4612.9, 0),
+            "Nochero": (13839, 9226, 4612.9, 0),
+            "Chofer": (13839, 9226, 4612.9, 0),
+        }
+        _GV_CONCEPTOS = ["Rem.H.Extras", "Rem.T.Extras", "Rem.Feriados", "Rem.Domingos", "Rem.Otro Bonos"]
+        _GV_OPTIMO = {  # óptimo MES por local, en el orden de _GV_CONCEPTOS
+            "Vitacura": (3247101, 213660, 679564, 3862169, 1845506),
+            "Las Condes": (3039949, 213660, 631162, 3582610, 650409),
+            "Chicureo": (2813441, 213660, 640139, 3435057, 620496),
+            "Macul": (2812176, 213660, 669886, 3574540, 1122597),
+            "La Dehesa": (2692818, 213660, 540470, 3142552, 514921),
+            "La Reina": (2702497, 213660, 541349, 3129104, 1336901),
+            "Quilin": (2702497, 213660, 551205, 3158673, 1002488),
+            "Providencia": (2028856, 213660, 342418, 2122135, 1373567),
+            "Nueva Providencia": (2594082, 213660, 531493, 3019035, 605711),
+            "Los Trapenses": (2931534, 213660, 641018, 3531678, 635624),
+            "La Casona": (2813441, 213660, 620427, 3405488, 941157),
+        }
+
+        def _gv_horas_turno(turno):
+            """Duración del turno planificado ('10:00 - 18:00(30 mins)' → 8.0), colación incluida."""
+            m = _re_gv.search(r'(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})', str(turno or ""))
+            if not m:
+                return None
+            a = int(m[1]) * 60 + int(m[2]); b = int(m[3]) * 60 + int(m[4])
+            if b <= a:
+                b += 24 * 60  # turno que cruza medianoche
+            return (b - a) / 60
+
+        def _gv_semana(dia):
+            return next((i + 1 for i, (a, b) in enumerate(_GV_SEMANAS) if a <= dia <= b), None)
+
+        def _gv_dia(row):
+            """Cantidades y costos variables de un registro persona-día."""
+            tar = _GV_TARIFAS[row["cargo_tar"]]
+            fch, tipo = row["fecha"], row["tipo_jornada"]
+            es_fer, es_dom = fch in _CP_FERIADOS, fch.weekday() == 6
+            es_te = _GV_TE_ES_DESCANSO and tipo == "Descanso"
+            te = 1 if es_te and (not (es_fer or es_dom) or _GV_TE_DOMFER in ("te", "ambos")) else 0
+            recargo = (not es_te) or _GV_TE_DOMFER in ("recargo", "ambos")
+            fer = 1 if es_fer and recargo else 0
+            dom = 1 if es_dom and not es_fer and recargo else 0  # feriado en domingo = feriado
+            he = 0.0
+            if tipo == "Turno":
+                plan = _gv_horas_turno(row["turno_raw"])
+                if plan is not None:
+                    hrs = float(row["horas_totales"] or 0)
+                    if not _GV_HORAS_INCL_COL:
+                        hrs += float(row["colacion_min"] or 0) / 60
+                    exc = hrs - plan
+                    he = exc if exc > _GV_HE_TOLERANCIA_H and exc > 0 else 0.0
+            k = 1 + _GV_APORTE
+            return pd.Series({
+                "he_h": he, "te_n": te, "fer_n": fer, "dom_n": dom,
+                "Rem.H.Extras": he * tar[2] * k, "Rem.T.Extras": te * tar[3] * k,
+                "Rem.Feriados": fer * tar[1] * k, "Rem.Domingos": dom * tar[0] * k,
+            })
+
+        # Self-check del parser de turnos (falla en voz alta si cambia el formato)
+        assert _gv_horas_turno("10:00 - 18:00(30 mins)") == 8.0
+        assert _gv_horas_turno("18:00 - 02:00( Sin Colación )") == 8.0
+
+        st.markdown("# 💼 Gastos Variables Remuneracionales")
+        st.caption("Óptimo = Excel de jefatura (Dotación Óptima). Real = asistencia × tarifa por cargo "
+                   f"del mismo Excel + aporte patronal {_GV_APORTE*100:.2f}%. Óptimo semanal = mes / 4.")
+        with st.expander("⚠️ Reglas provisorias (pendientes de definir con jefatura / RRHH)"):
+            st.markdown(
+                f"1. Hora extra desde un exceso de **{_GV_HE_TOLERANCIA_H:g} h** sobre la duración del turno.\n"
+                f"2. Horas totales {'**incluyen**' if _GV_HORAS_INCL_COL else '**no incluyen**'} la colación.\n"
+                f"3. Turno extra = día **Descanso trabajado**.\n"
+                f"4. Descanso trabajado en domingo/feriado se paga como: **{_GV_TE_DOMFER}**.\n"
+                "5. Otros bonos: **real sin fuente** (solo óptimo).\n"
+                "6. Ayudante de Cocina y Copero sin nivel → tarifa **nivel 1**.\n"
+                "7. Semanas: **1–7, 8–14, 15–21, 22–fin de mes**.\n"
+                "8. Feriados: **oficiales de Chile**.")
+
+        _gv_c1, _gv_c2 = st.columns(2)
+        with _gv_c1:
+            _gv_ref = st.date_input("Mes", value=_cp_dt.date.today().replace(day=1),
+                                    key="gv_mes", format="DD/MM/YYYY",
+                                    help="Cualquier día del mes a evaluar.")
+        _gv_ini = _gv_ref.replace(day=1)
+        _gv_fin = _gv_ini.replace(day=_cp_cal.monthrange(_gv_ini.year, _gv_ini.month)[1])
+        with _gv_c2:
+            if _user_local_cp:
+                _gv_loc = _user_local_cp
+                st.markdown(f"**Local:** `{_gv_loc}`")
+            else:
+                _gv_loc = st.selectbox("Local", ["Todos"] + list(_GV_OPTIMO), key="gv_local")
+
+        _gv_as = run_query("""
+            SELECT rut, TRIM(COALESCE(nombre,'') || ' ' || COALESCE(apellidos,'')) AS nombre,
+                   local, fecha, tipo_jornada, turno_raw, colacion_min, horas_totales, cargo
+            FROM asistencia_rrhh
+            WHERE fecha BETWEEN :i AND :f AND trabajo = true
+        """, {"i": str(_gv_ini), "f": str(_gv_fin)})
+        if _gv_as is None or _gv_as.empty:
+            st.info(f"Sin asistencia cargada entre {_gv_ini:%d/%m/%Y} y {_gv_fin:%d/%m/%Y}.")
+            st.stop()
+
+        _gv_as["fecha"] = pd.to_datetime(_gv_as["fecha"]).dt.date
+        _gv_as["cargo"] = _gv_as["cargo"].fillna("").str.strip()
+        _gv_as["cargo_tar"] = _gv_as["cargo"].map(lambda c: _GV_ALIAS.get(c, c))
+        _gv_excl = _gv_as[~_gv_as["cargo_tar"].isin(_GV_TARIFAS)]
+        _gv_as = _gv_as[_gv_as["cargo_tar"].isin(_GV_TARIFAS)].copy()
+        if _gv_as.empty:
+            st.info("Ningún cargo de la asistencia calza con las tarifas del Excel.")
+            st.stop()
+        _gv_as = pd.concat([_gv_as, _gv_as.apply(_gv_dia, axis=1)], axis=1)
+        _gv_as["semana"] = _gv_as["fecha"].map(lambda d: _gv_semana(d.day))
+
+        _gv_sel = _gv_as if _gv_loc == "Todos" else _gv_as[_gv_as["local"] == _gv_loc]
+        _gv_opt_mes = [sum(v[i] for v in _GV_OPTIMO.values()) if _gv_loc == "Todos"
+                       else _GV_OPTIMO.get(_gv_loc, (0,) * 5)[i] for i in range(5)]
+        _gv_money = lambda x: f"${x:,.0f}".replace(",", ".") if pd.notna(x) else "por definir"
+
+        def _gv_tabla(df, factor):
+            """Óptimo / Real / Dif / Var% por concepto, como la hoja Vista."""
+            filas = []
+            for i, c in enumerate(_GV_CONCEPTOS):
+                opt = _gv_opt_mes[i] * factor
+                real = df[c].sum() if c in df.columns else float("nan")
+                filas.append((c, opt, real))
+            filas.append(("Rem.Variable (sin otros bonos)",
+                          sum(f[1] for f in filas[:4]), sum(f[2] for f in filas[:4])))
+            return pd.DataFrame({
+                "Concepto": [f[0] for f in filas],
+                "Óptimo": [_gv_money(f[1]) for f in filas],
+                "Real": [_gv_money(f[2]) for f in filas],
+                "Dif": [_gv_money(f[2] - f[1]) for f in filas],
+                "Var %": [f"{(f[2]-f[1])/f[1]*100:+.1f}%" if f[1] and pd.notna(f[2]) else "—"
+                          for f in filas],
+            })
+
+        _gv_tabs = st.tabs(["Mes"] + [f"Semana {i+1} ({a}–{min(b, _gv_fin.day)})"
+                                      for i, (a, b) in enumerate(_GV_SEMANAS)])
+        with _gv_tabs[0]:
+            st.dataframe(_gv_tabla(_gv_sel, 1), use_container_width=True, hide_index=True)
+            if _gv_loc == "Todos":
+                st.markdown("**Por local (mes, sin otros bonos)**")
+                _gv_loc_df = _gv_as.groupby("local")[_GV_CONCEPTOS[:4]].sum().sum(axis=1).rename("real")
+                _gv_rk = pd.DataFrame({"local": list(_GV_OPTIMO),
+                                       "opt": [sum(v[:4]) for v in _GV_OPTIMO.values()]})
+                _gv_rk["real"] = _gv_rk["local"].map(_gv_loc_df).fillna(0)
+                _gv_rk["var"] = (_gv_rk["real"] - _gv_rk["opt"]) / _gv_rk["opt"]
+                _gv_rk = _gv_rk.sort_values("var", ascending=False)
+                st.dataframe(pd.DataFrame({
+                    "Local": _gv_rk["local"], "Óptimo": _gv_rk["opt"].map(_gv_money),
+                    "Real": _gv_rk["real"].map(_gv_money),
+                    "Dif": (_gv_rk["real"] - _gv_rk["opt"]).map(_gv_money),
+                    "Var %": _gv_rk["var"].map(lambda x: f"{x*100:+.1f}%"),
+                }), use_container_width=True, hide_index=True)
+        for _i in range(len(_GV_SEMANAS)):
+            with _gv_tabs[_i + 1]:
+                st.dataframe(_gv_tabla(_gv_sel[_gv_sel["semana"] == _i + 1], 0.25),
+                             use_container_width=True, hide_index=True)
+
+        with st.expander("Detalle por persona"):
+            _gv_det = (_gv_sel.groupby(["local", "nombre", "cargo"], as_index=False)
+                       [["he_h", "te_n", "fer_n", "dom_n"] + _GV_CONCEPTOS[:4]].sum())
+            _gv_det["Total"] = _gv_det[_GV_CONCEPTOS[:4]].sum(axis=1)
+            _gv_det = _gv_det.sort_values("Total", ascending=False).rename(columns={
+                "he_h": "Hrs extra", "te_n": "Turnos extra", "fer_n": "Feriados", "dom_n": "Domingos"})
+            _gv_det["Hrs extra"] = _gv_det["Hrs extra"].round(1)
+            for _c in _GV_CONCEPTOS[:4] + ["Total"]:
+                _gv_det[_c] = _gv_det[_c].map(_gv_money)
+            st.dataframe(_gv_det, use_container_width=True, hide_index=True)
+
+        if not _gv_excl.empty:
+            st.caption("Cargos excluidos (no están en el Excel): " + ", ".join(
+                f"{c or 'vacío'} ({n})" for c, n in _gv_excl["cargo"].value_counts().items()))
+        st.stop()
+
     st.markdown("# 👷 Costo de Personal")
     st.caption("Costo de mano de obra = cantidades de asistencia × precios de la planilla. "
                "Días normales × valor día, domingos × valor domingo (cocina/salón), "
