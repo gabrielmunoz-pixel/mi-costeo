@@ -14114,17 +14114,27 @@ elif modulo.startswith("📊"):
                             _ws_out.cell(_ar, 5).value = round(_aliva_d, 2) if _aliva_d else 0
                             _ws_out.cell(_ar, 7).value = round(_aliva_a, 2) if _aliva_a else 0
 
-                        # ════════ MES SEPTIEMBRE 2026 (col AC=29 monto, AD=30 %) ════════
-                        # DECISIÓN: los meses cerrados hasta AGO 2026 son datos ESTÁTICOS
-                        # ya cargados en el template (hasta col AA). El script NO los
-                        # reescribe para no pisar históricos cerrados. Solo se llena el
-                        # mes más reciente (SEPTIEMBRE 2026) en AC/AD.
+                        # ════════ HISTÓRICO MENSUAL DESDE BD ════════
+                        # I..AC (cols 9..29, % en la siguiente) = 11 meses cerrados previos
+                        # al mes del informe (I = mes-11 ... AC = mes-1); AG (33/34) = mismo
+                        # mes del año anterior. Todo desde BD, ya no hay datos estáticos.
                         # Los % replican el criterio del histórico: en Alemán = tipo/total
                         # del local (fila base+2); en Aliva = monto/total Alemán del local.
-                        # No se tocan E..AB ni AE en adelante ni fórmulas.
-                        _MESES_YAC = [(9, 2026, 29, 30)]
-                        _rango_ini = date(2026, 9, 1)
-                        _rango_fin = date(2026, 9, _dias_calendario_mes(2026, 9))
+                        # No se tocan E..H, AE/AF, AI en adelante ni fórmulas (AK).
+                        def _mes_off(n):
+                            _t = _exp_año * 12 + (_exp_mes - 1) + n
+                            return _t // 12, _t % 12 + 1
+                        _MESES_YAC = []
+                        for _i in range(11):
+                            _ya, _mm = _mes_off(_i - 11)
+                            _MESES_YAC.append((_mm, _ya, 9 + 2 * _i, 10 + 2 * _i))
+                        _MESES_YAC.append((_exp_mes, _exp_año - 1, 33, 34))
+                        # Rango mes-12 .. mes-1: 12 meses de número distinto, por eso basta
+                        # agrupar por EXTRACT(MONTH)
+                        _ya_ini, _mm_ini = _mes_off(-12)
+                        _ya_fin, _mm_fin = _mes_off(-1)
+                        _rango_ini = date(_ya_ini, _mm_ini, 1)
+                        _rango_fin = date(_ya_fin, _mm_fin, _dias_calendario_mes(_ya_fin, _mm_fin))
 
                         # 1 query Alemán (local/origen/mes), 1 apps (origen/mes), 1 Aliva
                         _df_yac = run_query("""
@@ -14153,6 +14163,16 @@ elif modulo.startswith("📊"):
                               AND local IS NOT NULL
                             GROUP BY local, EXTRACT(MONTH FROM fecha)
                         """, {'fi': str(_rango_ini), 'ff': str(_rango_fin)})
+                        # Meses sin detalle diario en ventas_aliva (nov-2025 a abr-2026): el
+                        # monto mensual cargado en ventas_mensual (tipo ALIVA) reemplaza al mes
+                        _df_yac_alm = run_query("""
+                            SELECT local, mes, monto AS venta FROM ventas_mensual
+                            WHERE tipo = 'ALIVA' AND (año * 100 + mes) BETWEEN :pi AND :pf
+                        """, {'pi': _ya_ini * 100 + _mm_ini, 'pf': _ya_fin * 100 + _mm_fin})
+                        if not _df_yac_alm.empty:
+                            _df_yac_al = pd.concat([
+                                _df_yac_al[~_df_yac_al['mes'].isin(_df_yac_alm['mes'])] if not _df_yac_al.empty else _df_yac_al,
+                                _df_yac_alm], ignore_index=True)
 
                         _ALIVA_TOTAL_ROW = {
                             48: 8, 49: 11, 50: 14, 51: 17, 52: 20, 53: 23,
@@ -14211,13 +14231,6 @@ elif modulo.startswith("📊"):
                                 _base_tot = float(_base_tot) if isinstance(_base_tot, (int, float)) else 0.0
                                 _ws_out.cell(_ar, _c_pct).value = (_m_av / _base_tot) if _base_tot else 0
 
-                        # ════════ AÑO ANTERIOR (columna AG = 33) ════════
-                        # Mismo mes del año anterior (mes completo).
-                        # ════════ COLUMNA AG (33) = SEP 2025 — FIJA, NO SE TOCA ════════
-                        # Esta columna es un mes histórico ESTÁTICO cargado manualmente en
-                        # el template. El script NO la escribe (antes la pisaba con el
-                        # "año anterior" del mes en curso, borrando SEP 2025). Se conserva
-                        # tal cual venga en el template.
 
                         # ── GENERAR GRÁFICOS CON MATPLOTLIB ─────────────────
                         import matplotlib
