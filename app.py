@@ -25192,6 +25192,17 @@ elif modulo.startswith("👷 Costo de Personal"):
         "La Casona": (2813441, 213660, 620427, 3405488, 941157),
     }
 
+    # Costo base (Rem. Fija) óptimo MES y dotación óptima por local (hoja Vista del Excel)
+    _GV_FIJA = {
+        "Vitacura": (63744055, 65), "Las Condes": (59572730, 60), "Chicureo": (60654754, 61),
+        "Macul": (62652143, 64), "La Dehesa": (51152245, 51), "La Reina": (52046013, 51),
+        "Quilin": (52244976, 52), "Providencia": (34498785, 31), "Nueva Providencia": (50630384, 50),
+        "Los Trapenses": (60305026, 61), "La Casona": (58521323, 59),
+    }
+    # Haberes fijos de la planilla que forman el costo base real (provisorio, validar con RRHH)
+    _GV_FIJA_COLS = ["sueldo_base", "gratificacion", "bono_produccion", "bono_gestion", "bono_formacion",
+                     "bono_delivery", "bono_reserva", "colacion_haber", "movilizacion"]
+
     def _gv_horas_turno(turno):
         """Duración del turno planificado ('10:00 - 18:00(30 mins)' → 8.0), colación incluida."""
         m = _re_gv.search(r'(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})', str(turno or ""))
@@ -25313,12 +25324,12 @@ elif modulo.startswith("👷 Costo de Personal"):
     <div style="margin-bottom:1.2rem">
         <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:#ffffff;margin-bottom:4px">Costo de Personal</div>
         <div style="font-family:'DM Serif Display',serif;font-size:2rem;color:#f0ede8;letter-spacing:-0.02em;line-height:1.1">
-            💼 Gastos Variables
+            👷 Costo de Personal
         </div>
         <div style="width:40px;height:2px;background:#d4a853;margin-top:8px;border-radius:2px"></div>
         <div style="font-size:0.85rem;color:#c8c4be;margin-top:10px">
-            Lo que se gastó en <b>horas extras, turnos extras, domingos y feriados</b>,
-            comparado con lo planificado (óptimo).
+            <b>Costo base</b> (remuneración fija) y <b>gastos variables</b> (horas extras, turnos extras,
+            domingos y feriados), comparados con lo planificado (óptimo).
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -25386,121 +25397,227 @@ elif modulo.startswith("👷 Costo de Personal"):
                     else _GV_OPTIMO.get(_gv_loc, (0,) * 5)[i]) * _gv_factor for i in range(5)]
     _GV_4 = _GV_CONCEPTOS[:4]  # conceptos con real (otros bonos aún sin fuente)
 
-    # ── Resumen ──
-    _gv_opt_tot = sum(_gv_opt_mes[:4])
-    _gv_real_tot = float(_gv_sel[_GV_4].sum().sum())
-    _gv_dif = _gv_real_tot - _gv_opt_tot
-    _gv_ratio = _gv_real_tot / _gv_opt_tot if _gv_opt_tot else 0
-    _gv_fg, _ = _gv_color(_gv_ratio)
-    _gv_estado = ("Dentro de lo planificado" if _gv_ratio <= 1 else
-                  "Levemente sobre lo planificado" if _gv_ratio <= 1.10 else "Sobre lo planificado")
-    st.markdown(
-        "<div class='gv-kpis'>"
-        f"<div class='gv-kpi'><div class='l'>Planificado</div><div class='v'>{_gv_money(_gv_opt_tot)}</div>"
-        f"<div class='s'>Óptimo de {_gv_dias} día(s) · {_gv_factor*100:.0f}% del mes</div></div>"
-        f"<div class='gv-kpi'><div class='l'>Real</div><div class='v'>{_gv_money(_gv_real_tot)}</div>"
-        f"<div class='s'>Según asistencia</div></div>"
-        f"<div class='gv-kpi'><div class='l'>Diferencia</div><div class='v' style='color:{_gv_fg}'>"
-        f"{'+' if _gv_dif > 0 else ''}{_gv_money(_gv_dif)}</div>"
-        f"<div class='s'>{(_gv_ratio - 1) * 100:+.1f}% vs óptimo</div></div>"
-        f"<div class='gv-kpi'><div class='l'>Estado</div><div class='v' style='font-size:1rem;color:{_gv_fg}'>"
-        f"● {_gv_estado}</div><div class='s'>Sin contar otros bonos</div></div>"
-        "</div>", unsafe_allow_html=True)
-    _gv_ult = max(_gv_as["fecha"]) if not _gv_as.empty else None
-    if _gv_ult and _gv_ult < _gv_fin:
-        st.caption(f"🕒 La asistencia cargada llega hasta el {_gv_ult:%d/%m/%Y}; el óptimo cubre "
-                   f"hasta el {_gv_fin:%d/%m/%Y}. Para comparar parejo, ajusta 'Hasta'.")
+    def _gv_norm(t):
+        import unicodedata as _ud
+        return "".join(c for c in _ud.normalize("NFKD", str(t or "")) if not _ud.combining(c)).strip().lower()
 
-    # ── Por concepto ──
-    st.markdown("<div class='section-label'>Por concepto</div>", unsafe_allow_html=True)
-    _gv_cant = {
-        "Rem.H.Extras":  ("Horas extras", f"{_gv_sel['he_h'].sum():,.0f} horas".replace(",", ".")),
-        "Rem.T.Extras":  ("Turnos extras", f"{int(_gv_sel['te_n'].sum())} turno(s) · solo Jefe de Local / Sub Adm."),
-        "Rem.Feriados":  ("Feriados", f"{int(_gv_sel['fer_n'].sum())} días trabajados en feriado"),
-        "Rem.Domingos":  ("Domingos", f"{int(_gv_sel['dom_n'].sum())} domingos pagados "
-                                      f"(desde el {_GV_DOM_LIBRES + 1}° trabajado por persona)"),
-    }
-    _gv_cols = st.columns(2)
-    for _i, _c in enumerate(_GV_4):
-        _nom, _det = _gv_cant[_c]
-        _gv_cols[_i % 2].markdown(_gv_card(_nom, float(_gv_sel[_c].sum()), _gv_opt_mes[_i], _det),
-                                  unsafe_allow_html=True)
-    _gv_cols[0].markdown(_gv_card("Otros bonos", None, _gv_opt_mes[4], "Aún sin fuente de datos reales"),
-                         unsafe_allow_html=True)
+    def _gv_base_real(ini, fin):
+        """Costo base real por local: planilla de cada mes del rango (si falta, la última anterior),
+        prorrateada por los días del rango en ese mes. → (serie por local, periodos usados, dotación, locales sin calce)"""
+        rm = run_query(f"""
+            SELECT rut, local, periodo, {' + '.join(f'COALESCE({c},0)' for c in _GV_FIJA_COLS)} AS fija
+            FROM remuneraciones_rrhh WHERE periodo IS NOT NULL
+        """)
+        if rm is None or rm.empty:
+            return None, [], pd.Series(dtype=float), []
+        canon = {_gv_norm(l): l for l in _GV_FIJA}
+        rm["local_c"] = rm["local"].map(lambda l: canon.get(_gv_norm(l)))
+        sin_calce = sorted(rm.loc[rm["local_c"].isna(), "local"].fillna("vacío").astype(str).unique())
+        rm = rm[rm["local_c"].notna()].copy()
+        if rm.empty:
+            return None, [], pd.Series(dtype=float), sin_calce
+        rm["periodo"] = pd.to_datetime(rm["periodo"]).dt.date.map(lambda d: d.replace(day=1))
+        rm["fija"] = pd.to_numeric(rm["fija"], errors="coerce").fillna(0.0)
+        pers = sorted(rm["periodo"].unique())
+        tot, usados, d = pd.Series(dtype=float), [], ini.replace(day=1)
+        while d <= fin:
+            dim = _cp_cal.monthrange(d.year, d.month)[1]
+            a, b = max(ini, d), min(fin, d.replace(day=dim))
+            p = max([x for x in pers if x <= d], default=pers[0])
+            usados.append(p)
+            s = rm[rm["periodo"] == p].groupby("local_c")["fija"].sum() * (1 + _GV_APORTE)
+            tot = tot.add(s * ((b - a).days + 1) / dim, fill_value=0)
+            d = d.replace(day=dim) + _cp_dt.timedelta(days=1)
+        dot = rm[rm["periodo"] == usados[-1]].groupby("local_c")["rut"].nunique()
+        return tot, sorted(set(usados)), dot, sin_calce
 
-    # ── Últimas 4 semanas cerradas (lun–dom), independiente de Desde/Hasta ──
-    _gv_wfin = _gv_hoy - _cp_dt.timedelta(days=_gv_hoy.weekday() + 1)  # último domingo cerrado
-    _gv_wini = _gv_wfin - _cp_dt.timedelta(days=27)
-    st.markdown("<div class='section-label' style='margin-top:1rem'>Últimas 4 semanas (lunes a domingo)</div>",
-                unsafe_allow_html=True)
-    _gv_wres = _gv_cargar(_gv_wini, _gv_wfin)
-    if _gv_wres is None:
-        st.caption("Sin asistencia cargada para las últimas 4 semanas.")
-    else:
-        _gv_w = _gv_wres[0] if _gv_loc == "Todos" else _gv_wres[0][_gv_wres[0]["local"] == _gv_loc]
-        _gv_opt_base = ([sum(v[i] for v in _GV_OPTIMO.values()) for i in range(4)] if _gv_loc == "Todos"
-                        else list(_GV_OPTIMO.get(_gv_loc, (0,) * 5)[:4]))
-        _gv_cols = st.columns(2)
-        for _k in range(4):
-            _a = _gv_wini + _cp_dt.timedelta(days=7 * _k)
-            _b = _a + _cp_dt.timedelta(days=6)
-            _s = _gv_w[(_gv_w["fecha"] >= _a) & (_gv_w["fecha"] <= _b)]
-            _o = sum(_gv_opt_base) * _gv_factor_optimo(_a, _b)
-            _det = (f"{_a:%d/%m} – {_b:%d/%m} · HE {_gv_money(float(_s['Rem.H.Extras'].sum()))} · "
-                    f"Dom {_gv_money(float(_s['Rem.Domingos'].sum()))}")
-            _gv_cols[_k % 2].markdown(_gv_card(f"Semana {_k + 1}", float(_s[_GV_4].sum().sum()), _o, _det),
-                                      unsafe_allow_html=True)
-        st.caption("Domingos según regla C: los 2 primeros del mes van incluidos, por eso las "
-                   "semanas de fin de mes suelen salir más altas.")
+    _gv_bt, _gv_bper, _gv_bdot, _gv_bsin = _gv_base_real(_gv_ini, _gv_fin)
+    _gv_tab_res, _gv_tab_var = st.tabs(["📋 Resumen", "💼 Gastos Variables"])
 
-
-    # ── Por local (solo vista cadena) ──
-    if _gv_loc == "Todos":
-        st.markdown("<div class='section-label' style='margin-top:1rem'>Por local</div>",
-                    unsafe_allow_html=True)
-        _gv_real_loc = _gv_as.groupby("local")[_GV_4].sum().sum(axis=1)
-        _gv_rk = sorted(((l, float(_gv_real_loc.get(l, 0)), sum(v[:4]) * _gv_factor)
-                         for l, v in _GV_OPTIMO.items()),
-                        key=lambda t: t[1] / t[2] if t[2] else 0, reverse=True)
-        _gv_cols = st.columns(2)
-        for _i, (_l, _r, _o) in enumerate(_gv_rk):
-            _he = _gv_as.loc[_gv_as["local"] == _l, "he_h"].sum()
-            _gv_cols[_i % 2].markdown(
-                _gv_card(_l, _r, _o, f"{_he:,.0f} horas extras".replace(",", ".")),
-                unsafe_allow_html=True)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    with st.expander("👥 Detalle por persona"):
-        _gv_det = (_gv_sel.groupby(["local", "nombre", "cargo"], as_index=False)
-                   [["he_h", "te_n", "fer_n", "dom_n"] + _GV_4].sum())
-        _gv_det["Total"] = _gv_det[_GV_4].sum(axis=1)
-        _gv_det = _gv_det.sort_values("Total", ascending=False)
-        st.dataframe(pd.DataFrame({
-            "Local": _gv_det["local"], "Nombre": _gv_det["nombre"], "Cargo": _gv_det["cargo"],
-            "Horas extra": _gv_det["he_h"].round(1), "Turnos extra": _gv_det["te_n"].astype(int),
-            "Domingos": _gv_det["dom_n"].astype(int), "Feriados": _gv_det["fer_n"].astype(int),
-            "Total $": _gv_det["Total"].map(_gv_money),
-        }), use_container_width=True, hide_index=True)
-
-    with st.expander("ℹ️ Cómo se calcula"):
+    with _gv_tab_res:
+        _gv_locs = list(_GV_FIJA) if _gv_loc == "Todos" else [_gv_loc]
+        _gv_var_loc = _gv_as.groupby("local")[_GV_4].sum().sum(axis=1)
+        _gv_filas = []  # (local, base real, base óptimo, var real, var óptimo)
+        for _l in _gv_locs:
+            _gv_filas.append((_l,
+                              float(_gv_bt.get(_l, 0)) if _gv_bt is not None else 0.0,
+                              _GV_FIJA.get(_l, (0, 0))[0] * _gv_factor,
+                              float(_gv_var_loc.get(_l, 0)),
+                              sum(_GV_OPTIMO.get(_l, (0,) * 5)[:4]) * _gv_factor))
+        _rb, _ob, _rv, _ov = (sum(f[i] for f in _gv_filas) for i in (1, 2, 3, 4))
+        _rt, _ot = _rb + _rv, _ob + _ov
+        _ratio = _rt / _ot if _ot else 0
+        _fg, _ = _gv_color(_ratio)
+        _est = ("Dentro de lo planificado" if _ratio <= 1 else
+                "Levemente sobre lo planificado" if _ratio <= 1.10 else "Sobre lo planificado")
         st.markdown(
-            "- **Óptimo:** planificación del Excel de jefatura (Dotación Óptima), por local.\n"
-            "- **Real:** asistencia diaria × tarifa de cada cargo del mismo Excel, "
-            f"+ {_GV_APORTE*100:.2f}% de aporte patronal.\n"
-            f"- **Horas extras:** lo trabajado (más la colación) sobre la duración del turno, "
-            f"desde {_GV_HE_TOLERANCIA_H*60:.0f} min de exceso.\n"
-            "- **Día de descanso trabajado:** Jefe de Local y Sub Administrador cobran turno extra "
-            "($100.000); el resto cobra todas esas horas como horas extras (+ recargo si es domingo o feriado).\n"
-            f"- **Domingos (provisorio):** cada persona tiene {_GV_DOM_LIBRES} domingos incluidos al mes; "
-            f"desde su {_GV_DOM_LIBRES + 1}° domingo trabajado (planificado o no) se paga el recargo.\n"
-            "- **Feriados:** recargo por cada feriado trabajado (feriados oficiales de Chile).\n"
-            "\n**Provisorio (por definir con RRHH):**\n"
-            "- Otros bonos aún sin datos reales: se muestra solo el óptimo.\n"
-            "- Ayudante de Cocina y Copero no traen nivel: se usa el promedio de las tarifas de sus niveles.")
-        if not _gv_excl.empty:
-            st.caption("Cargos no considerados (no están en el Excel): " + ", ".join(
-                f"{c or 'sin cargo'} ({n} días)" for c, n in _gv_excl["cargo"].value_counts().items()))
+            "<div class='gv-kpis'>"
+            f"<div class='gv-kpi'><div class='l'>Planificado</div><div class='v'>{_gv_money(_ot)}</div>"
+            f"<div class='s'>Óptimo de {_gv_dias} día(s) · {_gv_factor*100:.0f}% del mes</div></div>"
+            f"<div class='gv-kpi'><div class='l'>Real</div><div class='v'>{_gv_money(_rt)}</div>"
+            f"<div class='s'>Planilla + asistencia</div></div>"
+            f"<div class='gv-kpi'><div class='l'>Diferencia</div><div class='v' style='color:{_fg}'>"
+            f"{'+' if _rt > _ot else ''}{_gv_money(_rt - _ot)}</div>"
+            f"<div class='s'>{(_ratio - 1) * 100:+.1f}% vs óptimo</div></div>"
+            f"<div class='gv-kpi'><div class='l'>Estado</div><div class='v' style='font-size:1rem;color:{_fg}'>"
+            f"● {_est}</div><div class='s'>Sin contar otros bonos</div></div>"
+            "</div>", unsafe_allow_html=True)
+        if _gv_bt is None:
+            st.warning("No hay planillas de remuneraciones cargadas: el costo base real sale en $0. "
+                       "Cárgalas en Gestión de Datos → RRHH.")
+
+        st.markdown("<div class='section-label'>Por concepto</div>", unsafe_allow_html=True)
+        _dot_r = int(sum(_gv_bdot.get(_l, 0) for _l in _gv_locs))
+        _dot_o = sum(_GV_FIJA.get(_l, (0, 0))[1] for _l in _gv_locs)
+        _per_txt = ", ".join(f"{p:%m/%Y}" for p in _gv_bper) or "sin planilla"
+        _c1, _c2 = st.columns(2)
+        _c1.markdown(_gv_card("Costo base (remuneración fija)", _rb, _ob,
+                              f"Dotación {_dot_r} real / {_dot_o} óptima · planilla {_per_txt}"),
+                     unsafe_allow_html=True)
+        _c2.markdown(_gv_card("Gastos variables", _rv, _ov,
+                              "Horas extras, turnos extras, feriados y domingos"),
+                     unsafe_allow_html=True)
+
+        if _gv_loc == "Todos":
+            st.markdown("<div class='section-label' style='margin-top:1rem'>Por local</div>",
+                        unsafe_allow_html=True)
+            _cols = st.columns(2)
+            for _i, _f in enumerate(sorted(_gv_filas, key=lambda f: (f[1] + f[3]) / (f[2] + f[4])
+                                           if (f[2] + f[4]) else 0, reverse=True)):
+                _cols[_i % 2].markdown(
+                    _gv_card(_f[0], _f[1] + _f[3], _f[2] + _f[4],
+                             f"Base {_gv_money(_f[1])} · Variable {_gv_money(_f[3])}"),
+                    unsafe_allow_html=True)
+
+        with st.expander("ℹ️ Cómo se calcula"):
+            st.markdown(
+                "- **Planificado:** Rem. Fija + gastos variables (HE, TE, feriados, domingos) de la hoja "
+                "Vista del Excel de jefatura, prorrateado por los días elegidos. No incluye otros bonos.\n"
+                "- **Costo base real:** planilla de remuneraciones del mes (sueldo base, gratificación, "
+                "bonos de producción/gestión/formación/delivery/reserva, colación y movilización) "
+                f"+ {_GV_APORTE*100:.2f}% de aporte patronal, prorrateada por días. Si el mes no tiene "
+                "planilla cargada, se usa la última anterior.\n"
+                "- **Gastos variables real:** igual que en la pestaña 💼 Gastos Variables.")
+            if _gv_bsin:
+                st.caption("Locales de la planilla que no calzan con el Excel (no se suman): "
+                           + ", ".join(_gv_bsin))
+
+    with _gv_tab_var:
+        # ── Resumen ──
+        _gv_opt_tot = sum(_gv_opt_mes[:4])
+        _gv_real_tot = float(_gv_sel[_GV_4].sum().sum())
+        _gv_dif = _gv_real_tot - _gv_opt_tot
+        _gv_ratio = _gv_real_tot / _gv_opt_tot if _gv_opt_tot else 0
+        _gv_fg, _ = _gv_color(_gv_ratio)
+        _gv_estado = ("Dentro de lo planificado" if _gv_ratio <= 1 else
+                      "Levemente sobre lo planificado" if _gv_ratio <= 1.10 else "Sobre lo planificado")
+        st.markdown(
+            "<div class='gv-kpis'>"
+            f"<div class='gv-kpi'><div class='l'>Planificado</div><div class='v'>{_gv_money(_gv_opt_tot)}</div>"
+            f"<div class='s'>Óptimo de {_gv_dias} día(s) · {_gv_factor*100:.0f}% del mes</div></div>"
+            f"<div class='gv-kpi'><div class='l'>Real</div><div class='v'>{_gv_money(_gv_real_tot)}</div>"
+            f"<div class='s'>Según asistencia</div></div>"
+            f"<div class='gv-kpi'><div class='l'>Diferencia</div><div class='v' style='color:{_gv_fg}'>"
+            f"{'+' if _gv_dif > 0 else ''}{_gv_money(_gv_dif)}</div>"
+            f"<div class='s'>{(_gv_ratio - 1) * 100:+.1f}% vs óptimo</div></div>"
+            f"<div class='gv-kpi'><div class='l'>Estado</div><div class='v' style='font-size:1rem;color:{_gv_fg}'>"
+            f"● {_gv_estado}</div><div class='s'>Sin contar otros bonos</div></div>"
+            "</div>", unsafe_allow_html=True)
+        _gv_ult = max(_gv_as["fecha"]) if not _gv_as.empty else None
+        if _gv_ult and _gv_ult < _gv_fin:
+            st.caption(f"🕒 La asistencia cargada llega hasta el {_gv_ult:%d/%m/%Y}; el óptimo cubre "
+                       f"hasta el {_gv_fin:%d/%m/%Y}. Para comparar parejo, ajusta 'Hasta'.")
+
+        # ── Por concepto ──
+        st.markdown("<div class='section-label'>Por concepto</div>", unsafe_allow_html=True)
+        _gv_cant = {
+            "Rem.H.Extras":  ("Horas extras", f"{_gv_sel['he_h'].sum():,.0f} horas".replace(",", ".")),
+            "Rem.T.Extras":  ("Turnos extras", f"{int(_gv_sel['te_n'].sum())} turno(s) · solo Jefe de Local / Sub Adm."),
+            "Rem.Feriados":  ("Feriados", f"{int(_gv_sel['fer_n'].sum())} días trabajados en feriado"),
+            "Rem.Domingos":  ("Domingos", f"{int(_gv_sel['dom_n'].sum())} domingos pagados "
+                                          f"(desde el {_GV_DOM_LIBRES + 1}° trabajado por persona)"),
+        }
+        _gv_cols = st.columns(2)
+        for _i, _c in enumerate(_GV_4):
+            _nom, _det = _gv_cant[_c]
+            _gv_cols[_i % 2].markdown(_gv_card(_nom, float(_gv_sel[_c].sum()), _gv_opt_mes[_i], _det),
+                                      unsafe_allow_html=True)
+        _gv_cols[0].markdown(_gv_card("Otros bonos", None, _gv_opt_mes[4], "Aún sin fuente de datos reales"),
+                             unsafe_allow_html=True)
+
+        # ── Últimas 4 semanas cerradas (lun–dom), independiente de Desde/Hasta ──
+        _gv_wfin = _gv_hoy - _cp_dt.timedelta(days=_gv_hoy.weekday() + 1)  # último domingo cerrado
+        _gv_wini = _gv_wfin - _cp_dt.timedelta(days=27)
+        st.markdown("<div class='section-label' style='margin-top:1rem'>Últimas 4 semanas (lunes a domingo)</div>",
+                    unsafe_allow_html=True)
+        _gv_wres = _gv_cargar(_gv_wini, _gv_wfin)
+        if _gv_wres is None:
+            st.caption("Sin asistencia cargada para las últimas 4 semanas.")
+        else:
+            _gv_w = _gv_wres[0] if _gv_loc == "Todos" else _gv_wres[0][_gv_wres[0]["local"] == _gv_loc]
+            _gv_opt_base = ([sum(v[i] for v in _GV_OPTIMO.values()) for i in range(4)] if _gv_loc == "Todos"
+                            else list(_GV_OPTIMO.get(_gv_loc, (0,) * 5)[:4]))
+            _gv_cols = st.columns(2)
+            for _k in range(4):
+                _a = _gv_wini + _cp_dt.timedelta(days=7 * _k)
+                _b = _a + _cp_dt.timedelta(days=6)
+                _s = _gv_w[(_gv_w["fecha"] >= _a) & (_gv_w["fecha"] <= _b)]
+                _o = sum(_gv_opt_base) * _gv_factor_optimo(_a, _b)
+                _det = (f"{_a:%d/%m} – {_b:%d/%m} · HE {_gv_money(float(_s['Rem.H.Extras'].sum()))} · "
+                        f"Dom {_gv_money(float(_s['Rem.Domingos'].sum()))}")
+                _gv_cols[_k % 2].markdown(_gv_card(f"Semana {_k + 1}", float(_s[_GV_4].sum().sum()), _o, _det),
+                                          unsafe_allow_html=True)
+            st.caption("Domingos según regla C: los 2 primeros del mes van incluidos, por eso las "
+                       "semanas de fin de mes suelen salir más altas.")
+
+
+        # ── Por local (solo vista cadena) ──
+        if _gv_loc == "Todos":
+            st.markdown("<div class='section-label' style='margin-top:1rem'>Por local</div>",
+                        unsafe_allow_html=True)
+            _gv_real_loc = _gv_as.groupby("local")[_GV_4].sum().sum(axis=1)
+            _gv_rk = sorted(((l, float(_gv_real_loc.get(l, 0)), sum(v[:4]) * _gv_factor)
+                             for l, v in _GV_OPTIMO.items()),
+                            key=lambda t: t[1] / t[2] if t[2] else 0, reverse=True)
+            _gv_cols = st.columns(2)
+            for _i, (_l, _r, _o) in enumerate(_gv_rk):
+                _he = _gv_as.loc[_gv_as["local"] == _l, "he_h"].sum()
+                _gv_cols[_i % 2].markdown(
+                    _gv_card(_l, _r, _o, f"{_he:,.0f} horas extras".replace(",", ".")),
+                    unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        with st.expander("👥 Detalle por persona"):
+            _gv_det = (_gv_sel.groupby(["local", "nombre", "cargo"], as_index=False)
+                       [["he_h", "te_n", "fer_n", "dom_n"] + _GV_4].sum())
+            _gv_det["Total"] = _gv_det[_GV_4].sum(axis=1)
+            _gv_det = _gv_det.sort_values("Total", ascending=False)
+            st.dataframe(pd.DataFrame({
+                "Local": _gv_det["local"], "Nombre": _gv_det["nombre"], "Cargo": _gv_det["cargo"],
+                "Horas extra": _gv_det["he_h"].round(1), "Turnos extra": _gv_det["te_n"].astype(int),
+                "Domingos": _gv_det["dom_n"].astype(int), "Feriados": _gv_det["fer_n"].astype(int),
+                "Total $": _gv_det["Total"].map(_gv_money),
+            }), use_container_width=True, hide_index=True)
+
+        with st.expander("ℹ️ Cómo se calcula"):
+            st.markdown(
+                "- **Óptimo:** planificación del Excel de jefatura (Dotación Óptima), por local.\n"
+                "- **Real:** asistencia diaria × tarifa de cada cargo del mismo Excel, "
+                f"+ {_GV_APORTE*100:.2f}% de aporte patronal.\n"
+                f"- **Horas extras:** lo trabajado (más la colación) sobre la duración del turno, "
+                f"desde {_GV_HE_TOLERANCIA_H*60:.0f} min de exceso.\n"
+                "- **Día de descanso trabajado:** Jefe de Local y Sub Administrador cobran turno extra "
+                "($100.000); el resto cobra todas esas horas como horas extras (+ recargo si es domingo o feriado).\n"
+                f"- **Domingos (provisorio):** cada persona tiene {_GV_DOM_LIBRES} domingos incluidos al mes; "
+                f"desde su {_GV_DOM_LIBRES + 1}° domingo trabajado (planificado o no) se paga el recargo.\n"
+                "- **Feriados:** recargo por cada feriado trabajado (feriados oficiales de Chile).\n"
+                "\n**Provisorio (por definir con RRHH):**\n"
+                "- Otros bonos aún sin datos reales: se muestra solo el óptimo.\n"
+                "- Ayudante de Cocina y Copero no traen nivel: se usa el promedio de las tarifas de sus niveles.")
+            if not _gv_excl.empty:
+                st.caption("Cargos no considerados (no están en el Excel): " + ", ".join(
+                    f"{c or 'sin cargo'} ({n} días)" for c, n in _gv_excl["cargo"].value_counts().items()))
 
 elif modulo.startswith("📥 Stock Cierre"):
     import datetime as _sk_dt
