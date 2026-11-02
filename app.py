@@ -25177,6 +25177,10 @@ elif modulo.startswith("👷 Costo de Personal"):
     for _gv_c, _gv_niv in _GV_PROMEDIO_NIVELES.items():
         _GV_TARIFAS[_gv_c] = tuple(sum(_GV_TARIFAS[n][i] for n in _gv_niv) / len(_gv_niv)
                                    for i in range(4))
+    # Cargos de la asistencia que no están en el Excel: promedio de tarifas sin turno extra (provisorio)
+    _GV_SIN_TAR = "Otros cargos (tarifa promedio)"
+    _gv_base_tar = [t for t in _GV_TARIFAS.values() if t[3] == 0]
+    _GV_TARIFAS[_GV_SIN_TAR] = tuple(sum(t[i] for t in _gv_base_tar) / len(_gv_base_tar) for i in range(3)) + (0,)
     _GV_CONCEPTOS = ["Rem.H.Extras", "Rem.T.Extras", "Rem.Feriados", "Rem.Domingos", "Rem.Otro Bonos"]
     _GV_OPTIMO = {  # óptimo MES por local, en el orden de _GV_CONCEPTOS
         "Vitacura": (3247101, 213660, 679564, 3862169, 1845506),
@@ -25229,7 +25233,8 @@ elif modulo.startswith("👷 Costo de Personal"):
         fch, tipo = row["fecha"], row["tipo_jornada"]
         es_fer, es_dom = fch in _CP_FERIADOS, fch.weekday() == 6
         k = 1 + _GV_APORTE
-        es_descanso = _GV_TE_ES_DESCANSO and tipo == "Descanso"
+        # Descanso, No Planificado o Sin Turno trabajado: no hay turno planificado → todo es extra
+        es_descanso = _GV_TE_ES_DESCANSO and tipo in ("Descanso", "No Planificado", "Sin Turno")
         # Turno extra solo en cargos con tarifa TE (Jefe de Local / Sub Administrador);
         # el resto no tiene turnos extra: su descanso trabajado son horas extra.
         es_te = es_descanso and tar[3] > 0
@@ -25379,10 +25384,8 @@ elif modulo.startswith("👷 Costo de Personal"):
         df["fecha"] = pd.to_datetime(df["fecha"]).dt.date
         df["cargo"] = df["cargo"].fillna("").str.strip()
         df["cargo_tar"] = df["cargo"].map(lambda c: _GV_ALIAS.get(c, c))
-        excl = df[~df["cargo_tar"].isin(_GV_TARIFAS)]
-        df = df[df["cargo_tar"].isin(_GV_TARIFAS)].copy()
-        if df.empty:
-            return None
+        excl = df[~df["cargo_tar"].isin(_GV_TARIFAS)]  # se valorizan con tarifa promedio
+        df.loc[excl.index, "cargo_tar"] = _GV_SIN_TAR
         df = _gv_domingos(pd.concat([df, df.apply(_gv_dia, axis=1)], axis=1))
         return df[df["fecha"] >= ini], excl[excl["fecha"] >= ini]
 
@@ -25607,7 +25610,7 @@ elif modulo.startswith("👷 Costo de Personal"):
                 f"+ {_GV_APORTE*100:.2f}% de aporte patronal.\n"
                 f"- **Horas extras:** lo trabajado (más la colación) sobre la duración del turno, "
                 f"desde {_GV_HE_TOLERANCIA_H*60:.0f} min de exceso.\n"
-                "- **Día de descanso trabajado:** Jefe de Local y Sub Administrador cobran turno extra "
+                "- **Día trabajado sin turno planificado** (Descanso, No Planificado o Sin Turno): Jefe de Local y Sub Administrador cobran turno extra "
                 "($100.000); el resto cobra todas esas horas como horas extras (+ recargo si es domingo o feriado).\n"
                 f"- **Domingos (provisorio):** cada persona tiene {_GV_DOM_LIBRES} domingos incluidos al mes; "
                 f"desde su {_GV_DOM_LIBRES + 1}° domingo trabajado (planificado o no) se paga el recargo.\n"
@@ -25616,7 +25619,7 @@ elif modulo.startswith("👷 Costo de Personal"):
                 "- Otros bonos aún sin datos reales: se muestra solo el óptimo.\n"
                 "- Ayudante de Cocina y Copero no traen nivel: se usa el promedio de las tarifas de sus niveles.")
             if not _gv_excl.empty:
-                st.caption("Cargos no considerados (no están en el Excel): " + ", ".join(
+                st.caption("Cargos que no están en el Excel (valorizados con tarifa promedio): " + ", ".join(
                     f"{c or 'sin cargo'} ({n} días)" for c, n in _gv_excl["cargo"].value_counts().items()))
 
 elif modulo.startswith("📥 Stock Cierre"):
