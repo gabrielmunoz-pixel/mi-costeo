@@ -13590,7 +13590,7 @@ elif modulo.startswith("📊"):
             with _vdi3:
                 _vd_dias_hab = st.number_input(
                     "Días hábiles Aliva (L-S)", min_value=1, max_value=27,
-                    value=_dias_habiles_aliva(_vd_fecha.year, _vd_fecha.month, _vd_fecha.day) if _vd_fecha else 1,
+                    value=max(1, _dias_habiles_aliva(_vd_fecha.year, _vd_fecha.month, _vd_fecha.day)) if _vd_fecha else 1,
                     key="vd_dias_hab"
                 )
 
@@ -13935,7 +13935,7 @@ elif modulo.startswith("📊"):
                                                 key="exp_dias_cal")
             with _exp_c3:
                 _exp_dias_hab = st.number_input("Días hábiles Aliva", min_value=1, max_value=27,
-                                                value=_dias_habiles_aliva(_exp_fecha.year, _exp_fecha.month, _exp_fecha.day) if _exp_fecha else 1,
+                                                value=max(1, _dias_habiles_aliva(_exp_fecha.year, _exp_fecha.month, _exp_fecha.day)) if _exp_fecha else 1,
                                                 key="exp_dias_hab")
 
             if _exp_fecha and st.button("📥 Generar Excel", type="primary", key="btn_gen_excel"):
