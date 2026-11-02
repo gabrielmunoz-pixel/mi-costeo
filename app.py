@@ -25425,7 +25425,8 @@ elif modulo.startswith("👷 Costo de Personal"):
         return tot, sorted(set(usados)), dot, sin_calce
 
     _gv_bt, _gv_bper, _gv_bdot, _gv_bsin = _gv_base_real(_gv_ini, _gv_fin)
-    _gv_tab_res, _gv_tab_var = st.tabs(["📋 Resumen", "💼 Gastos Variables"])
+    _gv_tab_res, _gv_tab_var, _gv_tab_b = st.tabs(["📋 Resumen", "💼 Gastos Variables",
+                                                    "🅱️ Versión B (GeoVictoria)"])
 
     with _gv_tab_res:
         _gv_locs = list(_GV_FIJA) if _gv_loc == "Todos" else [_gv_loc]
@@ -25612,6 +25613,195 @@ elif modulo.startswith("👷 Costo de Personal"):
             if not _gv_excl.empty:
                 st.caption("Cargos que no están en el Excel (valorizados con tarifa promedio): " + ", ".join(
                     f"{c or 'sin cargo'} ({n} días)" for c, n in _gv_excl["cargo"].value_counts().items()))
+
+    # ══ VERSIÓN B: reporte "Remuneraciones" de GeoVictoria (totales por persona y corte) ══
+    # Tabla paralela asistencia_periodo_gv; no toca asistencia_rrhh.
+    with _gv_tab_b:
+        import re as _re_gvb
+        _GVB_LOCAL = {"Bilbao": "Providencia", "Casona Providencia": "La Casona"}  # Grupo GeoVictoria → local (provisorio)
+        _GVB_COLS = {  # columna del Excel → columna de la tabla (las 'Dec' traen las horas en decimal)
+            "Identificador": "rut", "Grupo": "grupo", "Cargo": "cargo",
+            "Días Remunerados": "dias_remunerados", "Descanso": "descanso", "Asistidos": "asistidos",
+            "Dec": "horas_trabajadas", "Dec.1": "horas_no_trabajadas", "Dec.2": "horas_extra",
+            "Domingos Trabajados": "domingos_trabajados", "Dec.4": "horas_domingo",
+            "Feriados Trabajados": "feriados_trabajados", "Dec.6": "horas_feriado",
+        }
+        _gvb_rut = lambda r: str(r or "").replace(".", "").replace(" ", "").upper()
+
+        if not st.session_state.get("gvb_tabla_ok"):
+            try:
+                with get_engine().connect() as _c:
+                    _c.execute(text("""
+                        CREATE TABLE IF NOT EXISTS asistencia_periodo_gv (
+                            rut TEXT NOT NULL, periodo_ini DATE NOT NULL, periodo_fin DATE NOT NULL,
+                            nombre TEXT, grupo TEXT, local TEXT, cargo TEXT,
+                            dias_remunerados INT, descanso INT, asistidos INT,
+                            horas_trabajadas NUMERIC, horas_no_trabajadas NUMERIC, horas_extra NUMERIC,
+                            domingos_trabajados INT, horas_domingo NUMERIC,
+                            feriados_trabajados INT, horas_feriado NUMERIC,
+                            fecha_carga TIMESTAMP NOT NULL DEFAULT NOW(),
+                            PRIMARY KEY (rut, periodo_ini, periodo_fin))"""))
+                    _c.commit()
+                st.session_state["gvb_tabla_ok"] = True
+            except Exception as _e:
+                st.error(f"No se pudo preparar la tabla asistencia_periodo_gv: {_e}")
+                st.stop()
+
+        st.caption("Versión B: horas extra, domingos y feriados tomados del reporte **Remuneraciones** de "
+                   "GeoVictoria (totales por persona del corte), en vez de la asistencia diaria.")
+
+        if _is_admin_cp:
+            with st.expander("📤 Cargar reporte Remuneraciones de GeoVictoria (.xlsx)"):
+                _f = st.file_uploader("Archivo", type=["xlsx"], key="gvb_file")
+                if _f is not None and st.button("💾 Procesar y cargar", key="gvb_cargar", type="primary"):
+                    _m = _re_gvb.search(r"(\d{2}-\d{2}-\d{4})\s*a\s*(\d{2}-\d{2}-\d{4})",
+                                        str(pd.read_excel(_f, header=None, nrows=1).iloc[0, 0]))
+                    if not _m:
+                        st.error("No encontré el 'Rango considerado' en la celda A1 del archivo.")
+                        st.stop()
+                    _pi, _pf = (_cp_dt.datetime.strptime(x, "%d-%m-%Y").date() for x in _m.groups())
+                    _f.seek(0)
+                    _x = pd.read_excel(_f, header=2)
+                    _faltan = [c for c in _GVB_COLS if c not in _x.columns]
+                    if _faltan:
+                        st.error("Al archivo le faltan columnas: " + ", ".join(_faltan))
+                        st.stop()
+                    _x = _x[_x["Identificador"].notna()]
+                    _regs = []
+                    for _, _r in _x.iterrows():
+                        _d = {v: _r[k] for k, v in _GVB_COLS.items()}
+                        _d["rut"] = _gvb_rut(_d["rut"])
+                        _d["grupo"] = str(_d["grupo"] or "").strip()
+                        _d["cargo"] = str(_d["cargo"] or "").strip()
+                        _d["local"] = _GVB_LOCAL.get(_d["grupo"], _d["grupo"])
+                        _d["nombre"] = f"{_r['Nombre'] or ''} {_r['Apellido'] or ''}".strip()
+                        for _k in _d:
+                            if _k not in ("rut", "grupo", "cargo", "local", "nombre"):
+                                _d[_k] = float(pd.to_numeric(_d[_k], errors="coerce") or 0)
+                        _d.update(periodo_ini=_pi, periodo_fin=_pf)
+                        _regs.append(_d)
+                    _cols = list(_regs[0])
+                    with get_engine().connect() as _c:
+                        _c.execute(text(f"""
+                            INSERT INTO asistencia_periodo_gv ({', '.join(_cols)})
+                            VALUES ({', '.join(':' + c for c in _cols)})
+                            ON CONFLICT (rut, periodo_ini, periodo_fin) DO UPDATE SET
+                            {', '.join(f'{c}=EXCLUDED.{c}' for c in _cols if c not in ('rut', 'periodo_ini', 'periodo_fin'))},
+                            fecha_carga=NOW()"""), _regs)
+                        _c.commit()
+                    st.success(f"✅ {len(_regs)} personas cargadas · corte {_pi:%d/%m/%Y} – {_pf:%d/%m/%Y}.")
+
+        _gvb_per = run_query("SELECT DISTINCT periodo_ini, periodo_fin FROM asistencia_periodo_gv "
+                             "ORDER BY periodo_fin DESC")
+        if _gvb_per is None or _gvb_per.empty:
+            st.info("Aún no hay reportes de GeoVictoria cargados.")
+        else:
+            _gvb_ops = [(pd.Timestamp(a).date(), pd.Timestamp(b).date())
+                        for a, b in _gvb_per.itertuples(index=False)]
+            _pi, _pf = st.selectbox("Corte", _gvb_ops, format_func=lambda t: f"{t[0]:%d/%m/%Y} – {t[1]:%d/%m/%Y}",
+                                    key="gvb_corte")
+            _b = run_query("SELECT * FROM asistencia_periodo_gv WHERE periodo_ini = :i AND periodo_fin = :f",
+                           {"i": str(_pi), "f": str(_pf)})
+            if _gv_loc != "Todos":
+                _b = _b[_b["local"] == _gv_loc]
+            _b["cargo_tar"] = _b["cargo"].fillna("").str.strip().map(lambda c: _GV_ALIAS.get(c, c))
+            _b.loc[~_b["cargo_tar"].isin(_GV_TARIFAS), "cargo_tar"] = _GV_SIN_TAR
+            _k = 1 + _GV_APORTE
+            _tar = lambda i: _b["cargo_tar"].map(lambda c: _GV_TARIFAS[c][i])
+            # Regla C: _GV_DOM_LIBRES domingos incluidos por mes del corte (corte de ~35 días = 1 mes)
+            _libres = _GV_DOM_LIBRES * max(1, round(((_pf - _pi).days + 1) / 30.4))
+            for _c in ("horas_extra", "domingos_trabajados", "feriados_trabajados"):
+                _b[_c] = pd.to_numeric(_b[_c], errors="coerce").fillna(0)
+            _b["he_h"] = _b["horas_extra"]
+            _b["dom_n"] = (_b["domingos_trabajados"] - _libres).clip(lower=0)
+            _b["fer_n"] = _b["feriados_trabajados"]
+            _b["Rem.H.Extras"] = _b["he_h"] * _tar(2) * _k
+            _b["Rem.T.Extras"] = 0.0
+            _b["Rem.Feriados"] = _b["fer_n"] * _tar(1) * _k
+            _b["Rem.Domingos"] = _b["dom_n"] * _tar(0) * _k
+
+            _fb = _gv_factor_optimo(_pi, _pf)
+            _ob = [(sum(v[i] for v in _GV_OPTIMO.values()) if _gv_loc == "Todos"
+                    else _GV_OPTIMO.get(_gv_loc, (0,) * 5)[i]) * _fb for i in range(5)]
+            _rt, _ot = float(_b[_GV_4].sum().sum()), sum(_ob[:4])
+            _ratio = _rt / _ot if _ot else 0
+            _fg, _ = _gv_color(_ratio)
+            st.markdown(
+                "<div class='gv-kpis'>"
+                f"<div class='gv-kpi'><div class='l'>Planificado</div><div class='v'>{_gv_money(_ot)}</div>"
+                f"<div class='s'>Óptimo de {(_pf - _pi).days + 1} día(s) del corte</div></div>"
+                f"<div class='gv-kpi'><div class='l'>Real (GeoVictoria)</div><div class='v'>{_gv_money(_rt)}</div>"
+                f"<div class='s'>{len(_b)} personas</div></div>"
+                f"<div class='gv-kpi'><div class='l'>Diferencia</div><div class='v' style='color:{_fg}'>"
+                f"{'+' if _rt > _ot else ''}{_gv_money(_rt - _ot)}</div>"
+                f"<div class='s'>{(_ratio - 1) * 100:+.1f}% vs óptimo</div></div>"
+                f"<div class='gv-kpi'><div class='l'>Horas extra</div><div class='v'>"
+                f"{_b['he_h'].sum():,.0f}".replace(",", ".") + "</div>"
+                "<div class='s'>Según GeoVictoria</div></div>"
+                "</div>", unsafe_allow_html=True)
+
+            st.markdown("<div class='section-label'>Por concepto</div>", unsafe_allow_html=True)
+            _cant = {
+                "Rem.H.Extras": ("Horas extras", f"{_b['he_h'].sum():,.0f} horas".replace(",", ".")),
+                "Rem.T.Extras": ("Turnos extras", "El reporte no trae turnos extra"),
+                "Rem.Feriados": ("Feriados", f"{int(_b['fer_n'].sum())} días trabajados en feriado"),
+                "Rem.Domingos": ("Domingos", f"{int(_b['dom_n'].sum())} domingos pagados "
+                                             f"(de {int(_b['domingos_trabajados'].sum())} trabajados; "
+                                             f"{_libres} incluidos por persona)"),
+            }
+            _cols = st.columns(2)
+            for _i, _c in enumerate(_GV_4):
+                _nom, _det = _cant[_c]
+                if _c == "Rem.T.Extras":
+                    _cols[_i % 2].markdown(_gv_card(_nom, None, _ob[_i], _det), unsafe_allow_html=True)
+                else:
+                    _cols[_i % 2].markdown(_gv_card(_nom, float(_b[_c].sum()), _ob[_i], _det),
+                                           unsafe_allow_html=True)
+
+            # ── Cruce A (asistencia diaria) vs B (GeoVictoria) en el mismo corte ──
+            st.markdown("<div class='section-label' style='margin-top:1rem'>Cruce con versión A (mismo corte)</div>",
+                        unsafe_allow_html=True)
+            _ra = _gv_cargar(_pi, _pf)
+            _a = _ra[0] if _ra is not None else pd.DataFrame(columns=["local", "rut"] + ["he_h", "dom_n", "fer_n"] + _GV_4)
+            if _gv_loc != "Todos":
+                _a = _a[_a["local"] == _gv_loc]
+            _sa = _a.groupby("local")[["he_h", "dom_n", "fer_n"]].sum()
+            _sa["$"] = _a.groupby("local")[_GV_4].sum().sum(axis=1)
+            _sb = _b.groupby("local")[["he_h", "dom_n", "fer_n"]].sum()
+            _sb["$"] = _b.groupby("local")[_GV_4].sum().sum(axis=1)
+            _x = _sa.join(_sb, how="outer", lsuffix="_a", rsuffix="_b").fillna(0)
+            _x.loc["TOTAL"] = _x.sum()
+            st.dataframe(pd.DataFrame({
+                "Local": _x.index,
+                "HE horas A": _x["he_h_a"].round(0).astype(int), "HE horas B": _x["he_h_b"].round(0).astype(int),
+                "Dom. pagados A": _x["dom_n_a"].astype(int), "Dom. pagados B": _x["dom_n_b"].astype(int),
+                "Feriados A": _x["fer_n_a"].astype(int), "Feriados B": _x["fer_n_b"].astype(int),
+                "Total $ A": _x["$_a"].map(_gv_money), "Total $ B": _x["$_b"].map(_gv_money),
+                "Dif $ (B−A)": (_x["$_b"] - _x["$_a"]).map(_gv_money),
+            }), use_container_width=True, hide_index=True)
+            st.caption("A = asistencia diaria (regla semanal de 42 h). B = reporte GeoVictoria. "
+                       "En B el turno extra de jefaturas no viene; queda en $0.")
+
+            with st.expander("👥 Cruce por persona"):
+                _a["rut_n"] = _a["rut"].map(_gvb_rut)
+                _pa = _a.groupby("rut_n")[["he_h"]].sum().rename(columns={"he_h": "HE A"})
+                _pb = _b.assign(rut_n=_b["rut"].map(_gvb_rut)).set_index("rut_n")[
+                    ["nombre", "local", "cargo", "he_h", "domingos_trabajados", "feriados_trabajados"]]
+                _pp = _pb.join(_pa, how="outer")
+                _pp["HE A"] = _pp["HE A"].fillna(0)
+                _pp["he_h"] = _pp["he_h"].fillna(0)
+                _pp = _pp.sort_values("he_h", ascending=False)
+                st.dataframe(pd.DataFrame({
+                    "RUT": _pp.index, "Nombre": _pp["nombre"], "Local": _pp["local"], "Cargo": _pp["cargo"],
+                    "HE B (GeoVictoria)": _pp["he_h"].round(1), "HE A (asistencia)": _pp["HE A"].round(1),
+                    "Diferencia": (_pp["he_h"] - _pp["HE A"]).round(1),
+                    "Domingos trab.": _pp["domingos_trabajados"], "Feriados trab.": _pp["feriados_trabajados"],
+                }), use_container_width=True, hide_index=True)
+                st.caption("Personas sin nombre: están en la asistencia diaria pero no en el reporte de GeoVictoria.")
+
+            _sin = sorted(set(_b["local"]) - set(_GV_OPTIMO))
+            if _sin:
+                st.caption("Grupos de GeoVictoria que no calzan con un local del Excel: " + ", ".join(_sin))
 
 elif modulo.startswith("📥 Stock Cierre"):
     import datetime as _sk_dt
