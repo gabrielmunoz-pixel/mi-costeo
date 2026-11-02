@@ -25127,10 +25127,9 @@ elif modulo.startswith("👷 Costo de Personal"):
     # ══ GASTOS VARIABLES REMUNERACIONALES ══════════════════════════════
     # Óptimo = Excel de jefatura (Dotación Óptima). Real = asistencia_rrhh ×
     # tarifa por cargo del mismo Excel (+ aporte patronal).
-    import re as _re_gv
     # ── Reglas PENDIENTES (jefatura/RRHH). Valor provisorio; cambiar aquí. ──
-    _GV_HE_TOLERANCIA_H = 10 / 60  # P1: hora extra desde 10 min de exceso (por validar con Bernardita)
-    _GV_HORAS_INCL_COL  = False    # P2: horas_totales ya descuenta la colación (por validar)
+    _GV_JORNADA_SEM     = 42       # HE = horas de la semana (lun–dom) sobre 42, por persona
+    _GV_COLACION_DIA_H  = 1        # colación por día trabajado; cuenta dentro de las 42
     _GV_TE_ES_DESCANSO  = True     # P3: turno extra = día 'Descanso' trabajado
     _GV_TE_DOMFER       = "ambos"  # P4 (solo jefaturas con tarifa TE): 'te' | 'recargo' | 'ambos'
     # Resto de cargos (sin tarifa TE): descanso trabajado = todas sus horas como horas extra.
@@ -25207,16 +25206,6 @@ elif modulo.startswith("👷 Costo de Personal"):
     _GV_FIJA_COLS = ["sueldo_base", "gratificacion", "bono_produccion", "bono_gestion", "bono_formacion",
                      "bono_delivery", "bono_reserva", "colacion_haber", "movilizacion"]
 
-    def _gv_horas_turno(turno):
-        """Duración del turno planificado ('10:00 - 18:00(30 mins)' → 8.0), colación incluida."""
-        m = _re_gv.search(r'(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})', str(turno or ""))
-        if not m:
-            return None
-        a = int(m[1]) * 60 + int(m[2]); b = int(m[3]) * 60 + int(m[4])
-        if b <= a:
-            b += 24 * 60  # turno que cruza medianoche
-        return (b - a) / 60
-
     def _gv_factor_optimo(ini, fin):
         """Fracción del óptimo MENSUAL que corresponde al rango (prorrateo por días de cada mes)."""
         f, d = 0.0, ini
@@ -25242,22 +25231,26 @@ elif modulo.startswith("👷 Costo de Personal"):
         recargo = (not es_te) or _GV_TE_DOMFER in ("recargo", "ambos")
         fer = 1 if es_fer and recargo else 0
         dom = 0  # domingos: se calculan por persona-mes en _gv_domingos
-        he = 0.0
-        if es_descanso and not es_te:
-            he = float(row["horas_totales"] or 0)
-        elif tipo == "Turno":
-            plan = _gv_horas_turno(row["turno_raw"])
-            if plan is not None:
-                hrs = float(row["horas_totales"] or 0)
-                if not _GV_HORAS_INCL_COL:
-                    hrs += float(row["colacion_min"] or 0) / 60
-                exc = hrs - plan
-                he = exc if exc >= _GV_HE_TOLERANCIA_H and exc > 0 else 0.0
+        he = 0.0  # horas extra: se calculan por persona-semana en _gv_he_semanal
         return pd.Series({
             "he_h": he, "te_n": te, "fer_n": fer, "dom_n": dom,
             "Rem.H.Extras": he * tar[2] * k, "Rem.T.Extras": te * tar[3] * k,
             "Rem.Feriados": fer * tar[1] * k, "Rem.Domingos": dom * tar[0] * k,
         })
+
+    def _gv_he_semanal(df):
+        """HE = horas de la semana lun–dom (horas_totales + 1 h colación por día) sobre 42, por persona.
+        Los días cobrados como turno extra no suman. Las HE de la semana se anotan en su último día trabajado."""
+        hrs = pd.to_numeric(df["horas_totales"], errors="coerce").fillna(0) + _GV_COLACION_DIA_H
+        hrs = hrs.where(df["te_n"] == 0, 0.0)
+        sem = df["fecha"].map(lambda f: f - _cp_dt.timedelta(days=f.weekday()))
+        tot = hrs.groupby([df["rut"], sem]).transform("sum")
+        ult = df["fecha"] == df["fecha"].groupby([df["rut"], sem]).transform("max")
+        ult &= ~df.assign(_s=sem).duplicated(["rut", "_s", "fecha"], keep="first")
+        df["he_h"] = (tot - _GV_JORNADA_SEM).clip(lower=0).where(ult, 0.0)
+        df["Rem.H.Extras"] = (df["he_h"] * df["cargo_tar"].map(lambda c: _GV_TARIFAS[c][2])
+                              * (1 + _GV_APORTE))
+        return df
 
     def _gv_domingos(df):
         """Regla C (provisoria): cada persona tiene _GV_DOM_LIBRES domingos incluidos al mes;
@@ -25271,9 +25264,6 @@ elif modulo.startswith("👷 Costo de Personal"):
                               * (1 + _GV_APORTE))
         return df
 
-    # Self-check del parser de turnos (falla en voz alta si cambia el formato)
-    assert _gv_horas_turno("10:00 - 18:00(30 mins)") == 8.0
-    assert _gv_horas_turno("18:00 - 02:00( Sin Colación )") == 8.0
     assert _gv_factor_optimo(_cp_dt.date(2026, 10, 1), _cp_dt.date(2026, 10, 31)) == 1.0
     assert abs(_gv_factor_optimo(_cp_dt.date(2026, 10, 25), _cp_dt.date(2026, 11, 7)) - (7/31 + 7/30)) < 1e-9
 
@@ -25372,13 +25362,13 @@ elif modulo.startswith("👷 Costo de Personal"):
 
     def _gv_cargar(ini, fin):
         """Asistencia valorizada entre ini y fin → (con tarifa, excluidos); None si no hay datos.
-        Se trae desde el día 1 del mes de 'ini' para contar bien los domingos del mes (regla C)."""
+        Se trae desde el día 1 del mes (domingos, regla C) o el lunes de esa semana (HE semanal)."""
         df = run_query("""
             SELECT rut, TRIM(COALESCE(nombre,'') || ' ' || COALESCE(apellidos,'')) AS nombre,
                    local, fecha, tipo_jornada, turno_raw, colacion_min, horas_totales, cargo
             FROM asistencia_rrhh
             WHERE fecha BETWEEN :i AND :f AND trabajo = true
-        """, {"i": str(ini.replace(day=1)), "f": str(fin)})
+        """, {"i": str(min(ini.replace(day=1), ini - _cp_dt.timedelta(days=ini.weekday()))), "f": str(fin)})
         if df is None or df.empty:
             return None
         df["fecha"] = pd.to_datetime(df["fecha"]).dt.date
@@ -25386,7 +25376,7 @@ elif modulo.startswith("👷 Costo de Personal"):
         df["cargo_tar"] = df["cargo"].map(lambda c: _GV_ALIAS.get(c, c))
         excl = df[~df["cargo_tar"].isin(_GV_TARIFAS)]  # se valorizan con tarifa promedio
         df.loc[excl.index, "cargo_tar"] = _GV_SIN_TAR
-        df = _gv_domingos(pd.concat([df, df.apply(_gv_dia, axis=1)], axis=1))
+        df = _gv_he_semanal(_gv_domingos(pd.concat([df, df.apply(_gv_dia, axis=1)], axis=1)))
         return df[df["fecha"] >= ini], excl[excl["fecha"] >= ini]
 
     _gv_res = _gv_cargar(_gv_ini, _gv_fin)
@@ -25608,10 +25598,11 @@ elif modulo.startswith("👷 Costo de Personal"):
                 "- **Óptimo:** planificación del Excel de jefatura (Dotación Óptima), por local.\n"
                 "- **Real:** asistencia diaria × tarifa de cada cargo del mismo Excel, "
                 f"+ {_GV_APORTE*100:.2f}% de aporte patronal.\n"
-                f"- **Horas extras:** lo trabajado (más la colación) sobre la duración del turno, "
-                f"desde {_GV_HE_TOLERANCIA_H*60:.0f} min de exceso.\n"
-                "- **Día trabajado sin turno planificado** (Descanso, No Planificado o Sin Turno): Jefe de Local y Sub Administrador cobran turno extra "
-                "($100.000); el resto cobra todas esas horas como horas extras (+ recargo si es domingo o feriado).\n"
+                f"- **Horas extras:** por persona y semana (lunes a domingo), todo lo que pase de "
+                f"{_GV_JORNADA_SEM} horas. Cada día trabajado suma {_GV_COLACION_DIA_H} h de colación "
+                "dentro de esas 42. Las horas de la semana se anotan en su último día trabajado.\n"
+                "- **Día trabajado sin turno planificado** (Descanso, No Planificado o Sin Turno): Jefe de Local "
+                "y Sub Administrador cobran turno extra ($100.000) y esas horas no suman a la semana.\n"
                 f"- **Domingos (provisorio):** cada persona tiene {_GV_DOM_LIBRES} domingos incluidos al mes; "
                 f"desde su {_GV_DOM_LIBRES + 1}° domingo trabajado (planificado o no) se paga el recargo.\n"
                 "- **Feriados:** recargo por cada feriado trabajado (feriados oficiales de Chile).\n"
