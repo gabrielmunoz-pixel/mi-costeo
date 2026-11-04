@@ -13996,6 +13996,47 @@ elif modulo.startswith("📊"):
                         _ws_out.cell(47, 5).value = f' {_mes_exp_str} {_exp_dia:02d}'
                         _ws_out.cell(47, 7).value = f' ACUMULADA {_mes_exp_str}'
 
+                        # ── Proyección (AE) y anual (AK): la plantilla quedó fija en OCT 2026
+                        # (título, *31 días y meses del anual). Se reescriben para el mes del informe.
+                        import re as _re_pr
+                        # La Casona abrió en jul-2026 (3 días de venta en julio): su anual 2026 es
+                        # venta por día desde la apertura × días desde la apertura al 31/12 (155, plantilla)
+                        _VD_CASONA_JUL_DIAS, _VD_CASONA_DIAS_AÑO = 3, 155
+                        _dm_pr = _dias_calendario_mes(_exp_año, _exp_mes)
+                        def _ym_pr(base, c):
+                            """(año, mes) de la columna histórica c (I..AC) en un informe del mes base."""
+                            _t = base[0] * 12 + base[1] - 1 + (c - 9) // 2 - 11
+                            return _t // 12, _t % 12 + 1
+                        for _r in range(1, _ws_out.max_row + 1):
+                            _ae, _ak = _ws_out.cell(_r, 31), _ws_out.cell(_r, 37)
+                            if isinstance(_ae.value, str):
+                                if 'PROYEC' in _ae.value.upper():
+                                    _ae.value = f'PROYECCIÓN {_mes_exp_str} {_exp_año}'
+                                else:
+                                    _ae.value = _re_pr.sub(r'(=G\d+/\$[MN]\$2\*)\d+$', rf'\g<1>{_dm_pr}', _ae.value)
+                            if not isinstance(_ak.value, str):
+                                continue
+                            if 'PROYEC' in _ak.value.upper():
+                                _ak.value = f'PROYECCIÓN ANUAL {_exp_año}'
+                                continue
+                            _es_casona = '155' in _ak.value and _exp_año == 2026
+                            if not (_es_casona or _re_pr.fullmatch(r'=\(([A-Z]+\d+(?:\+[A-Z]+\d+)*)\)/\d+\*12', _ak.value)):
+                                continue
+                            # meses cerrados del año del informe (columnas I..AC)
+                            _cols_año = [c for c in range(9, 30, 2) if _ym_pr((_exp_año, _exp_mes), c)[0] == _exp_año]
+                            _L_pr = lambda c: f'{_oxl.utils.get_column_letter(c)}{_r}'
+                            if _es_casona:
+                                _cc = [c for c in _cols_año if _ym_pr((_exp_año, _exp_mes), c)[1] >= 7]
+                                _dias_c = _VD_CASONA_JUL_DIAS + sum(
+                                    _dias_calendario_mes(*_ym_pr((_exp_año, _exp_mes), c)) for c in _cc
+                                    if _ym_pr((_exp_año, _exp_mes), c)[1] > 7)
+                                _ak.value = (f'=(({"+".join(_L_pr(c) for c in _cc)}+G{_r})'
+                                             f'/({_dias_c}+M2)*{_VD_CASONA_DIAS_AÑO})')
+                            else:
+                                # todas las filas: ENE..mes anterior + proyección del mes, ÷ n × 12
+                                _refs = [_L_pr(c) for c in _cols_año] + [f'AE{_r}']
+                                _ak.value = f'=({"+".join(_refs)})/{len(_refs)}*12'
+
                         # ════════ VENTA DÍA (E) + ACUMULADO (G) ════════
                         # El aplicativo llena ÚNICAMENTE la columna E (venta del día) y
                         # la G (acumulado). F y H son fórmulas de % del template y no se
